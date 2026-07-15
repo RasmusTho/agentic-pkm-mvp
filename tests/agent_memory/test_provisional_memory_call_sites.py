@@ -327,3 +327,60 @@ def test_provisional_memory_cannot_reach_action_authority(
         in receipt["payload"]["authority_blocked_reasons"]
         for receipt in receipts
     )
+
+
+def test_cited_provisional_memory_reaches_production_proposal_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agent_memory import provisional_recall
+    from app.agents.ask import graph as ask_graph
+    from app.agents.ask.state import AgentState
+
+    candidate = _recall_candidate(tmp_path)
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ask_graph,
+        "retrieve_relevant_provisional",
+        lambda *args, **kwargs: provisional_recall.ProvisionalRecallSearch(
+            candidates=(candidate,),
+            excluded=(),
+        ),
+    )
+    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
+    receipt_path = tmp_path / "proposal-recall.jsonl"
+    monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(receipt_path))
+
+    uncited = ask_graph._recall_node(  # noqa: SLF001 - required production call-site proof
+        AgentState(query="Draft a proposal using this memory without a citation"),
+        ask_settings=object(),
+        consuming_authority=ConsumingAuthority.PROPOSAL,
+    )
+    state = ask_graph._recall_node(  # noqa: SLF001 - required production call-site proof
+        AgentState(query="Draft a proposal using this cited memory"),
+        ask_settings=object(),
+        consuming_authority=ConsumingAuthority.PROPOSAL,
+        citation_reference="proposal://draft-1#citation-1",
+    )
+    denied_receipt, receipt = [
+        json.loads(line)
+        for line in receipt_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert uncited.recalled == []
+    assert uncited.recalled_content == {}
+    assert uncited.recalled_context_items == []
+    assert denied_receipt["payload"]["admitted"] is False
+    assert denied_receipt["payload"]["citation_present"] is False
+    assert len(state.recalled) == 1
+    assert state.recalled[0].use_right.value == "cited_proposal"
+    assert state.recalled_content[state.recalled[0].artifact_id] == candidate.record.content
+    assert state.recalled_context_items[0]["_admitted_provisional_memory"] is True
+    assert state.recalled_context_items[0]["payload"]["authority_state"] == "noncanonical"
+    assert state.recalled_context_items[0]["payload"]["memory_state"] == "unreviewed"
+    assert receipt["payload"]["admitted"] is True
+    assert receipt["payload"]["consuming_authority"] == "proposal"
+    assert receipt["payload"]["requested_use_right"] == "cited_proposal"
+    assert receipt["payload"]["citation_present"] is True
+    assert receipt["payload"]["may_write"] is False

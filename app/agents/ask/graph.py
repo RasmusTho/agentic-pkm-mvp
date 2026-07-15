@@ -236,7 +236,7 @@ def _recall_node(
             receipt_path=_provisional_recall_receipt_path(),
             citation_reference=citation_reference,
         )
-        if guarded.may_answer and guarded.explanation is not None:
+        if (guarded.may_answer or guarded.may_propose) and guarded.explanation is not None:
             recalled.append(guarded.explanation)
             recalled_content[guarded.explanation.artifact_id] = candidate.record.content
             reasoning.append(
