@@ -31,11 +31,10 @@ no new runtime behavior.
   blocked/future template into a closure-ready historical ledger. That repo ledger records merged
   MVR-01A–01C, MVR-02–04, MVR-05A–05D, MVR-06A–06D, and MVR-07 receipts plus the MVR-08 PR/head candidate, but explicitly delegates MVR-08's eventual
   merge SHA and the live open/closed state to GitHub #2143; it never predicts its own merge.
-- After MVR-08 merges, run the merged-head closure gate, append MVR-08's exact merge SHA and every
-  final AC/Verify/owner-doc receipt to live #2143, then close it only when no gap remains. Immediately
-  after close, create and deliver one docs-only post-close receipt PR which updates the checked-in
-  parent reference/README with the live close state and MVR-08 merge SHA. That PR is a required
-  closure writeback, not a reopened implementation child and does not invent further runtime scope.
+- The parent closure workflow, not the MVR-08 child, runs after MVR-08 merges: it appends that exact
+  merge SHA and every final receipt to #2143, closes it only when no gap remains, then creates and
+  delivers one docs-only post-close receipt PR that records the live close state and merge SHA. That
+  historical writeback is neither an open terminal-child criterion nor reopened runtime scope.
 
 ## Concretely
 
@@ -118,9 +117,9 @@ operators, or future agents still act on stale single-global-vault truth.
     doc writeback at `docs/MULTI_VAULT_RUNTIME/PARENT_FEATURE_ISSUE.md :: Parent reference — Multi-vault runtime selection`
 - [ ] #2566 and #3156/#3163 show truthful dependency/status receipts with no duplicate scope.
   - Verify: GitHub comment receipts on issues `#2566`, `#3156`, and `#3163`
-- [ ] #2143 contains a complete child/AC/Verify/PR/SHA/owner-doc ledger and has no residual open
-  executable runtime scope after MVR-08 merges; only then is the live issue closed, followed by the
-  required docs-only closure receipt PR.
+- [ ] The MVR-08 child leaves a complete closure-ready child/AC/Verify/PR/owner-doc ledger in its PR
+  and #2143 comment, with no residual executable runtime scope. Its own acceptance ends at that
+  receipt; it does not close #2143 or require post-close work.
   - Verify: runtime receipt on GitHub issue `#2143`
 
 ## Out of Scope
@@ -153,10 +152,11 @@ operators, or future agents still act on stale single-global-vault truth.
   `pytest -q tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`.
 - Run the opt-in integrated UAT in the same worktree and attach its exact merged SHA and result to
   #2143. A branch-local, dirty, stale, skipped, or missing-target run cannot close the parent.
-- Verify the merged README says shipped and the merged parent reference delegates live closure state
-  to #2143; post MVR-08's exact merge SHA to #2143 before closing it. Immediately create the required
-  docs-only post-close receipt PR, verify its merged writeback of the live close state, and link that
-  PR from #2143 as the final historical receipt.
+- **Parent closure workflow, outside the MVR-08 child:** after its merge, post MVR-08's exact merge
+  SHA and the merged-head receipt to #2143, close the parent only when that ledger is complete, then
+  create and merge the required docs-only post-close receipt PR and link it from the closed parent.
+  This post-close historical writeback is not an MVR-08 acceptance criterion and does not leave the
+  terminal child open or reopen runtime scope.
 
 ## Restart / Durability Posture
 

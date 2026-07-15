@@ -21,14 +21,17 @@ not background lifecycles.
 
 - Inject the request's immutable `ActiveContextSet` into Companion/API routes and shared service
   calls that read, retrieve, capture, mutate, or emit receipts against content vaults.
-- Migrate the existing Companion choose/open-vault picker and its current client state—not the
+- Migrate the existing Companion choose/open-vault picker **and fresh-vault initialize flow** with
+  their current client state—not the
   deferred #2566 visual switcher—to create or replace a scoped selection, retain the returned
   `context_selection_id` for that client session, and send it on every vault-bound request. On
   expiry/restart the client clears the stale ID and never retries the failed request via fallback.
   It may mint a fresh selection automatically only when a new authenticated resolution proves
   exactly one authorized registered binding and that binding is the explicit instance default; the
-  reminted context is used for a new request. Any zero/many/ambiguous/default mismatch shows the
-  existing reselection contract.
+  reminted context is used for a new request. Successful initialization atomically registers/sets
+  the explicit default where the current one-vault journey requires it, then returns and persists a
+  scoped selection for the new binding; it never relies on `last_active_vault_ref`. Any
+  zero/many/ambiguous/default mismatch shows the existing reselection contract.
 - Preserve #3163 during the MVR-05→MVR-06 transition: the legacy choose/open picker action also
   emits its existing single-watcher selection event through one named compatibility bridge, while
   generic scoped request/session selections never do. MVR-06 must atomically initialize durable
@@ -266,6 +269,10 @@ to cross its floor; independently safe explicit-global work may continue.
   to B, and stale-ID recovery with zero, many, ambiguous, or default-mismatched bindings visibly
   asks for reselection.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context`
+- [ ] **MVR-05B:** A fresh no-vault production initialize registers the binding, atomically establishes
+  the explicit one-vault default where applicable, returns/persists a scoped selection, and lets the
+  immediately following vault-bound request resolve that binding without last-active fallback.
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context`
 - [ ] **MVR-05B:** After API restart, a stale bearer never authorizes or falls back for its failed request; the
   client never retries that failed request. Before a later, newly initiated request it may
   transparently mint a replacement only after fresh authenticated resolution proves exactly one

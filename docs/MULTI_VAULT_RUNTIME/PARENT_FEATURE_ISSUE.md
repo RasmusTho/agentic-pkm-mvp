@@ -30,7 +30,7 @@ consumer migration and validation after those contracts are frozen.
 ## Source Anchors
 
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Capability boundary`
-- `docs/contracts/ACTIVE_CONTEXT_SET.md :: target contract`
+- `docs/contracts/ACTIVE_CONTEXT_SET.md :: Multi-Vault Runtime V1 Decision`
 - `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Topology rules`
 - `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Future Multi-Vault`
 - `app/vault/app_local.py :: AppLocalSettings / KnownVaultRef`

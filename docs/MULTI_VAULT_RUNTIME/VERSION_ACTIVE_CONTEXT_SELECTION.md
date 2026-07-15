@@ -2,7 +2,7 @@
 name: Version Active Context Selection
 description: Make ActiveContextSet a versioned immutable request/session runtime seam
 task_id: MVR-03
-source_anchor: "docs/contracts/ACTIVE_CONTEXT_SET.md :: target contract"
+source_anchor: "docs/contracts/ACTIVE_CONTEXT_SET.md :: Multi-Vault Runtime V1 Decision"
 parent_capability: Multi-vault runtime selection
 prerequisites: [MVR-01, MVR-02]
 depends_on: [ESTABLISH_INSTANCE_VAULT_REGISTRY.md, RESOLVE_INSTANCE_DEFAULT_VAULT.md]
