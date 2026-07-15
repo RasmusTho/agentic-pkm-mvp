@@ -26,12 +26,12 @@ import, cutover, Product route/process removal, legacy retirement, and end-to-en
 - remove BuilderOps/Signboard ownership from Product FastAPI, Product startup/bootstrap, Product
   Compose mounts/env/secrets/health, and Product deployment paths;
 - disable/remove production SQLite/JSONL/JSON authority construction and SSH direct-store paths;
-- run health/readiness, API/executor end-to-end, crash recovery, backup restore drill, and Product-
-  independence acceptance;
+- run health/readiness, API/executor end-to-end, crash recovery, full-backup + continuous-WAL
+  restore-through-watermark drill, and Product-independence acceptance;
 - archive legacy sources read-only with inventory hashes and retention; and
 - define rollback before activation as prior image + pre-import backup, and recovery after activation
-  as a compatible image or proved point-in-time replay through the last acknowledged transition;
-  never rewind accepted state or reactivate SQLite.
+  as a compatible image or full-backup + continuous-WAL replay through the recorded highest
+  acknowledged LSN/receipt sequence; never rewind accepted state or reactivate SQLite.
 
 ## Concretely
 
@@ -40,7 +40,7 @@ backup, final import, authority-epoch activation, client/executor switch, Produc
 removal, end-to-end proof, and archive receipt. Any failed gate stops before authority activation or
 leaves the PostgreSQL epoch authoritative for forward repair. Once a client can receive an accepted
 response, snapshot rewind is forbidden; recovery must prove all acknowledged idempotency/state/
-receipt/outbox/fencing records survive or are replayed and reconciled.
+receipt/outbox/fencing records survive or are replayed through the acknowledged LSN and reconciled.
 
 ## Why This Matters
 
@@ -68,9 +68,10 @@ unchanged.
   the same change, with a fail-loud preflight.
 - No dual-write/dual-authority window is permitted.
 - Pre-activation rollback may restore the pre-import backup. Post-activation recovery is
-  forward-only and must preserve every acknowledged transition; a point-in-time recovery must replay
-  WAL/events through the last acknowledged receipt and reconcile unknown external effects before
-  reopening writes.
+  forward-only and must preserve every acknowledged transition; full backup + continuous WAL must
+  replay through the recorded highest acknowledged LSN/receipt sequence and reconcile unknown
+  external effects before reopening writes. Missing independent WAL durability blocks authority
+  readiness and cutover.
 - Product Runtime behavior unrelated to BuilderOps remains unchanged and independently verifiable.
 - Archived sources are immutable evidence, not rollback authority.
 - Owner docs are not rewritten as shipped until this task's receipts exist; BCP-07 owns writeback.
@@ -79,7 +80,8 @@ unchanged.
 
 - [ ] Final inventory/import reconciliation covers the producer-derived expected host/worktree/
   container/automation universe, accounts for all legacy state, records a new authority epoch, and
-  proves no coverage gap, live legacy lease, or unresolved conflict entered production.
+  proves no coverage gap, live legacy lease, unresolved conflict, or evidence-ambiguous repo
+  provenance entered production authority.
   Verify: cutover receipt containing BCP-03 inventory/import/reconciliation hashes.
 - [ ] MacBook client plus Demerzel executor complete a record→lease→attempt→outbox→GitHub readback→
   receipt flow against one PostgreSQL epoch after restart.
@@ -90,13 +92,14 @@ unchanged.
 - [ ] Production commands cannot create/open BuilderOps or dispatcher SQLite/JSONL/JSON authority and
   fail closed if the API is unavailable.
   Verify: `tests/architecture/test_builderops_store_boundary.py::test_cutover_leaves_no_legacy_authority_producer`.
-- [ ] A post-import encrypted backup restores to a disposable database with matching epoch/counts/
-  hashes and passes `/readyz` plus outbox/lease integrity checks.
-  Verify: restore-drill receipt bound to the authoritative cutover backup.
+- [ ] A post-import encrypted full backup plus continuous WAL restores to a disposable database
+  through the highest acknowledged LSN/receipt sequence with matching epoch/counts/hashes and passes
+  `/readyz` plus outbox/lease integrity checks.
+  Verify: restore-through-watermark receipt bound to the authoritative full backup and WAL lineage.
 - [ ] Recovery rehearsal proves pre-activation backup rollback is unavailable after activation and
-  that compatible-image or point-in-time recovery preserves/replays every acknowledged transition,
-  idempotency result, receipt, outbox outcome, and fencing state before writes reopen, with no SQLite
-  activation path.
+  that compatible-image or full-backup + continuous-WAL recovery reaches the recorded highest
+  acknowledged LSN/receipt sequence and preserves every transition, idempotency result, receipt,
+  outbox outcome, and fencing state before writes reopen, with no SQLite activation path.
   Verify: `tests/ops/test_builderops_cutover.py::test_post_activation_recovery_cannot_rewind_acknowledged_state`.
 - [ ] Legacy stores are archived read-only with hashes/retention and #3686/PR #3695 are reconciled as
   superseded-target evidence.

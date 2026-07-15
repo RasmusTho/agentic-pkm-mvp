@@ -30,6 +30,9 @@ delta for delivered work, not a duplicate orchestrator and not a request to reop
   repo-scoped GitHub credential;
 - bind every attempt to `RepoRef`, governing Issue, PR, exact head SHA, workflow/model identity,
   lease/fencing token, and deterministic operation key;
+- independently load the delivery manifest from the target repository's protected default branch/
+  base SHA, bind its hash to the attempt/head, and select only the host credential mapping authorized
+  for that `RepoRef`;
 - retain bounded independent review/repair loops and restart recovery from durable API state;
 - execute merge only after required CI, local review gate, repository protection, current SHA, and
   scope checks pass;
@@ -41,8 +44,9 @@ delta for delivered work, not a duplicate orchestrator and not a request to reop
 
 The delivered #3603 consumer is retained, but its dispatcher store port is replaced by an API client.
 It claims a task bound to issue/PR/SHA, runs its bounded reviewer and repair policy, persists each
-attempt through the API, and submits a gated merge intent. The outbox executor reconciles GitHub and
-commits a readback receipt before completion.
+attempt through the API, re-resolves protected-base repo policy plus host credential mapping, and
+submits a gated merge intent. The outbox executor reconciles GitHub and commits a readback receipt
+before completion.
 
 ## Why This Matters
 
@@ -71,6 +75,10 @@ weaken them and does not enter Product Runtime.
 - The executor resolves GitHub/model credentials from host-secret references at effect time. Raw
   material never enters API requests, PostgreSQL, outbox payloads, receipts, artifacts, logs, or
   backups.
+- Client-supplied delivery policy/routing is advisory. Immediately before privileged execution, the
+  executor resolves the manifest from the protected default branch/base SHA, binds manifest hash +
+  base/head SHA + `RepoRef`, and rejects any host credential mapping or requested action outside
+  that repo policy.
 - A merge receipt binds the exact current SHA and GitHub readback; a local success return is
   insufficient.
 - Existing CI + review + protection gates are not weakened by autonomous execution.
@@ -85,8 +93,9 @@ weaken them and does not enter Product Runtime.
   external effects through reconciliation.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_restart_resumes_from_api_receipts_without_duplicate_attempt`.
 - [ ] Merge is rejected for stale SHA, missing required CI/review/protection gate, expired fencing,
-  or repo scope mismatch.
-  Verify: `tests/dispatcher/test_verification_merge.py::test_merge_requires_current_sha_all_gates_fencing_and_repo_scope`.
+  repo scope mismatch, client-vs-protected manifest mismatch, stale base/manifest hash, or host
+  credential mapping outside the target `RepoRef` policy.
+  Verify: `tests/dispatcher/test_verification_merge.py::test_merge_revalidates_protected_manifest_and_repo_credential_binding`.
 - [ ] A timed-out merge reconciles GitHub state before retry and emits one terminal readback receipt.
   Verify: `tests/dispatcher/test_verification_merge.py::test_timed_out_merge_reconciles_before_retry`.
 - [ ] Executor credentials are host-local and privileged-scope-only; API/status/logs and all durable

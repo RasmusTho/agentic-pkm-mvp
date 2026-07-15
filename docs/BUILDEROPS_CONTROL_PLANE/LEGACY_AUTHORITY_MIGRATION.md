@@ -26,6 +26,8 @@ host-identity lessons remain migration inputs.
 - freeze each source, record path/host/user/worktree, schema, size, timestamps, content hash, and
   writer status, and reject stale/foreign inventory acknowledgement;
 - create versioned read-only adapters and deterministic normalized identities/provenance;
+- derive `RepoRef`, scope, and stack only from recorded source evidence, registered worktree/repo
+  identity, or an acknowledged deterministic mapping; quarantine missing/ambiguous provenance;
 - dry-run and import tasks/events/records/attempts/idempotency/artifact references/receipts while
   reporting counts, deduplication, conflicts, omissions, and quarantine;
 - expire/tombstone all legacy live leases and create a new PostgreSQL authority epoch/fencing base;
@@ -70,6 +72,9 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 - No legacy lease becomes a live PostgreSQL lease.
 - Existing immutable inquiry artifacts may remain external by hash, but authoritative identity,
   state, promotion, and receipts import into PostgreSQL.
+- Unknown/ambiguous repo provenance is never defaulted from CWD or import target. Quarantined records
+  cannot authorize a lease, effect, promotion, or merge and unresolved authority-bearing provenance
+  blocks cutover.
 - Import is not production cutover and does not disable writers; BCP-06 owns the freeze window.
 
 ## Acceptance Criteria
@@ -90,6 +95,10 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 - [ ] Inquiry/epic-run identities, transitions, promotions, and receipts are represented in
   PostgreSQL with content-hash references to immutable artifacts and no file-only terminal state.
   Verify: `tests/builderops/control_plane/test_legacy_artifact_import.py::test_file_first_authority_imports_envelope_and_receipts`.
+- [ ] Legacy `RepoRef`/scope/stack is backfilled only from evidence-bound mappings; missing or
+  ambiguous provenance is quarantined as non-authoritative and cannot authorize a lease, effect,
+  promotion, or merge.
+  Verify: `tests/builderops/control_plane/test_legacy_import.py::test_unresolved_repo_provenance_is_quarantined_and_non_authoritative`.
 - [ ] A reconciliation receipt accounts for every expected producer/root and every source item as
   imported, deduplicated, quarantined, explicitly missing/inaccessible, intentionally excluded, or
   archived, and cutover rejects any unresolved coverage gap.
@@ -105,7 +114,8 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 ## How to Verify (Pre-Merge)
 
 - construct fixtures for omitted caller roots, multiple worktrees, host/container path divergence,
-  unmounted/inaccessible volumes, stale acknowledgements, partial imports, and source mutation;
+  unmounted/inaccessible volumes, ambiguous/missing repo provenance, stale acknowledgements, partial
+  imports, and source mutation;
 - run importer twice and compare database/result hashes; and
 - preserve #3686/PR #3695 evidence in the migration receipt.
 

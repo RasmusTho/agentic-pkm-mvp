@@ -60,7 +60,8 @@ reshape a Product SBS subsystem.
 ## Suggested Validation
 
 - keep a child/PR/receipt ledger on the parent;
-- require the BCP-06 end-to-end cutover and restore-drill receipts before BCP-07; and
+- require the BCP-06 end-to-end cutover and restore-through-acknowledged-watermark receipts before
+  BCP-07; and
 - close only through BCP-07's parent-closure handoff.
 
 ## Source Docs
@@ -77,7 +78,7 @@ reshape a Product SBS subsystem.
 | BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | `agent:blocked` on BCP-01 |
 | BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | `agent:blocked` on BCP-01 |
 | BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | `agent:blocked` on BCP-02 |
-| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline; API/PostgreSQL migration blocked on BCP-02/04; host pilot separately keyring-gated |
+| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline; API/PostgreSQL migration blocked on BCP-02/04; host auth green, pilot waits on #3812/PR #3813 merge/install |
 | BCP-06 | [#3793](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3793) | `agent:blocked` on BCP-03/04/05 |
 | BCP-07 | Existing #3690 | `agent:blocked` on BCP-06 |
 
@@ -95,5 +96,6 @@ authoritative cutover gates.
 ## Validation / Acceptance Path
 
 After BCP-06, attach the Demerzel end-to-end API/executor/GitHub readback receipt, legacy-import
-reconciliation, independent Product/BuilderOps lifecycle proof, and backup restore drill. Only then
+reconciliation, independent Product/BuilderOps lifecycle proof, and full-backup + continuous-WAL
+restore-through-acknowledged-watermark drill. Only then
 may #3690/BCP-07 promote current-state owner docs and close this parent.

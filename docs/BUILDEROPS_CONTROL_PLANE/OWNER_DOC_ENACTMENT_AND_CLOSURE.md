@@ -74,7 +74,7 @@ without changing Product runtime or inventing a new Product SBS component.
   Verify: reconciled anchors in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`,
   `docs/builderops/BUILDEROPS_VAULT_STORE.md`, and `docs/AGENT_ISSUE_DISPATCHER.md`.
 - [ ] Deployment/security/health/operations docs own the separate Compose/pin/credential/health/
-  backup/restore lifecycle without implying Product ownership.
+  full-backup/continuous-WAL/recovery lifecycle without implying Product ownership.
   Verify: reconciled anchors in `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, `docs/SECURITY.md`,
   `docs/HEALTH.md`, and `docs/OPERATIONS.md`.
 - [ ] BCP-INV-01 through BCP-INV-10 are registered only with the tests/gates/doctors that actually

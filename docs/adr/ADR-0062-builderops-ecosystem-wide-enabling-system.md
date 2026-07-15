@@ -91,6 +91,11 @@ transaction:
 3. the append-only BuilderOps receipt; and
 4. an outbox intent.
 
+The API does not acknowledge that transition until its commit/recovery LSN is synchronously durable
+in an encrypted recovery target outside the primary PostgreSQL volume. Durable recovery state tracks
+the highest acknowledged LSN/receipt sequence; authority readiness fails closed when that invariant
+cannot be maintained.
+
 GitHub cannot participate in that transaction. A privileged executor claims the durable outbox
 intent, performs the external effect with deterministic reconciliation, reads GitHub back, and then
 records the observed outcome in a new transaction and receipt. A timed-out call is unknown, never
@@ -116,7 +121,8 @@ and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns dist
 - versioned migration lineage and migration gate;
 - immutable release pin and deployment/rollback receipt;
 - `/healthz`, `/readyz`, structured status/metrics, and alert/probe path;
-- scheduled backup, retention, restore tooling, and a proved restore drill; and
+- scheduled full backup plus continuous encrypted WAL/recovery durability outside the primary
+  volume, retention, restore tooling, and a proved restore-through-acknowledged-LSN drill; and
 - API and executor credentials with rotation/revocation procedures.
 
 Product Runtime must not start, stop, proxy, health-gate, migrate, back up, mount, authenticate, or
@@ -133,12 +139,15 @@ subsequent correctness repairs are also present on `main`. That work is migrated
 BCP-05 moves its durable state and claims from dispatcher SQLite to the BuilderOps API and PostgreSQL
 authority. The merged PR is an immutable delivery baseline, not a branch to reopen or rewrite.
 
-The executor is a privileged BuilderOps client. It holds the narrowest practical repo-scoped GitHub
-credential and host-local model/subscription sessions; general MacBook clients and Product Runtime
-never receive those credentials. Merge remains gated by the governing Issue, current PR SHA,
-required CI, the repository review gate, repository protection, and a GitHub readback receipt.
-BuilderOps orchestration cannot broaden repository permission or make a merge authoritative by
-itself.
+The executor is a privileged BuilderOps client. It independently loads the delivery manifest from
+the target repository's protected default branch/base SHA, binds its hash plus `RepoRef` and current
+PR head SHA to the attempt, and selects only a host-side credential mapping already authorized for
+that `RepoRef`. Client-supplied policy is advisory and cannot weaken the server-side manifest or
+broaden the credential. The executor holds the narrowest practical repo-scoped GitHub credential
+and host-local model/subscription sessions; general MacBook clients and Product Runtime never
+receive those credentials. Merge remains gated by the governing Issue, current PR SHA, required CI,
+the repository review gate, repository protection, and a GitHub readback receipt. BuilderOps
+orchestration cannot broaden repository permission or make a merge authoritative by itself.
 
 ### D6 — Governed migration and one-way cutover
 
@@ -157,10 +166,11 @@ before disabling every legacy writer. It then removes Product Runtime BuilderOps
 archives the legacy sources read-only under an explicit retention policy, and verifies that no
 production command can recreate SQLite authority. Before authority activation, rollback may restore
 the pre-import PostgreSQL backup. After activation, rollback is forward-only: a compatible prior
-service image may run against the current database, or a proved point-in-time recovery may replay
-through the last acknowledged transition. No post-activation snapshot rewind may discard an
-accepted transition, idempotency result, receipt, outbox outcome, or fencing state. SQLite is never
-reactivated as authority.
+service image may run against the current database, or a proved point-in-time recovery must restore
+the full backup and continuous WAL through the recorded highest acknowledged LSN/receipt sequence.
+Writes reopen only after recovery and unknown-effect reconciliation reach that watermark. No
+post-activation snapshot rewind may discard an accepted transition, idempotency result, receipt,
+outbox outcome, or fencing state. SQLite is never reactivated as authority.
 
 ### D7 — Multi-repo provenance and promotion remain explicit
 
@@ -168,11 +178,15 @@ reactivated as authority.
 bearing records. TCD routing keys on `(repo, stack, task-class)` with global → stack → repo priors so
 learning from one stack does not silently distort another. Existing data is backfilled where
 evidence supports it and quarantined as `unknown`/unresolved where it does not; provenance is never
-invented.
+invented. An unresolved envelope cannot authorize a lease, external effect, promotion, or merge and
+blocks authoritative cutover until it is evidence-resolved or retained as non-authoritative
+quarantine.
 
 Promotion is addressed to one consumer repo and requires that repo's normal acceptance path. A
 BuilderOps standing in repo A is non-transitive to repo B. BuilderOpsReceipt projections may be
 committed into consumer repos as evidence, but projections are not the control-plane authority.
+The privileged executor re-resolves the repo-governed delivery manifest and host credential mapping;
+it never treats a client-selected manifest or routing prior as merge authority.
 
 ### D8 — Layer on ADR-0010; extraction triggers split runtime from source
 
@@ -214,13 +228,15 @@ requires an owner decision before specification and backlog preparation.
   SQLite is superseded as the production target.
 - Issue #3603 remains the review/merge-orchestration workstream after PR #3620 merged. BCP-05 reuses
   that delivered implementation and migrates its dispatcher-SQLite authority after BCP-02/04; it
-  does not reopen the merged PR or create another orchestrator. The host remains disabled until the
-  separately recorded interactive keyring authorization and pilot receipt exist.
+  does not reopen the merged PR or create another orchestrator. Host authentication is green; the
+  host remains disabled while #3812 / PR #3813 is active and until the subsequent low-risk pilot
+  receipt exists.
 - Issue #3690 remains the owner-doc enactment task and must be rewritten to reflect this topology
   after the BCP-06 cutover is proved.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves
   identity and provenance or emits a reviewable quarantine/conflict receipt.
-- Independent backup/restore is a launch gate. A persistent volume alone is not a backup.
+- Independent full-backup + continuous-WAL restore-through-watermark is a launch gate. A persistent
+  volume or snapshot alone is not recoverability.
 - Product availability and BuilderOps availability are independent: either may be down without the
   other process owning or restarting it.
 

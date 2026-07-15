@@ -32,11 +32,11 @@ required CI, review gates, repository protection, and GitHub merge results remai
 | # | Task | ID | Issue | Delivers | Depends on |
 |---|---|---|---|---|---|
 | 1 | [PostgreSQL Transaction Kernel](POSTGRES_TRANSACTION_KERNEL.md) | BCP-01 | #3792 | Store port, PostgreSQL schema/migrations, fenced leases, atomic idempotency + state + receipt + outbox | — |
-| 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 | Separate service app/Compose project, auth, release pin, health, backup/restore, trust boundary | BCP-01 |
+| 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 | Separate service app/Compose project, auth, release pin, health, full backup + continuous WAL recovery, trust boundary | BCP-01 |
 | 3 | [Legacy Authority Migration](LEGACY_AUTHORITY_MIGRATION.md) | BCP-03 | #3789 | Complete SQLite/JSONL/JSON inventory, read-only import, conflict/quarantine report, authority epoch | BCP-01 |
 | 4 | [API-Only Client Cutover](API_ONLY_CLIENT_CUTOVER.md) | BCP-04 | #3791 | MacBook skills/CLI/automation use authenticated API and fail closed with no local/direct-DB fallback | BCP-02 |
 | 5 | [Demerzel Review And Merge Orchestration](DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md) | BCP-05 | existing #3603; baseline PR #3620 merged | Migrate the delivered executor to API/PostgreSQL/outbox and scoped merge authority | BCP-02, BCP-04 |
-| 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove restore/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
+| 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove restore-through-watermark/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
 | 7 | [Owner-Doc Enactment And Closure](OWNER_DOC_ENACTMENT_AND_CLOSURE.md) | BCP-07 | existing #3690 | Reconcile shipped Builder System/store/dispatcher/deployment/security/health docs and close parent | BCP-06 |
 
 Execution order:
@@ -57,19 +57,23 @@ not by rewriting that merge.
 2. **API-only authority.** Every production client, including the Demerzel executor, uses the
    authenticated API. Only the BuilderOps data layer reaches PostgreSQL.
 3. **Atomic local transition.** Idempotency result, guarded state mutation, receipt, and outbox intent
-   commit in one PostgreSQL transaction. If any part fails, none becomes visible.
+   commit in one PostgreSQL transaction. If any part fails, none becomes visible. The API
+   acknowledges only after the commit/recovery LSN is durable outside the primary volume.
 4. **Reconciled external effects.** An outbox timeout is `unknown`, not `failed`. Retry reads GitHub
    before repeating; terminal success requires GitHub readback bound to repo and current SHA.
 5. **Fenced leases.** Stale workers cannot mutate after expiry/reassignment; fencing survives API,
    worker, and database restarts.
-6. **Credential non-transitivity and non-persistence.** A credential/lease for repo A cannot act on
-   repo B. Product and general clients cannot obtain merge credentials. Raw secrets never enter
-   PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, or BuilderOps backups.
+6. **Credential/policy non-transitivity and non-persistence.** A credential/lease for repo A cannot
+   act on repo B. The privileged executor re-resolves the protected-base delivery manifest and a
+   host-side `RepoRef` credential mapping; client-selected policy cannot weaken it. Product and
+   general clients cannot obtain merge credentials. Raw secrets never enter PostgreSQL, outbox
+   payloads, receipts, artifacts, logs/metrics, or BuilderOps backups.
 7. **Independent lifecycle.** Product start/stop/deploy/health/backup cannot start, stop, publish, or
    restore BuilderOps, and BuilderOps failure does not change Product process ownership.
 8. **No authority rewind.** Before activation, rollback may use the pre-import PostgreSQL backup.
-   After activation, recovery preserves every acknowledged transition through a compatible image or
-   proved point-in-time replay; it never rewinds accepted state or re-enables SQLite/JSONL/JSON.
+   After activation, a compatible image or full-backup + continuous-WAL recovery must reach the
+   highest acknowledged LSN/receipt sequence before writes reopen; it never rewinds accepted state
+   or re-enables SQLite/JSONL/JSON.
 9. **Artifact integrity.** Large artifacts may remain content-addressed files, but identity, state,
    terminal receipts, and promotion/outbox status are PostgreSQL-authoritative.
 10. **Fail-loud cutover.** Incomplete producer-derived source coverage, an unenumerated host/
@@ -106,19 +110,22 @@ Partial-failure examples:
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once`.
 - [ ] A producer-derived manifest proves the complete MacBook/Demerzel worktree/container source
   universe, and every expected source is imported, quarantined, explicitly accounted missing, or
-  archived, with no live lease carried into the new epoch.
+  archived, with no live lease carried into the new epoch. Evidence-backed repo provenance is
+  backfilled; unresolved provenance remains non-authoritative quarantine.
   Verify: BCP-03 migration reconciliation receipt plus BCP-06 cutover receipt.
 - [ ] Product Runtime contains no BuilderOps route, process bootstrap, data mount, secret, or health
   dependency, and its lifecycle remains healthy with BuilderOps stopped.
   Verify: `tests/architecture/test_builderops_product_separation.py::test_product_runtime_has_no_builderops_ownership`.
-- [ ] An encrypted backup restores into a disposable database and passes readiness plus invariant
-  checks before authoritative cutover.
-  Verify: BCP-02 restore-drill receipt and BCP-06 cutover gate.
+- [ ] A full backup plus synchronously durable continuous WAL restores into a disposable database
+  through the highest acknowledged LSN/receipt sequence and passes readiness/invariant checks before
+  authoritative cutover.
+  Verify: BCP-02 restore-through-watermark drill and BCP-06 cutover/recovery gate.
 - [ ] Durable-state and restored-backup negative scans prove no raw client/database/GitHub/model
   credential is persisted, and post-activation recovery cannot lose acknowledged state.
   Verify: BCP-02 credential-persistence test plus BCP-06 no-authority-rewind rehearsal.
-- [ ] A verification-gated merge uses the repo-scoped executor credential, binds the current PR SHA,
-  and becomes terminal only after GitHub readback.
+- [ ] A verification-gated merge uses the repo-scoped executor credential, independently binds the
+  protected-base delivery manifest and host credential mapping to the current PR SHA, and becomes
+  terminal only after GitHub readback.
   Verify: the migrated #3603/#3620 test baseline and BCP-05 runtime receipt.
 
 ## Backlog reconciliation

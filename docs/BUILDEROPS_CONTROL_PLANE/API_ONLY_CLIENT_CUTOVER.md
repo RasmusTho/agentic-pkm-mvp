@@ -69,6 +69,8 @@ removes direct operational-store access from builder clients.
 - BCP-04 prepares clients; BCP-06 chooses the authoritative cutover moment.
 - Every authority-bearing request names one `RepoRef`; no implicit current-directory repo inference
   may authorize a mutation.
+- Client manifest/routing selection improves request formation but is never privileged authority;
+  BCP-05 independently re-resolves protected-base policy and host credential binding.
 
 ## Acceptance Criteria
 

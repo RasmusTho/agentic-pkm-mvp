@@ -26,6 +26,8 @@ port and PostgreSQL implementation before network deployment or migration can be
   authority-bearing record, with repo-namespaced leases, idempotency keys, outbox operations, and
   promotions;
 - make guarded state + idempotency result + receipt + outbox intent one transaction;
+- expose the committed receipt sequence and PostgreSQL recovery LSN so the API can withhold
+  acknowledgement until BCP-02 proves independent synchronous durability;
 - implement atomic claim/heartbeat/release/complete with monotonically fenced ownership;
 - implement an outbox claim/retry/reconciliation state machine with deterministic operation keys;
 - retain SQLite only as an explicitly injected test/migration adapter, never an automatic runtime
@@ -62,6 +64,8 @@ by BuilderOps governance and remains outside Product persistence authority.
 - A timed-out external call stays `unknown` until reconciled.
 - Stale fencing tokens cannot mutate after lease expiry/reassignment.
 - File projections/artifacts cannot be the sole terminal-state or receipt authority.
+- A transaction result is not externally acknowledgeable without its committed receipt sequence and
+  recovery LSN; BCP-02 owns the independent durability gate.
 - Missing/ambiguous repo scope fails closed; an identity, lease, idempotency key, or promotion in one
   repo namespace cannot collide with or authorize another.
 - Do not yet switch production clients or remove Product routes.
@@ -90,6 +94,9 @@ by BuilderOps governance and remains outside Product persistence authority.
   idempotency/outbox/promotion identities are repo-namespaced so repo A cannot collide with or
   authorize repo B.
   Verify: `tests/builderops/control_plane/test_multirepo_namespace.py::test_authority_envelope_is_required_and_repo_namespaces_are_isolated`.
+- [ ] Each accepted transaction returns a committed receipt sequence and recovery LSN bound to its
+  idempotent result for the service acknowledgement gate.
+  Verify: `tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_transaction_result_binds_receipt_sequence_and_recovery_lsn`.
 
 ## Out of Scope
 

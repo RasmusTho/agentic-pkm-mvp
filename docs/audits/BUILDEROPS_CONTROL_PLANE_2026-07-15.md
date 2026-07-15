@@ -1,6 +1,6 @@
 State: Advisory architecture audit snapshot, 2026-07-15. Structural evidence baseline: `origin/main` at `1e66c16120a9bbd0b1c91c3b50162be805d407c7`; lifecycle reconciliation refreshed through `origin/main` at `c4dbfc420564f9e810543737086f1b6808f6ddf3` the same day. Subordinate to owner docs and ADRs. Executable handoff: `docs/BUILDEROPS_CONTROL_PLANE/`.
 Doc role: Reference (architecture audit)
-Authority: Evidence and synthesis only. ADR-0010 owns the authority seam; proposed ADR-0062 owns the target decision after acceptance; GitHub Issues own implementation work.
+Authority: Evidence and synthesis only. ADR-0010 owns the authority seam; accepted ADR-0062 owns the target decision; GitHub Issues own implementation work.
 Owner: BuilderOps governance / Architecture spine
 Temporal class: Point-in-time audit; refresh rather than silently treating live-state claims as current.
 
@@ -16,8 +16,9 @@ topology, deployment/health/backup contracts, open ADR PR #3691, issue #3686 / P
 existing Demerzel orchestration work in issue #3603 / PR #3620. Three independent read-only evidence
 passes covered runtime/persistence, Demerzel operations, and backlog reconciliation. No live host was
 queried, so host claims below are limited to repository-recorded evidence. A same-day lifecycle
-refresh records PR #3620 as merged, its correctness follow-ups on `main`, and #3603 still open with
-the host disabled pending interactive keyring authorization and pilot evidence.
+refresh records PR #3620 as merged and its correctness follow-ups on `main`. A later GitHub receipt
+on #3603 (2026-07-15T13:21:05Z) supersedes the earlier credential snapshot: ChatGPT/keyring auth is
+green, the host remains disabled, and active #3812 / PR #3813 must merge/install before the pilot.
 
 ## 2. Authority baseline
 
@@ -136,18 +137,22 @@ delivery plus deterministic reconciliation and authoritative readback. This is n
 
 Derive the expected source/root universe from every legacy producer/default plus MacBook/Demerzel
 worktree, container, automation, and host inventory; then freeze every SQLite/JSONL/JSON authority
-source, hash it, dry-run a versioned read-only import, preserve provenance, quarantine conflicts,
+source, hash it, dry-run a versioned read-only import, preserve evidence-backed repo provenance and
+quarantine missing/ambiguous provenance or conflicts,
 invalidate live leases into a new authority epoch, back up before import, reconcile coverage/counts/
 hashes, cut all clients to the API, disable legacy writers, and archive sources read-only. Before
-activation the pre-import backup is available; after activation recovery may not rewind any
-acknowledged state. No recovery path re-enables SQLite.
+activation the pre-import backup is available; after activation a full backup plus continuous WAL
+must restore through the recorded highest acknowledged LSN/receipt sequence before writes reopen.
+No recovery path rewinds acknowledged state or re-enables SQLite.
 
 ### RQ4 — Where does merge authority live?
 
 In a privileged Demerzel executor with repo-scoped GitHub permission and host-local model sessions.
-It is a BuilderOps API client, not a database client. It may execute only an outbox/attempt that
-passed issue/SHA/CI/review/protection gates and becomes terminal only after GitHub readback. General
-clients and Product Runtime never receive merge credentials.
+It is a BuilderOps API client, not a database client. It independently resolves the protected-base
+repo delivery manifest and host credential mapping, binds them to `RepoRef` plus base/head SHA, and
+may execute only an outbox/attempt that passed issue/SHA/CI/review/protection gates. It becomes
+terminal only after GitHub readback. General clients and Product Runtime never receive merge
+credentials.
 Raw GitHub/model/client/database credentials stay in host secret stores and never enter PostgreSQL,
 outbox payloads, receipts, artifacts, logs/metrics, or BuilderOps backups.
 
@@ -180,8 +185,8 @@ Minimum deployable unit:
 - `/healthz` for process liveness and `/readyz` for database/schema/outbox readiness;
 - structured secret-safe status for queue age, dead letters, lease conflicts, API auth failures,
   GitHub rate-limit/credential state, and executor heartbeat;
-- scheduled encrypted backup outside the database volume, retention, and a disposable restore drill;
-  and
+- scheduled encrypted full backup plus continuous synchronous WAL durability outside the primary
+  volume, acknowledged-LSN tracking, retention, and a disposable restore-through-watermark drill; and
 - a host-level probe independent of Product `/readyz` and Product worker heartbeat.
 
 ## 7. Invariant kernel
@@ -190,13 +195,13 @@ Minimum deployable unit:
 |---|---|---|---|
 | BCP-INV-01 | MUST | Every production authority-bearing client uses authenticated API; no direct DB/local fallback. | client contract tests + static inventory gate |
 | BCP-INV-02 | MUST | Exactly one production PostgreSQL authority epoch exists. | schema metadata + startup/readiness gate |
-| BCP-INV-03 | MUST | State, idempotency, receipt, and outbox intent commit atomically. | transaction/fault-injection tests |
+| BCP-INV-03 | MUST | State, idempotency, receipt, and outbox intent commit atomically; API acknowledgement waits for independent recovery-LSN durability. | transaction/fault-injection + recovery-durability tests |
 | BCP-INV-04 | MUST | External effects become terminal only after deterministic reconciliation/readback. | outbox crash-window tests |
 | BCP-INV-05 | MUST | Lease fencing rejects stale workers across expiry/restart. | concurrent claim/heartbeat tests |
 | BCP-INV-06 | MUST | Product Runtime owns no BuilderOps route, process, data, credential, or health path. | architecture/Compose route-removal gate |
-| BCP-INV-07 | GATE | Independent migrations, backup, restore drill, release pin, health, and no-authority-rewind recovery pass before cutover. | deploy/cutover/recovery receipt |
-| BCP-INV-08 | GATE | Producer-derived host/worktree/container/automation coverage proves all legacy stores are inventoried, frozen, reconciled, and archived; live leases are not imported. | expected-source manifest + reconciliation receipt |
-| BCP-INV-09 | MUST | Credentials are repo-scoped where applicable, unavailable to Product/general clients, and absent from all durable state/backups. | secret/permission inventory + durable-state/restore negative tests |
+| BCP-INV-07 | GATE | Independent migrations, full backup + continuous WAL, restore through acknowledged LSN, release pin, health, and no-authority-rewind recovery pass before cutover. | deploy/cutover/recovery receipt |
+| BCP-INV-08 | GATE | Producer-derived host/worktree/container/automation coverage proves all legacy stores are inventoried, frozen, provenance-resolved or quarantined, reconciled, and archived; live leases are not imported. | expected-source/provenance manifest + reconciliation receipt |
+| BCP-INV-09 | MUST | Executor revalidates protected-base repo policy and credential binding; credentials are unavailable to Product/general clients and absent from all durable state/backups. | manifest/secret/permission + durable-state/restore negative tests |
 | BCP-INV-10 | DOCTOR | Outbox age/dead letters, lease conflicts, credential/rate-limit state, and executor heartbeat are visible without secrets. | status/metrics contract |
 
 These are target-state invariants. They enter `docs/testing/invariant-tests.md` only with the task

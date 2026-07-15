@@ -30,16 +30,19 @@ Product ownership.
 - provide independent deploy/rollback receipts and a host probe;
 - implement `/healthz`, `/readyz`, and secret-safe status/metrics for database/schema, outbox age and
   dead letters, lease conflicts, auth failures, rate limits/credential state, and executor heartbeat;
-- provide scheduled encrypted backup outside the database volume, retention, documented restore,
-  and an automated restore drill into a disposable database; and
+- provide scheduled encrypted full backups plus continuous WAL durability to an independent
+  recovery target outside the primary database volume, retention, acknowledged-LSN tracking,
+  documented point-in-time restore, and an automated restore-through-watermark drill; and
 - prove Product Compose and Product credentials/config are not dependencies.
 
 ## Concretely
 
 The slice adds a BuilderOps-only Compose invocation and service entrypoint such that an operator can
 deploy a pinned image, wait for migrations, call authenticated `/healthz` and `/readyz`, inspect
-secret-safe status, take a backup, restore it into an isolated project, and change to a compatible
-BuilderOps image without rewinding authoritative data or running a `pkm-*` Compose command.
+secret-safe status, prove synchronous recovery durability before mutation acknowledgement, take a
+full backup, restore it plus WAL through the highest acknowledged LSN into an isolated project, and
+change to a compatible BuilderOps image without rewinding authoritative data or running a `pkm-*`
+Compose command.
 
 ## Why This Matters
 
@@ -65,10 +68,12 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - Raw client, database, GitHub, merge, and model/session credentials are never returned to clients or
   persisted in repo config, PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, or
   BuilderOps backups/restores. Durable records carry non-secret references and scope metadata only.
-- `/healthz` is process liveness; `/readyz` fails on unavailable DB, wrong schema/epoch, or an
-  authority-threatening outbox condition.
-- A persistent volume is not accepted as backup; backup/restore negative scans must also prove the
-  credential exclusion boundary.
+- `/healthz` is process liveness; `/readyz` fails on unavailable DB, wrong schema/epoch, an
+  authority-threatening outbox condition, or inability to keep the commit/recovery LSN synchronously
+  durable in the independent recovery target.
+- A persistent volume or snapshot alone is not accepted as recoverability. Full backup + continuous
+  WAL must restore through the highest acknowledged LSN/receipt sequence; backup/restore negative
+  scans must also prove the credential exclusion boundary.
 - Do not cut production clients or expose the service as authority until BCP-03/04/05 gates pass.
 
 ## Acceptance Criteria
@@ -88,9 +93,14 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - [ ] Deploy and rollback use a BuilderOps-specific immutable pin and emit receipts that identify
   image SHA, schema version, and authority epoch without restoring an older authoritative snapshot.
   Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
-- [ ] A scheduled encrypted backup can be restored into a disposable database and pass schema,
-  count, integrity, and readiness checks.
-  Verify: `tests/ops/test_builderops_backup_restore.py::test_backup_restore_drill_reaches_ready_with_matching_integrity`.
+- [ ] Authority-bearing API responses are withheld until the transaction's recovery LSN is
+  synchronously durable outside the primary volume, and readiness fails closed when that guarantee
+  or its lag bound is unavailable.
+  Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_authority_ack_waits_for_independent_recovery_lsn`.
+- [ ] An encrypted full backup plus continuous WAL restores into a disposable database through the
+  highest acknowledged LSN/receipt sequence and passes schema, count, integrity, outbox/lease, and
+  readiness checks.
+  Verify: `tests/ops/test_builderops_backup_restore.py::test_full_backup_and_wal_restore_through_acknowledged_watermark`.
 - [ ] Negative scans of PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, encrypted
   backup bytes, and a restored database find no raw client/database/GitHub/model credential; only
   non-secret reference/fingerprint/scope/rotation metadata is durable.
@@ -107,7 +117,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 
 - render/validate Compose config under the dedicated project name;
 - run auth-negative, credential-redaction, durable-state, and restored-backup secret scans;
-- execute backup plus disposable restore in an isolated test project; and
+- interrupt recovery durability to prove acknowledgement/readiness fails closed, then execute full
+  backup + WAL restore through the acknowledged watermark in an isolated test project; and
 - run `ruff check app tests` plus focused ops tests.
 
 ## Related Docs
