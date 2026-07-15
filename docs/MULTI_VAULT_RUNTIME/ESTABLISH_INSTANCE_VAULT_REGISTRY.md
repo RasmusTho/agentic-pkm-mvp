@@ -48,11 +48,16 @@ This slice promotes the existing seed without changing content-vault authority.
   the global fence blocks every claim/start until a fenced all-channel re-key and ledger
   reconstruction proves one owner per canonical root. No consumer bypasses the lease.
 - Add the host-local cross-channel ownership ledger shared by dev/test/prod/native registration and
-  lifecycle preflight. It stores channel plus stable binding and an HMAC fingerprint of canonical
-  filesystem identity, not raw paths. Registration/relocation holds its global lock and uses a
-  recoverable pending reservation → per-channel registry commit → active lease protocol. A matching
-  root already active/pending in another channel fails loud. Explicit transfer drains/stops the old
-  channel before release/claim; recovery never permits two active owners.
+  lifecycle preflight. It stores channel plus stable binding and HMAC fingerprints of the canonical
+  filesystem identity and its canonical ancestor-identity chain, not raw paths. Canonicalization
+  resolves symlinks, bind-mount aliases, and filesystem identity before comparison. Registration or
+  relocation under the global lock rejects equality and either direction of ancestor/descendant
+  overlap with every active or pending root; `/vault` and `/vault/project` therefore cannot belong to
+  different channels. Registration/relocation uses a recoverable pending reservation → per-channel
+  registry commit → active lease protocol. Explicit cross-channel transfer is implemented but
+  remains capability-gated until MVR-05C proves production foreground read and write lease fencing;
+  before that floor every transfer request fails `capability_not_ready`. Once enabled, transfer
+  drains/stops the old channel before release/claim; recovery never permits two active owners.
 - Registration removal uses a crash-safe `draining_removal` ledger transition under the global
   fence: reject new request/lifecycle acquisition, drain or fail every consumer holding the binding,
   commit the per-channel registry removal, then release the ownership lease in one recoverable
@@ -161,7 +166,7 @@ then carries only its mapped acceptance criteria and validation commands:
    rejects new-schema picker/registration writes until the 01B rollback capability is present.
 2. **MVR-01B — durable deployment and ownership:** per-channel instance-state export/import,
    cross-process store identity, host-global ledger/key lifecycle, first-rollout legacy-owner
-   bootstrap, channel transfer, latest-revision legacy export/transformer for scalar-representable
+   bootstrap, dormant channel-transfer protocol, latest-revision legacy export/transformer for scalar-representable
    state, protected prod-volume backup/restore, guarded previous-image startup, and cutover owner-doc writebacks. It depends on 01A. If
    more than one registration exists, active volume cutover remains dormant until 01C is present.
 3. **MVR-01C — multi-registration rollback lineage:** explicit scalar target, authenticated
@@ -259,10 +264,15 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   fails closed behind the global fence (a lost key requires globally fenced re-key plus ledger
   reconstruction, never metadata-only restore).
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
-- [ ] **MVR-01B:** Registering or starting the same canonical content root in two release channels is rejected by
-  the shared ownership ledger; injected crashes in reserve/commit/activate/transfer recover to at
-  most one active owner without exposing raw host paths.
-  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_same_content_root_cannot_be_active_in_two_channels`
+- [ ] **MVR-01B:** Registering, relocating, or starting equal, ancestor, or descendant canonical
+  content roots in two release channels is rejected by the shared ownership ledger, including
+  symlink and bind-mount aliases; injected crashes in reserve/commit/activate recover to at most one
+  non-overlapping active owner without exposing raw host paths.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels`
+- [ ] **MVR-01B:** Cross-channel transfer remains dormant after the ownership protocol ships: every
+  production transfer request fails capability-not-ready until the MVR-05C foreground read/write
+  ownership-fence floor is active, and an injected direct call cannot release the source lease.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor`
 - [ ] **MVR-01B:** Removing an actively leased registration enters a recoverable draining state,
   blocks new consumers, drains existing request/lifecycle holders, commits removal, and only then
   releases ownership; crash injection at each phase yields neither dual ownership nor a stranded lease.

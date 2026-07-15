@@ -35,7 +35,8 @@ cross-process truth belong here.
   re-authorized at lifecycle start; a missing/unauthorized member remains explicitly failed.
 - Persist an intent mode that distinguishes `compatibility` from `explicit`. A missing legacy field
   is initialized exactly once as compatibility mode: MVR-06 snapshots the live bridge binding when
-  present, otherwise the current default/no-vault result, into nullable durable
+  present, otherwise resolves the current instance default, then the explicit legacy bootstrap
+  (`VAULT_ROOT`/`WATCHER_VAULT_PATH` through the MVR-02 adapter), then no-vault, into nullable durable
   `compatibility_binding_id`. Restart reuses that exact binding and never re-derives another from
   unrecorded interaction history or default. While mode remains compatibility, a production legacy
   choose/open command or explicit MVR-02 default set/clear atomically replaces/clears this field and
@@ -112,6 +113,12 @@ cross-process truth belong here.
   unknown/ambiguous row remains quarantined for explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
   readiness degraded/blocked but a valid global row never blocks multi-binding startup merely for
   lacking a binding.
+- Before multi-worker activation, prove the production PostgreSQL poll/claim/dispatch/ack seam owns
+  each row exactly once under concurrent independent binding workers. The claim must be atomic in the
+  database (not a plain select followed by a later acknowledgement), preserve singleton ownership for
+  `global` work, and scope `vault_bound` ownership to its binding without permitting a second worker
+  to dispatch the same row. Repository CI runs the race against provisioned PostgreSQL on the exact
+  delivery SHA and errors rather than skips when PostgreSQL or the required claim semantics are absent.
 - Revalidate every not-yet-in-flight vault-bound row against the current stable binding, compatible
   registry revision, authorization verdict, routing class, and payload locator before dispatch.
   Captured request/background context and generation remain immutable producer provenance, but a
@@ -228,6 +235,11 @@ migration, preflight, and fail-loud gate merge together.
   instance default; a later legacy choose/open picker event or explicit default set/clear changes it
   while compatibility mode remains active, and governed background administration enters explicit mode.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback`
+- [ ] **MVR-06B:** An existing headless one-vault install with only `VAULT_ROOT` or
+  `WATCHER_VAULT_PATH`, no live picker bridge binding, and no explicit instance default migrates that
+  legacy bootstrap to exactly one durable compatibility binding; restart keeps its watcher active
+  instead of persisting no-vault.
+  - Verify: `tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher`
 - [ ] **MVR-06B:** After bridge retirement, a legacy choose/open picker change still atomically updates the
   compatibility binding and drains/rebinds the supervisor; generic scoped selection and every picker
   event after explicit-mode transition leave background intent unchanged.
@@ -302,6 +314,12 @@ migration, preflight, and fail-loud gate merge together.
   global topics continue exactly once, scoped vault-bound rows retain one canonical lineage, and
   unknown/ambiguous rows remain quarantined without dispatch or acknowledgement.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06_requires_complete_mvr05_classification_receipt`
+- [ ] **MVR-06D:** Independent production workers racing the PostgreSQL poll/claim/dispatch/ack path
+  acquire one atomic dispatch owner for each global or vault-bound row; no worker can dispatch the
+  same row twice, and the test fails rather than skips without the provisioned database or required
+  locking/claim constraints.
+  - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_binding_workers_claim_each_row_once` +
+    successful exact-SHA `integration-nightly / pg-contracts` workflow receipt on #2143
 - [ ] **MVR-06A:** The MVR-06 minimum-runtime floor commits before the first background-intent field and blocks
   every older API/watcher/worker before registry access; fault injection leaves either untouched
   MVR-05 state or an MVR-06-compatible lineage.
@@ -350,6 +368,7 @@ migration, preflight, and fail-loud gate merge together.
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/integration/test_multi_vault_lifecycle_and_dimension.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/migrations/test_multi_vault_background_intent_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
+- exact-SHA `integration-nightly / pg-contracts`: `pytest -q tests/integration/test_multi_vault_outbox_pg_claims.py`; missing PostgreSQL or claim constraints is an error, never a skip
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings or multi_vault"`
 - `mypy app`
 - `pytest -q -m "not pg"`

@@ -275,13 +275,16 @@ to cross its floor; independently safe explicit-global work may continue.
   filesystem/retrieval/cache read revalidates or drains that in-flight request and never returns data
   from the stale root or authorization snapshot.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_authority_or_locator_change_blocks_inflight_read_before_effect`
-- [ ] **MVR-05B:** After an explicit cross-channel transfer releases the source lease, a restarted source
-  API rejects foreground resolution/read from its stale registry and selection; only the destination
-  channel with the active binding/root-fingerprint lease may read.
-  - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_channel_lease_transfer`
-- [ ] **MVR-05C:** The same transfer/restart scenario rejects governed writes from the stale source
-  before token use or filesystem effect, while the destination can write only after current GOV
-  authorization under its active ownership lease.
+- [ ] **MVR-05B:** With cross-channel transfer still dormant, production request resolution and read
+  seams require the current channel's active binding/root-fingerprint lease. A staged transfer
+  simulation followed by source restart proves stale source registry/selection state cannot read the
+  destination-owned root.
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer`
+- [ ] **MVR-05C:** After both production read and governed-write lease seams are installed, MVR-05C
+  atomically advances the foreground-ownership floor and enables MVR-01B cross-channel transfer. The
+  production transfer/restart scenario rejects reads and writes from the stale source before token
+  use or filesystem effect, while the destination can access only under its matching active lease
+  and current GOV authorization; failure to advance the floor leaves transfer dormant.
   - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer`
 - [ ] **MVR-05C:** The production capture path issues, persists, validates, and receipts the expanded token bound
   to principal/instance/scope/binding revision/auth epoch; legacy-shaped tokens and stale epochs fail

@@ -48,8 +48,10 @@ enabled consumer.
 
 Per-channel registry isolation is not sufficient because current containers can see shared host
 roots. A separate host-local **channel ownership ledger** is mounted consistently into every channel
-and native runtime. Under one global mode-`0600` lock it records `channel_id`, stable binding, and an
-HMAC fingerprint of canonical filesystem identity (never a raw host path). One CSPRNG-generated,
+and native runtime. Under one global mode-`0600` lock it records `channel_id`, stable binding, and
+HMAC fingerprints of canonical filesystem identity plus its canonical ancestor-identity chain
+(never a raw host path). Equality and either direction of ancestor/descendant overlap are conflicts,
+including after symlink or bind-mount alias resolution. One CSPRNG-generated,
 host-global ledger key lives mode `0600` in private host app-data outside every channel volume and
 is mounted read-only into all channel/native consumers; generation, permissions, durable backup,
 and key ID are host-bootstrap truth. Missing, ephemeral, channel-specific, mismatched, or permissive
@@ -59,9 +61,10 @@ owner resumes; interrupted rotation recovers one complete generation and never c
 Registration/relocation
 uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
-active in dev/test/prod/native simultaneously. Explicit transfer drains/stops the source channel,
-commits release, then claims the destination; crashes leave a blocking recoverable reservation,
-never two owners or an unowned running lifecycle.
+active or nested inside another active root in dev/test/prod/native simultaneously. Explicit transfer
+remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
+drains/stops the source channel, commits release, and claims the destination; crashes leave a
+blocking recoverable reservation, never two owners or an unowned running lifecycle.
 
 The first MVR-01 rollout is a host-wide ownership migration, not a per-channel best effort. Before
 any new reservation is accepted, deployment acquires a global bootstrap fence, blocks legacy
@@ -264,6 +267,9 @@ Partial delivery remains fail-closed:
 
 - after issue 01C but before task 02, registrations exist but `last_active_vault_ref` remains the
   compatibility behavior; no registration is silently promoted to default;
+- after issue 01B and until issue 05C advances the foreground-ownership floor, cross-channel transfer
+  is implemented but production requests fail capability-not-ready; the source lease cannot be
+  released while legacy foreground read/write paths remain unfenced;
 - after task 02 but before task 03, default resolution is available only through explicit
   background/compatibility adapters; requests do not pretend to be session-scoped;
 - after task 03 but before issues 05A–06D, migrated callers may use ActiveContextSet while unmigrated
