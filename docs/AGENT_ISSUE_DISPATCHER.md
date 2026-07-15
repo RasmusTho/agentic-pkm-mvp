@@ -82,8 +82,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   monotonically as new findings become linked to the same PR. Each accepted extension is committed
   atomically with the new current head in a separate cumulative authority field; the original
   request remains immutable audit evidence, and every later takeover must contain the full durable
-  cumulative set. Live governing-contract checks and trusted-evidence projections consume that
-  cumulative field, so evidence accepted by a takeover cannot disappear from later closure gates.
+  cumulative set. The same authenticated monotonic gate applies when a stale-head superseded chain
+  reopens. Live governing-contract checks and trusted-evidence projections consume that cumulative
+  field, so evidence accepted by a takeover cannot disappear from later closure gates.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
