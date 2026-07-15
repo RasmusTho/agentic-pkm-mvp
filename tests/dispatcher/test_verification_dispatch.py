@@ -265,6 +265,156 @@ def test_legacy_unknown_field_replay_fails_closed_without_exposure_or_mutation(
     assert after_attempts == before_attempts
 
 
+_VERIFICATION_MUTATION_TABLES = (
+    ("verification_runs", "run_id"),
+    ("verification_attempts", "attempt_id"),
+    ("verification_exceptions", "exception_id"),
+)
+
+
+def _verification_state_snapshot(state) -> dict[str, list[dict[str, object]]]:
+    with state.store._connect() as conn:
+        return {
+            table: [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY {key}")]
+            for table, key in _VERIFICATION_MUTATION_TABLES
+        }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "ingest",
+        "claim",
+        "heartbeat",
+        "start",
+        "terminal",
+        "rebind_head",
+        "backoff",
+        "defer_unclaimed",
+        "supersede_unclaimed",
+        "record_attempt",
+        "record_attempt_batch",
+        "exception",
+    ],
+)
+@pytest.mark.parametrize("corruption", ["unknown_request_field", "row_identity_mismatch"])
+def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
+    tmp_path, mutation: str, corruption: str
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = None
+    if mutation not in {
+        "ingest",
+        "claim",
+        "defer_unclaimed",
+        "supersede_unclaimed",
+    }:
+        claimed = state.claim(run.run_id, "coordinator")
+        assert claimed.lease_id is not None
+
+    secret = "corrupted-row-private-key-must-not-escape"
+    with state.store._connect() as conn:
+        if corruption == "unknown_request_field":
+            corrupted_request = dict(run.request)
+            corrupted_request["credential"] = {"private_key": secret}
+            conn.execute(
+                "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+                (json.dumps(corrupted_request), run.run_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE verification_runs SET repository=? WHERE run_id=?",
+                ("attacker/other", run.run_id),
+            )
+        conn.commit()
+
+    before = _verification_state_snapshot(state)
+    lease_id = claimed.lease_id if claimed is not None else "unused-lease"
+    assert lease_id is not None
+
+    with pytest.raises(ValueError) as rejected:
+        if mutation == "ingest":
+            state.ingest(request())
+        elif mutation == "claim":
+            state.claim(run.run_id, "coordinator")
+        elif mutation == "heartbeat":
+            state.heartbeat(run.run_id, "coordinator", lease_id)
+        elif mutation == "start":
+            state.start(run.run_id, "coordinator", lease_id, "session", {"head": run.head_sha})
+        elif mutation == "terminal":
+            state.terminal(
+                run.run_id,
+                "failed",
+                {"outcome": "blocked"},
+                holder="coordinator",
+                lease_id=lease_id,
+            )
+        elif mutation == "rebind_head":
+            state.rebind_head(
+                run.run_id,
+                "b" * 40,
+                expected_head_sha=run.head_sha,
+                observed_repository=run.repository,
+                observed_pr_number=run.pr_number,
+                observed_head_sha="b" * 40,
+                holder="coordinator",
+                lease_id=lease_id,
+            )
+        elif mutation == "backoff":
+            state.backoff(
+                run.run_id,
+                {"outcome": "deferred"},
+                "2030-01-01T00:00:00+00:00",
+                holder="coordinator",
+                lease_id=lease_id,
+            )
+        elif mutation == "defer_unclaimed":
+            state.defer_unclaimed(
+                run.run_id,
+                {"outcome": "deferred"},
+                "2030-01-01T00:00:00+00:00",
+            )
+        elif mutation == "supersede_unclaimed":
+            state.supersede_unclaimed(
+                run.run_id, {"outcome": "superseded"}, reason="stale_head"
+            )
+        elif mutation == "record_attempt":
+            state.record_attempt(
+                run.run_id,
+                "standard_repair",
+                "session",
+                "sol",
+                "xhigh",
+                {"head": run.head_sha},
+                "failed",
+                holder="coordinator",
+                lease_id=lease_id,
+            )
+        elif mutation == "record_attempt_batch":
+            state.record_attempt_batch(
+                run.run_id,
+                "batch",
+                1,
+                run.head_sha,
+                lambda _attempts, _attempt_id: [],
+                holder="coordinator",
+                lease_id=lease_id,
+            )
+        else:
+            assert mutation == "exception"
+            state.exception(
+                run.run_id,
+                "requires_human",
+                {"summary": "blocked"},
+                holder="coordinator",
+                lease_id=lease_id,
+            )
+
+    assert secret not in str(rejected.value)
+    assert _verification_state_snapshot(state) == before
+
+
 class _ClaimClock:
     def __init__(self) -> None:
         self._value = CLAIM_PRE_LOCK

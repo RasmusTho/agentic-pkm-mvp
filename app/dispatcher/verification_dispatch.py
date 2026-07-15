@@ -282,6 +282,18 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     return request
 
 
+def _validated_mutation_row(
+    conn: sqlite3.Connection, run_id: str
+) -> sqlite3.Row | None:
+    """Read and validate durable run authority before any transaction mutation."""
+    row = conn.execute(
+        "SELECT * FROM verification_runs WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    if row is not None:
+        _validated_row_request(row)
+    return row
+
+
 @dataclass(frozen=True)
 class VerificationRun:
     run_id: str
@@ -620,9 +632,7 @@ class VerificationDispatchLedger:
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
             expires = _future_from(now, ttl_seconds)
-            row = conn.execute(
-                "SELECT * FROM verification_runs WHERE run_id = ?", (run_id,)
-            ).fetchone()
+            row = _validated_mutation_row(conn, run_id)
             if row is None:
                 raise ValueError(f"verification run {run_id} not found")
             expired = row["lease_expires_at"] is not None and row["lease_expires_at"] <= now
@@ -673,6 +683,9 @@ class VerificationDispatchLedger:
     ) -> VerificationRun:
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
+            row = _validated_mutation_row(conn, run_id)
+            if row is None:
+                raise ValueError("verification heartbeat ownership mismatch")
             expires = _future(ttl_seconds)
             result = conn.execute(
                 """
@@ -701,6 +714,9 @@ class VerificationDispatchLedger:
     ) -> VerificationRun:
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
+            row = _validated_mutation_row(conn, run_id)
+            if row is None:
+                raise ValueError("verification start ownership mismatch")
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -731,16 +747,15 @@ class VerificationDispatchLedger:
             raise ValueError("invalid verification terminal status")
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
-            owner = conn.execute(
-                """
-                SELECT current_head_sha FROM verification_runs
-                WHERE run_id=? AND claimed_by=? AND lease_id=?
-                  AND status IN ('claimed','running')
-                  AND lease_expires_at>?
-                """,
-                (run_id, holder, lease_id, now),
-            ).fetchone()
-            if owner is None:
+            owner = _validated_mutation_row(conn, run_id)
+            if (
+                owner is None
+                or owner["claimed_by"] != holder
+                or owner["lease_id"] != lease_id
+                or owner["status"] not in ACTIVE_STATES
+                or owner["lease_expires_at"] is None
+                or owner["lease_expires_at"] <= now
+            ):
                 raise ValueError("verification terminal ownership mismatch")
             if status == "completed" and not self._closure_ready(
                 conn, run_id, owner["current_head_sha"]
@@ -806,10 +821,7 @@ class VerificationDispatchLedger:
             raise ValueError("verification rebind does not match live PR head")
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
-            row = conn.execute(
-                "SELECT * FROM verification_runs WHERE run_id=?",
-                (run_id,),
-            ).fetchone()
+            row = _validated_mutation_row(conn, run_id)
             if row is None:
                 raise ValueError("verification run not found")
             if (
@@ -858,6 +870,9 @@ class VerificationDispatchLedger:
         _parse_timestamp(retry_after)
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
+            row = _validated_mutation_row(conn, run_id)
+            if row is None:
+                raise ValueError("verification backoff ownership mismatch")
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -880,8 +895,11 @@ class VerificationDispatchLedger:
         self, run_id: str, receipt: Mapping[str, object], retry_after: str
     ) -> VerificationRun:
         _parse_timestamp(retry_after)
-        now = _now()
         with self.store._connect() as conn:
+            now = _begin_immediate_now(conn)
+            row = _validated_mutation_row(conn, run_id)
+            if row is None:
+                raise ValueError("verification run is not unclaimed and deferrable")
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -904,8 +922,11 @@ class VerificationDispatchLedger:
     def supersede_unclaimed(
         self, run_id: str, receipt: Mapping[str, object], *, reason: str
     ) -> VerificationRun:
-        now = _now()
         with self.store._connect() as conn:
+            now = _begin_immediate_now(conn)
+            row = _validated_mutation_row(conn, run_id)
+            if row is None:
+                raise ValueError("verification run is not unclaimed and supersedable")
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -953,16 +974,15 @@ class VerificationDispatchLedger:
         )
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
-            owner = conn.execute(
-                """
-                SELECT 1 FROM verification_runs
-                WHERE run_id=? AND claimed_by=? AND lease_id=?
-                  AND status IN ('claimed','running')
-                  AND lease_expires_at>?
-                """,
-                (run_id, holder, lease_id, now),
-            ).fetchone()
-            if owner is None:
+            owner = _validated_mutation_row(conn, run_id)
+            if (
+                owner is None
+                or owner["claimed_by"] != holder
+                or owner["lease_id"] != lease_id
+                or owner["status"] not in ACTIVE_STATES
+                or owner["lease_expires_at"] is None
+                or owner["lease_expires_at"] <= now
+            ):
                 raise ValueError("verification attempt ownership mismatch")
             if idempotency_key:
                 existing = conn.execute(
@@ -1055,16 +1075,15 @@ class VerificationDispatchLedger:
 
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
-            owner = conn.execute(
-                """
-                SELECT current_head_sha FROM verification_runs
-                WHERE run_id=? AND claimed_by=? AND lease_id=?
-                  AND status IN ('claimed','running')
-                  AND lease_expires_at>?
-                """,
-                (run_id, holder, lease_id, now),
-            ).fetchone()
-            if owner is None:
+            owner = _validated_mutation_row(conn, run_id)
+            if (
+                owner is None
+                or owner["claimed_by"] != holder
+                or owner["lease_id"] != lease_id
+                or owner["status"] not in ACTIVE_STATES
+                or owner["lease_expires_at"] is None
+                or owner["lease_expires_at"] <= now
+            ):
                 raise ValueError("verification event batch ownership mismatch")
             if owner["current_head_sha"] != expected_head_sha:
                 raise ValueError("verification event batch head changed")
@@ -1193,16 +1212,15 @@ class VerificationDispatchLedger:
     ) -> str:
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
-            owner = conn.execute(
-                """
-                SELECT current_head_sha FROM verification_runs
-                WHERE run_id=? AND claimed_by=? AND lease_id=?
-                  AND status IN ('claimed','running')
-                  AND lease_expires_at>?
-                """,
-                (run_id, holder, lease_id, now),
-            ).fetchone()
-            if owner is None:
+            owner = _validated_mutation_row(conn, run_id)
+            if (
+                owner is None
+                or owner["claimed_by"] != holder
+                or owner["lease_id"] != lease_id
+                or owner["status"] not in ACTIVE_STATES
+                or owner["lease_expires_at"] is None
+                or owner["lease_expires_at"] <= now
+            ):
                 raise ValueError("verification exception ownership mismatch")
             head_sha = owner["current_head_sha"]
             exception_id = "vexception-" + hashlib.sha256(
