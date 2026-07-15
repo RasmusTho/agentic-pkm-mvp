@@ -2,11 +2,214 @@ from __future__ import annotations
 
 import pytest
 
+from app.dispatcher.verification_consumer import VerificationConsumer
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+from tests.dispatcher.test_verification_consumer import (
+    GREEN,
+    Auth,
+    Launcher,
+    Truth,
+    merged_pr,
+)
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
 
 REPAIRED_HEAD = "b" * 40
+
+
+def _delivered_receipt(
+    head_sha: str, *, include_repair: bool = True
+) -> dict[str, object]:
+    repair_events: list[dict[str, object]] = []
+    if include_repair:
+        repair_events.append(
+            {
+                "kind": "repair",
+                "session_id": "repair-1",
+                "capability": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+                "outcome": "fixed",
+                "finding_id": "head-rebind",
+                "strongest": False,
+            }
+        )
+    return {
+        "verdict": "delivered",
+        "head_sha": head_sha,
+        "summary": "verified and merged",
+        "receipt_ids": [
+            *(["repair-1"] if include_repair else []),
+            "review-1",
+            "review-2",
+        ],
+        "retry_after": None,
+        "review_events": [
+            *repair_events,
+            {
+                "kind": "review",
+                "session_id": "review-1",
+                "capability": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+                "outcome": "clean",
+                "finding_id": None,
+                "strongest": True,
+            },
+            {
+                "kind": "review",
+                "session_id": "review-2",
+                "capability": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+                "outcome": "clean",
+                "finding_id": None,
+                "strongest": True,
+            },
+        ],
+        "human_exception": None,
+    }
+
+
+def _pending_delivered_run(
+    state: VerificationDispatchLedger,
+    *,
+    receipt: dict[str, object] | None = None,
+) -> tuple[str, dict[str, object]]:
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "original-host")
+    receipt = receipt or _delivered_receipt(REPAIRED_HEAD)
+    state.record_attempt(
+        run.run_id,
+        "verification",
+        "01900000-0000-7000-8000-000000000051",
+        "gpt-5.6-sol",
+        "xhigh",
+        {"head_sha": HEAD},
+        "launched",
+        receipt,
+        holder="original-host",
+        lease_id=claimed.lease_id or "",
+    )
+    state.backoff(
+        run.run_id,
+        {
+            "outcome": "blocked",
+            "reason": "postlaunch_live_truth_unavailable",
+            "pending_terminal_receipt": receipt,
+        },
+        "2000-01-01T00:00:00+00:00",
+        holder="original-host",
+        lease_id=claimed.lease_id or "",
+    )
+    return run.run_id, receipt
+
+
+def test_pending_delivered_replay_rebinds_to_merged_receipt_head(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _pending_delivered_run(state)
+    truth = Truth(
+        merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
+        GREEN,
+    )
+
+    completed = VerificationConsumer(
+        state, truth, Auth(), Launcher(), "replay-host"
+    ).consume(request())
+
+    assert completed.run_id == run_id
+    assert completed.status == "completed"
+    assert completed.requested_head_sha == HEAD
+    assert completed.current_head_sha == REPAIRED_HEAD
+    assert completed.verified_head_sha == REPAIRED_HEAD
+    assert [row["kind"] for row in state.attempts(run_id)] == [
+        "verification",
+        "standard_repair",
+        "review",
+        "review",
+    ]
+    for attempt in state.attempts(run_id)[1:]:
+        assert attempt["receipt"]["head_sha"] == REPAIRED_HEAD
+
+
+def test_pending_delivered_replay_rejects_head_change_without_repair_event(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _pending_delivered_run(
+        state,
+        receipt=_delivered_receipt(REPAIRED_HEAD, include_repair=False),
+    )
+    truth = Truth(
+        merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
+        GREEN,
+    )
+
+    rejected = VerificationConsumer(
+        state, truth, Auth(), Launcher(), "replay-host"
+    ).consume(request())
+
+    assert rejected.run_id == run_id
+    assert rejected.status == "failed"
+    assert rejected.stop_reason == "receipt_head_mismatch"
+    assert rejected.current_head_sha == HEAD
+    assert rejected.verified_head_sha is None
+    assert [row["kind"] for row in state.attempts(run_id)] == ["verification"]
+
+
+def test_pending_delivered_replay_lost_lease_cannot_rebind_or_apply_events(
+    tmp_path, monkeypatch
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _pending_delivered_run(state)
+    truth = Truth(
+        merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
+        GREEN,
+    )
+    original_rebind = state.rebind_head
+
+    def expire_then_rebind(*args, **kwargs):
+        with state.store._connect() as conn:
+            conn.execute(
+                "UPDATE verification_runs "
+                "SET lease_expires_at='2000-01-01T00:00:00+00:00' WHERE run_id=?",
+                (run_id,),
+            )
+            conn.commit()
+        return original_rebind(*args, **kwargs)
+
+    monkeypatch.setattr(state, "rebind_head", expire_then_rebind)
+
+    current = VerificationConsumer(
+        state, truth, Auth(), Launcher(), "replay-host"
+    ).consume(request())
+
+    assert current.run_id == run_id
+    assert current.status == "claimed"
+    assert current.current_head_sha == HEAD
+    assert current.verified_head_sha is None
+    assert [row["kind"] for row in state.attempts(run_id)] == ["verification"]
+
+
+def test_pending_delivered_replay_rejects_unauthorized_head_rebind(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _pending_delivered_run(state)
+    truth = Truth(
+        merged_pr(
+            head={"ref": "branch", "sha": REPAIRED_HEAD},
+            body="Governing-Issue: #9999\n\nFixes #9999",
+        ),
+        GREEN,
+    )
+
+    rejected = VerificationConsumer(
+        state, truth, Auth(), Launcher(), "replay-host"
+    ).consume(request())
+
+    assert rejected.run_id == run_id
+    assert rejected.status == "failed"
+    assert rejected.stop_reason == "receipt_live_truth_governing_issue_mismatch"
+    assert rejected.requested_head_sha == HEAD
+    assert rejected.current_head_sha == HEAD
+    assert rejected.verified_head_sha is None
+    assert [row["kind"] for row in state.attempts(run_id)] == ["verification"]
 
 
 def _record_exhausted_repair_budget(

@@ -117,8 +117,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   A source or contract-parse failure during that post-launch read enters exact-lease bounded
   technical backoff while retaining the deterministic verification attempt and pending terminal
   receipt for safe resume/replay. A pending delivered receipt bypasses the ordinary open-only intake
-  gate on retry, but can complete only through a fresh authenticated exact-head merged/check read;
-  its event batch remains exact-replay idempotent.
+  gate on retry, but can complete only through a fresh authenticated exact-head merged/check read.
+  When that receipt proves a repaired head, replay requires its durable repair event and performs
+  the same exact-lease/live-PR-fenced head rebind before applying events or terminal state; the
+  requested-head audit stays immutable while current and verified heads converge on the merged
+  receipt head. Its event batch remains exact-replay idempotent.
   Persisted pending receipts are untrusted replay input: the consumer reloads the canonical schema
   and reapplies structural and semantic validation before authentication, event application, or
   completion. Corrupt or schema-unverifiable replay data terminals technically with redacted

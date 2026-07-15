@@ -1531,6 +1531,40 @@ class VerificationConsumer:
             )
         review_events = receipt.get("review_events")
         events = review_events if isinstance(review_events, list) else []
+        changed_head = receipt_head != claimed.head_sha
+        if changed_head and not any(
+            isinstance(event, Mapping) and event.get("kind") == "repair"
+            for event in events
+        ):
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                dict(receipt),
+                reason="receipt_head_mismatch",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        if changed_head:
+            live_pr_number = live_pr.get("number")
+            assert isinstance(live_pr_number, int) and not isinstance(
+                live_pr_number, bool
+            )
+            try:
+                claimed = self.ledger.rebind_head(
+                    claimed.run_id,
+                    receipt_head,
+                    expected_head_sha=claimed.head_sha,
+                    observed_repository=claimed.repository,
+                    observed_pr_number=live_pr_number,
+                    observed_head_sha=str(_nested(live_pr, "head", "sha") or ""),
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            except ValueError:
+                current = self.ledger.get(claimed.run_id)
+                if current is not None:
+                    return current
+                raise
         loop = VerificationAgentLoop(
             self.ledger,
             claimed.run_id,
