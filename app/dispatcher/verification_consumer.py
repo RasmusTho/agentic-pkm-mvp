@@ -312,6 +312,7 @@ _UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = frozenset(
         "allOf",
         "oneOf",
         "not",
+        "uniqueItems",
         "dependentRequired",
         "dependentSchemas",
         "if",
