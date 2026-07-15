@@ -376,7 +376,14 @@ def load_and_validate_verification_closer_receipt(
         validate_verification_closer_receipt(receipt, schema)
     except jsonschema.ValidationError as exc:
         raise ReceiptContractError("verification closer receipt is invalid") from exc
-    return receipt
+    sanitized = sanitize_verification_closer_receipt(receipt)
+    try:
+        validate_verification_closer_receipt(sanitized, schema)
+    except jsonschema.ValidationError as exc:
+        raise ReceiptContractError(
+            "sanitized verification closer receipt is invalid"
+        ) from exc
+    return sanitized
 
 
 class GhCliVerificationSource:
@@ -686,6 +693,22 @@ _UNSAFE_DIAGNOSTIC_KEYS = frozenset(
         "traceback",
     }
 )
+_MAX_RECEIPT_TEXT = 512
+_MAX_RECEIPT_LIST_ITEMS = 16
+_MAX_RECEIPT_IDS = 32
+_SAFE_DURABLE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}\Z")
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?i)\b(api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|credential|"
+    r"password|secret)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)"
+)
+_BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+_KNOWN_TOKEN_VALUE = re.compile(
+    r"(?i)\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{6,}"
+)
+_ABSOLUTE_MACHINE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:/(?:Users|home|private|tmp|var|opt|etc|Volumes)"
+    r"(?:/[^\s,;:)\]}]+)+|[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*)"
+)
 
 
 def bounded_error_type(value: object) -> str | None:
@@ -705,6 +728,140 @@ def bounded_coordinator_session_id(value: object) -> str | None:
         return None
     canonical = str(parsed)
     return canonical if value == canonical else None
+
+
+def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> str:
+    """Redact machine-local/sensitive text and enforce one durable size bound."""
+
+    text = str(value)
+    text = _CREDENTIAL_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _BEARER_VALUE.sub("Bearer [REDACTED]", text)
+    text = _KNOWN_TOKEN_VALUE.sub("[REDACTED]", text)
+    text = _ABSOLUTE_MACHINE_PATH.sub("[REDACTED_PATH]", text)
+    return text.strip()[:limit]
+
+
+def _required_receipt_text(value: object) -> str:
+    return _sanitize_receipt_text(value) or "[REDACTED]"
+
+
+def _sanitize_receipt_identifier(value: object, *, prefix: str) -> str:
+    raw = str(value)
+    if (
+        _SAFE_DURABLE_IDENTIFIER.fullmatch(raw)
+        and _KNOWN_TOKEN_VALUE.search(raw) is None
+    ):
+        return raw
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"{prefix}-{digest}"
+
+
+def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
+    finding = event.get("finding_id")
+    return {
+        "kind": event["kind"],
+        "session_id": _sanitize_receipt_identifier(
+            event["session_id"], prefix="review-session"
+        ),
+        "capability": _sanitize_receipt_identifier(
+            event["capability"], prefix="capability"
+        ),
+        "reasoning_effort": _sanitize_receipt_identifier(
+            event["reasoning_effort"], prefix="reasoning"
+        ),
+        "outcome": _sanitize_receipt_identifier(event["outcome"], prefix="outcome"),
+        "finding_id": (
+            _sanitize_receipt_identifier(finding, prefix="finding")
+            if finding is not None
+            else None
+        ),
+        "strongest": event.get("strongest"),
+    }
+
+
+def _sanitize_human_exception_packet(
+    packet: Mapping[str, object],
+) -> dict[str, object]:
+    raw_options = packet["options"]
+    assert isinstance(raw_options, list)
+    option_ids: dict[str, str] = {}
+    options: list[dict[str, object]] = []
+    for option in raw_options[:3]:
+        assert isinstance(option, Mapping)
+        raw_id = str(option["id"])
+        safe_id = _sanitize_receipt_identifier(raw_id, prefix="option")
+        option_ids[raw_id] = safe_id
+        options.append(
+            {
+                "id": safe_id,
+                "label": _required_receipt_text(option["label"]),
+                "consequence": _required_receipt_text(option["consequence"]),
+            }
+        )
+
+    def safe_list(field: str) -> list[str]:
+        values = packet[field]
+        assert isinstance(values, list)
+        return [
+            _required_receipt_text(value)
+            for value in values[:_MAX_RECEIPT_LIST_ITEMS]
+        ]
+
+    return {
+        "failure_class": packet["failure_class"],
+        "original_intent": _required_receipt_text(packet["original_intent"]),
+        "current_state": _required_receipt_text(packet["current_state"]),
+        "tried_actions": safe_list("tried_actions"),
+        "evidence": safe_list("evidence"),
+        "why_unsafe": _required_receipt_text(packet["why_unsafe"]),
+        "options": options,
+        "no_action_option": option_ids[str(packet["no_action_option"])],
+        "recommended_option": option_ids[str(packet["recommended_option"])],
+        "recommendation_rationale": _required_receipt_text(
+            packet["recommendation_rationale"]
+        ),
+        "consequence_of_doing_nothing": _required_receipt_text(
+            packet["consequence_of_doing_nothing"]
+        ),
+    }
+
+
+def sanitize_verification_closer_receipt(
+    receipt: Mapping[str, object],
+) -> dict[str, object]:
+    """Project one schema-valid coordinator receipt onto its durable-safe form."""
+
+    raw_receipt_ids = receipt["receipt_ids"]
+    assert isinstance(raw_receipt_ids, list)
+    raw_events = receipt.get("review_events")
+    raw_exception = receipt.get("human_exception")
+    retry_after = receipt.get("retry_after")
+    if isinstance(retry_after, str):
+        retry_after = _sanitize_receipt_text(retry_after, limit=128)
+    return {
+        "verdict": receipt["verdict"],
+        "head_sha": receipt["head_sha"],
+        "summary": _sanitize_receipt_text(receipt["summary"]),
+        "receipt_ids": [
+            _sanitize_receipt_identifier(value, prefix="receipt")
+            for value in raw_receipt_ids[:_MAX_RECEIPT_IDS]
+        ],
+        "retry_after": retry_after,
+        "review_events": (
+            [
+                _sanitize_review_event(event)
+                for event in raw_events[:_MAX_RECEIPT_LIST_ITEMS]
+                if isinstance(event, Mapping)
+            ]
+            if isinstance(raw_events, list)
+            else None
+        ),
+        "human_exception": (
+            _sanitize_human_exception_packet(raw_exception)
+            if isinstance(raw_exception, Mapping)
+            else None
+        ),
+    }
 
 
 def sanitize_codex_failure_receipt(
@@ -764,7 +921,12 @@ def redact_durable_diagnostics(value: object) -> object:
             redacted[key] = redact_durable_diagnostics(child)
         return redacted
     if isinstance(value, list):
-        return [redact_durable_diagnostics(child) for child in value]
+        return [
+            redact_durable_diagnostics(child)
+            for child in value[:_MAX_RECEIPT_LIST_ITEMS]
+        ]
+    if isinstance(value, str):
+        return _sanitize_receipt_text(value)
     return value
 
 

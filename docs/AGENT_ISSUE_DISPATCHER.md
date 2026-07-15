@@ -83,7 +83,13 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
   rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
   invalid review or repair events cannot strand coordinator authority or consume a partial budget;
-  a no-repair delivery still requires two distinct clean review sessions. Check eligibility selects the latest GitHub rerun per
+  a no-repair delivery still requires two distinct clean review sessions. Schema validity does not
+  make model-produced text durable-safe: raw coordinator output remains transient, and only the
+  bounded projection that redacts credentials and machine-local paths may enter attempts, pending
+  replay receipts, terminal rows, Human Exception packets, or status output. The projection retains
+  the structured identities and actionable option relationships required for deterministic replay
+  and governed owner decisions, then passes the canonical schema and semantic validation again.
+  Check eligibility selects the latest GitHub rerun per
   check name. Schema-v3 health, backup, and restore validation covers verification runs, attempts,
   exceptions, head-audit fields, and their write-critical keys. A deployed pre-head-rebinding v3
   backup may omit only the two additive current/verified-head columns: recovery preserves that
