@@ -20,7 +20,10 @@ generation unknown. A process-global mutable manager cannot safely represent con
 
 - Define the minimal runtime-capable `ActiveContextSet` schema: `context_id`, monotonic
   `generation`, immutable zero/one/many source bindings, selection provenance, optional dimension
-  filter, and principal/scope/topology fields already reserved by the contract.
+  filter, and principal/scope/topology fields already reserved by the contract. Every source
+  binding also carries its monotonic `binding_revision` (path/device/authority-provenance revision),
+  and the snapshot carries the registry revision plus a non-secret authorization-decision epoch or
+  fingerprint.
 - Add a typed `ContextSelectionStore` keyed by a high-entropy opaque server-minted
   `context_selection_id`. In the current single-user product that ID is an expiring bearer
   capability, not a claim of multi-user identity: every operation also passes the existing #2223
@@ -42,11 +45,14 @@ generation unknown. A process-global mutable manager cannot safely represent con
   unknown, or pre-restart `context_selection_id` fails closed with a reselection-required error; it
   never falls through to a default, last-active state, or another session. No unrelated
   chat/canvas session map or durable human-artifact store is reused.
-- Rotate generation atomically on session change; let in-flight work finish on its snapshot.
-- Key/invalidate caches and downstream context artifacts by `context_id`, generation, principal,
-  scope, a non-reversible selection-capability digest, dimension/filter, and binding set; never by
-  binding plus generation alone. Raw bearer IDs are never logged, receipted, or embedded in cache
-  keys.
+- Rotate generation atomically on session change; let in-flight work finish on its snapshot. On
+  each production resolution, compare current binding/registry revisions and authorization epoch
+  with the prior snapshot. Relocation, removal, authority-provenance, or verdict change invalidates
+  affected cache entries and rotates generation before downstream work starts.
+- Key/invalidate caches and downstream context artifacts by `context_id`, generation,
+  registry/binding revisions, authorization epoch/fingerprint, principal, scope, a non-reversible
+  selection-capability digest, dimension/filter, and binding set; never by binding plus generation
+  alone. Raw bearer IDs are never logged, receipted, or embedded in cache keys.
 - Enforce GOV authorization independently for every resolved binding.
 
 ## Concretely
@@ -121,6 +127,9 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   raw bearer IDs remain secret and the typed principal field stays in the key for future
   authenticated-principal expansion.
   - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_cache_keys_include_full_context_identity`
+- [ ] Relocating a binding or changing its authority provenance/verdict rotates the production
+  request context and invalidates affected cache entries before the next request can reuse data.
+  - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_binding_revision_rotates_context_and_cache_before_next_request`
 
 ## Out of Scope
 
@@ -128,7 +137,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py`
+- `pytest -q tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_multi_vault_request_isolation.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

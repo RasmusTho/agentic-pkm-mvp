@@ -166,7 +166,8 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 - Selection cannot upgrade authority. Every binding is independently authorized by GOV.
 - No request, session, worker, restart, or migration silently falls back to another vault,
   `last_active`, CWD, or `./vault` after an explicit selection fails.
-- One request uses one immutable context generation. Switches affect later work only.
+- One request uses one immutable context generation. Session changes and binding/authority revision
+  changes rotate later generations and invalidate affected caches; in-flight work keeps its snapshot.
 - Every read, retrieval result, write, receipt, cache entry, and background binding preserves
   vault identity and context-generation provenance.
 - Container registry/default/background intent survives force-recreate on a shared instance-state
@@ -201,9 +202,10 @@ Partial delivery remains fail-closed:
 - after task 05 but before task 06, the existing picker alone continues to drive #3163's named
   single-watcher bridge while scoped request/session selection does not; task 06 atomically hands
   that live binding to the durable supervisor before disabling the bridge;
-- after task 05 but before task 06, versioned vault-bound outbox rows remain pending and
-  unacknowledged behind the interim scalar-worker gate; safe global work continues, and only task
-  06 enables binding-scoped dispatch/classification/recovery;
+- after task 05 but before task 06, the interim scalar worker dispatches a versioned vault-bound row
+  only when registry, authorization, binding revision, and resolved root prove one matching
+  singleton; ambiguous/mismatched rows remain pending and unacknowledged, safe global work
+  continues, and only task 06 enables multi-binding dispatch/classification/recovery;
 - a dimension containing an unknown, stale, or unauthorized member fails the whole production
   context resolution; it never returns a partial set, excludes the member, or substitutes another;
 - if one background binding fails, its lifecycle and health remain failed while other bindings

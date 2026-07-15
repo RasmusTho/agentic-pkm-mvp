@@ -24,8 +24,11 @@ not background lifecycles.
 - Migrate the existing Companion choose/open-vault picker and its current client state—not the
   deferred #2566 visual switcher—to create or replace a scoped selection, retain the returned
   `context_selection_id` for that client session, and send it on every vault-bound request. On
-  expiry/restart the client clears the stale ID, shows the existing reselection contract, and never
-  silently continues on the instance default.
+  expiry/restart the client clears the stale ID and never retries the failed request via fallback.
+  It may mint a fresh selection automatically only when a new authenticated resolution proves
+  exactly one authorized registered binding and that binding is the explicit instance default; the
+  reminted context is used for a new request. Any zero/many/ambiguous/default mismatch shows the
+  existing reselection contract.
 - Preserve #3163 during the MVR-05→MVR-06 transition: the legacy choose/open picker action also
   emits its existing single-watcher selection event through one named compatibility bridge, while
   generic scoped request/session selections never do. MVR-06 must atomically initialize durable
@@ -47,11 +50,12 @@ not background lifecycles.
   least MVR-05. Apply invariant→producers to startup, migrations, fixtures, and rollback preflight.
 - Version every MVR-05 vault-bound outbox producer with `routing_class=vault_bound`, stable binding,
   and captured context identity before it may serve multi-vault writes. In the same slice, teach the
-  still-scalar worker to recognize that envelope and fail closed before handler dispatch: leave the
-  row durably pending/unacknowledged, report readiness `blocked_pending_mvr06`, and continue only
-  independently safe `global` work. MVR-06 owns binding-scoped dispatch, legacy classification,
-  quarantine, and recovery; until it lands no versioned vault-bound row can execute against the
-  worker's env-selected vault.
+  still-scalar worker to recognize that envelope. It may dispatch only after production resolution
+  proves the registry contains exactly one authorized binding, the row names that binding, and the
+  worker's resolved root/fingerprint matches its current binding revision. Otherwise it leaves the
+  row durably pending/unacknowledged, reports readiness `blocked_pending_mvr06`, and continues only
+  independently safe `global` work. MVR-06 owns multi-binding dispatch, legacy classification,
+  quarantine, and recovery; until it lands no ambiguous row can execute against an env-selected vault.
 - Namespace every migrated vault-bound outbox idempotency/dedup key by `vault_binding_id` in
   addition to topic, logical source identity, and content fingerprint. A global producer uses an
   explicit `global` scope marker. Two vaults containing the same UUID/path/content must create
@@ -127,8 +131,9 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
 - [ ] Every MVR-05 vault-bound producer emits the versioned binding/context routing envelope, and
-  the interim scalar worker leaves such rows pending/unacknowledged with blocked readiness instead
-  of dispatching them; global work remains independently processable until MVR-06.
+  the interim scalar worker dispatches only a provable registry/authorization/root-matching
+  singleton; it leaves every ambiguous/mismatched row pending/unacknowledged with blocked readiness,
+  while global work remains independently processable until MVR-06.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_never_dispatches_mvr05_vault_bound_rows`
 - [ ] Vault-bound outbox idempotency keys include the stable binding: duplicate logical identities
   in two bindings persist independently, while same-binding retries deduplicate.
@@ -140,6 +145,10 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   bearer ID through production read and governed-write requests; choosing B changes later requests
   to B, and stale-ID recovery visibly asks for reselection.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context`
+- [ ] After API restart, a stale bearer never authorizes or falls back for its failed request; the
+  client may transparently mint and retry only after a fresh authenticated resolution proves one
+  authorized binding equal to the explicit default, otherwise reselection remains visible.
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_recovers_only_unambiguous_singleton_default`
 - [ ] Before MVR-06 takes ownership, only the legacy choose/open picker action also drives #3163's
   single-watcher rebind; generic scoped session/request selection does not. The bridge is named and
   guarded for atomic retirement by MVR-06.

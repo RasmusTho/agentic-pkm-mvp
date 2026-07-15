@@ -31,6 +31,11 @@ fail-closed precedence resolver.
   They validate registration and authority, use MVR-01's locked transaction, emit redacted
   receipts, and never mutate last-active. Tests drive these production commands rather than seeding
   the store or invoking an internal setter directly.
+- Make registration removal reference-safe: removing the current default returns a conflict unless
+  the same locked transaction supplies either `clear_default=true` or one valid authorized
+  replacement binding. Explicit clear/replacement updates default, the MVR-06 compatibility
+  binding when present, dimensions, and the removal revision/event atomically; it never silently
+  chooses another registration or leaves a dangling default.
 - Publish the versioned default-mutation event consumed by MVR-06. After MVR-06, while background
   intent mode remains `compatibility`, set/clear atomically replaces/clears its durable
   `compatibility_binding_id`; the supervisor drains the old generation and resolves the new default
@@ -100,6 +105,9 @@ turns an invalid explicit selection into a dangerous silent read/write against t
   - Verify: `tests/instance/test_default_vault_resolution.py::test_legacy_last_active_materializes_default_once`
 - [ ] Existing no-vault and single-vault bootstrap paths remain truthful.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_default_adapter_preserves_bootstrap_and_no_vault`
+- [ ] Removing the current default is rejected unless the production mutation explicitly clears or
+  replaces it in the same locked transaction; no dangling or silently substituted default remains.
+  - Verify: `tests/api/test_default_vault_admin.py::test_removing_current_default_requires_atomic_clear_or_replacement`
 - [ ] The explicit default persists on the MVR-01 instance-state volume across a pinned-image
   force-recreate and resolves identically in every enabled registry consumer.
   - Verify: `tests/integration/test_vault_registry_container_durability.py::test_default_survives_recreate_after_mvr02`
