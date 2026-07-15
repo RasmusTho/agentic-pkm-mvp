@@ -465,10 +465,12 @@ class CodexExecLauncher:
         )
         env = {k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
         stop_heartbeat = threading.Event()
+        stdout_complete = threading.Event()
         authority_lost = threading.Event()
         heartbeat_failures: list[Exception] = []
         authority_loss_outcome = "heartbeat_authority_lost"
         heartbeat_thread: threading.Thread | None = None
+        parent_watchdog_thread: threading.Thread | None = None
         stderr_thread: threading.Thread | None = None
         stderr_chunks: list[str] = []
         process: subprocess.Popen[str] | None = None
@@ -567,6 +569,31 @@ class CodexExecLauncher:
 
             stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
             stderr_thread.start()
+
+            def watch_parent_liveness() -> None:
+                while not stop_heartbeat.wait(0.25):
+                    if process is None or process.poll() is None:
+                        continue
+                    # A normal parent may exit just before the reader drains
+                    # its final buffered events and observes EOF. Only treat
+                    # the exit as authority loss when stdout remains open
+                    # beyond a bounded drain grace, which indicates an
+                    # inherited pipe held by a surviving descendant.
+                    if stdout_complete.wait(5):
+                        return
+                    if not stop_heartbeat.is_set():
+                        record_authority_loss(
+                            RuntimeError(
+                                "coordinator parent exited while stdout remained open"
+                            ),
+                            outcome="parent_exit_authority_lost",
+                        )
+                    return
+
+            parent_watchdog_thread = threading.Thread(
+                target=watch_parent_liveness, daemon=True
+            )
+            parent_watchdog_thread.start()
             if on_heartbeat:
                 def pulse() -> None:
                     while not stop_heartbeat.wait(30):
@@ -625,6 +652,7 @@ class CodexExecLauncher:
                         except (json.JSONDecodeError, jsonschema.ValidationError):
                             continue
                         terminal = candidate
+        stdout_complete.set()
         if self.runner is subprocess.run:
             assert process is not None
             if authority_lost.is_set():
@@ -638,6 +666,8 @@ class CodexExecLauncher:
             stop_heartbeat.set()
             if heartbeat_thread:
                 heartbeat_thread.join(timeout=1)
+            if parent_watchdog_thread:
+                parent_watchdog_thread.join(timeout=1)
         else:
             returncode = result.returncode
         if authority_lost.is_set():

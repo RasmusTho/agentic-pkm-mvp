@@ -80,7 +80,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   loss of coordinator authority: the consumer terminates the private Codex process group, escalates
   surviving descendants to a bounded group kill, reaps the direct child, rejects any later stdout,
   and records one bounded backoff receipt without accepting a terminal result from the
-  authority-lost process.
+  authority-lost process. The same technical authority-loss path applies when the direct Codex
+  parent exits but a descendant keeps inherited stdout open beyond the bounded drain grace;
+  heartbeat renewal cannot outlive the direct coordinator.
 - Pre-launch eligibility and post-launch delivery truth are separate gates. Launch still requires an
   open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
   exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.

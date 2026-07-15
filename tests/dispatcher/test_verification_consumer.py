@@ -830,6 +830,20 @@ class _DescendantHeldStdoutProcess(_IgnoringTerminateProcess):
             self.release_stdout()
 
 
+class _NormalExitDescendantHeldStdoutProcess(_DescendantHeldStdoutProcess):
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__(lines)
+        self.returncode = 0
+
+    def killpg(self, process_group_id: int, sig: int) -> None:
+        self.group_signals.append((process_group_id, sig))
+        if process_group_id != self.pid or not self.descendant_alive:
+            raise ProcessLookupError(process_group_id)
+        if sig == verification_consumer.signal.SIGKILL:
+            self.descendant_alive = False
+            self.release_stdout()
+
+
 def _authority_loss_launcher(tmp_path: Path) -> CodexExecLauncher:
     return CodexExecLauncher(
         tmp_path,
@@ -1037,6 +1051,80 @@ def test_process_group_authority_loss_rejects_late_descendant_output(
     assert process.stdout.reads == 1
 
 
+def _normal_parent_exit_with_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[_NormalExitDescendantHeldStdoutProcess, CodexExecFailure, list[int]]:
+    process = _NormalExitDescendantHeldStdoutProcess(_late_terminal_lines())
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    monkeypatch.setattr(verification_consumer.os, "killpg", process.killpg)
+    event_wait = verification_consumer.threading.Event.wait
+
+    def accelerated_wait(event, timeout=None):
+        if timeout is not None:
+            timeout = min(timeout, 0.01)
+        return event_wait(event, timeout)
+
+    monkeypatch.setattr(
+        verification_consumer.threading.Event, "wait", accelerated_wait
+    )
+    heartbeat_counts: list[int] = []
+    outcome: dict[str, BaseException] = {}
+
+    def launch() -> None:
+        try:
+            _authority_loss_launcher(tmp_path).launch(
+                {"head_sha": HEAD},
+                on_heartbeat=lambda: heartbeat_counts.append(len(heartbeat_counts) + 1),
+            )
+        except BaseException as exc:  # noqa: BLE001 - asserted thread outcome
+            outcome["error"] = exc
+
+    worker = Thread(target=launch, daemon=True)
+    worker.start()
+    try:
+        worker.join(timeout=0.5)
+        assert not worker.is_alive(), {
+            "launcher_still_blocked": True,
+            "heartbeats": len(heartbeat_counts),
+            "group_signals": process.group_signals,
+        }
+    finally:
+        if worker.is_alive():
+            process.release_stdout()
+            worker.join(timeout=1)
+    error = outcome.get("error")
+    assert isinstance(error, CodexExecFailure), outcome
+    return process, error, heartbeat_counts
+
+
+def test_parent_exit_with_descendant_stdout_stops_heartbeat_and_reaps_group(
+    tmp_path, monkeypatch
+) -> None:
+    process, error, heartbeat_counts = _normal_parent_exit_with_descendant(
+        tmp_path, monkeypatch
+    )
+
+    stopped_at = len(heartbeat_counts)
+    verification_consumer.threading.Event().wait(0.05)
+    assert len(heartbeat_counts) == stopped_at
+    assert error.receipt["outcome"] == "parent_exit_authority_lost"
+    assert not process.descendant_alive
+    assert process.group_signals == [
+        (process.pid, verification_consumer.signal.SIGTERM),
+        (process.pid, 0),
+        (process.pid, verification_consumer.signal.SIGKILL),
+    ]
+
+
+def test_parent_exit_rejects_late_descendant_stdout(tmp_path, monkeypatch) -> None:
+    process, error, _ = _normal_parent_exit_with_descendant(tmp_path, monkeypatch)
+
+    assert error.receipt["session_id"] is None
+    assert process.stdout.reads == 1
+
+
 def test_thread_start_authority_loss_terminates_codex_child(
     tmp_path, monkeypatch
 ) -> None:
@@ -1115,6 +1203,40 @@ def test_heartbeat_authority_loss_persists_one_backoff_receipt(tmp_path) -> None
     assert result.terminal_receipt["outcome"] == "heartbeat_authority_lost"
     with state.store._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM verification_attempts").fetchone()[0] == 0
+
+
+def test_parent_exit_authority_loss_persists_one_backoff_receipt(tmp_path) -> None:
+    class ParentExitedLauncher(Launcher):
+        def launch(
+            self,
+            context_pack,
+            *,
+            resume_session_id=None,
+            on_thread_started=None,
+            on_heartbeat=None,
+        ):
+            raise CodexExecFailure(
+                {
+                    "outcome": "parent_exit_authority_lost",
+                    "returncode": 0,
+                    "stderr": "coordinator parent exited while stdout remained open",
+                    "terminal_error": "RuntimeError: descendant retained stdout",
+                    "session_id": None,
+                }
+            )
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        ParentExitedLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "parent_exit_authority_lost"
+    assert result.claimed_by is None
+    assert result.lease_id is None
 
 
 def test_auth_preflight_requires_chatgpt_keyring_and_login_status(tmp_path) -> None:
