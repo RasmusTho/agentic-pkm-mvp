@@ -357,6 +357,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         scores=scores,
         citations=citations,
         aggregate=0.5,
+        edge_fingerprint=f"legacy:{edge.id}:{artifact.id}",
         watermark_set={"repo": "commit:abc"},
         valid_from="2026-07-15T00:00:00Z",
         asserted_at="2026-07-15T00:00:00Z",
@@ -447,6 +448,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert all(item.public_id for item in legacy.list_evidence_edges())
     assessments = legacy.list_assessments_for_capability(capability.id)
     assert all(item.public_id for item in assessments)
+    migrated_assessment_public_id = assessments[0].public_id
     assert all(
         citation.get("public_id")
         for assessment in assessments
@@ -539,6 +541,25 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     with pytest.raises(CkmValidationError, match="ckm_artifact.*watermark"):
         missing_column.ensure_schema()
 
+    blank_identity = CkmStore(tmp_path / "blank-identity.sqlite3")
+    blank_identity.ensure_schema()
+    blank_capability = _capability(blank_identity)
+    before_blank_identity = blank_identity.state_identity()
+    with sqlite3.connect(blank_identity.db_path) as conn:
+        conn.execute(
+            "UPDATE ckm_capability SET public_id = '' WHERE id = ?",
+            (blank_capability.id,),
+        )
+        conn.commit()
+    with pytest.raises(CkmValidationError, match="ckm_capability.public_id.*blank"):
+        blank_identity.ensure_schema()
+    assert blank_identity.state_identity() == before_blank_identity
+    with sqlite3.connect(blank_identity.db_path) as conn:
+        assert conn.execute(
+            "SELECT public_id FROM ckm_capability WHERE id = ?",
+            (blank_capability.id,),
+        ).fetchone()[0] == ""
+
     assert set(legacy.table_names()) == set(CKM_TABLE_NAMES)
 
     migrated_inferred_public_id = migrated_inferred.public_id
@@ -550,6 +571,23 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         existence_provenance="receipt:legacy-inference",
     )
     assert rebuilt_inferred.public_id == migrated_inferred_public_id
+    rebuilt_artifact = _artifact(legacy)
+    rebuilt_edge = _edge(legacy, rebuilt_artifact.id, rebuilt_inferred.id)
+    rebuilt_assessment = legacy.append_assessment(
+        capability_id=rebuilt_inferred.id,
+        scores=scores,
+        citations={
+            dimension: [rebuilt_edge.to_dict()] for dimension in MATURITY_DIMENSIONS
+        },
+        aggregate=0.5,
+        edge_fingerprint=assessment_fingerprint(
+            [rebuilt_edge], {rebuilt_artifact.id: rebuilt_artifact}
+        ),
+        watermark_set={"repo": "commit:abc"},
+        valid_from="2026-07-15T00:00:00Z",
+        asserted_at="2026-07-15T00:00:00Z",
+    )
+    assert rebuilt_assessment.public_id == migrated_assessment_public_id
 
 
 def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:

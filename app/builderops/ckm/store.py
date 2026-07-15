@@ -110,6 +110,8 @@ class CkmStore:
             legacy = bool(existing_tables) and "ckm_state" not in existing_tables
             if existing_tables:
                 self._validate_required_columns(conn, legacy=legacy)
+                if not legacy:
+                    self._validate_persisted_identity_values(conn)
             self._add_public_identity_columns(conn)
             self._migrate_evidence_edge_basis(conn)
             self._migrate_assessment_explainability(conn)
@@ -359,6 +361,10 @@ class CkmStore:
         state_rows = conn.execute("SELECT * FROM ckm_state").fetchall()
         if len(state_rows) != 1 or int(state_rows[0]["schema_version"]) != CKM_SCHEMA_VERSION:
             raise CkmValidationError("CKM state preflight failed: missing or unsupported state row")
+        CkmStore._validate_persisted_identity_values(conn)
+
+    @staticmethod
+    def _validate_persisted_identity_values(conn: sqlite3.Connection) -> None:
         checks = {
             "ckm_capability": ("public_id", "identity_key"),
             "ckm_artifact": ("public_id",),
@@ -479,7 +485,6 @@ class CkmStore:
             "aggregate": row["aggregate"],
             "aggregate_formula_id": row["aggregate_formula_id"],
             "low_confidence": row["low_confidence"],
-            "edge_fingerprint": row["edge_fingerprint"],
             "watermark_set": row["watermark_set"],
             "valid_from": row["valid_from"],
             "asserted_at": row["asserted_at"],
