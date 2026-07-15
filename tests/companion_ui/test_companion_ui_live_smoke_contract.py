@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from tests.companion_ui.live_smoke_contract import (
+    assert_gateway_identity,
     assert_operator_channel,
     assert_operator_health,
 )
@@ -76,3 +77,23 @@ def test_expected_channel_rejects_missing_or_wrong_operator_environment() -> Non
 
     with pytest.raises(AssertionError, match="did not match"):
         assert_operator_channel({"environment": "dev"}, expected_channel="test")
+
+
+def test_gateway_identity_rejects_stale_page_with_fresh_backend() -> None:
+    current_sha = "a" * 40
+    stale_sha = "b" * 40
+
+    assert_gateway_identity(
+        actual_channel="test",
+        actual_git_sha=current_sha,
+        expected_channel="test",
+        expected_git_sha=current_sha,
+    )
+
+    with pytest.raises(AssertionError, match="gateway git SHA"):
+        assert_gateway_identity(
+            actual_channel="test",
+            actual_git_sha=stale_sha,
+            expected_channel="test",
+            expected_git_sha=current_sha,
+        )

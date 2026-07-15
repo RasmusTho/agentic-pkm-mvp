@@ -370,6 +370,7 @@ health_gate || {
 version_gate
 fleet_model_fitness_gate
 COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED="${ack_embedding_rebuild_required}" \
+  COMPANION_UI_EXPECTED_SHA="${target_sha}" \
   scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 record_receipt
 capture_watch_gate || {

@@ -23,6 +23,30 @@ def assert_operator_channel(
     )
 
 
+def assert_gateway_identity(
+    *,
+    actual_channel: str,
+    actual_git_sha: str,
+    expected_channel: str,
+    expected_git_sha: str,
+) -> None:
+    """Validate gateway-owned identity independently of proxied API state."""
+
+    normalized_channel = actual_channel.strip().lower()
+    normalized_expected_channel = expected_channel.strip().lower()
+    assert normalized_channel == normalized_expected_channel, (
+        f"gateway runtime channel {normalized_channel!r} did not match "
+        f"expected channel {normalized_expected_channel!r}"
+    )
+
+    normalized_sha = actual_git_sha.strip().lower()
+    normalized_expected_sha = expected_git_sha.strip().lower()
+    assert normalized_sha == normalized_expected_sha, (
+        f"gateway git SHA {normalized_sha!r} did not match "
+        f"deployed SHA {normalized_expected_sha!r}"
+    )
+
+
 def assert_operator_health(
     payload: Mapping[str, Any],
     *,

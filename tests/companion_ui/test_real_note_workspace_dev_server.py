@@ -136,10 +136,24 @@ def _note_payload(
 # ---------------------------------------------------------------------------
 
 
-def _start_server(client: _FakeClient, api_base_url: str) -> tuple[HTTPServer, int]:
+def _start_server(
+    client: _FakeClient,
+    api_base_url: str,
+    *,
+    runtime_channel: str = "",
+    runtime_git_sha: str = "",
+) -> tuple[HTTPServer, int]:
     from companion_ui.workspace.serve_dev_page import make_handler
 
-    handler = make_handler(client=client, api_base_url=api_base_url)
+    handler_kwargs: dict[str, Any] = {
+        "client": client,
+        "api_base_url": api_base_url,
+    }
+    if runtime_channel:
+        handler_kwargs["runtime_channel"] = runtime_channel
+    if runtime_git_sha:
+        handler_kwargs["runtime_git_sha"] = runtime_git_sha
+    handler = make_handler(**handler_kwargs)
     server = HTTPServer(("127.0.0.1", 0), handler)  # port 0 = OS-assigned
     port = server.server_address[1]
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -747,6 +761,32 @@ class TestLiveServer:
     def test_get_root_has_dev_marker(self, live_server_ok) -> None:
         resp = httpx.get(f"http://127.0.0.1:{live_server_ok['port']}/")
         assert "DEV" in resp.text or "STAGING" in resp.text
+
+    def test_gateway_channel_marker_is_vault_independent(self) -> None:
+        client = _FakeClient(
+            get_result={
+                "state": "vault_selection_required",
+                "reason": "no_vault_bound",
+                "recent_vaults": [],
+                "actions": [],
+            }
+        )
+        server, port = _start_server(
+            client,
+            "http://127.0.0.1:18002",
+            runtime_channel="test",
+            runtime_git_sha="a" * 40,
+        )
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/", timeout=5.0)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert resp.status_code == 200
+        assert '<meta name="pkm-runtime-channel" content="test">' in resp.text
+        assert f'<meta name="pkm-runtime-git-sha" content="{"a" * 40}">' in resp.text
+        assert 'data-testid="workspace-vault-channel"' not in resp.text
 
     def test_get_root_has_api_base_url(self, live_server_ok) -> None:
         resp = httpx.get(f"http://127.0.0.1:{live_server_ok['port']}/")
