@@ -67,7 +67,8 @@ def valid_human_exception_packet(packet: object) -> bool:
     return (
         bool(packet["tried_actions"])
         and bool(packet["evidence"])
-        and bool(options)
+        and 2 <= len(options) <= 3
+        and len(set(options)) == len(options)
         and packet["no_action_option"] in options
         and packet["recommended_option"] in options
     )
