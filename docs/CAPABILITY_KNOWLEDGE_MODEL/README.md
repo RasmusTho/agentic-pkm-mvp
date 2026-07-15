@@ -1,11 +1,11 @@
-State: Specification directory for the Capability Knowledge Model (CKM / Kvasir) MVP, enacted by ADR-0057. Backlog FILED: parent #3138, children #3139-#3148. System-level source of truth for what the MVP must do; GitHub issues are execution artifacts created from these task specs. Builder System work (BuilderOps plane); not Product/Runtime truth.
+State: ACCEPTED/DELIVERED Capability Knowledge Model (CKM / Kvasir) MVP, enacted by ADR-0057. Validation parent #3138 is closed after children #3139-#3148 and presentation refinement #3689; current-main acceptance and owner visual acceptance are recorded on the parent. This directory remains the MVP contract/history owner. Post-MVP structured access and measurement are owned by `docs/CKM_MEASUREMENT_AND_ACCESS/`. Builder System work (BuilderOps plane); not Product/Runtime truth.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the MVP task decomposition, execution order, cross-task invariants, and acceptance path for the CKM. Subordinate to ADR-0057 (decisions), ADR-0010 (BuilderOps authority), `docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md` (grounding SRS), `docs/CAPABILITY_CONTRACT_MODEL.md` and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (seed taxonomy owners).
 Owner: BuilderOps governance
-Temporal class: operational (active delivery lane)
+Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: mixed (this directory for task shape; ADR-0057 for decisions)
-Last reviewed: 2026-07-14
+Last reviewed: 2026-07-15
 
 # Capability Knowledge Model (CKM / Kvasir) — MVP Specification
 
@@ -59,16 +59,16 @@ Partial-failure walk: seed applied but ingestion fails → registry exists with 
 
 ## Acceptance criteria (capability level)
 
-- [x] The CEG exists in the BuilderOps store, seeded from SBS + Capability Contract Model, populated with evidence from repo + GitHub sources, and rebuildable from scratch. Verify: `tests/builderops/ckm/test_rebuild_roundtrip.py::test_drop_and_rebuild_reproduces_graph`
+- [x] The CEG exists in the BuilderOps store, seeded from SBS + Capability Contract Model, populated with evidence from repo + GitHub sources, and rebuildable from scratch. Verify: `tests/builderops/ckm/test_store.py::test_upsert_idempotent_and_rebuild`; `tests/builderops/ckm/test_seed.py::test_seed_idempotent_and_incremental`
 - [x] Every capability has a seven-dimension assessment where every dimension cites its evidence, with candidate/confirmed share visible. Verify: `tests/builderops/ckm/test_assessment_engine.py::test_every_dimension_cites_evidence`
 - [x] Gap and missing-evidence findings are generated and specific (capability + dimension + citation). Verify: `tests/builderops/ckm/test_gap_detection.py::test_findings_name_capability_dimension_and_citation`
-- [x] Projections + CLI + HTML overview exist, self-identify as projections, and carry watermarks. Verify: `tests/builderops/ckm/test_projections.py::test_all_egress_self_identifies_with_watermark` and `tests/builderops/ckm/test_overview_html.py::test_projection_footer_always_present`
+- [x] Projections + CLI + HTML overview exist, self-identify as projections, and carry watermarks. Verify: `tests/builderops/ckm/test_projections.py::test_all_egress_self_identifies_with_watermark`; `tests/builderops/ckm/test_overview_html.py::test_provenance_banner_precedes_map_and_footer_remains`
 - [x] The orthogonality contract holds on the live path. Verify: `tests/builderops/ckm/test_evidence_kind_orthogonality.py::test_ckm_never_touches_runtime_evidence_role`
-- [ ] Owner has viewed the Development Overview against the real repo and the parent issue records the validation receipt. Verify: parent feature issue validation comment (operator receipt)
+- [x] Owner has viewed the Development Overview against the real repo and the parent issue records the validation receipt. Verify: [owner visual acceptance receipt on #3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138#issuecomment-4974008965)
 
 ## Relationship to GitHub issues
 
-Parent feature issue: [#3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138) — the live validation hub (blocked, not directly picked up); draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Children: CKM-01 #3139, CKM-02 #3140, CKM-03 #3141, CKM-04 #3142, CKM-05 #3143, CKM-06 #3144, CKM-07 #3145, CKM-08 #3146, CKM-09 #3147, CKM-10 #3148, and presentation refinement CKM-11 #3689. The spec is authoritative; issues track backlog state.
+Accepted parent feature issue: [#3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138), closed 2026-07-15 with a complete parent receipt; checked-in contract: [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Delivered children: CKM-01 #3139, CKM-02 #3140, CKM-03 #3141, CKM-04 #3142, CKM-05 #3143, CKM-06 #3144, CKM-07 #3145, CKM-08 #3146, CKM-09 #3147, CKM-10 #3148, and presentation refinement CKM-11 #3689. Successor validation hub: #3775 with contract at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md`.
 
 ## Verification path
 
@@ -76,4 +76,4 @@ Each task ships its own tests under `tests/builderops/ckm/` (named in each task'
 
 ## Validation / acceptance path
 
-After CKM-09/CKM-10 merge: run the full pipeline against the live repo, attach the generated overview + projections to the parent issue as the validation receipt, owner eyeballs the capability map for sanity (grain, obvious mis-associations). Owner-doc promotion (README/DOCS_INDEX rows claiming the CKM as a supported builder capability, plus a `docs/builderops/` owner doc) happens once acceptance is recorded — not before.
+Acceptance completed: the full live pipeline and generated overview/projections were attached to #3138; CKM-11 #3689 then received explicit owner visual acceptance for desktop, expanded-row, 390×844, and 200%-zoom-equivalent states. Current-main reconciliation on 2026-07-15 re-ran the corrected parent acceptance ledger (10 passed) before closing #3138. This README and `docs/DOCS_INDEX.md` now state accepted MVP truth; successor access/measurement work makes no shipped claim until its own parent #3775 closes.
