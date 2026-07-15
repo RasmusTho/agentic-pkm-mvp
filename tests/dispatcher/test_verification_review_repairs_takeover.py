@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -17,6 +18,7 @@ from app.dispatcher.verification_consumer import (
     _governing_contract_matches,
     _trusted_evidence_urls,
 )
+from app.dispatcher.verification_agent_loop import valid_human_exception_packet
 from app.dispatcher.verification_dispatch import (
     VerificationDispatchLedger,
     _live_observed_verification_request,
@@ -30,7 +32,13 @@ from tests.dispatcher.test_verification_consumer import (
     green_checks,
 )
 from tests.dispatcher.test_verification_dispatch import _migrated_legacy_ledger
-from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    ledger,
+    pre_trust_request,
+    request,
+)
 
 
 REPAIRED_HEAD = "b" * 40
@@ -433,8 +441,13 @@ def _record_exhausted_chain(
     payload: dict[str, object],
     *,
     expire_lease: bool = True,
+    authenticate_with_live_observation: bool = False,
 ) -> tuple[str, list[dict[str, object]]]:
-    run = state.ingest(payload)
+    run = state.ingest(
+        _live_observed_artifact(state, payload)
+        if authenticate_with_live_observation
+        else payload
+    )
     claimed = state.claim(run.run_id, "head-a-host")
     lease_id = claimed.lease_id or ""
     state.start(
@@ -516,26 +529,212 @@ def _durable_verification_snapshot(
         run = conn.execute(
             "SELECT * FROM verification_runs WHERE run_id=?", (run_id,)
         ).fetchone()
+        assert run is not None
+        chain_runs = conn.execute(
+            """
+            SELECT * FROM verification_runs
+            WHERE repository=? AND pr_number=? AND stage=?
+            ORDER BY created_at, run_id
+            """,
+            (run["repository"], run["pr_number"], run["stage"]),
+        ).fetchall()
+        run_ids = [row["run_id"] for row in chain_runs]
+        placeholders = ", ".join("?" for _ in run_ids)
         attempts = conn.execute(
-            "SELECT * FROM verification_attempts WHERE run_id=? ORDER BY created_at, attempt_id",
-            (run_id,),
+            f"""
+            SELECT * FROM verification_attempts
+            WHERE run_id IN ({placeholders})
+            ORDER BY run_id, created_at, attempt_id
+            """,
+            run_ids,
         ).fetchall()
         exceptions = conn.execute(
-            "SELECT * FROM verification_exceptions WHERE run_id=? ORDER BY exception_id",
-            (run_id,),
+            f"""
+            SELECT * FROM verification_exceptions
+            WHERE run_id IN ({placeholders})
+            ORDER BY run_id, exception_id
+            """,
+            run_ids,
         ).fetchall()
         run_count = conn.execute(
             "SELECT COUNT(*) FROM verification_runs"
         ).fetchone()[0]
-    assert run is not None
     return {
-        "run": dict(run),
+        "runs": [dict(row) for row in chain_runs],
         "attempts": [dict(row) for row in attempts],
         "exceptions": [dict(row) for row in exceptions],
         "run_count": run_count,
     }
 
 
+def _insert_valid_attempt_authority_change(
+    state: VerificationDispatchLedger, run_id: str
+) -> None:
+    """Insert the same production row shape as a fresh clean review attempt."""
+
+    context = {"head_sha": HEAD}
+    with state.store._connect() as conn:
+        final_repair = conn.execute(
+            """
+            SELECT attempt_id FROM verification_attempts
+            WHERE run_id=? AND attempt_kind IN ('standard_repair', 'escalated_repair')
+            ORDER BY created_at DESC, attempt_id DESC LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()
+        review_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM verification_attempts
+            WHERE run_id=? AND attempt_kind='review'
+            """,
+            (run_id,),
+        ).fetchone()[0]
+        assert final_repair is not None
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                receipt_json, created_at
+            ) VALUES (?, ?, 'review', ?, ?, ?, ?, ?, 'clean', ?, ?)
+            """,
+            (
+                "vattempt-delayed-observation-review",
+                run_id,
+                review_count + 1,
+                "delayed-observation-review-session",
+                "gpt-5.6-terra",
+                "high",
+                hashlib.sha256(
+                    json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                json.dumps(
+                    {
+                        "head_sha": HEAD,
+                        "reviewed_attempt_id": final_repair["attempt_id"],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "2030-01-01T00:00:00.000000+00:00",
+            ),
+        )
+        conn.commit()
+
+
+def _insert_valid_exception_authority_change(
+    state: VerificationDispatchLedger, run_id: str
+) -> None:
+    """Insert the exact durable shape produced by ``ledger.exception``."""
+
+    failure_class = "authority-critical"
+    packet: dict[str, object] = {
+        "failure_class": failure_class,
+        "original_intent": "verify and close the governed pull request",
+        "current_state": "canonical verification authority changed",
+        "tried_actions": ["re-read the canonical verification chain"],
+        "evidence": [f"verification run {run_id}"],
+        "why_unsafe": "continuing would accept stale authority",
+        "options": [
+            {
+                "id": "hold",
+                "label": "Hold",
+                "consequence": "delivery remains paused",
+            },
+            {
+                "id": "restart",
+                "label": "Restart",
+                "consequence": "delivery restarts from live authority",
+            },
+        ],
+        "no_action_option": "hold",
+        "recommended_option": "hold",
+        "recommendation_rationale": "authority must be revalidated first",
+        "consequence_of_doing_nothing": "delivery remains blocked",
+    }
+    assert valid_human_exception_packet(packet)
+    exception_id = "vexception-" + hashlib.sha256(
+        f"{run_id}:{failure_class}:{HEAD}".encode()
+    ).hexdigest()[:16]
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_exceptions (
+                exception_id, run_id, failure_class, head_sha, packet_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                exception_id,
+                run_id,
+                failure_class,
+                HEAD,
+                json.dumps(
+                    packet,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "2030-01-01T00:00:00.000000+00:00",
+                "2030-01-01T00:00:00.000000+00:00",
+            ),
+        )
+        conn.commit()
+
+
+def _insert_inert_legacy_audit_authority_change(
+    state: VerificationDispatchLedger, head_sha: str
+) -> None:
+    """Insert the quarantined row shape produced by the legacy migration."""
+
+    legacy_request = pre_trust_request(head_sha)
+    idempotency_key = legacy_request["idempotency_key"]
+    assert isinstance(idempotency_key, str)
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_runs (
+                run_id, idempotency_key, contract_version, repository,
+                pr_number, head_sha, current_head_sha, stage, request_json,
+                supporting_authority_json, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'legacy_untrusted', ?, ?)
+            """,
+            (
+                f"vrun-{idempotency_key[:16]}",
+                idempotency_key,
+                legacy_request["contract_version"],
+                legacy_request["repository"],
+                legacy_request["pr_number"],
+                head_sha,
+                head_sha,
+                legacy_request["stage"],
+                json.dumps(
+                    legacy_request,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                "2030-01-01T00:00:00.000000+00:00",
+                "2030-01-01T00:00:00.000000+00:00",
+            ),
+        )
+        conn.commit()
+
+
+def _assert_delayed_observation_rejected_without_mutation(
+    state: VerificationDispatchLedger,
+    run_id: str,
+    delayed_observation: dict[str, object],
+) -> None:
+    snapshot_after_authority_change = _durable_verification_snapshot(state, run_id)
+    database_after_authority_change = state.store.db_path.read_bytes()
+
+    with pytest.raises(
+        ValueError, match="verification canonical authority changed during live observation"
+    ):
+        state.ingest(delayed_observation)
+
+    assert _durable_verification_snapshot(state, run_id) == snapshot_after_authority_change
+    assert state.store.db_path.read_bytes() == database_after_authority_change
 def _record_backoff_chain(
     state: VerificationDispatchLedger,
     *,
@@ -1126,6 +1325,77 @@ def test_expired_head_reconciliation_rejects_ambiguous_terminal_authority(
     assert retained.status == "running"
     assert retained.current_head_sha == HEAD
     assert state.attempts(run_id) == before
+
+
+def test_delayed_observation_rejects_attempt_only_authority_change(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _record_exhausted_chain(state, request())
+    delayed_observation = _live_observed_artifact(state, request(REPAIRED_HEAD))
+
+    _insert_valid_attempt_authority_change(state, run_id)
+
+    _assert_delayed_observation_rejected_without_mutation(
+        state, run_id, delayed_observation
+    )
+
+
+def test_delayed_observation_rejects_exception_only_authority_change(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _record_exhausted_chain(state, request())
+    delayed_observation = _live_observed_artifact(state, request(REPAIRED_HEAD))
+
+    _insert_valid_exception_authority_change(state, run_id)
+
+    _assert_delayed_observation_rejected_without_mutation(
+        state, run_id, delayed_observation
+    )
+
+
+def test_delayed_observation_rejects_cumulative_authority_only_change(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _record_exhausted_chain(state, request())
+    delayed_observation = _live_observed_artifact(state, request(REPAIRED_HEAD))
+
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE verification_runs
+            SET supporting_authority_json='[3626]'
+            WHERE run_id=?
+            """,
+            (run_id,),
+        )
+        conn.commit()
+
+    _assert_delayed_observation_rejected_without_mutation(
+        state, run_id, delayed_observation
+    )
+
+
+def test_delayed_observation_rejects_inert_legacy_audit_only_change(
+    tmp_path: Path,
+) -> None:
+    state, _ = _migrated_legacy_ledger(tmp_path)
+    run_id, _ = _record_exhausted_chain(
+        state,
+        request(REPAIRED_HEAD),
+        authenticate_with_live_observation=True,
+    )
+    delayed_observation = _live_observed_artifact(
+        state, request(SECOND_REPAIRED_HEAD)
+    )
+
+    _insert_inert_legacy_audit_authority_change(state, THIRD_REPAIRED_HEAD)
+
+    _assert_delayed_observation_rejected_without_mutation(
+        state, run_id, delayed_observation
+    )
 
 
 def test_historical_authenticated_artifact_cannot_move_expired_chain_backward(
