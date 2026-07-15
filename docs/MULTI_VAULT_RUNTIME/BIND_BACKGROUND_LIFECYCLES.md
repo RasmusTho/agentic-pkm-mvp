@@ -28,8 +28,10 @@ cross-process truth belong here.
   the cutover if either handoff step fails. Afterward, the production legacy choose/open picker
   producer and replacement supervisor preserve #3163's full two-phase protocol while mode is
   `compatibility`: close/drain compatibility-mutation ingress, prepare the candidate revision, final-
-  scan and quiesce the old lifecycle, then atomically commit `compatibility_binding_id`, provenance,
-  and revision before resume. The supervisor cannot resolve/reload/perform candidate-binding effects
+  scan and quiesce normal old-binding effects while retaining a durable old-root event buffer through
+  commit, then atomically commit `compatibility_binding_id`, provenance, and revision. After commit it
+  performs the bracketing old-root scan/buffer drain and records the handoff receipt before resume.
+  The supervisor cannot resolve/reload/perform candidate-binding effects
   before committed resume. Pre-commit failure resumes the old lifecycle and reopens old-binding
   ingress; post-commit failure recovers forward with ingress blocked. Durable phase/revision truth,
   not the wake-up hint, closes event-loss and restart windows. Generic request/session selection
@@ -45,8 +47,13 @@ cross-process truth belong here.
   by MVR-01B), then no-vault, into nullable durable
   `compatibility_binding_id`. Restart reuses that exact binding and never re-derives another from
   unrecorded interaction history or default. While mode remains compatibility, a production legacy
-  choose/open command or explicit MVR-02 default set/clear atomically replaces/clears this field and
-  stores event provenance in the revision before publishing a rebind hint. Any governed add/remove command
+  choose/open command or explicit MVR-02 default set/clear derives a candidate and routes it through
+  the same prepare/quiesce/commit/resume transaction before publishing a rebind hint. Default set
+  selects that explicit binding. Default clear re-runs MVR-02 precedence after removal—registered
+  legacy bootstrap, then truthful no-vault—so an env-backed one-vault watcher is not idled while
+  foreground resolution still selects its bootstrap binding. The commit atomically replaces
+  `compatibility_binding_id` with that resolved binding or nullable no-vault and stores event
+  provenance in the revision. Any governed add/remove command
   transitions to explicit mode. `explicit` with an empty binding list is durable and means idle—it
   must never re-enrol the default after restart. This state mutates through MVR-01's locked,
   revision-checked atomic registry transaction.
@@ -87,9 +94,12 @@ cross-process truth belong here.
   active lease for this exact channel, binding, and canonical-root fingerprint. A missing, pending,
   foreign-channel, or changed lease blocks lifecycle work; runtime state cannot self-claim ownership.
 - Subscribe the supervisor to MVR-02's versioned default-mutation event. While intent mode is
-  `compatibility`, MVR-06 extends the production default set/clear transaction so it atomically
-  updates `compatibility_binding_id` before the wake-up hint; the supervisor drains the current
-  generation and re-resolves the replacement binding or truthful no-vault state before later work.
+  `compatibility`, default set/clear is a producer of the full prepare/quiesce/commit/resume protocol,
+  not a commit-before-drain mutation. It derives the candidate using MVR-02 precedence, closes and
+  drains mutation ingress, keeps old-root observation buffered through commit, completes the
+  post-commit old-root scan/buffer drain, and only then resumes the replacement binding or truthful
+  no-vault state. The atomic commit precedes only the idempotent wake-up hint; a delayed/lost hint or
+  crash converges from durable phase/revision truth without splitting foreground and background.
   The same event cannot alter an `explicit` intent set. A default mutation may not leave a running
   compatibility lifecycle silently bound to the prior vault or rely on process restart.
 - Extend registration removal in the same schema-aware service: compatibility mode atomically clears
@@ -277,15 +287,21 @@ migration, preflight, and fail-loud gate merge together.
   keeps its watcher active instead of persisting no-vault, and MVR-06 never creates a binding itself.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher`
 - [ ] **MVR-06B:** After bridge retirement, a legacy choose/open picker change still atomically updates the
-  compatibility binding through the same mutation-gate → old-root final scan/quiescent ack → commit →
-  resume transaction and drains/rebinds the supervisor; generic scoped selection and every picker
+  compatibility binding through the same mutation-gate → old-root pre-commit scan/buffer/quiescent
+  ack → commit → old-root post-commit scan/buffer drain → resume transaction and drains/rebinds the
+  supervisor; generic scoped selection and every picker
   event after explicit-mode transition leave background intent unchanged.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff`
 - [ ] **MVR-06B:** After bridge retirement, injected faults at mutation-gate, prepare, old-root final
-  scan, quiescent acknowledgement, commit, and resume never strand an accepted old-binding write or
+  scans, quiescent acknowledgement, commit, buffer drain, and resume never strand an accepted
+  old-binding write or
   let the supervisor perform a candidate-binding effect before commit. Pre-commit recovery resumes
   the old binding; post-commit recovery rolls forward, including when every wake-up hint is lost.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity`
+- [ ] **MVR-06B:** A direct-filesystem write to A after its pre-commit reconciliation scan but before
+  compatibility commit is captured by the durable handoff buffer or post-commit old-root scan and is
+  receipted under A before B can load, including when the filesystem event hint is dropped.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_handoff_buffers_direct_filesystem_write_through_commit`
 - [ ] **MVR-06D:** The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
@@ -317,8 +333,10 @@ migration, preflight, and fail-loud gate merge together.
   state but every add/remove or other intent-changing API/CLI command fails capability-not-ready and
   cannot diverge durable intent from the still-authoritative legacy watcher.
   - Verify: `tests/api/test_background_binding_admin.py::test_mvr06a_rejects_all_intent_mutations_until_supervisor_handoff`
-- [ ] **MVR-06B:** Replacing or clearing the instance default through MVR-02's production API/CLI drains and
-  re-resolves a compatibility lifecycle before later work, but does not rebind explicit intent.
+- [ ] **MVR-06B:** Replacing or clearing the instance default through MVR-02's production API/CLI uses
+  the full prepare/quiesce/commit/resume protocol before later work, but does not rebind explicit
+  intent; clearing falls back to a registered legacy bootstrap before truthful no-vault so foreground
+  and background resolution remain identical.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle`
 - [ ] **MVR-06B:** Rebind drains in-flight work on the old generation and routes later work to the new one using
   #3163's production event/reload path.

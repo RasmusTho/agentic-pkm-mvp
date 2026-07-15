@@ -57,20 +57,27 @@ not background lifecycles.
   selection as unusable and journal its prior/new binding and compatibility revisions. When a
   watcher lifecycle is enabled, the picker first closes a durable compatibility-mutation ingress
   gate, drains every old-binding mutation already admitted, and publishes a `prepare` revision. The
-  watcher finishes its captured old tick, performs one final old-root reconciliation scan after the
-  mutation drain, durably enqueues/receipts everything found, then enters quiescent state without
-  loading/scanning/emitting against the new binding and acknowledges that exact prepare revision.
-  The picker then atomically commits the new durable
-  selection/compatibility binding and prior-selection invalidation before publishing `resume`; only
+  watcher finishes its captured old tick and enters a durable handoff-observation state for A: it
+  stops normal old-binding effects but keeps the filesystem subscription live, journals every A
+  event, performs a reconciliation scan after the mutation drain, and acknowledges that exact
+  prepare revision. The acknowledgement does not end observation. The watcher keeps buffering A
+  events through the picker commit; after it observes the committed revision it performs a second
+  reconciliation scan of A, drains the durable event buffer, and records the old-root handoff
+  receipt before it may resolve or load B. This commit-bracketing observation window is the atomic
+  filesystem cutoff: an Obsidian/direct-filesystem write after either pre-commit scan but before the
+  selection commit is still reconciled under A even when an event hint is lost. The picker then
+  atomically commits the new durable selection/compatibility binding and prior-selection
+  invalidation before publishing `resume`; only
   that resume lets the watcher resolve/reload B and perform effects, and only the committed picker
   bearer is returned. An intentionally disabled or absent watcher is durably classified
   `no_lifecycle` by instance configuration/preflight, so the same picker commit does not wait for an
   acknowledgement that no process can produce; in that posture the mutation gate drains directly
   into the picker commit because no ingest lifecycle is promised. A failure or crash before the
   selection commit keeps the prior selection authoritative, issues a CAS-safe cancel/compensation,
-  resumes the watcher on A, then reopens A mutation ingress; B has produced no effects. A failure after commit is recovered as
-  committed: ingress remains blocked until recovery publishes/reconciles resume, never compensated
-  to A after B effects. Picker bridge operations serialize under the journal revision/CAS so recovery
+  resumes the watcher on A, then reopens A mutation ingress; B has produced no effects. A failure
+  after commit is recovered as committed: ingress remains blocked until recovery completes A's
+  post-commit scan/buffer drain and publishes/reconciles resume, never compensated to A after B
+  effects. Picker bridge operations serialize under the journal revision/CAS so recovery
   cannot roll back a later picker. This alignment invariant applies only to the picker transition
   being replaced: other clients' immutable scoped read sessions may legitimately remain on A while
   the one compatibility watcher follows the latest legacy picker B, and are never invalidated or
@@ -445,15 +452,19 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06`
 - [ ] **MVR-05B:** Picker replacement and the #3163 compatibility watcher rebind are recoverable as
   one operation. Before prepare, carrier-free compatibility mutations are durably gated and drained;
-  the enabled watcher completes a final old-root reconciliation scan, then acknowledges a durable
-  prepared/quiescent revision without effects on the new binding. Only then may selection activation/prior invalidation commit and a
-  resume revision permit new-binding effects. Pre-commit faults cancel/compensate while B has no
-  effects, resume A, and reopen A ingress; post-commit faults recover forward and block ingress until resume. An intentionally
+  the enabled watcher scans A, acknowledges a durable prepared/quiescent revision without effects
+  on B, and retains durable old-root event observation through selection commit. After commit it
+  completes the bracketing A scan/buffer drain and handoff receipt before a resume revision may
+  permit B effects. A direct-filesystem write after the pre-commit scan but before commit remains an
+  A write and cannot be stranded, including when its event hint is lost. Pre-commit faults
+  cancel/compensate while B has no effects, resume A, and reopen A ingress; post-commit faults recover
+  forward and block ingress until the A drain and resume complete. An intentionally
   disabled/absent watcher is a durable `no_lifecycle` outcome and needs no process acknowledgement.
   Concurrent picker operations serialize, while unrelated clients' existing scoped reads remain
   valid on their immutable bindings and may intentionally differ from the single watcher.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic`
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack`
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture`
 - [ ] **MVR-05B:** Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.

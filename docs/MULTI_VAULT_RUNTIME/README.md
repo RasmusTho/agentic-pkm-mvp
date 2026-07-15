@@ -310,8 +310,9 @@ Partial delivery remains fail-closed:
   no global "multi-vault delivered" claim is allowed;
 - after issue 05B but before issue 06B, the existing picker alone prepares #3163's named monotonic
   cross-process compatibility revision. Compatibility-mutation ingress is gated/drained first; an
-  enabled watcher final-scans the old root and acknowledges quiescence on the prepared revision
-  before the picker selection commits, then applies/reloads and resumes only after that commit. An
+  enabled watcher scans the old root and acknowledges quiescence on the prepared revision while
+  retaining durable old-root event observation through commit, then performs the bracketing
+  post-commit scan/buffer drain and receipt before it applies/reloads and resumes B. An
   intentionally disabled/absent watcher is represented by durable `no_lifecycle` posture
   and requires no process acknowledgement. An in-process event is only a hint and scoped request/
   session selection does not mutate the record. Issue 06B atomically hands
@@ -327,10 +328,12 @@ Partial delivery remains fail-closed:
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
   ambiguous/conflicting rows quarantine. Issue 05D retires the compatibility translator only after
   native producer migration, and issue 06D cannot backfill a duplicate;
-- after issue 06B, legacy choose/open continues to rebind only `compatibility` lifecycle intent with
-  the same mutation-gate/final-scan/quiesce → commit → resume transaction; the first governed
-  background add/remove enters `explicit` mode, after which picker and default changes cannot mutate
-  the explicit background set;
+- after issue 06B, legacy choose/open and default set/clear continue to rebind only `compatibility`
+  lifecycle intent with the same mutation-gate/pre-commit scan+buffer/quiesce → commit →
+  post-commit old-root scan+buffer drain → resume transaction. Default clear re-runs the canonical
+  default → registered legacy bootstrap → no-vault precedence; the first governed background
+  add/remove enters `explicit` mode, after which picker and default changes cannot mutate the explicit
+  background set;
 - from issue 05A through issue 06B, the interim scalar worker dispatches a versioned vault-bound row
   only when the row uniquely matches the worker's explicit current single-binding compatibility
   context, current authorization, binding revision, and resolved root, and it holds the binding's

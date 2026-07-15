@@ -33,15 +33,17 @@ rationale) to record the supersession rather than leaving it as if still current
 - Runs selection/switch plus rebind as a recoverable prepare → commit → resume transaction in the
   shared app-local selection state before returning success. When the watcher lifecycle is enabled,
   the picker first closes and drains a durable compatibility-mutation ingress gate. The separately
-  deployed watcher drains its captured old tick, runs one final old-root reconciliation scan after
-  that mutation drain, durably enqueues/receipts the result, and only then acknowledges the prepare
-  revision while quiescent; it does not load, scan, emit, or auto-execute against the candidate root.
-  The picker then commits selection plus compatibility binding/revision and publishes resume. Only
-  after observing that committed resume may the watcher re-resolve the root → reload vault-scoped
+  deployed watcher drains its captured old tick, enters durable handoff observation for A, runs a
+  reconciliation scan after that mutation drain, and acknowledges the prepare revision while normal
+  old-binding effects are quiescent. It keeps the A filesystem subscription and durable event buffer
+  live through selection commit. After observing the committed revision it performs a bracketing
+  A reconciliation scan, drains/receipts the buffer, and only then may consume resume, re-resolve the
+  root → reload vault-scoped
   settings via the SETTINGS-01 path (one loader, not a second one — see capability Cross-Task
   Invariants) → resume ingest against the new root. Pre-commit failure cancels while the new root has
   no watcher effects, resumes A, then reopens A mutation ingress; post-commit recovery rolls forward
-  and keeps ingress blocked until resume.
+  and keeps ingress blocked until the A scan/buffer drain and resume. A direct-filesystem write after
+  the pre-commit scan but before commit is therefore receipted under A even if its event hint is lost.
   An intentionally disabled or omitted watcher is represented durably as `no_lifecycle`, so picker
   commit succeeds without waiting for a nonexistent acknowledgement. `VaultChangedEvent` (emitted by
   `VaultManager._emit_changed`) remains
@@ -79,13 +81,15 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 - [ ] Switching vaults mid-run rebinds cleanly: in-flight tick completes against the old root, next
       tick runs against the new root, `ingest_binding` reflects each state truthfully.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_switch_is_clean_and_truthful`
-- [ ] A fault at every prepare/acknowledge/selection-commit/resume boundary produces no effect in the
+- [ ] A fault at every prepare/acknowledge/selection-commit/old-root-drain/resume boundary produces no effect in the
       candidate vault before selection commit and recovers forward after commit. The prepare gate
-      blocks/drains old-binding mutations and the watcher completes a final old-root scan before its
-      quiescent acknowledgement, so no accepted A write is stranded; a configured
+      blocks/drains old-binding mutations; the watcher scans before acknowledgement, durably observes
+      A through commit, and scans/drains again after commit before B, so no accepted or direct-
+      filesystem A write in the handoff window is stranded. A configured
       `no_lifecycle` watcher posture completes the foreground selection without a process ack.
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic`
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes`
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
 - [ ] Rebind triggers the SETTINGS-01 settings reload for the new vault (vault-scoped settings
       follow the vault; one bundle swap).
@@ -102,7 +106,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
 - `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
   (vault/watcher hot path)
 
@@ -114,7 +118,8 @@ the UI says one vault and ingest watches another — captures silently vanish fr
   management) than "the one watcher follows the one active selection." This task's rebind
   mechanism (prepare shared revision, quiesce, commit, reconcile, resume) is the building block a future
   multi-watcher task would reuse per-instance, but instantiating multiple watchers is not this
-  task's scope. The single-watcher transaction is prepare/quiesce → picker commit → resume, not an
+  task's scope. The single-watcher transaction is prepare/pre-scan+buffer/quiesce → picker commit →
+  post-scan+buffer drain → resume, not an
   acknowledgement after the watcher has already performed effects in the candidate vault.
 - Multi-active-vault epic #2143 in the sense of concurrently serving more than one selected vault
   to the API/retrieval layer — still exactly one active vault at a time, as today. (This task is
