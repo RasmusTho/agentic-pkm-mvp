@@ -27,6 +27,7 @@ from tests.dispatcher.test_verification_consumer import (
     Launcher,
     Truth,
     eligible_pr,
+    green_checks,
 )
 from tests.dispatcher.test_verification_dispatch import _migrated_legacy_ledger
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
@@ -613,6 +614,48 @@ def test_expired_backoff_rebind_preserves_cumulative_chain_evidence(
         "review",
         "review",
     ]
+
+
+def test_consumer_rebinds_expired_backoff_and_launches_head_b_fresh(
+    tmp_path: Path,
+) -> None:
+    class HeadBLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            session_id, receipt = super().launch(context_pack, **kwargs)
+            receipt["head_sha"] = REPAIRED_HEAD
+            return session_id, receipt
+
+    state = ledger(tmp_path)
+    run_id, before = _record_backoff_chain(
+        state, retry_after="2000-01-01T00:00:00+00:00"
+    )
+    source, _ = _gh_source(request(REPAIRED_HEAD))
+    authenticated = source.pending_requests(REPO)[0]
+    launcher = HeadBLauncher()
+
+    result = VerificationConsumer(
+        state,
+        Truth(
+            eligible_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
+            green_checks(REPAIRED_HEAD),
+        ),
+        Auth(),
+        launcher,
+        "head-b-host",
+    ).consume(authenticated)
+
+    after = _durable_verification_snapshot(state, run_id)
+    assert result.run_id == run_id
+    assert result.requested_head_sha == HEAD
+    assert result.current_head_sha == REPAIRED_HEAD
+    assert result.status == "needs_human"
+    assert len(launcher.calls) == 1
+    context_pack, resume_session_id = launcher.calls[0]
+    assert context_pack["head_sha"] == REPAIRED_HEAD
+    assert resume_session_id is None
+    assert after["attempts"][: len(before["attempts"])] == before["attempts"]
+    assert after["exceptions"][: len(before["exceptions"])] == before["exceptions"]
+    assert after["run_count"] == before["run_count"] == 1
 
 
 @pytest.mark.parametrize("failure", ["unexpired", "unauthenticated", "stale_live_head"])
