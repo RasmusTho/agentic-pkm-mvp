@@ -108,6 +108,9 @@ This slice promotes the existing seed without changing content-vault authority.
   receipted outcome under the source binding. Missing hooks or an unsettled row leave transfer
   capability-not-ready and abort before the source registration or lease changes; no default,
   dimension membership, row, or compatibility lifecycle is implicitly retargeted to the destination.
+  If no authorized source replacement exists, an enabled compatibility watcher retains its enabled
+  posture but becomes durable idle/no-vault; `no_lifecycle` is legal only when the pre-transfer
+  configuration already declares the watcher disabled or omitted.
   Only after reference repair, queue drain, source retirement, and destination registration/lineage are durable does
   it replace `transferring` with the destination active lease. A crash resumes or compensates from
   the journal while the reservation blocks both channels; it never admits an ordinary duplicate,

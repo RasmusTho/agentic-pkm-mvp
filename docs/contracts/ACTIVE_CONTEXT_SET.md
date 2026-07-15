@@ -26,7 +26,8 @@ Declare the active cognitive context as a versioned set of bindings rather than 
 - ActiveContextSet identifier and generation/version.
 - Effective workspace, scope, sphere, situated identity, principal, and topology posture.
 - Source-binding list treated as implementation detail.
-- Degraded-mode posture when no binding is active.
+- Typed healthy/degraded posture: ordinary no-vault is a healthy zero-binding state; unavailable,
+  invalid, unauthorized, or stale requested binding is degraded with a bounded reason.
 
 ## Commands
 
