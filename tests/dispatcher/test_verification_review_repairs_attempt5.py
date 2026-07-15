@@ -294,3 +294,123 @@ def test_repaired_head_artifact_cannot_merge_unrelated_authority(tmp_path) -> No
     )
     with pytest.raises(ValueError, match="idempotency authority conflict"):
         same_head_state.ingest(unrelated)
+
+
+def _superseded_exhausted_chain(
+    state: VerificationDispatchLedger,
+) -> str:
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    state.start(
+        run.run_id,
+        "host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000061",
+        {"head_sha": HEAD, "stale_context": True},
+    )
+    for ordinal in range(1, 3):
+        state.record_attempt(
+            run.run_id,
+            "standard_repair",
+            f"superseded-repair-{ordinal}",
+            "gpt-5.6-terra",
+            "high",
+            {"head_sha": HEAD},
+            "repaired",
+            {"head_sha": HEAD},
+            holder="host",
+            lease_id=claimed.lease_id or "",
+        )
+    state.backoff(
+        run.run_id,
+        {"outcome": "deferred", "reason": "checks_not_green"},
+        "2000-01-01T00:00:00+00:00",
+        holder="host",
+        lease_id=claimed.lease_id or "",
+    )
+    state.supersede_unclaimed(
+        run.run_id,
+        {"outcome": "noop", "reason": "stale_head"},
+        reason="stale_head",
+    )
+    return run.run_id
+
+
+def test_stale_head_superseded_chain_reopens_without_budget_reset(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run_id = _superseded_exhausted_chain(state)
+
+    reopened = state.ingest(request(REPAIRED_HEAD))
+
+    assert reopened.run_id == run_id
+    assert reopened.status == "queued"
+    assert reopened.requested_head_sha == HEAD
+    assert reopened.current_head_sha == REPAIRED_HEAD
+    assert [row["kind"] for row in state.attempts(run_id)] == [
+        "standard_repair",
+        "standard_repair",
+    ]
+
+
+def test_reopened_stale_head_chain_clears_stale_execution_state(tmp_path) -> None:
+    state = ledger(tmp_path)
+    _superseded_exhausted_chain(state)
+
+    reopened = state.ingest(request(REPAIRED_HEAD))
+
+    assert reopened.requested_head_sha == HEAD
+    assert reopened.current_head_sha == REPAIRED_HEAD
+    assert reopened.verified_head_sha is None
+    assert reopened.claimed_by is None
+    assert reopened.lease_id is None
+    assert reopened.lease_expires_at is None
+    assert reopened.coordinator_session_id is None
+    assert reopened.context_pack is None
+    assert reopened.terminal_receipt is None
+    assert reopened.stop_reason is None
+    assert reopened.retry_after is None
+
+
+def test_stale_head_superseded_chain_rejects_unrelated_authority(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run_id = _superseded_exhausted_chain(state)
+    unrelated = request(REPAIRED_HEAD)
+    unrelated["linked_issue"] = 9999
+
+    with pytest.raises(ValueError, match="governing issue mismatch"):
+        state.ingest(unrelated)
+
+    original = state.get(run_id)
+    assert original is not None
+    assert original.status == "superseded"
+    assert original.current_head_sha == HEAD
+
+
+@pytest.mark.parametrize(
+    ("status", "stop_reason"),
+    [
+        ("failed", "technical_failure"),
+        ("completed", None),
+        ("needs_human", "human_exception"),
+        ("superseded", "closed_unmerged_or_merged"),
+    ],
+)
+def test_non_reopenable_terminal_chains_remain_terminal(
+    tmp_path, status: str, stop_reason: str | None
+) -> None:
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET status=?, stop_reason=?, "
+            "terminal_receipt_json=? WHERE run_id=?",
+            (status, stop_reason, '{"outcome":"terminal"}', original.run_id),
+        )
+        conn.commit()
+
+    next_run = state.ingest(request(REPAIRED_HEAD))
+
+    retained = state.get(original.run_id)
+    assert retained is not None
+    assert retained.status == status
+    assert next_run.run_id != original.run_id
