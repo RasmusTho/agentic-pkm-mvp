@@ -93,6 +93,9 @@ unchanged.
   watermark proves API replay and GitHub execution remain fail-closed until both intent and
   pre-effect attempt LSNs are durable.
   Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch` plus Demerzel runtime receipt.
+- [ ] Cutover consumes the BCP-05 proof that a protected-base or delivery-manifest change after final
+  validation invalidates the GitHub conditional/merge-group fence and performs no merge.
+  Verify: `tests/dispatcher/test_verification_merge.py::test_merge_rejects_base_or_manifest_change_after_final_validation` plus the BCP-05 runtime receipt.
 - [ ] Product FastAPI has no BuilderOps/Signboard route, Product startup/Compose has no BuilderOps
   process/data/secret/health ownership, and Product reaches readiness while BuilderOps is stopped.
   Verify: `tests/architecture/test_builderops_product_separation.py::test_product_runtime_has_no_builderops_ownership`.

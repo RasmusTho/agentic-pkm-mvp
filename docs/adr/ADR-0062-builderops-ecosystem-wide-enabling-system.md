@@ -157,6 +157,15 @@ receive those credentials. Merge remains gated by the governing Issue, current P
 the repository review gate, repository protection, and a GitHub readback receipt. BuilderOps
 orchestration cannot broaden repository permission or make a merge authoritative by itself.
 
+Final validation produces an authorization fence over protected-base OID, delivery-manifest blob
+OID/hash, PR head OID, `RepoRef`, and credential generation. The privileged effect must use a
+GitHub-enforced conditional merge/ruleset or merge-queue path that rejects or invalidates the attempt
+if the protected base or manifest changes after validation. Where GitHub cannot enforce that fence,
+direct merge fails closed. A merge queue/merge group repeats policy, credential, SHA, CI, review, and
+protection validation against the queue-selected base before GitHub may merge; a base advance or
+policy revocation while the pre-effect attempt becomes durable produces a stale/revalidation receipt,
+not a merge.
+
 ### D6 — Governed migration and one-way cutover
 
 Cutover inventories **all** legacy BuilderOps, dispatcher, model-inquiry, and epic-run SQLite/JSONL/
@@ -199,8 +208,10 @@ bearing ambiguity is resolved or has those duplicate-preventing tombstone semant
 Promotion is addressed to one consumer repo and requires that repo's normal acceptance path. A
 BuilderOps standing in repo A is non-transitive to repo B. BuilderOpsReceipt projections may be
 committed into consumer repos as evidence, but projections are not the control-plane authority.
-The privileged executor re-resolves the repo-governed delivery manifest and host credential mapping;
-it never treats a client-selected manifest or routing prior as merge authority.
+The privileged executor re-resolves the repo-governed delivery manifest and host credential mapping,
+then binds the effect to the same protected-base/manifest authorization fence through a GitHub-
+enforced conditional or merge-queue path. It never treats a client-selected manifest or routing prior
+as merge authority, and it never merges under policy that changed after final validation.
 
 ### D8 — Layer on ADR-0010; extraction triggers split runtime from source
 
@@ -242,9 +253,9 @@ requires an owner decision before specification and backlog preparation.
   SQLite is superseded as the production target.
 - Issue #3603 remains the review/merge-orchestration workstream after PR #3620 merged. BCP-05 reuses
   that delivered implementation and migrates its dispatcher-SQLite authority after BCP-02/04; it
-  does not reopen the merged PR or create another orchestrator. Host authentication is green; the
-  host remains disabled while #3812 / PR #3813 is active and until the subsequent low-risk pilot
-  receipt exists.
+  does not reopen the merged PR or create another orchestrator. Host authentication is green and
+  #3812 / PR #3813 are closed/merged; the installed-main low-risk pilot receipt remains the blocking
+  host-enablement evidence.
 - Issue #3690 remains the owner-doc enactment task and must be rewritten to reflect this topology
   after the BCP-06 cutover is proved.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves

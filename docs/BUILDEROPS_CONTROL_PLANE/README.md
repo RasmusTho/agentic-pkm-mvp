@@ -70,11 +70,13 @@ not by rewriting that merge.
    worker, and database restarts.
 6. **Credential/policy non-transitivity and non-persistence.** A credential/lease for repo A cannot
    act on repo B. The privileged executor re-resolves the protected-base delivery manifest and a
-   host-side `RepoRef` credential mapping; client-selected policy cannot weaken it. Product and
-   general clients cannot obtain merge credentials. Raw secrets never enter PostgreSQL, outbox
-   payloads, receipts, artifacts, logs/metrics, WAL, or BuilderOps backups. Backup/WAL decryption
-   uses independently recoverable key/KMS custody outside Demerzel's failure domains rather than
-   depending solely on its host secret store.
+   host-side `RepoRef` credential mapping; client-selected policy cannot weaken it. The GitHub effect
+   is conditional on the same protected-base/manifest authorization fence or a merge queue that
+   revalidates it, so a post-validation base/policy change produces no merge. Product and general
+   clients cannot obtain merge credentials. Raw secrets never enter PostgreSQL, outbox payloads,
+   receipts, artifacts, logs/metrics, WAL, or BuilderOps backups. Backup/WAL decryption uses
+   independently recoverable key/KMS custody outside Demerzel's failure domains rather than depending
+   solely on its host secret store.
 7. **Independent lifecycle.** Product start/stop/deploy/health/backup cannot start, stop, publish, or
    restore BuilderOps, and BuilderOps failure does not change Product process ownership.
 8. **No authority rewind.** Before activation, rollback may use the pre-import PostgreSQL backup.
@@ -141,9 +143,10 @@ Partial-failure examples:
   acknowledged state.
   Verify: BCP-02 credential-persistence test plus BCP-06 no-authority-rewind rehearsal.
 - [ ] A verification-gated merge uses the repo-scoped executor credential, independently binds the
-  protected-base delivery manifest and host credential mapping to the current PR SHA, and becomes
-  terminal only after GitHub readback.
-  Verify: the migrated #3603/#3620 test baseline and BCP-05 runtime receipt.
+  protected-base delivery manifest and host credential mapping to the current PR SHA, executes only
+  through a GitHub-enforced base/manifest conditional or revalidated merge queue, rejects a base or
+  policy change after final validation, and becomes terminal only after GitHub readback.
+  Verify: the migrated #3603/#3620 test baseline, BCP-05 protected-base race test, and runtime receipt.
 
 ## Backlog reconciliation
 

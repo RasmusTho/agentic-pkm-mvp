@@ -71,8 +71,8 @@ without changing Product runtime or inventing a new Product SBS component.
   and `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md :: 1. Executive Model`.
 - [ ] Store/boundary/dispatcher docs define authenticated API-only clients, one PostgreSQL
   operational authority, intent/attempt durability-gated outbox/readback semantics, evidence-only
-  quarantine versus duplicate-preventing authority tombstones, and SQLite migration/test-only
-  posture.
+  quarantine versus duplicate-preventing authority tombstones, conditional protected-base/manifest
+  merge fencing, and SQLite migration/test-only posture.
   Verify: reconciled anchors in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`,
   `docs/builderops/BUILDEROPS_VAULT_STORE.md`, and `docs/AGENT_ISSUE_DISPATCHER.md`.
 - [ ] Deployment/security/health/operations docs own the separate Compose/pin/credential/health/
@@ -89,8 +89,9 @@ without changing Product runtime or inventing a new Product SBS component.
   Verify: GitHub/backlog reconciliation receipt linked on the parent.
 - [ ] The parent capability checklist is complete and its closure receipt links cutover,
   stalled-durability/no-external-effect proof, authority-ambiguity resolution/tombstone
-  reconciliation, restore without Demerzel host secrets, independent key-custody recovery,
-  no-authority-rewind recovery, executor/GitHub readback, tests, and owner-doc diff.
+  reconciliation, protected-base/manifest post-validation race rejection, restore without Demerzel
+  host secrets, independent key-custody recovery, no-authority-rewind recovery, executor/GitHub
+  readback, tests, and owner-doc diff.
   Verify: parent #3788 closure comment.
 
 ## Out of Scope

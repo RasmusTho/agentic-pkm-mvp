@@ -62,7 +62,8 @@ reshape a Product SBS subsystem.
 - keep a child/PR/receipt ledger on the parent;
 - require the BCP-06 end-to-end cutover, stalled-durability/no-GitHub-effect fault proof,
   authority-ambiguity resolution/tombstone reconciliation, restore-through-acknowledged-watermark,
-  and independent recovery-key/KMS custody receipts before BCP-07; and
+  protected-base/manifest post-validation race rejection, and independent recovery-key/KMS custody
+  receipts before BCP-07; and
 - close only through BCP-07's parent-closure handoff.
 
 ## Source Docs
@@ -79,7 +80,7 @@ reshape a Product SBS subsystem.
 | BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | `agent:blocked` on BCP-01 |
 | BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | `agent:blocked` on BCP-01 |
 | BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | `agent:blocked` on BCP-02 |
-| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline; API/PostgreSQL migration blocked on BCP-02/04; host auth green, pilot waits on #3812/PR #3813 merge/install |
+| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline; API/PostgreSQL migration blocked on BCP-02/04; host auth green and #3812/PR #3813 closed/merged; installed-main pilot receipt pending |
 | BCP-06 | [#3793](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3793) | `agent:blocked` on BCP-03/04/05 |
 | BCP-07 | Existing #3690 | `agent:blocked` on BCP-06 |
 
@@ -99,7 +100,8 @@ authoritative cutover gates.
 After BCP-06, attach the Demerzel end-to-end API/executor/GitHub readback receipt, legacy-import
 reconciliation (including evidence-only quarantine versus duplicate-preventing authority tombstones),
 stalled-durability proof that GitHub remains untouched until intent and pre-effect attempt LSNs are
-independently durable, independent Product/BuilderOps lifecycle proof, and full-backup + continuous-
-WAL restore-through-acknowledged-watermark drill with Demerzel's host secret store unavailable and
-independently recoverable key/KMS custody. Only then
+independently durable, protected-base/manifest post-validation race proof, independent Product/
+BuilderOps lifecycle proof, and full-backup + continuous-WAL restore-through-acknowledged-watermark
+drill with Demerzel's host secret store unavailable and independently recoverable key/KMS custody.
+Only then
 may #3690/BCP-07 promote current-state owner docs and close this parent.

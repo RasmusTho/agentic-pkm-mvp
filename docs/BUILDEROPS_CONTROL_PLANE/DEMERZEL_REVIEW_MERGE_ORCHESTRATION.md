@@ -33,6 +33,8 @@ delta for delivered work, not a duplicate orchestrator and not a request to reop
 - independently load the delivery manifest from the target repository's protected default branch/
   base SHA, bind its hash to the attempt/head, and select only the host credential mapping authorized
   for that `RepoRef`;
+- bind the privileged effect to a GitHub-enforced protected-base/manifest conditional or merge-queue
+  fence so policy changes after final validation invalidate the attempt instead of racing the merge;
 - retain bounded independent review/repair loops and restart recovery from durable API state;
 - execute merge only after required CI, local review gate, repository protection, current SHA, and
   scope checks pass;
@@ -44,9 +46,11 @@ delta for delivered work, not a duplicate orchestrator and not a request to reop
 
 The delivered #3603 consumer is retained, but its dispatcher store port is replaced by an API client.
 It claims a task bound to issue/PR/SHA, runs its bounded reviewer and repair policy, persists each
-attempt through the API, re-resolves protected-base repo policy plus host credential mapping, and
-submits a gated merge intent. The outbox executor reconciles GitHub and commits a readback receipt
-before completion.
+attempt through the API, re-resolves protected-base repo policy plus host credential mapping, binds a
+GitHub-enforced authorization fence over protected-base OID + manifest blob/hash + PR head OID +
+`RepoRef` + credential generation, and submits the gated merge intent through the repo's conditional
+or merge-queue path. The outbox executor reconciles GitHub and commits a readback receipt before
+completion.
 
 ## Why This Matters
 
@@ -83,6 +87,11 @@ weaken them and does not enter Product Runtime.
   executor resolves the manifest from the protected default branch/base SHA, binds manifest hash +
   base/head SHA + `RepoRef`, and rejects any host credential mapping or requested action outside
   that repo policy.
+- The GitHub effect itself must be conditional on the same protected-base OID and manifest blob/hash,
+  or run through a merge queue/merge group that revalidates the fence and repository gates against
+  its queue-selected base. If the base/manifest changes after final validation or while the
+  pre-effect attempt becomes durable, GitHub must reject/invalidate the attempt; without an enforced
+  conditional/queue path, direct merge fails closed.
 - A merge receipt binds the exact current SHA and GitHub readback; a local success return is
   insufficient.
 - Existing CI + review + protection gates are not weakened by autonomous execution.
@@ -103,6 +112,10 @@ weaken them and does not enter Product Runtime.
   repo scope mismatch, client-vs-protected manifest mismatch, stale base/manifest hash, or host
   credential mapping outside the target `RepoRef` policy.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_revalidates_protected_manifest_and_repo_credential_binding`.
+- [ ] Advancing the protected base or changing/revoking its delivery manifest after final validation
+  but before the external effect invalidates the GitHub conditional/merge-group authorization fence
+  and performs no merge; a new attempt requires fresh policy, credential, and gate validation.
+  Verify: `tests/dispatcher/test_verification_merge.py::test_merge_rejects_base_or_manifest_change_after_final_validation`.
 - [ ] A timed-out merge reconciles GitHub state before retry and emits one terminal readback receipt.
   Verify: `tests/dispatcher/test_verification_merge.py::test_timed_out_merge_reconciles_before_retry`.
 - [ ] Executor credentials are host-local and privileged-scope-only; API/status/logs and all durable

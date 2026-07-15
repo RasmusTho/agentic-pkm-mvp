@@ -1,4 +1,4 @@
-State: Advisory architecture audit snapshot, 2026-07-15. Structural evidence baseline: `origin/main` at `1e66c16120a9bbd0b1c91c3b50162be805d407c7`; lifecycle reconciliation refreshed through `origin/main` at `c4dbfc420564f9e810543737086f1b6808f6ddf3` the same day. Subordinate to owner docs and ADRs. Executable handoff: `docs/BUILDEROPS_CONTROL_PLANE/`.
+State: Advisory architecture audit snapshot, 2026-07-15. Structural evidence baseline: `origin/main` at `1e66c16120a9bbd0b1c91c3b50162be805d407c7`; lifecycle reconciliation refreshed through `origin/main` at `9e45e847b8cb8bfee847c9e7364cd8f16c793bdf` and live GitHub the same day. Subordinate to owner docs and ADRs. Executable handoff: `docs/BUILDEROPS_CONTROL_PLANE/`.
 Doc role: Reference (architecture audit)
 Authority: Evidence and synthesis only. ADR-0010 owns the authority seam; accepted ADR-0062 owns the target decision; GitHub Issues own implementation work.
 Owner: BuilderOps governance / Architecture spine
@@ -18,7 +18,8 @@ passes covered runtime/persistence, Demerzel operations, and backlog reconciliat
 queried, so host claims below are limited to repository-recorded evidence. A same-day lifecycle
 refresh records PR #3620 as merged and its correctness follow-ups on `main`. A later GitHub receipt
 on #3603 (2026-07-15T13:21:05Z) supersedes the earlier credential snapshot: ChatGPT/keyring auth is
-green, the host remains disabled, and active #3812 / PR #3813 must merge/install before the pilot.
+green. Issue #3812 and PR #3813 are closed/merged at `c6a48b00`; the host remains disabled until the
+merged main build is installed and the subsequent low-risk pilot receipt exists.
 
 ## 2. Authority baseline
 
@@ -153,9 +154,11 @@ No recovery path rewinds acknowledged state or re-enables SQLite.
 In a privileged Demerzel executor with repo-scoped GitHub permission and host-local model sessions.
 It is a BuilderOps API client, not a database client. It independently resolves the protected-base
 repo delivery manifest and host credential mapping, binds them to `RepoRef` plus base/head SHA, and
-may execute only an outbox/attempt that passed issue/SHA/CI/review/protection gates. It becomes
-terminal only after GitHub readback. General clients and Product Runtime never receive merge
-credentials.
+may execute only an outbox/attempt that passed issue/SHA/CI/review/protection gates. The effect is
+conditional on the same protected-base/manifest fence through GitHub enforcement or a revalidated
+merge queue; a base/policy change after final validation invalidates the attempt and performs no
+merge. It becomes terminal only after GitHub readback. General clients and Product Runtime never
+receive merge credentials.
 Raw GitHub/model/client/database/recovery-decryption credentials never enter PostgreSQL, outbox
 payloads, receipts, artifacts, logs/metrics, WAL, or BuilderOps backups. Operational secrets stay in
 host secret stores; backup/WAL decryption uses independently recoverable key/KMS custody outside
@@ -163,10 +166,10 @@ Demerzel's failure domains so total host loss does not make the recovery lineage
 
 ### RQ5 — How independent is the lifecycle?
 
-Operationally independent now: separate Compose project, database service/volume/role/secrets,
-migrations, release pin, health/readiness, probe, backup/restore, and receipts. Source code may remain
-in this repository behind a hard build/package seam until a later source-repository extraction
-trigger fires.
+The required target is operational independence: separate Compose project, database service/volume/
+role/secrets, migrations, release pin, health/readiness, probe, backup/restore, and receipts. The
+current audit does not claim that deployment is shipped. Source code may remain in this repository
+behind a hard build/package seam until a later source-repository extraction trigger fires.
 
 ## 6. Target topology
 
@@ -208,7 +211,7 @@ Minimum deployable unit:
 | BCP-INV-06 | MUST | Product Runtime owns no BuilderOps route, process, data, credential, or health path. | architecture/Compose route-removal gate |
 | BCP-INV-07 | GATE | Independent migrations, full backup + continuous WAL, independently recoverable key/KMS custody, restore through acknowledged LSN without the primary host secret store, release pin, health, and no-authority-rewind recovery pass before cutover. | deploy/cutover/recovery receipt |
 | BCP-INV-08 | GATE | Producer-derived host/worktree/container/automation coverage proves all legacy stores are inventoried, frozen, and reconciled; plain quarantine contains evidence-only material, every authority-bearing ambiguity is evidence-resolved or duplicate-preventing tombstoned, and live leases are not imported. | expected-source/provenance manifest + reconciliation receipt |
-| BCP-INV-09 | MUST | Executor revalidates protected-base repo policy and credential binding; credentials and raw recovery keys are unavailable to Product/general clients and absent from BuilderOps durable state/backups/WAL. | manifest/secret/permission + durable-state/restore negative tests |
+| BCP-INV-09 | MUST | Executor revalidates protected-base repo policy and credential binding, and the GitHub effect is conditional on the same base/manifest fence or a revalidated merge queue; credentials and raw recovery keys are unavailable to Product/general clients and absent from BuilderOps durable state/backups/WAL. | protected-base race + manifest/secret/permission + durable-state/restore negative tests |
 | BCP-INV-10 | DOCTOR | Outbox age/dead letters, lease conflicts, credential/rate-limit state, and executor heartbeat are visible without secrets. | status/metrics contract |
 
 These are target-state invariants. They enter `docs/testing/invariant-tests.md` only with the task
