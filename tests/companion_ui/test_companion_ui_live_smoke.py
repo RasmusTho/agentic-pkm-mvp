@@ -36,8 +36,13 @@ from urllib.parse import urljoin
 
 import pytest
 
+from tests.companion_ui.live_smoke_contract import assert_operator_health
+
 _SMOKE_URL = os.environ.get("COMPANION_UI_SMOKE_URL")
 _EXPECTED_CHANNEL = os.environ.get("COMPANION_UI_EXPECTED_CHANNEL")
+_ALLOW_EMBEDDING_REBUILD_REQUIRED = (
+    os.environ.get("COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED") == "1"
+)
 if not _SMOKE_URL:
     pytest.skip(
         "Set COMPANION_UI_SMOKE_URL=<gateway root URL> to run the live UI smoke.",
@@ -74,7 +79,12 @@ def test_live_gateway_is_healthy_and_not_in_error_state() -> None:
             health = page.request.get(urljoin(base, "api/operator/health"))
             assert health.ok, f"health proxy HTTP {health.status}"
             payload = health.json()
-            assert payload.get("ok") is True, f"health not ok: {payload!r}"
+            assert_operator_health(
+                payload,
+                allow_embedding_rebuild_required=(
+                    _ALLOW_EMBEDDING_REBUILD_REQUIRED
+                ),
+            )
 
             # (b) the rendered entry surface is not stuck in an error state.
             response = page.goto(base, wait_until="domcontentloaded")
