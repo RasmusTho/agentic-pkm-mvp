@@ -70,7 +70,11 @@ active in two dev/test/prod/native ownership domains simultaneously, and nested 
 those domains. Relocation is implemented but capability-gated until MVR-06C proves every foreground
 and background consumer uses the matching shared/exclusive effect-lease order. Explicit transfer
 remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
-drains/stops the source channel, commits release, and claims the destination; crashes leave a
+uses a production-derived source-channel inventory to close foreground ingress, drain and stop every
+vault-bound watcher, scalar worker, settings reload, outbox/ingest, Heimdal projection, API/CLI, and
+other lifecycle/effect producer, and installs a restart fence that rejects the old channel lease
+before committing release and claiming the destination. Vault-independent global work is classified
+and unaffected. Crashes leave a
 blocking recoverable reservation, never two owners or an unowned running lifecycle.
 
 The first MVR-01 rollout is a host-wide ownership migration, not a per-channel best effort. Before

@@ -84,7 +84,10 @@ This slice promotes the existing seed without changing content-vault authority.
   not move an existing consumer. Explicit cross-channel transfer is implemented but
   remains capability-gated until MVR-05C proves production foreground read and write lease fencing;
   before that floor every transfer request fails `capability_not_ready`. The dormant protocol defines
-  one recoverable global-fence transaction. It drains/stops the source, then changes the active
+  one recoverable global-fence transaction. Its activation owner must provide a production-derived
+  source-channel producer inventory, close foreground ingress, drain/stop every vault-bound source
+  lifecycle/effect producer, and install a restart fence that rejects the retiring channel/binding
+  lease before ownership moves; missing coverage leaves transfer capability-not-ready. It then changes the active
   source ledger entry into a `transferring` reservation bound to one transfer ID, canonical-root
   fingerprint, source binding/revision, and intended destination channel. This transfer-only state
   owns and excludes the root but is not an active binding and is the sole narrow exception to normal

@@ -267,7 +267,9 @@ acceptance criteria prefixed with its ID:
    AuthorityReceipt producers, migration, fixtures, preflight, and the cross-process per-binding
    shared effect fence plus active channel-ownership lease spanning final revalidation through
    I/O/receipt. It reuses the exclusive GOV-revocation fence and dormant removal/relocation paths shipped by
-   05B, proves write-side lock-order enforcement, and then enables cross-channel transfer, with governed-write
+   05B, proves write-side lock-order enforcement, and then enables cross-channel transfer only after
+   a production-derived inventory closes foreground ingress, drains/stops every vault-bound source
+   lifecycle/effect producer, and installs a source-channel restart fence, with governed-write
    owner-contract writeback. Depends on 05B.
 4. **MVR-05D — outbox producers and delivery completion:** production envelope registry, binding-keyed
    dedup, remaining-producer migration and full worker delivery, event-contract writeback, and aggregate request
@@ -438,6 +440,15 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   current GOV authorization; failure to advance the floor leaves transfer dormant.
   - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer`
   - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_destination_uses_minted_binding_and_transfer_lineage`
+- [ ] **MVR-05C:** Before advancing the transfer floor or moving ownership, a production-derived
+  source-channel inventory closes request/CLI ingress, drains and stops every vault-bound
+  compatibility watcher, scalar worker, settings reload, outbox/ingest, Heimdal projection, API/CLI,
+  and other lifecycle/effect producer, and installs a restart fence that rejects the retiring
+  channel/binding lease. Missing inventory coverage, drain failure, or any source restart leaves
+  transfer capability-not-ready and ownership unchanged; explicitly global work needs no invented
+  binding and remains independent.
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_drains_and_restart_fences_every_source_lifecycle_before_ownership_move`
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_source_inventory_covers_every_enabled_vault_bound_producer`
 - [ ] **MVR-05C:** Transfer invokes the MVR-02 and MVR-04 journal hooks to atomically clear or
   explicitly replace the source default and remove the source binding from every dimension before
   retirement; destination default/dimension membership is never inferred, and recovery exposes no
@@ -607,7 +618,7 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05C validation
 
-- `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set tests/api/test_multi_vault_governed_writes.py::test_authority_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_exact_active_context_and_target_membership tests/integration/test_multi_vault_write_effect_fence.py::test_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_nested_effect_boundary.py::test_parent_authority_cannot_write_registered_child_vault tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_channel_transfer_foreground.py::test_destination_uses_minted_binding_and_transfer_lineage tests/integration/test_vault_registry_channel_isolation.py::test_transfer_repairs_source_default_and_dimensions_before_retirement tests/integration/test_vault_registry_channel_isolation.py::test_transfer_drains_source_bound_rows_before_destination_id_activation tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
+- `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set tests/api/test_multi_vault_governed_writes.py::test_authority_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_exact_active_context_and_target_membership tests/integration/test_multi_vault_write_effect_fence.py::test_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_nested_effect_boundary.py::test_parent_authority_cannot_write_registered_child_vault tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_channel_transfer_foreground.py::test_destination_uses_minted_binding_and_transfer_lineage tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_drains_and_restart_fences_every_source_lifecycle_before_ownership_move tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_source_inventory_covers_every_enabled_vault_bound_producer tests/integration/test_vault_registry_channel_isolation.py::test_transfer_repairs_source_default_and_dimensions_before_retirement tests/integration/test_vault_registry_channel_isolation.py::test_transfer_drains_source_bound_rows_before_destination_id_activation tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
 - Verify the 05C PR diff contains its mapped `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` writeback.
 
 ### MVR-05D validation
