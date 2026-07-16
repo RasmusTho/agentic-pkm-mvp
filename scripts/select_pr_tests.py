@@ -22,6 +22,10 @@ FULL_SUITE_REASONS = (
 )
 
 FULL_SUITE_EXACT = {
+    # Shared CLI registration and path resolution affect many runtime
+    # subsystems. Never narrow their coverage to a single feature owner.
+    "app/cli/__init__.py",
+    "app/config/paths.py",
     "conftest.py",
     "pytest.ini",
     "pyproject.toml",
@@ -110,7 +114,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "settings",
-        ("app/settings/", "docs/settings/", "tests/settings/", "tests/config/"),
+        (
+            "app/settings/",
+            "app/cli/settings_explain.py",
+            "app/services/companion_eligibility.py",
+            "app/services/settings.py",
+            "docs/settings/",
+            "tests/settings/",
+            "tests/config/",
+        ),
         ("tests/settings", "tests/config"),
     ),
     (
