@@ -251,6 +251,24 @@ def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
         assert fragment in verification_closer
 
 
+def test_dispatcher_owner_doc_owns_schema_v6_merge_and_closure_invariants() -> None:
+    owner_doc = " ".join(_read("docs/AGENT_ISSUE_DISPATCHER.md").split())
+
+    for fragment in (
+        "SCHEMA_VERSION = 6",
+        "All v1 requests have unknown exact closure authority",
+        "verification_legacy_recovery_audit.v2",
+        "at most 10 closing issues",
+        "prepared -> merged -> reconciled -> restored",
+        "synthetic or malformed open-PR `merge_commit_sha`",
+        "One bounded GraphQL `ClosedEvent.closer` batch",
+        "a merge commit message can never become closer authority",
+        "trusted-but-invalid receipt fails closed",
+        "post-merge owner-doc check: PR #<PR>;",
+    ):
+        assert fragment in owner_doc
+
+
 def test_owner_doc_policy_requires_pr_specific_child_and_open_parent_receipts() -> None:
     agents = " ".join(_read("AGENTS.md").split())
     hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
