@@ -140,20 +140,28 @@ signal above (`## Dead-letter signal`) plus the PROD deploy-time stop condition 
 
 ### PROD deploy pending-retry preflight
 
-`scripts/deploy_channel.sh deploy prod <sha>` (and `rollback prod`) run a read-only preflight,
+`scripts/deploy_channel.sh deploy prod <sha>` runs a read-only preflight,
 `scripts/prod_deploy_retry_preflight.py`, before the pin file is written or Compose is touched. It
 inspects pending (`delivered_at is null`) DB outbox rows and blocks the deploy when any row is
 already at a **terminal retry boundary** — a state where the row's very next processing pass
 dead-letters it instead of retrying, with no further code change or failure needed to get there:
 
 - **Worker-level transient retry counter** — the re-emitted event payload's `_worker_retry_count`
-  has already reached `_MAX_TRANSIENT_RETRY_ATTEMPTS` (3, `app/workers/outbox_worker.py`); the next
-  transient failure for that row dead-letters immediately instead of being re-queued
-  (`_queue_transient_retry`).
+  (stamped by the prior cycle onto the retry row) has already reached
+  `_MAX_TRANSIENT_RETRY_ATTEMPTS` (3, `app/workers/outbox_worker.py`); the next transient failure
+  for that row dead-letters immediately instead of being re-queued (`_queue_transient_retry`).
 - **Dispatch-attempt crash-loop counter** — the outbox row's own `attempts` column has already
-  reached `_MAX_DISPATCH_ATTEMPTS` (5 by default, overridable via `WORKER_MAX_DISPATCH_ATTEMPTS`,
-  same variable the worker itself reads); the next non-transient dispatch failure dead-letters
-  immediately.
+  reached `_MAX_DISPATCH_ATTEMPTS − 1` (4 with the default budget of 5; the budget is overridable
+  via `WORKER_MAX_DISPATCH_ATTEMPTS`, same variable the worker itself reads). The worker bumps
+  `attempts` and then dead-letters+acks in the *same* consume cycle, so a row observed pending
+  between cycles tops out at `max − 1` — and that *is* the terminal state: its next non-transient
+  dispatch failure dead-letters it. (`attempts == max` is only observable in the milliseconds
+  crash window between the bump and the ack.)
+
+The preflight understands both live row shapes: envelope rows written by
+`write_outbox_event` (counter nested at `payload->'payload'->'_worker_retry_count'`) and legacy
+flat rows (counter at the top level) — mirroring the worker's own `_coerce_event_from_db`
+unwrapping.
 
 This is exactly the failure class that let #3124's promotion pass every existing gate (deploy,
 health, exact-SHA, embedding, live smoke) while eight `panel.scan.requested` rows already at
@@ -167,15 +175,25 @@ Posture:
   proceed.
 - **Redacted.** The failure output reports aggregate counts only — `terminal_pending_count`, a
   `by_topic` breakdown keyed on the event-type label, and a `by_classification` breakdown by which
-  counter is exhausted — never payload content, note/source paths, DSNs, or credentials.
-- **PROD-only.** dev and test channel deploys are unaffected; this does not rework TEST or dev
-  channel startup policy.
+  counter is exhausted — never payload content, note/source paths, DSNs, or credentials. The DSN
+  itself is sourced from the channel's governed runtime env file (the `WATCHER_RUNTIME_ENV_FILE`
+  reference in the channel pin file, same resolution `deploy_channel_compose` uses) and injected
+  only into the single preflight subprocess — never exported to the wider shell, never passed to
+  Compose, never printed (the #3875 posture). Ambient shell `DATABASE_URL`/`DB_DSN` is the
+  fallback when the governed file provides none.
+- **Never silent.** The deploy log always carries exactly one status line —
+  `prod pending-retry preflight: ok`, `... skipped:<reason>`, or
+  `... blocked terminal_pending_count=<n>` — so a skipped safety gate can never masquerade as a
+  pass.
+- **PROD deploys only.** dev and test channel deploys are unaffected, and `rollback prod` is
+  deliberately not gated: the prior stable ref must always be recoverable
+  (`docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
 - **Ordinary pending work is unaffected.** A row below both thresholds never blocks a deploy, no
   matter how large the pending queue is.
 - **Fails open on infra unavailability.** No DSN configured, the DB unreachable, or the outbox
-  query itself failing skips the check (status `skipped`) rather than blocking the deploy — DB/API
-  availability is a distinct, already-gated concern (health/version gates run later in the same
-  script), not this check's job.
+  query itself failing skips the check (visible `skipped:<reason>` line) rather than blocking the
+  deploy — DB/API availability is a distinct, already-gated concern (health/version gates run
+  later in the same script), not this check's job.
 
 Operator action on a block: inspect the reported topic(s) — for example
 `python -m app.cli events-doctor --path "$INDEX_OUTBOX_PATH"`, or the live outbox for the affected

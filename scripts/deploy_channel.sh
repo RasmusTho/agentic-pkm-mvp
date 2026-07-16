@@ -298,17 +298,73 @@ capture_watch_gate() {
 }
 
 prod_pending_retry_preflight() {
-  # Read-only PROD-only preflight (#3903): detect pending DB-outbox rows
-  # already at a terminal retry boundary -- one more failure and the worker
-  # dead-letters them on its own, no code change involved. Runs before pin
-  # write or Compose mutation so a restart never silently consumes rows that
-  # are already deterministically doomed (the #3124 postmortem: eight
+  # Read-only PROD deploy-only preflight (#3903): detect pending DB-outbox
+  # rows already at a terminal retry boundary -- one more failure and the
+  # worker dead-letters them on its own, no code change involved. Runs before
+  # pin write or Compose mutation so a restart never silently consumes rows
+  # that are already deterministically doomed (the #3124 postmortem: eight
   # panel.scan.requested rows already at retry-3 dead-lettered the moment
   # the worker restarted, undetected by every other gate). Never mutates the
-  # outbox; see scripts/prod_deploy_retry_preflight.py and
+  # outbox; deliberately NOT applied to rollback (the prior stable ref must
+  # always be recoverable -- docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md).
+  # See scripts/prod_deploy_retry_preflight.py and
   # docs/HEALTH.md :: Outbox and dead-letter signals.
-  local receipt_json rc=0
-  receipt_json="$("${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
+  local receipt_json rc=0 dsn_from_file="" runtime_env_ref="" runtime_env_file=""
+
+  # Resolve the channel's governed runtime env file exactly the way the
+  # shared compose lib does (_deploy_channel_env_value on the
+  # WATCHER_RUNTIME_ENV_FILE ref in the channel pin file), and extract a DSN
+  # from it for the preflight. The value is injected ONLY into the single
+  # preflight subprocess env below -- never exported into this shell, never
+  # passed to Compose, never printed (#3875 redaction posture). Ambient shell
+  # DATABASE_URL/DB_DSN remains the fallback when the governed file provides
+  # none.
+  runtime_env_ref="$(_deploy_channel_env_value "${pin_file}" WATCHER_RUNTIME_ENV_FILE)"
+  if [ -n "${runtime_env_ref}" ]; then
+    case "${runtime_env_ref}" in
+      /*) runtime_env_file="${runtime_env_ref}" ;;
+      ./*) runtime_env_file="${ROOT}/${runtime_env_ref#./}" ;;
+      *) runtime_env_file="${ROOT}/${runtime_env_ref}" ;;
+    esac
+  fi
+  if [ -n "${runtime_env_file}" ] && [ -f "${runtime_env_file}" ]; then
+    dsn_from_file="$(_deploy_channel_env_value "${runtime_env_file}" DATABASE_URL)"
+    if [ -z "${dsn_from_file}" ]; then
+      dsn_from_file="$(_deploy_channel_env_value "${runtime_env_file}" DB_DSN)"
+    fi
+  fi
+
+  if [ -n "${dsn_from_file}" ]; then
+    receipt_json="$(DATABASE_URL="${dsn_from_file}" "${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
+  else
+    receipt_json="$("${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
+  fi
+
+  # Always emit exactly one status line -- ok / skipped:<reason> / blocked --
+  # derived from the receipt's status+reason fields (counts and reason codes
+  # only). A silent skip of a prod safety gate is indistinguishable from a
+  # pass: the false-green pattern this repo has been burned by.
+  printf '%s' "${receipt_json}" | "${PYTHON}" -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    data = {}
+status = data.get("status") or "error"
+if status == "skipped":
+    line = "prod pending-retry preflight: skipped:" + str(data.get("reason") or "unknown")
+elif status == "blocked":
+    line = (
+        "prod pending-retry preflight: blocked terminal_pending_count="
+        + str(data.get("terminal_pending_count"))
+    )
+elif status == "ok":
+    line = "prod pending-retry preflight: ok"
+else:
+    line = "prod pending-retry preflight: " + str(status)
+print(line)
+'
+
   if [ "${rc}" -ne 0 ]; then
     echo "prod deploy blocked before pin or Compose mutation: pending outbox work is already at the terminal retry boundary and would dead-letter on worker startup" >&2
     printf '%s\n' "${receipt_json}" >&2
@@ -397,7 +453,9 @@ if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   exit 86
 fi
 
-if [ "${channel}" = "prod" ]; then
+# Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
+# the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
+if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
   prod_pending_retry_preflight || exit 87
 fi
 

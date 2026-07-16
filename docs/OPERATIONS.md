@@ -322,6 +322,13 @@ job. The plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist`.
 - Treat `INDEX_OUTBOX_PATH` JSONL lines as audit evidence only. A line in JSONL does not prove a DB
   outbox row is pending, delivered, or failed, and `python -m app.cli status` keeps
   `events_log` separate from `worker_queue` for that reason.
+- A PROD deploy (`scripts/deploy_channel.sh deploy prod <sha>`) refuses to proceed — before pin or
+  Compose mutation — when pending outbox rows are already at the terminal retry boundary and would
+  deterministically dead-letter on worker restart (#3903). The deploy log always carries a
+  `prod pending-retry preflight: ok|skipped:<reason>|blocked ...` status line; on a block, resolve
+  the underlying processing failure first (this preflight never mutates the queue), then redeploy.
+  Rollback is deliberately not gated. Full contract:
+  `docs/HEALTH.md :: Outbox and dead-letter signals`.
 
 Operator triage order:
 1. Run `make verify-runtime`.

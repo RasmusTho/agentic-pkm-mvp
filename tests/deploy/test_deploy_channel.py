@@ -194,6 +194,12 @@ def connect(dsn, **kwargs):
 '''
 
 
+# Deliberately credential-bearing: the redaction test asserts none of these
+# identity fragments ever reach deploy output, and every other prod test rides
+# the same DSN so any new leak path shows up loudly.
+_FAKE_PROD_DSN = "postgresql://produser:sup3rsecret@prod-db.internal:5432/pkm_prod"
+
+
 def _configure_prod_retry_preflight(
     root: Path,
     env: dict[str, str],
@@ -201,14 +207,22 @@ def _configure_prod_retry_preflight(
     *,
     rows: list[tuple[str, dict, int]] | None = None,
     unreachable: bool = False,
+    no_dsn: bool = False,
 ) -> None:
     """Copy the real preflight script into the fixture repo and fake its DB layer.
 
-    ``rows`` is a list of ``(topic, payload_dict, attempts)`` triples standing
-    in for pending (``delivered_at is null``) outbox rows. The real
+    ``rows`` is a list of ``(topic, payload, attempts)`` triples standing in
+    for pending (``delivered_at is null``) outbox rows. The real
     scripts/prod_deploy_retry_preflight.py runs unmodified against these rows
     through the fake psycopg module below -- only the DB connection is faked,
     the classification logic under test is real.
+
+    DSN sourcing mirrors the production mechanics (#3903 D1): the DSN lives in
+    the channel's governed runtime env file, referenced from the channel pin
+    file via WATCHER_RUNTIME_ENV_FILE -- not in the ambient shell env, which
+    the real prod call chain never provides. ``no_dsn=True`` leaves the
+    runtime env file without any DSN key (and the shell env is scrubbed in
+    every mode), exercising the visible skipped:no_dsn path.
     """
     shutil.copy2(
         REPO_ROOT / "scripts/prod_deploy_retry_preflight.py",
@@ -218,7 +232,19 @@ def _configure_prod_retry_preflight(
     pylib_dir.mkdir(exist_ok=True)
     (pylib_dir / "psycopg.py").write_text(_FAKE_PSYCOPG_MODULE, encoding="utf-8")
     env["PYTHONPATH"] = str(pylib_dir)
-    env["DATABASE_URL"] = "postgresql://fake:fake@localhost/fake"
+
+    # The governed channel pin file references the runtime env file; the DSN
+    # lives only in the latter, exactly like the real prod channel.
+    (root / "config/deploy/prod.env").write_text(
+        "WATCHER_RUNTIME_ENV_FILE=./runtime-prod.env\n", encoding="utf-8"
+    )
+    runtime_env_lines = "SOME_OTHER_KEY=untouched\n"
+    if not no_dsn:
+        runtime_env_lines += f"DATABASE_URL={_FAKE_PROD_DSN}\n"
+    (root / "runtime-prod.env").write_text(runtime_env_lines, encoding="utf-8")
+    env.pop("DATABASE_URL", None)
+    env.pop("DB_DSN", None)
+
     if unreachable:
         env["FAKE_OUTBOX_DB_UNREACHABLE"] = "1"
         env.pop("FAKE_OUTBOX_ROWS_JSON", None)
@@ -408,23 +434,37 @@ def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutat
     tmp_path: Path,
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
+    # Dispatch-attempt mechanism at the corrected terminal boundary: the
+    # worker bumps attempts then dead-letters+acks in the same cycle, so a
+    # PENDING row tops out at attempts == max - 1 (4 with the default budget
+    # of 5) -- and that IS the state whose next non-transient failure
+    # dead-letters. attempts == 5 is only observable in a crash window.
     _configure_prod_retry_preflight(
         root,
         env,
         tmp_path,
-        rows=[("panel.scan.requested", {"_worker_retry_count": 3}, 0)],
+        rows=[("panel.scan.requested", {}, 4)],
     )
 
     result = _run_deploy(root, env, sha, channel="prod")
 
     assert result.returncode != 0
+    assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
     assert "terminal retry boundary" in result.stderr
-    assert not (root / "config/deploy/prod.env").exists()
+    # The pin file pre-exists to carry WATCHER_RUNTIME_ENV_FILE, so "no pin
+    # mutation" means no APP_IMAGE_* lines were written to it.
+    assert "APP_IMAGE_TAG" not in (root / "config/deploy/prod.env").read_text(encoding="utf-8")
+    assert not (root / "config/deploy/prod.previous.env").exists()
     assert not (tmp_path / "docker-called").exists()
 
 
 def test_prod_deploy_pending_retry_preflight_is_redacted(tmp_path: Path) -> None:
     root, env, sha = _deploy_harness(tmp_path)
+    # Worker-retry mechanism, in the REAL writer shape: write_outbox_event
+    # stores the Event ENVELOPE, so _worker_retry_count sits nested at
+    # payload->'payload' (the #3124 rows looked exactly like this). The
+    # secrets live in the nested payload and the DSN (with credentials) comes
+    # from the governed runtime env file -- none of it may reach output.
     _configure_prod_retry_preflight(
         root,
         env,
@@ -433,18 +473,19 @@ def test_prod_deploy_pending_retry_preflight_is_redacted(tmp_path: Path) -> None
             (
                 "panel.scan.requested",
                 {
-                    "_worker_retry_count": 3,
-                    "note_path": "/private/secret/vault/Some Secret Note.md",
+                    "event_type": "panel.scan.requested",
+                    "event_id": "e" * 32,
                     "trace_id": "trace-should-not-leak",
-                    "text": "the quick brown fox jumped over some secret content",
+                    "payload": {
+                        "_worker_retry_count": 3,
+                        "note_path": "/private/secret/vault/Some Secret Note.md",
+                        "text": "the quick brown fox jumped over some secret content",
+                    },
                 },
                 0,
             )
         ],
     )
-    # Override with a DSN carrying embedded credentials/host identity to prove
-    # neither the connection string nor any payload field ever reaches output.
-    env["DATABASE_URL"] = "postgresql://produser:sup3rsecret@prod-db.internal:5432/pkm_prod"
 
     result = _run_deploy(root, env, sha, channel="prod")
 
@@ -468,13 +509,51 @@ def test_prod_deploy_allows_nonterminal_pending_outbox_work(tmp_path: Path) -> N
         env,
         tmp_path,
         rows=[
+            # Worker-retry counter below the budget (flat legacy shape).
             ("panel.scan.requested", {"_worker_retry_count": 1}, 0),
+            # Ordinary healthy pending work.
             ("ingest.vault_changed", {}, 2),
+            # Dispatch-attempt negative boundary: attempts == max - 2 (3) is
+            # NOT terminal -- the row still has a whole retry cycle left. Only
+            # attempts >= max - 1 (4) blocks (see the blocks-test).
+            ("panel.scan.requested", {}, 3),
         ],
     )
 
     result = _run_deploy(root, env, sha, channel="prod")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (root / "config/deploy/prod.env").exists()
+    assert "prod pending-retry preflight: ok" in result.stdout
+    assert "APP_IMAGE_TAG" in (root / "config/deploy/prod.env").read_text(encoding="utf-8")
+    assert (tmp_path / "docker-called").exists()
+
+
+def test_prod_deploy_pending_retry_preflight_fails_open_when_db_unreachable(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, unreachable=True)
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Fail-open must be VISIBLE, never silent: a skip line is emitted so a
+    # skipped safety gate can never masquerade as a pass in the deploy log.
+    assert "prod pending-retry preflight: skipped:db_unreachable" in result.stdout
+    assert (tmp_path / "docker-called").exists()
+
+
+def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    # Governed runtime env file carries no DATABASE_URL/DB_DSN and the shell
+    # env is scrubbed: the preflight cannot inspect the outbox and must skip
+    # visibly while the deploy proceeds.
+    _configure_prod_retry_preflight(root, env, tmp_path, no_dsn=True)
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "prod pending-retry preflight: skipped:no_dsn" in result.stdout
     assert (tmp_path / "docker-called").exists()
