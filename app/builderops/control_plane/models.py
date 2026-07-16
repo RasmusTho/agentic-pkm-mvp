@@ -258,6 +258,14 @@ class StorePort(Protocol):
         fault_at: str | None = None,
     ) -> TransactionResult: ...
 
+    def replay(
+        self,
+        repository: str,
+        idempotency_key: str,
+        *,
+        watermark: RecoveryWatermark,
+    ) -> TransactionResult | None: ...
+
     def claim_outbox(
         self,
         *,
@@ -276,6 +284,10 @@ class StorePort(Protocol):
         watermark: RecoveryWatermark,
     ) -> bool: ...
 
+    def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim: ...
+
+    def mark_effect_unknown(self, claim: OutboxClaim, *, detail: str) -> None: ...
+
     def reconcile_outbox(
         self,
         claim: OutboxClaim,
@@ -284,3 +296,11 @@ class StorePort(Protocol):
         evidence: Mapping[str, Any],
         fault_at: str | None = None,
     ) -> OutboxReconciliation: ...
+
+    def outbox_status(
+        self,
+        repository: str,
+        operation_key: str | None,
+        *,
+        watermark: RecoveryWatermark | None = None,
+    ) -> str: ...
