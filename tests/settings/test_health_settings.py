@@ -93,6 +93,34 @@ def test_missing_file_returns_defaults(
     assert result.errors == []
 
 
+@pytest.mark.parametrize("configured_dir", ["../outside", "/tmp/outside-settings"])
+def test_configured_legacy_health_path_must_remain_inside_vault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_dir: str,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", configured_dir)
+
+    with pytest.raises(ValueError, match="escapes vault root"):
+        _load(vault)
+
+
+def test_configured_legacy_health_symlink_must_remain_inside_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    outside = tmp_path / "outside"
+    vault.mkdir()
+    outside.mkdir()
+    (vault / "linked-system").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "linked-system")
+
+    with pytest.raises(ValueError, match="escapes vault root"):
+        _load(vault)
+
+
 def test_valid_thresholds_load_ok(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

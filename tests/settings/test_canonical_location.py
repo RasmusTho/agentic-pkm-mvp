@@ -130,6 +130,30 @@ def test_migration_is_governed_and_receipted(tmp_path: Path, monkeypatch: pytest
     assert durable.rows[0].surface == "migration"
 
 
+def test_migration_preserves_unowned_fixed_backup_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    unowned_backup = vault / ".settings-before-migration"
+    unowned_backup.mkdir(parents=True)
+    sentinel = unowned_backup / "recovery-copy.md"
+    sentinel.write_text("preserve me\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve me\n"
+    assert (vault / "settings" / "global.md").read_text(encoding="utf-8") == "# legacy\n"
+    assert not list(vault.glob(".settings-before-migration-*"))
+
+
 def test_migration_refuses_canonical_legacy_conflict_before_guard(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     canonical = vault / "settings" / "global.md"

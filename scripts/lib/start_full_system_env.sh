@@ -73,12 +73,21 @@ import os
 import sys
 from pathlib import Path
 
-from app.settings.locations import (
-    LEGACY_COMPILED_DIR,
-    LEGACY_SYSTEM_SETTINGS,
-    read_settings_mapping,
-    resolve_settings_file,
-)
+_operator_provider = os.environ.get("LLM_PROVIDER")
+if not _operator_provider:
+    os.environ["LLM_PROVIDER"] = "mock"
+try:
+    from app.settings.locations import (
+        LEGACY_COMPILED_DIR,
+        LEGACY_SYSTEM_SETTINGS,
+        read_settings_mapping,
+        resolve_settings_file,
+    )
+finally:
+    if _operator_provider is None:
+        os.environ.pop("LLM_PROVIDER", None)
+    else:
+        os.environ["LLM_PROVIDER"] = _operator_provider
 
 vault_root = Path(sys.argv[1]).expanduser()
 

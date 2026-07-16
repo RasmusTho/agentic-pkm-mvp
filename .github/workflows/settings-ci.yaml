@@ -3,14 +3,14 @@ name: settings-ci
 on:
   push:
     paths:
-      - "vault/@Settings/**"
+      - "vault/settings/**"
       - "app/settings/**"
       - "docs/settings/**"
       - "app/events/bus.py"
       - ".github/workflows/settings-ci.yaml"
   pull_request:
     paths:
-      - "vault/@Settings/**"
+      - "vault/settings/**"
       - "app/settings/**"
       - "docs/settings/**"
       - "app/events/bus.py"
@@ -41,4 +41,9 @@ jobs:
           LLM_PROVIDER: mock
           REASONING_PROVIDER: mock
           PLANNER_PROVIDER: mock
-        run: pytest -q tests/settings/test_compile.py tests/settings/test_prompt_registry.py tests/settings/test_standards_registry.py
+        run: >-
+          pytest -q
+          tests/settings/test_compile.py
+          tests/settings/test_prompt_registry.py
+          tests/settings/test_standards_registry.py
+          tests/architecture/test_settings_single_location.py

@@ -149,7 +149,8 @@ def migrate_settings_location(
 
     canonical.parent.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix=".settings-migrate-", dir=canonical.parent))
-    backup = canonical.parent / ".settings-before-migration"
+    backup = Path(tempfile.mkdtemp(prefix=".settings-before-migration-", dir=canonical.parent))
+    backup.rmdir()
     published = False
     try:
         if canonical.exists():
@@ -159,8 +160,6 @@ def migrate_settings_location(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
 
-        if backup.exists():
-            shutil.rmtree(backup)
         if canonical.exists():
             os.replace(canonical, backup)
         os.replace(staged, canonical)

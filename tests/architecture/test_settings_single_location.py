@@ -51,4 +51,20 @@ def test_no_new_settings_paths() -> None:
         for segment in LEGACY_SEGMENTS:
             if segment in normalized:
                 violations.add(f"{relative}: shell contains retired settings path {segment!r}")
+    operational_paths = {
+        *(ROOT / ".github").rglob("*.yml"),
+        *(ROOT / ".github").rglob("*.yaml"),
+        *(ROOT / "config").rglob("*.yml"),
+        *(ROOT / "config").rglob("*.yaml"),
+        *(ROOT / "scripts").rglob("*.yml"),
+        *(ROOT / "scripts").rglob("*.yaml"),
+        *ROOT.glob("*compose*.yml"),
+        *ROOT.glob("*compose*.yaml"),
+    }
+    for path in sorted(operational_paths):
+        relative = path.relative_to(ROOT)
+        normalized = path.read_text(encoding="utf-8").replace("\\", "/")
+        for segment in LEGACY_SEGMENTS:
+            if segment in normalized:
+                violations.add(f"{relative}: operational config contains retired settings path {segment!r}")
     assert not violations, "new settings locations are forbidden outside the compat seam:\n" + "\n".join(sorted(violations))

@@ -160,11 +160,24 @@ def load_health_settings(
                 configured_vault_root=None,
             )
 
+    resolved_root = Path(vault_root).expanduser().resolve()
+    configured_health = (
+        resolved_root
+        / Path(get_vault_system_dir_rel(vault_root))
+        / "Settings"
+        / "health.md"
+    ).resolve()
+    if not configured_health.is_relative_to(resolved_root):
+        raise ValueError(
+            "configured legacy health settings path escapes vault root: "
+            f"{configured_health}"
+        )
+
     target = resolve_settings_file(
         vault_root,
         "health.md",
         legacy_paths=(
-            Path(get_vault_system_dir_rel(vault_root)) / "Settings" / "health.md",
+            configured_health.relative_to(resolved_root),
             LEGACY_HEALTH_SETTINGS,
         ),
     )
