@@ -36,6 +36,9 @@ class SettingsReceiptRow:
     timestamp: str
     key: str
     value: Any
+    old_value: Any
+    new_value: Any
+    file: str | None
     surface: str | None
     actor: str | None
     is_runtime_gating: bool
@@ -112,6 +115,9 @@ def _project_settings_receipt(record: dict[str, Any]) -> tuple[SettingsReceiptRo
             timestamp=timestamp,
             key=key,
             value=payload.get("value"),
+            old_value=payload.get("old_value"),
+            new_value=payload.get("new_value", payload.get("value")),
+            file=first_str(payload.get("file")),
             surface=first_str(payload.get("surface")),
             actor=first_str(payload.get("actor")),
             is_runtime_gating=bool(payload.get("is_runtime_gating", False)),

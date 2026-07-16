@@ -12,10 +12,39 @@ import app.watcher.registry as registry
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsStore
 from app.vault.settings_service import SettingsService
+from app.receipts.settings_receipts import query_settings_receipts
 from app.watcher.settings_delta import SETTINGS_LOCAL_REL, handle_settings_local_delta
 from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
+
+
+def test_delta_apply_receipted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    previous_values = {
+        key: value
+        for key, value in _read_frontmatter(vault_root / SETTINGS_LOCAL_REL).items()
+        if key in {"enableVaultWatcher", "enableAutoIndexing"}
+    }
+    _write_local_settings(vault_root, {"enableAutoIndexing": False})
+
+    result = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_LOCAL_REL,
+        previous_values=previous_values,
+    )
+
+    assert result.errors == ()
+    rows = query_settings_receipts(outbox_path=outbox_path).rows
+    row = next(row for row in rows if row.key == "enableAutoIndexing")
+    assert row.surface == "file"
+    assert row.file == str(vault_root / SETTINGS_LOCAL_REL)
+    assert row.old_value is True
+    assert row.new_value is False
 
 
 def _write_watchers_config(path: Path) -> None:
@@ -97,7 +126,9 @@ def test_multiple_watcher_specs_emit_one_settings_receipt_per_delta(
     assert summaries["ingest"]["emitted_in_tick"] >= 1
 
 
-def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> None:
+def test_runtime_gating_key_removal_routes_settings_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     vault_root = tmp_path / "vault"
     initialize_test_vault(vault_root)
 
@@ -108,6 +139,9 @@ def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> N
         if key in {"enableVaultWatcher", "enableAutoIndexing"}
     }
     assert "enableAutoIndexing" in previous_values
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
 
     store = MarkdownSettingsStore()
     document = store.read(local_md)
@@ -120,10 +154,25 @@ def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> N
     original_update = SettingsService.update_setting
 
     def _spy_update(
-        self: SettingsService, context, key, value, *, surface="api", actor="human", persist=True
+        self: SettingsService,
+        context,
+        key,
+        value,
+        *,
+        surface="api",
+        actor="human",
+        persist=True,
     ):
         captured_calls.append((key, value, surface, actor, persist))
-        return original_update(self, context, key, value, surface=surface, actor=actor, persist=persist)
+        return original_update(
+            self,
+            context,
+            key,
+            value,
+            surface=surface,
+            actor=actor,
+            persist=persist,
+        )
 
     with patch.object(SettingsService, "update_setting", _spy_update):
         result = handle_settings_local_delta(
@@ -141,5 +190,17 @@ def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> N
     assert receipt.surface == "file"
     assert receipt.actor == "human"
     assert receipt.is_runtime_gating is True
-    assert captured_calls == [("enableAutoIndexing", receipt.value, "file", "human", False)]
+    assert receipt.value is None
+    assert receipt.old_value is True
+    assert receipt.new_value is None
+    assert captured_calls == [("enableAutoIndexing", True, "file", "human", False)]
     assert "enableAutoIndexing" not in _read_frontmatter(local_md)
+
+    row = next(
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "enableAutoIndexing"
+    )
+    assert row.value is None
+    assert row.old_value is True
+    assert row.new_value is None

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.vault.manager import VaultManager
+from app.receipts.settings_write import settings_receipt_old_value
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 from app.vault.settings_service import (
     RUNTIME_GATING_SETTINGS,
@@ -135,14 +136,15 @@ def handle_settings_local_delta(
         try:
             persist = key in current_keys
             value = current_values[key] if persist else resolution.settings[key].value
-            _effective, receipt = service.update_setting(
-                context,
-                key,
-                value,
-                surface="file",
-                actor="human",
-                persist=persist,
-            )
+            with settings_receipt_old_value(previous_values.get(key)):
+                _effective, receipt = service.update_setting(
+                    context,
+                    key,
+                    value,
+                    surface="file",
+                    actor="human",
+                    persist=persist,
+                )
         except SettingsWriteError as exc:
             errors.append(str(exc))
             continue

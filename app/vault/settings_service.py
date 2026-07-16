@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import json
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
 
-from app.events.schema import make_outbox_event
-from app.events.types import SETTINGS_WRITE_RECEIPT
+from app.receipts.settings_write import (
+    SettingsWriteReceipt,
+    emit_settings_write_receipt,
+    resolve_settings_receipt_old_value,
+)
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore
@@ -41,82 +42,6 @@ VALID_SOURCE_SCOPES = {"app-local", "vault-shared", "vault-local"}
 RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset({"enableVaultWatcher", "enableAutoIndexing"})
 
 _SETTINGS_WRITE_ACTION = "settings.runtime_gating.write"
-
-
-@dataclass(frozen=True)
-class SettingsWriteReceipt:
-    """Actor-tagged receipt emitted for every governed settings write.
-
-    Currently wired for the API surface and the watcher-detected file surface:
-    ``app/api/routes/companion.py`` calls with ``surface='api'`` and the
-    watcher routes runtime-gating ``settings/local.md`` deltas with
-    ``surface='file'``.
-    """
-
-    key: str
-    value: Any
-    surface: str
-    """Origin surface: 'api', 'cli', 'file' (watcher-detected), or 'mcp'."""
-    actor: str
-    """Stable actor identifier; 'human' for all UI/API/CLI/file origins."""
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    is_runtime_gating: bool = False
-
-
-def _emit_settings_write_receipt(receipt: SettingsWriteReceipt) -> None:
-    """Durably emit ``receipt`` as an outbox event (#2787, RESEARCH-01 D-1).
-
-    The in-memory ``SettingsWriteReceipt`` dataclass is lost on process restart, which
-    contradicts the receipt contract in
-    ``docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_RUNTIME_CONTROL_ACTION_BOUNDARY.md``
-    (accountability evidence must be reproducible later). This mirrors the
-    ``promotion.transition.applied`` precedent (``app/promotion/consumer.py``): write the
-    same event, keyed by the same ``event_id``, to both the JSONL audit surface and the DB
-    outbox. Neither sink is required for the write to succeed — durability is additive and
-    must never block or fail the governed settings write itself.
-
-    The topic schema registry (KERNEL-08) has not landed yet. Per the shared derivation
-    helper (KERNEL-02, ``app/services/outbox.py :: derive_idempotency_key``) producers must
-    not invent ad-hoc key schemes; this is an event-id-keyed emission (one receipt per
-    construction, no natural content-dedup key), the same class as
-    ``app/outbox/events.py :: emit_index_embedding_requested``.
-    """
-    envelope = make_outbox_event(
-        SETTINGS_WRITE_RECEIPT,
-        source="settings_service",
-        payload={
-            "key": receipt.key,
-            "value": receipt.value,
-            "surface": receipt.surface,
-            "actor": receipt.actor,
-            "timestamp": receipt.timestamp,
-            "is_runtime_gating": receipt.is_runtime_gating,
-        },
-    )
-    record = envelope.model_dump(mode="json")
-
-    try:
-        from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
-
-        outbox_path = get_index_outbox_path()
-        outbox_path.parent.mkdir(parents=True, exist_ok=True)
-        with outbox_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False))
-            handle.write("\n")
-    except Exception:
-        logger.warning("settings.write.receipt jsonl append failed", exc_info=True)
-
-    try:
-        from app.services.outbox import (  # noqa: PLC0415
-            EVENT_ID_FINGERPRINT,
-            derive_idempotency_key,
-            write_outbox_event,
-        )
-
-        idempotency_key = derive_idempotency_key(SETTINGS_WRITE_RECEIPT, envelope.event_id, EVENT_ID_FINGERPRINT)
-        write_outbox_event(envelope, idempotency_key=idempotency_key)
-    except Exception:
-        logger.debug("settings.write.receipt db outbox write skipped/failed", exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -417,6 +342,7 @@ class SettingsService:
             raise SettingsWriteError(f"{path.name} cannot set {key}")
 
         frontmatter = dict(document.frontmatter)
+        old_value = resolve_settings_receipt_old_value(frontmatter.get(key))
         frontmatter[key] = value
         if persist:
             self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
@@ -430,12 +356,16 @@ class SettingsService:
         )
 
         # Emit actor-tagged receipt for all governed writes.
+        receipt_value = value if persist else None
         receipt = SettingsWriteReceipt(
             key=key,
-            value=value,
+            value=receipt_value,
             surface=surface,
             actor=actor,
             is_runtime_gating=is_runtime_gating,
+            file=str(path),
+            old_value=old_value,
+            new_value=receipt_value,
         )
         logger.info(
             "settings.write surface=%s actor=%s key=%s runtime_gating=%s ts=%s",
@@ -448,7 +378,7 @@ class SettingsService:
         # Durability is additive: the in-memory receipt above remains the return-value
         # contract; this also persists the same receipt as a durable outbox event so it
         # survives process restart (#2787).
-        _emit_settings_write_receipt(receipt)
+        emit_settings_write_receipt(receipt)
 
         return effective, receipt
 

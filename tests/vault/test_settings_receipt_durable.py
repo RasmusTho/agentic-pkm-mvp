@@ -17,13 +17,15 @@ This test asserts:
 from __future__ import annotations
 
 from pathlib import Path
+from textwrap import dedent
 
 from app.events.types import SETTINGS_WRITE_RECEIPT
 from app.receipts.settings_receipts import (
     SettingsReceiptQuery,
     query_settings_receipts,
 )
-from app.vault.app_local import AppLocalSettingsStore
+from app.settings import compiler
+from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
 from app.vault.manager import VaultManager
 from app.vault.settings_service import SettingsService, SettingsWriteReceipt
 
@@ -127,3 +129,150 @@ def test_non_runtime_gating_write_also_durable(tmp_path: Path, monkeypatch) -> N
     assert len(result.rows) == 1
     assert result.rows[0].key == "handoffFolder"
     assert result.rows[0].is_runtime_gating is False
+
+
+def _write_settings_source(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dedent(body).strip() + "\n", encoding="utf-8")
+
+
+def test_autoheal_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    settings_dir = tmp_path / "vault" / "@Settings"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
+    _write_settings_source(
+        settings_dir / "global.md",
+        """
+        ---
+        uuid: global
+        ---
+        ## Runtime
+        ```yaml settings
+        timeout_ms: fast
+        ```
+        """,
+    )
+
+    compiler.compile_all(auto_heal=True, vault_dir=settings_dir)
+
+    result = query_settings_receipts(outbox_path=outbox_path)
+    row = next(row for row in result.rows if row.key == "global.timeout_ms")
+    assert row.surface == "auto-heal"
+    assert row.actor == "agent"
+    assert row.file == str(settings_dir / "global.md")
+    assert row.old_value == "fast"
+    assert row.new_value == 8000
+
+
+def test_autoheal_reference_only_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    settings_dir = tmp_path / "vault" / "@Settings"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
+    global_path = settings_dir / "global.md"
+    _write_settings_source(
+        global_path,
+        """
+        ---
+        uuid: global
+        ---
+        ## Runtime
+        ```yaml settings
+        timeout_ms: 8000
+        ```
+        """,
+    )
+
+    compiler.compile_all(auto_heal=True, vault_dir=settings_dir)
+
+    row = next(
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "global.__reference__"
+    )
+    assert row.surface == "auto-heal"
+    assert row.actor == "agent"
+    assert row.file == str(global_path)
+    assert row.old_value is None
+    assert "Reference — Global" in row.new_value
+
+
+def test_app_local_write_receipted(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    app_local_path = tmp_path / "app-local.md"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    store = AppLocalSettingsStore(app_local_path)
+
+    store.upsert_known_vault(
+        KnownVaultRef(ref="path:/vault", path="/vault"),
+        make_active=True,
+    )
+
+    result = query_settings_receipts(outbox_path=outbox_path)
+    app_local_rows = [row for row in result.rows if row.surface == "app-local"]
+    assert app_local_rows
+    assert {row.key for row in app_local_rows} >= {
+        "appInstallId",
+        "knownVaults",
+        "lastActiveVaultRef",
+    }
+    assert all(row.file == str(app_local_path) for row in app_local_rows)
+
+
+def test_all_writers_queryable(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    manager, vault = _manager(tmp_path)
+    SettingsService().update_setting(
+        manager.context,
+        "handoffFolder",
+        "Projects",
+        surface="api",
+        actor="human",
+    )
+    AppLocalSettingsStore(tmp_path / "secondary-app-local.md").load()
+
+    result = query_settings_receipts(vault_root=vault, outbox_path=outbox_path)
+
+    assert {row.surface for row in result.rows} >= {"api", "app-local"}
+    assert len(query_settings_receipts(SettingsReceiptQuery(surface="api"), outbox_path=outbox_path).rows) == 1
+    assert query_settings_receipts(
+        SettingsReceiptQuery(surface="app-local"), outbox_path=outbox_path
+    ).rows
+
+
+def test_receipt_sink_failure_never_gates_settings_write(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    manager, _vault = _manager(tmp_path)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path))  # a directory cannot be appended
+
+    effective, receipt = SettingsService().update_setting(
+        manager.context,
+        "handoffFolder",
+        "Still Written",
+        surface="api",
+        actor="human",
+    )
+
+    assert effective.value == "Still Written"
+    assert receipt.new_value == "Still Written"
+
+    def _broken_envelope(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("synthetic envelope failure")
+
+    monkeypatch.setattr("app.events.schema.make_outbox_event", _broken_envelope)
+    effective, _receipt = SettingsService().update_setting(
+        manager.context,
+        "handoffFolder",
+        "Written Again",
+        surface="api",
+        actor="human",
+    )
+    assert effective.value == "Written Again"
