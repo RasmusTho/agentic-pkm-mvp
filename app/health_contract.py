@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ from app.events.outbox import default_outbox_path, event_name, latest_trace_stor
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
 from app.stores import get_object_store, resolve_store_backend
+
+logger = logging.getLogger(__name__)
 
 # Health checks must never load the full outbox into memory; it can grow to hundreds of MB.
 # Bound tail reads to this many bytes — enough to capture recent activity for all checks.
@@ -51,6 +54,9 @@ def _resolve_store_backend_for_health() -> StoreBackendResolution:
     try:
         backend = resolve_store_backend()
     except Exception as exc:
+        # Intentional swallow: the failure is carried as data into the health
+        # snapshot (store_resolution_error) — logged too so it is greppable.
+        logger.warning("Store backend resolution failed", exc_info=True)
         return StoreBackendResolution(backend=None, error=f"{type(exc).__name__}: {exc}")
     return StoreBackendResolution(backend=backend, error=None)
 
@@ -70,6 +76,9 @@ def _count_outbox_lines_db(resolution: StoreBackendResolution | None = None) -> 
 
         return count_outbox_events()
     except Exception:
+        # Intentional swallow: fall back to the file-based count, but log the
+        # DB failure instead of silently degrading (#3894).
+        logger.warning("DB outbox count failed; falling back to file count", exc_info=True)
         return None
 
 
@@ -90,6 +99,9 @@ def _count_outbox_lines_from_file(path: Path) -> int:
             count += 1
         return count
     except Exception:
+        # Intentional swallow: health must not crash on an unreadable outbox
+        # file, but the read failure is logged rather than folded into 0.
+        logger.warning("Outbox file line count failed for %s", path, exc_info=True)
         return 0
 
 
@@ -120,6 +132,11 @@ def _dead_letter_stats_db(resolution: StoreBackendResolution | None = None) -> d
 
         return dead_letter_stats()
     except Exception:
+        # Intentional swallow: fall back to the JSONL-tail stats, but log the
+        # DB failure instead of silently degrading (#3894).
+        logger.warning(
+            "DB dead-letter stats failed; falling back to JSONL tail", exc_info=True
+        )
         return None
 
 
@@ -201,10 +218,16 @@ def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
                 partial = False
             data = fh.read()
     except Exception:
+        # Intentional swallow: an unreadable outbox tail degrades to "no recent
+        # records" for health purposes, but the I/O failure is logged (#3894).
+        logger.warning("Outbox tail read failed for %s", target, exc_info=True)
         return []
     try:
         lines = data.decode("utf-8", errors="replace").splitlines()
     except Exception:
+        # Defensive only: decode(errors="replace") cannot realistically raise;
+        # logged loudly if it ever does.
+        logger.warning("Outbox tail decode failed for %s", target, exc_info=True)
         return []
     if partial and lines:
         lines = lines[1:]  # drop potentially truncated first line
@@ -218,6 +241,9 @@ def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
             if isinstance(obj, dict):
                 records.append(obj)
         except Exception:
+            # Intentionally silent: a truncated/garbled JSONL line in an
+            # append-only log tail is expected (partial writes at the cut
+            # boundary); logging per line would spam every health poll.
             continue
     return records
 
@@ -394,6 +420,9 @@ class HealthContract:
         try:
             index_result = diagnose_index()
         except Exception as exc:
+            # Intentional swallow: the failure is surfaced as an index issue in
+            # the snapshot below — logged too, with the full traceback (#3894).
+            logger.warning("Index diagnostic failed during health evaluation", exc_info=True)
             index_result = {
                 "backend": None,
                 "expected_identity": None,
@@ -666,6 +695,9 @@ class HealthContract:
         try:
             return datetime.fromisoformat(text)
         except Exception:
+            # Intentionally silent: called per record on every health poll and
+            # malformed timestamps in old outbox records are expected; a None
+            # simply excludes the record from age computation.
             return None
 
     def _summary_status(self, issues: Any, warnings: Any) -> str:
@@ -793,6 +825,10 @@ class HealthContract:
                 handle.write(json.dumps(entry, ensure_ascii=False))
                 handle.write("\n")
         except Exception:
+            # Intentional swallow: incident capture is best-effort and must not
+            # break health evaluation — but losing an incident record silently
+            # is exactly the failure this log line exists to prevent (#3894).
+            logger.warning("Failed to append incident log entry to %s", path, exc_info=True)
             return
 
     def _count_objects(self) -> tuple[int, str | None]:
@@ -808,6 +844,9 @@ class HealthContract:
         try:
             return get_object_store().count_objects(), None
         except Exception as exc:
+            # Intentional swallow: the failure is returned as data and surfaced
+            # by evaluate() — logged too so the traceback is not lost (#3894).
+            logger.warning("Object store count failed", exc_info=True)
             return 0, f"{type(exc).__name__}: {exc}"
 
     def _bootstrap_state(
