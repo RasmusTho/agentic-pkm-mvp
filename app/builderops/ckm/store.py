@@ -102,7 +102,11 @@ class CkmStore:
                 ).fetchall()
             }
             current_tables = set(CKM_TABLE_NAMES)
-            legacy_tables = current_tables - {"ckm_state"}
+            legacy_tables = current_tables - {
+                "ckm_state",
+                "ckm_public_identity",
+                "ckm_identity_successor",
+            }
             if existing_tables and existing_tables != current_tables and existing_tables != legacy_tables:
                 raise CkmValidationError(
                     "unsupported partial CKM schema; refusing to half-initialize identity/state metadata"
@@ -124,6 +128,7 @@ class CkmStore:
             initial_revision = 1 if legacy else 0 if not existing_tables else None
             self._initialize_or_validate_state(conn, initial_revision=initial_revision)
             citations_changed = self._backfill_public_identities(conn)
+            self._register_existing_public_identities(conn)
             if existing_tables and not legacy and citations_changed:
                 self._advance_state_revision(conn)
             for statement in CKM_DDL_STATEMENTS:
@@ -293,6 +298,72 @@ class CkmStore:
                     (_dumps(migrated), row["id"]),
                 )
         return changed
+
+    @staticmethod
+    def _register_existing_public_identities(conn: sqlite3.Connection) -> None:
+        now = utc_now()
+        for table, resource_type in (
+            ("ckm_capability", "capability"),
+            ("ckm_artifact", "artifact"),
+            ("ckm_evidence_edge", "evidence_edge"),
+            ("ckm_evidence_edge_history", "evidence_edge"),
+            ("ckm_assessment", "assessment"),
+            ("ckm_finding", "finding"),
+        ):
+            for row in conn.execute(
+                f"SELECT DISTINCT public_id FROM {table} WHERE public_id != ''"
+            ).fetchall():
+                conn.execute(
+                    """
+                    INSERT INTO ckm_public_identity
+                        (public_id, resource_type, status, created_at, tombstoned_at)
+                    VALUES (?, ?, 'active', ?, NULL)
+                    ON CONFLICT(public_id) DO NOTHING
+                    """,
+                    (row["public_id"], resource_type, now),
+                )
+
+    @staticmethod
+    def _claim_public_identity(
+        conn: sqlite3.Connection, *, public_id: str, resource_type: str
+    ) -> None:
+        existing = conn.execute(
+            "SELECT resource_type, status FROM ckm_public_identity WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if existing is not None:
+            if existing["resource_type"] != resource_type:
+                raise CkmValidationError(
+                    f"public identity {public_id!r} belongs to {existing['resource_type']}"
+                )
+            if existing["status"] == "tombstone":
+                raise CkmValidationError(
+                    f"public identity {public_id!r} is tombstoned and cannot be reused"
+                )
+            return
+        conn.execute(
+            """
+            INSERT INTO ckm_public_identity
+                (public_id, resource_type, status, created_at, tombstoned_at)
+            VALUES (?, ?, 'active', ?, NULL)
+            """,
+            (public_id, resource_type, utc_now()),
+        )
+
+    @staticmethod
+    def _tombstone_public_identity(conn: sqlite3.Connection, public_id: str) -> None:
+        updated = conn.execute(
+            """
+            UPDATE ckm_public_identity
+            SET status = 'tombstone', tombstoned_at = ?
+            WHERE public_id = ? AND status = 'active'
+            """,
+            (utc_now(), public_id),
+        )
+        if updated.rowcount != 1:
+            raise CkmValidationError(
+                f"public identity {public_id!r} is missing or already tombstoned"
+            )
 
     @staticmethod
     def _backfill_citation_value(conn: sqlite3.Connection, value: Any) -> Any:
@@ -578,10 +649,39 @@ class CkmStore:
         with self._connect() as conn:
             conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute("BEGIN IMMEDIATE")
+            preserved_identities = []
+            preserved_successors = []
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ckm_public_identity'"
+            ).fetchone():
+                preserved_identities = conn.execute(
+                    "SELECT * FROM ckm_public_identity ORDER BY public_id"
+                ).fetchall()
+                preserved_successors = conn.execute(
+                    "SELECT * FROM ckm_identity_successor ORDER BY source_public_id, successor_public_id"
+                ).fetchall()
             for table in reversed(CKM_TABLE_NAMES):
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
             for statement in CKM_DDL_STATEMENTS:
                 conn.execute(statement)
+            for row in preserved_identities:
+                conn.execute(
+                    """
+                    INSERT INTO ckm_public_identity
+                        (public_id, resource_type, status, created_at, tombstoned_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    tuple(row),
+                )
+            for row in preserved_successors:
+                conn.execute(
+                    """
+                    INSERT INTO ckm_identity_successor
+                        (source_public_id, successor_public_id, relation, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    tuple(row),
+                )
             now = utc_now()
             conn.execute(
                 """
@@ -640,6 +740,9 @@ class CkmStore:
         public_id = stable_public_id("capability", resolved_identity_key)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._claim_public_identity(
+                conn, public_id=public_id, resource_type="capability"
+            )
             existing = conn.execute(
                 "SELECT * FROM ckm_capability WHERE identity_key = ?",
                 (resolved_identity_key,),
@@ -698,6 +801,91 @@ class CkmStore:
             raise CkmValidationError(f"capability upsert did not persist: {name}")
         return capability
 
+    def tombstone_capability(
+        self,
+        public_id: str,
+        *,
+        successor_public_ids: Sequence[str] = (),
+        relation: str = "split_successor",
+    ) -> None:
+        """Delete capability content while retaining non-reusable public identity history."""
+
+        if relation not in {"split_successor", "merge_successor"}:
+            raise CkmValidationError(f"unsupported successor relation: {relation}")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            capability = conn.execute(
+                "SELECT id FROM ckm_capability WHERE public_id = ?", (public_id,)
+            ).fetchone()
+            if capability is None:
+                raise CkmValidationError(f"active capability identity not found: {public_id}")
+            for successor_public_id in successor_public_ids:
+                successor = conn.execute(
+                    """
+                    SELECT status FROM ckm_public_identity
+                    WHERE public_id = ? AND resource_type = 'capability'
+                    """,
+                    (successor_public_id,),
+                ).fetchone()
+                if successor is None or successor["status"] != "active":
+                    raise CkmValidationError(
+                        f"active successor capability identity not found: {successor_public_id}"
+                    )
+            capability_id = str(capability["id"])
+            dependent = conn.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM ckm_evidence_edge WHERE capability_id = ?) +
+                    (SELECT COUNT(*) FROM ckm_assessment WHERE capability_id = ?) +
+                    (SELECT COUNT(*) FROM ckm_finding WHERE capability_id = ?) AS count
+                """,
+                (capability_id, capability_id, capability_id),
+            ).fetchone()["count"]
+            if dependent:
+                raise CkmValidationError(
+                    "capability tombstone requires dependent evidence, assessments, and findings "
+                    "to be retired first"
+                )
+            conn.execute(
+                "UPDATE ckm_capability SET parent_id = NULL WHERE parent_id = ?",
+                (capability_id,),
+            )
+            conn.execute("DELETE FROM ckm_capability WHERE id = ?", (capability_id,))
+            self._tombstone_public_identity(conn, public_id)
+            now = utc_now()
+            for successor_public_id in successor_public_ids:
+                conn.execute(
+                    """
+                    INSERT INTO ckm_identity_successor
+                        (source_public_id, successor_public_id, relation, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (public_id, successor_public_id, relation, now),
+                )
+            self._advance_state_revision(conn)
+            conn.commit()
+
+    def identity_lifecycle(self, public_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            identity = conn.execute(
+                "SELECT * FROM ckm_public_identity WHERE public_id = ?", (public_id,)
+            ).fetchone()
+            if identity is None:
+                return None
+            successors = conn.execute(
+                """
+                SELECT successor_public_id, relation FROM ckm_identity_successor
+                WHERE source_public_id = ? ORDER BY successor_public_id
+                """,
+                (public_id,),
+            ).fetchall()
+        return {
+            "public_id": identity["public_id"],
+            "resource_type": identity["resource_type"],
+            "status": identity["status"],
+            "successors": [dict(row) for row in successors],
+        }
+
     def get_capability_by_identity_key(self, identity_key: str) -> CkmCapability | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -740,6 +928,7 @@ class CkmStore:
         public_id = stable_public_id("artifact", source_ref)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._claim_public_identity(conn, public_id=public_id, resource_type="artifact")
             existing = conn.execute(
                 "SELECT * FROM ckm_artifact WHERE source_ref = ?", (source_ref,)
             ).fetchone()
@@ -921,6 +1110,9 @@ class CkmStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             public_id = self._edge_public_id(conn, artifact_id, capability_id, resolved_basis)
+            self._claim_public_identity(
+                conn, public_id=public_id, resource_type="evidence_edge"
+            )
             candidate = CkmEvidenceEdge(
                 id=candidate_id,
                 public_id=public_id,
@@ -1338,6 +1530,9 @@ class CkmStore:
                 "asserted_at": resolved_asserted_at,
             }
             values[1] = self._assessment_public_id(conn, identity_row)
+            self._claim_public_identity(
+                conn, public_id=str(values[1]), resource_type="assessment"
+            )
             conn.execute(
                 f"INSERT INTO ckm_assessment ({column_list}) VALUES ({placeholders})",
                 values,
@@ -1449,6 +1644,7 @@ class CkmStore:
                 conn.commit()
                 return CkmFinding.from_row(existing, citations=candidate.citations)
             public_id = self._finding_public_id(conn, kind, capability_id, dimension)
+            self._claim_public_identity(conn, public_id=public_id, resource_type="finding")
             conn.execute(
                 """
                 INSERT INTO ckm_finding (
@@ -1526,6 +1722,9 @@ class CkmStore:
                 if row is None:
                     public_id = self._finding_public_id(
                         conn, candidate.kind, candidate.capability_id, candidate.dimension
+                    )
+                    self._claim_public_identity(
+                        conn, public_id=public_id, resource_type="finding"
                     )
                     conn.execute(
                         """

@@ -548,6 +548,8 @@ def test_schema_v2_assessment_migrates_with_legacy_formula_provenance(tmp_path: 
             f"INSERT INTO ckm_assessment ({','.join(columns)}) VALUES ({','.join('?' for _ in values)})",
             values,
         )
+        conn.execute("DROP TABLE ckm_identity_successor")
+        conn.execute("DROP TABLE ckm_public_identity")
         conn.execute("DROP TABLE ckm_state")
 
     store.ensure_schema()

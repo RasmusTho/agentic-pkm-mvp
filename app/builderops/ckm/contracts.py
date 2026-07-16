@@ -1,15 +1,13 @@
 """Transport-neutral public contracts for CKM measurement and access.
 
 This module deliberately contains no query executor.  It defines the stable
-identity, snapshot, envelope, value-state, ordering, and cursor vocabulary that
+identity, snapshot, envelope, value-state, ordering, and completeness vocabulary that
 the Q1b read path must implement.
 """
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import hmac
 import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
@@ -20,13 +18,15 @@ JsonDict = dict[str, Any]
 
 ENVELOPE_SCHEMA_VERSION = 1
 RESOURCE_SCHEMA_VERSION = 1
-CURSOR_SCHEMA_VERSION = 1
+ACCESS_POLICY_VERSION = "ckm-local-access-v1"
+EFFECTIVE_AUDIENCE = "single_operator_local"
+REDACTION_PROFILE = "none"
 
 SUPPORTED_RESOURCE_TYPES = frozenset(
     {"capability", "artifact", "evidence_edge", "assessment", "finding"}
 )
 SUPPORTED_VALUE_STATES = frozenset(
-    {"measured", "missing", "not_applicable", "unsupported"}
+    {"measured", "missing", "unassessed", "unsupported"}
 )
 SUPPORTED_HISTORY_MODES = frozenset({"current"})
 
@@ -108,8 +108,8 @@ class TaggedValue:
         return cls(state="missing", reason=reason)
 
     @classmethod
-    def not_applicable(cls, reason: str) -> "TaggedValue":
-        return cls(state="not_applicable", reason=reason)
+    def unassessed(cls, reason: str) -> "TaggedValue":
+        return cls(state="unassessed", reason=reason)
 
     @classmethod
     def unsupported(cls, reason: str) -> "TaggedValue":
@@ -141,6 +141,47 @@ class CkmStateIdentity:
 
 
 @dataclass(frozen=True)
+class ObjectClassCompleteness:
+    """Accounting for one object class in a bounded complete capture."""
+
+    object_class: str
+    included: int
+    filtered: int = 0
+    omitted: int = 0
+    truncated: int = 0
+
+    def __post_init__(self) -> None:
+        if self.object_class not in SUPPORTED_RESOURCE_TYPES:
+            raise ValueError(f"unsupported completeness object class: {self.object_class}")
+        if min(self.included, self.filtered, self.omitted, self.truncated) < 0:
+            raise ValueError("completeness counts must be non-negative")
+
+
+@dataclass(frozen=True)
+class CompletenessManifest:
+    """Proves whether every declared object class was accounted for completely."""
+
+    object_classes: Sequence[ObjectClassCompleteness]
+    complete: bool
+
+    def __post_init__(self) -> None:
+        names = [item.object_class for item in self.object_classes]
+        if not names or len(names) != len(set(names)):
+            raise ValueError("completeness manifest needs distinct object classes")
+        actually_complete = all(
+            item.omitted == 0 and item.truncated == 0 for item in self.object_classes
+        )
+        if self.complete != actually_complete:
+            raise ValueError("complete must agree with omitted and truncated accounting")
+
+    def to_dict(self) -> JsonDict:
+        return {
+            "complete": self.complete,
+            "object_classes": [asdict(item) for item in self.object_classes],
+        }
+
+
+@dataclass(frozen=True)
 class SnapshotManifest:
     epoch: str
     state_revision: int
@@ -150,6 +191,10 @@ class SnapshotManifest:
     taxonomy_digest: str
     watermarks: Mapping[str, str]
     provenance: Sequence[Mapping[str, Any]]
+    effective_audience: str
+    access_policy_version: str
+    redaction_profile: str
+    completeness: CompletenessManifest
     read_set_digest: str
     snapshot_digest: str
 
@@ -161,6 +206,7 @@ class SnapshotManifest:
         taxonomy_digest: str,
         watermarks: Mapping[str, str],
         provenance: Sequence[Mapping[str, Any]],
+        completeness: CompletenessManifest,
         read_set: Any,
     ) -> "SnapshotManifest":
         unsigned: JsonDict = {
@@ -172,32 +218,25 @@ class SnapshotManifest:
             "taxonomy_digest": taxonomy_digest,
             "watermarks": dict(sorted(watermarks.items())),
             "provenance": [dict(item) for item in provenance],
+            "effective_audience": EFFECTIVE_AUDIENCE,
+            "access_policy_version": ACCESS_POLICY_VERSION,
+            "redaction_profile": REDACTION_PROFILE,
+            "completeness": completeness.to_dict(),
             "read_set_digest": canonical_digest(read_set),
         }
-        return cls(**unsigned, snapshot_digest=canonical_digest(unsigned))
+        return cls(
+            **{key: value for key, value in unsigned.items() if key != "completeness"},
+            completeness=completeness,
+            snapshot_digest=canonical_digest(unsigned),
+        )
 
     def to_dict(self) -> JsonDict:
         return {
             **asdict(self),
             "watermarks": dict(sorted(self.watermarks.items())),
             "provenance": [dict(item) for item in self.provenance],
+            "completeness": self.completeness.to_dict(),
         }
-
-
-@dataclass(frozen=True)
-class TruncationMetadata:
-    truncated: bool
-    returned_count: int
-    limit: int
-    next_cursor: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.returned_count < 0 or self.limit <= 0:
-            raise ValueError("returned_count must be non-negative and limit must be positive")
-        if self.returned_count > self.limit:
-            raise ValueError("returned_count must not exceed limit")
-        if self.truncated != (self.next_cursor is not None):
-            raise ValueError("truncation and next_cursor must be stated together")
 
 
 @dataclass(frozen=True)
@@ -244,15 +283,14 @@ class ResultEnvelope:
     query_digest: str
     snapshot: SnapshotManifest
     resources: Sequence[ResourceDto]
-    truncation: TruncationMetadata
     projection: ProjectionMarker = field(default_factory=ProjectionMarker)
     schema_version: int = ENVELOPE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         if any(resource.resource_type != self.resource_type for resource in self.resources):
             raise ValueError("every resource must match the envelope resource type")
-        if len(self.resources) != self.truncation.returned_count:
-            raise ValueError("truncation returned_count must match the resource count")
+        if not self.snapshot.completeness.complete:
+            raise ValueError("result envelopes cannot contain an incomplete snapshot")
         keys = [resource.total_order_key for resource in self.resources]
         if keys != sorted(keys):
             raise ValueError("resources must use the stable public total order")
@@ -265,7 +303,6 @@ class ResultEnvelope:
             "projection": asdict(self.projection),
             "snapshot": self.snapshot.to_dict(),
             "resources": [resource.to_dict() for resource in self.resources],
-            "truncation": asdict(self.truncation),
         }
 
 
@@ -285,120 +322,15 @@ def canonical_query_digest(query: Mapping[str, Any]) -> str:
     return canonical_digest(query)
 
 
-@dataclass(frozen=True)
-class CursorPayload:
-    resource_type: str
-    query_digest: str
-    snapshot_digest: str
-    limit: int
-    last_key: Sequence[str]
-    envelope_schema_version: int = ENVELOPE_SCHEMA_VERSION
-    resource_schema_version: int = RESOURCE_SCHEMA_VERSION
-    cursor_schema_version: int = CURSOR_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        validate_contract_request(
-            envelope_schema_version=self.envelope_schema_version,
-            resource_schema_version=self.resource_schema_version,
-            cursor_schema_version=self.cursor_schema_version,
-            resource_type=self.resource_type,
-        )
-        if not self.query_digest or not self.snapshot_digest:
-            raise ValueError("cursor query and snapshot digests must not be empty")
-        if self.limit <= 0:
-            raise ValueError("cursor limit must be positive")
-        if not self.last_key or not all(isinstance(value, str) and value for value in self.last_key):
-            raise ValueError("cursor last_key must contain non-empty strings")
-
-    def to_dict(self) -> JsonDict:
-        return {
-            "cursor_schema_version": self.cursor_schema_version,
-            "envelope_schema_version": self.envelope_schema_version,
-            "resource_schema_version": self.resource_schema_version,
-            "resource_type": self.resource_type,
-            "query_digest": self.query_digest,
-            "snapshot_digest": self.snapshot_digest,
-            "limit": self.limit,
-            "last_key": list(self.last_key),
-        }
-
-    def encode(self, secret: bytes) -> str:
-        if not secret:
-            raise ValueError("cursor secret must not be empty")
-        body = canonical_json(self.to_dict()).encode("utf-8")
-        signature = hmac.new(secret, body, hashlib.sha256).digest()
-        return f"{_b64url(body)}.{_b64url(signature)}"
-
-    @classmethod
-    def decode(cls, token: str, secret: bytes) -> "CursorPayload":
-        try:
-            if not secret:
-                raise ValueError("cursor secret must not be empty")
-            encoded_body, encoded_signature = token.split(".", 1)
-            body = _b64url_decode(encoded_body)
-            signature = _b64url_decode(encoded_signature)
-            if _b64url(body) != encoded_body or _b64url(signature) != encoded_signature:
-                raise ValueError("cursor encoding is not canonical base64url")
-            expected = hmac.new(secret, body, hashlib.sha256).digest()
-            if not hmac.compare_digest(signature, expected):
-                raise ValueError("signature mismatch")
-            raw = json.loads(body)
-            if not isinstance(raw, dict):
-                raise ValueError("payload is not an object")
-            validate_contract_request(
-                envelope_schema_version=raw.get("envelope_schema_version"),
-                resource_schema_version=raw.get("resource_schema_version"),
-                cursor_schema_version=raw.get("cursor_schema_version"),
-                resource_type=raw.get("resource_type"),
-            )
-            limit = raw.get("limit")
-            last_key = raw.get("last_key")
-            if not isinstance(limit, int) or limit <= 0:
-                raise ValueError("limit must be a positive integer")
-            if not isinstance(last_key, list) or not all(isinstance(v, str) for v in last_key):
-                raise ValueError("last_key must be a list of strings")
-            return cls(
-                cursor_schema_version=raw["cursor_schema_version"],
-                envelope_schema_version=raw["envelope_schema_version"],
-                resource_schema_version=raw["resource_schema_version"],
-                resource_type=raw["resource_type"],
-                query_digest=str(raw.get("query_digest", "")),
-                snapshot_digest=str(raw.get("snapshot_digest", "")),
-                limit=limit,
-                last_key=tuple(last_key),
-            )
-        except CkmContractError:
-            raise
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise CkmContractError(
-                code="invalid_cursor",
-                message="cursor is malformed or its signature is invalid",
-            ) from exc
-
-    def assert_bound_to(
-        self,
-        *,
-        resource_type: str,
-        query_digest: str,
-        snapshot_digest: str,
-        limit: int,
-    ) -> None:
-        actual = (self.resource_type, self.query_digest, self.snapshot_digest, self.limit)
-        expected = (resource_type, query_digest, snapshot_digest, limit)
-        if actual != expected:
-            raise CkmContractError(
-                code="cursor_binding_mismatch",
-                message="cursor does not belong to this resource, query, snapshot, and limit",
-            )
-
-
 def validate_contract_request(
     *,
     ckm_schema_version: Any = CKM_SCHEMA_VERSION,
     envelope_schema_version: Any = ENVELOPE_SCHEMA_VERSION,
     resource_schema_version: Any = RESOURCE_SCHEMA_VERSION,
-    cursor_schema_version: Any = CURSOR_SCHEMA_VERSION,
     resource_type: Any,
+    effective_audience: Any = EFFECTIVE_AUDIENCE,
+    access_policy_version: Any = ACCESS_POLICY_VERSION,
+    redaction_profile: Any = REDACTION_PROFILE,
     filters: Mapping[str, Any] | None = None,
     supported_filters: frozenset[str] = frozenset(),
     history_mode: str = "current",
@@ -407,7 +339,6 @@ def validate_contract_request(
         "ckm": (ckm_schema_version, CKM_SCHEMA_VERSION),
         "envelope": (envelope_schema_version, ENVELOPE_SCHEMA_VERSION),
         "resource": (resource_schema_version, RESOURCE_SCHEMA_VERSION),
-        "cursor": (cursor_schema_version, CURSOR_SCHEMA_VERSION),
     }
     for kind, (requested, supported) in versions.items():
         if requested != supported:
@@ -416,6 +347,22 @@ def validate_contract_request(
                 message=f"unsupported {kind} schema version: {requested}",
                 details={"schema": kind, "requested": requested, "supported": [supported]},
             )
+    policy = {
+        "effective_audience": (effective_audience, EFFECTIVE_AUDIENCE),
+        "access_policy_version": (access_policy_version, ACCESS_POLICY_VERSION),
+        "redaction_profile": (redaction_profile, REDACTION_PROFILE),
+    }
+    mismatches = {
+        key: requested
+        for key, (requested, supported) in policy.items()
+        if requested != supported
+    }
+    if mismatches:
+        raise CkmContractError(
+            code="unsupported_access_policy",
+            message="unsupported or ambiguous CKM access policy",
+            details={"requested": mismatches},
+        )
     if resource_type not in SUPPORTED_RESOURCE_TYPES:
         raise CkmContractError(
             code="unsupported_resource",
@@ -435,11 +382,3 @@ def validate_contract_request(
             message=f"unsupported historical semantics: {history_mode}",
             details={"history_mode": history_mode},
         )
-
-
-def _b64url(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-
-def _b64url_decode(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))

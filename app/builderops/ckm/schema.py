@@ -17,6 +17,8 @@ CKM_SCHEMA_VERSION = 5
 
 CKM_TABLE_NAMES = (
     "ckm_state",
+    "ckm_public_identity",
+    "ckm_identity_successor",
     "ckm_capability",
     "ckm_artifact",
     "ckm_evidence_edge",
@@ -29,6 +31,12 @@ CKM_TABLE_NAMES = (
 CKM_REQUIRED_COLUMNS = {
     "ckm_state": frozenset(
         {"singleton", "epoch", "state_revision", "schema_version", "created_at", "updated_at"}
+    ),
+    "ckm_public_identity": frozenset(
+        {"public_id", "resource_type", "status", "created_at", "tombstoned_at"}
+    ),
+    "ckm_identity_successor": frozenset(
+        {"source_public_id", "successor_public_id", "relation", "created_at"}
     ),
     "ckm_capability": frozenset(
         {
@@ -81,6 +89,12 @@ CKM_REQUIRED_COLUMNS = {
 }
 
 CKM_LEGACY_ADDED_COLUMNS = {
+    "ckm_public_identity": frozenset(
+        {"public_id", "resource_type", "status", "created_at", "tombstoned_at"}
+    ),
+    "ckm_identity_successor": frozenset(
+        {"source_public_id", "successor_public_id", "relation", "created_at"}
+    ),
     "ckm_capability": frozenset({"public_id", "identity_key"}),
     "ckm_artifact": frozenset({"public_id"}),
     "ckm_evidence_edge": frozenset({"public_id", "basis"}),
@@ -104,6 +118,24 @@ CKM_DDL_STATEMENTS = [
         schema_version INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ckm_public_identity (
+        public_id TEXT PRIMARY KEY,
+        resource_type TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'tombstone')),
+        created_at TEXT NOT NULL,
+        tombstoned_at TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ckm_identity_successor (
+        source_public_id TEXT NOT NULL REFERENCES ckm_public_identity(public_id),
+        successor_public_id TEXT NOT NULL REFERENCES ckm_public_identity(public_id),
+        relation TEXT NOT NULL CHECK (relation IN ('split_successor', 'merge_successor')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (source_public_id, successor_public_id)
     )
     """,
     """

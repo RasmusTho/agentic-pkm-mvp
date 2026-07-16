@@ -10,14 +10,17 @@ import pytest
 
 from app.builderops.ckm.assess import assessment_fingerprint
 from app.builderops.ckm.contracts import (
+    ACCESS_POLICY_VERSION,
+    EFFECTIVE_AUDIENCE,
+    REDACTION_PROFILE,
     CkmContractError,
-    CursorPayload,
+    CompletenessManifest,
     ErrorEnvelope,
+    ObjectClassCompleteness,
     ResourceDto,
     ResultEnvelope,
     SnapshotManifest,
     TaggedValue,
-    TruncationMetadata,
     canonical_digest,
     canonical_query_digest,
     stable_public_id,
@@ -89,7 +92,7 @@ def _assert_one_mutation(store: CkmStore, action) -> object:
     return result
 
 
-def test_public_identity_survives_rebuild_and_rename(
+def test_public_identity_lifecycle_policy(
     store: CkmStore, tmp_path: Path
 ) -> None:
     original = _capability(store)
@@ -160,6 +163,80 @@ def test_public_identity_survives_rebuild_and_rename(
     assert rebuilt_edge.public_id == edge.public_id
     assert rebuilt_fingerprint == fingerprint
     assert rebuilt_assessment.public_id == assessment.public_id
+
+    deleted = store.upsert_capability(
+        identity_key="inferred:deleted",
+        name="Deleted capability",
+        definition="Content removed after deletion.",
+        existence_provenance="receipt:deleted",
+    )
+    store.tombstone_capability(deleted.public_id)
+    assert store.identity_lifecycle(deleted.public_id) == {
+        "public_id": deleted.public_id,
+        "resource_type": "capability",
+        "status": "tombstone",
+        "successors": [],
+    }
+    with pytest.raises(CkmValidationError, match="tombstoned and cannot be reused"):
+        store.upsert_capability(
+            identity_key="inferred:deleted",
+            name="Reused capability",
+            definition="Must be refused.",
+            existence_provenance="receipt:reuse",
+        )
+
+    split_source = store.upsert_capability(
+        identity_key="inferred:split-source",
+        name="Split source",
+        definition="Original identity.",
+        existence_provenance="receipt:split",
+    )
+    split_successors = [
+        store.upsert_capability(
+            identity_key=f"inferred:split-{suffix}",
+            name=f"Split successor {suffix}",
+            definition="New successor identity.",
+            existence_provenance="receipt:split",
+        )
+        for suffix in ("a", "b")
+    ]
+    store.tombstone_capability(
+        split_source.public_id,
+        successor_public_ids=[item.public_id for item in split_successors],
+        relation="split_successor",
+    )
+    assert store.identity_lifecycle(split_source.public_id)["successors"] == [
+        {"successor_public_id": item.public_id, "relation": "split_successor"}
+        for item in sorted(split_successors, key=lambda item: item.public_id)
+    ]
+
+    merge_sources = [
+        store.upsert_capability(
+            identity_key=f"inferred:merge-{suffix}",
+            name=f"Merge source {suffix}",
+            definition="Input identity.",
+            existence_provenance="receipt:merge",
+        )
+        for suffix in ("a", "b")
+    ]
+    merge_successor = store.upsert_capability(
+        identity_key="inferred:merge-successor",
+        name="Merge successor",
+        definition="New merged identity.",
+        existence_provenance="receipt:merge",
+    )
+    for source in merge_sources:
+        store.tombstone_capability(
+            source.public_id,
+            successor_public_ids=[merge_successor.public_id],
+            relation="merge_successor",
+        )
+        assert store.identity_lifecycle(source.public_id)["successors"] == [
+            {
+                "successor_public_id": merge_successor.public_id,
+                "relation": "merge_successor",
+            }
+        ]
 
     first_manifest = tmp_path / "first-capabilities.yaml"
     first_manifest.write_text(
@@ -426,6 +503,8 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
             "idx_ckm_finding_public_id",
         ):
             conn.execute(f"DROP INDEX {index_name}")
+        conn.execute("DROP TABLE ckm_identity_successor")
+        conn.execute("DROP TABLE ckm_public_identity")
         conn.execute("DROP TABLE ckm_state")
         conn.execute("ALTER TABLE ckm_capability DROP COLUMN public_id")
         conn.execute("ALTER TABLE ckm_capability DROP COLUMN identity_key")
@@ -597,6 +676,10 @@ def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:
         taxonomy_digest="taxonomy-v1",
         watermarks={"repo": "commit:abc"},
         provenance=[{"ref_type": "repo", "ref": "fixture@abc"}],
+        completeness=CompletenessManifest(
+            object_classes=[ObjectClassCompleteness("capability", included=1)],
+            complete=True,
+        ),
         read_set=[capability.public_id],
     )
     resource = ResourceDto(
@@ -609,7 +692,7 @@ def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:
         values={
             "measured_zero": TaggedValue.measured(0),
             "missing": TaggedValue.missing("no assessment"),
-            "not_applicable": TaggedValue.not_applicable("dimension does not apply"),
+            "unassessed": TaggedValue.unassessed("no assessment has run"),
             "unsupported": TaggedValue.unsupported("not implemented in schema v1"),
         },
     )
@@ -618,12 +701,6 @@ def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:
         query_digest=canonical_query_digest({"resource": "capability"}),
         snapshot=snapshot,
         resources=[resource],
-        truncation=TruncationMetadata(
-            truncated=True,
-            returned_count=1,
-            limit=1,
-            next_cursor="opaque-cursor",
-        ),
     ).to_dict()
 
     assert envelope["projection"] == {
@@ -639,56 +716,56 @@ def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:
     assert {value["state"] for value in envelope["resources"][0]["values"].values()} == {
         "measured",
         "missing",
-        "not_applicable",
+        "unassessed",
         "unsupported",
     }
     assert envelope["snapshot"]["snapshot_digest"]
-    assert envelope["truncation"]["truncated"] is True
+    assert envelope["snapshot"]["effective_audience"] == EFFECTIVE_AUDIENCE
+    assert envelope["snapshot"]["access_policy_version"] == ACCESS_POLICY_VERSION
+    assert envelope["snapshot"]["redaction_profile"] == REDACTION_PROFILE
+    assert envelope["snapshot"]["completeness"]["complete"] is True
 
     typed_error = CkmContractError(code="unsupported_filter", message="not supported")
     assert ErrorEnvelope(typed_error).to_dict()["error"]["code"] == "unsupported_filter"
 
 
-def test_cursor_contract_binds_query_snapshot_versions() -> None:
-    secret = b"test-only-secret"
-    query_digest = canonical_query_digest(
-        {"resource_type": "capability", "filters": {"lifecycle": "candidate"}}
+def test_snapshot_manifest_accounts_for_complete_scope(store: CkmStore) -> None:
+    accounting = [
+        ObjectClassCompleteness("capability", included=3, filtered=1),
+        ObjectClassCompleteness("artifact", included=5, omitted=1),
+        ObjectClassCompleteness("evidence_edge", included=7, truncated=2),
+    ]
+    incomplete = CompletenessManifest(object_classes=accounting, complete=False)
+    snapshot = SnapshotManifest.build(
+        state=store.state_identity(),
+        taxonomy_digest="taxonomy-v1",
+        watermarks={"repo": "commit:abc"},
+        provenance=[{"ref_type": "repo", "ref": "fixture@abc"}],
+        completeness=incomplete,
+        read_set=[],
     )
-    cursor = CursorPayload(
-        resource_type="capability",
-        query_digest=query_digest,
-        snapshot_digest="snapshot-123",
-        limit=25,
-        last_key=("capability", "ckm_capability_abc"),
-    )
-    token = cursor.encode(secret)
-    decoded = CursorPayload.decode(token, secret)
-
-    assert decoded == cursor
-    decoded.assert_bound_to(
-        resource_type="capability",
-        query_digest=query_digest,
-        snapshot_digest="snapshot-123",
-        limit=25,
-    )
-    with pytest.raises(CkmContractError) as mismatch:
-        decoded.assert_bound_to(
+    assert snapshot.to_dict()["completeness"] == {
+        "complete": False,
+        "object_classes": [
+            {
+                "object_class": item.object_class,
+                "included": item.included,
+                "filtered": item.filtered,
+                "omitted": item.omitted,
+                "truncated": item.truncated,
+            }
+            for item in accounting
+        ],
+    }
+    with pytest.raises(ValueError, match="incomplete snapshot"):
+        ResultEnvelope(
             resource_type="capability",
-            query_digest=query_digest,
-            snapshot_digest="new-snapshot",
-            limit=25,
+            query_digest=canonical_query_digest({"resource": "capability"}),
+            snapshot=snapshot,
+            resources=[],
         )
-    assert mismatch.value.code == "cursor_binding_mismatch"
-
-    body, signature = token.split(".", 1)
-    tampered = f"{body[:-1]}{'A' if body[-1] != 'A' else 'B'}.{signature}"
-    with pytest.raises(CkmContractError) as invalid:
-        CursorPayload.decode(tampered, secret)
-    assert invalid.value.code == "invalid_cursor"
-
-    with pytest.raises(CkmContractError) as noncanonical:
-        CursorPayload.decode(f"{body}=.{signature}", secret)
-    assert noncanonical.value.code == "invalid_cursor"
+    with pytest.raises(ValueError, match="complete must agree"):
+        CompletenessManifest(object_classes=accounting, complete=True)
 
 
 def test_unsupported_versions_and_semantics_are_typed() -> None:
@@ -707,6 +784,10 @@ def test_unsupported_versions_and_semantics_are_typed() -> None:
         (
             {"resource_type": "capability", "history_mode": "as_of"},
             "unsupported_historical_semantics",
+        ),
+        (
+            {"resource_type": "capability", "effective_audience": "remote_team"},
+            "unsupported_access_policy",
         ),
     )
     for arguments, expected_code in cases:

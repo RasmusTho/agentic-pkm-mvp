@@ -133,6 +133,8 @@ def test_schema_migrates_edge_basis_without_losing_rows(tmp_path: Path) -> None:
             """,
             ("edge_legacy_second", artifact.id, capability.id, artifact.source_ref),
         )
+        conn.execute("DROP TABLE ckm_identity_successor")
+        conn.execute("DROP TABLE ckm_public_identity")
         conn.execute("DROP TABLE ckm_state")
         conn.commit()
 
