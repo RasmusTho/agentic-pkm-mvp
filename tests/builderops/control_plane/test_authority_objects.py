@@ -62,6 +62,16 @@ def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
             record_id="learning-1",
             record_type="LearningSignal",
             state="active",
+            payload={"summary": "durable"},
+            idempotency_key="record-create",
+            expected_states=(),
+        )
+    with pytest.raises(IdempotencyConflict):
+        store.commit_record(
+            envelope=envelope,
+            record_id="learning-1",
+            record_type="LearningSignal",
+            state="active",
             payload={"summary": "changed"},
             idempotency_key="record-create",
         )

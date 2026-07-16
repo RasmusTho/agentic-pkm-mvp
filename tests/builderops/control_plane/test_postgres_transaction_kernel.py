@@ -108,6 +108,19 @@ def test_idempotency_replay_and_conflict(control_plane_store, envelope) -> None:
     assert recovered.recovery_lsn != "0/0"
 
 
+def test_idempotency_distinguishes_absent_and_empty_outbox(control_plane_store, envelope) -> None:
+    kwargs = {
+        "envelope": envelope,
+        "task_id": "optional-outbox-shape",
+        "to_state": "ready",
+        "idempotency_key": "optional-outbox-shape",
+        "request": {"command": "create"},
+    }
+    control_plane_store.commit_transition(**kwargs)
+    with pytest.raises(IdempotencyConflict):
+        control_plane_store.commit_transition(**kwargs, outbox={})
+
+
 def test_transaction_result_binds_receipt_sequence_and_recovery_lsn(
     control_plane_store, envelope
 ) -> None:

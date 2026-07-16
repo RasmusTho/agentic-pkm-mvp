@@ -158,7 +158,7 @@ class PostgresBuilderOpsStore:
             "task_id": task_id,
             "to_state": to_state,
             "request": dict(request),
-            "outbox": dict(outbox) if outbox else None,
+            "outbox": dict(outbox) if outbox is not None else None,
             "claim_holder": claim_holder,
             "claim_ttl_seconds": claim_ttl_seconds if claim_holder is not None else None,
             "release_on_commit": release_on_commit,
@@ -553,8 +553,8 @@ class PostgresBuilderOpsStore:
                 "payload": dict(payload),
                 "primary_id": primary_id,
                 "secondary_id": secondary_id,
-                "lease_identity": self._lease_identity_json(lease) if lease else None,
-                "expected_states": list(expected_states) if expected_states else None,
+                "lease_identity": self._lease_identity_json(lease) if lease is not None else None,
+                "expected_states": list(expected_states) if expected_states is not None else None,
             }
         )
         envelope_json = Jsonb(envelope.as_json())
