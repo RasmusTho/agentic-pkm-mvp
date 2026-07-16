@@ -123,6 +123,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "companion-ui/",
             "app/api/",
+            # HTTP middleware is API surface: TraceIdMiddleware is wired only
+            # into app/api/app.py, and its x-trace-id propagation regression
+            # lives in tests/api (test_ask_contract).
+            "app/middleware/",
             "api/",
             "tests/companion_ui/",
             "tests/api/",
@@ -146,6 +150,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/watcher/",
             "app/sync/",
+            # Watcher process entrypoint (`python -m app.cli watcher run`);
+            # its CLI regressions live in tests/watcher (same single-file
+            # granularity as runtime_health's app/cli/health.py).
+            "app/cli/watcher.py",
             "scripts/run_live_watcher.sh",
             "tests/watcher/",
             "tests/sync/",
@@ -167,6 +175,21 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "docs/OBSERVABILITY_STABILIZATION/",
         ),
         ("tests/health", "tests/invariants", "tests/api"),
+    ),
+    (
+        # Structured logging / tracing / status-model surface (#3895). Its
+        # home suite is tests/observability; the API status routes and the
+        # trace-context consumers (app/api/routes/status.py, TraceIdMiddleware
+        # binding app.observability.tracer) regress in tests/api. The docs
+        # owner file is the exact path docs/OBSERVABILITY.md so this prefix
+        # never steals runtime_health's docs/OBSERVABILITY_STABILIZATION/.
+        "observability",
+        (
+            "app/observability/",
+            "tests/observability/",
+            "docs/OBSERVABILITY.md",
+        ),
+        ("tests/observability", "tests/api"),
     ),
     (
         "store_ingest",
