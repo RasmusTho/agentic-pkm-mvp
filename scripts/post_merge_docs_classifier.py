@@ -10,7 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
-from app.dispatcher.verification_contract import resolve_issue_authority
+from app.dispatcher.verification_contract import IssueAuthority, resolve_issue_authority
+from app.dispatcher.verified_merge import resolve_post_merge_issue_authority
 
 
 CLASSIFICATIONS: tuple[str, ...] = (
@@ -71,8 +72,12 @@ def _nested_str(data: dict[str, object], *keys: str) -> str:
     return current if isinstance(current, str) else ""
 
 
-def _linked_issues(body: str, issue: dict[str, object]) -> list[int]:
-    authority = resolve_issue_authority(body)
+def _linked_issues(
+    body: str,
+    issue: dict[str, object],
+    trusted_authority: IssueAuthority | None = None,
+) -> list[int]:
+    authority = trusted_authority or resolve_issue_authority(body)
     numbers = set(authority.closing_issues) if authority is not None else set()
     issue_number = issue.get("number")
     if isinstance(issue_number, int):
@@ -205,13 +210,31 @@ def classify(
     pr: dict[str, object],
     files_payload: object,
     issue: dict[str, object],
+    comments_payload: object | None = None,
+    repository: str | None = None,
 ) -> PostMergeDocsClassification:
-    body = pr.get("body") if isinstance(pr.get("body"), str) else ""
+    raw_body = pr.get("body")
+    body = raw_body if isinstance(raw_body, str) else ""
     files = _changed_files(files_payload)
     docs_files = _docs_spec_files(files)
     runtime_files = _runtime_or_contract_files(files)
     declaration = _owner_doc_declaration(body)
-    linked = _linked_issues(body, issue)
+    if (comments_payload is None) != (repository is None):
+        raise ValueError("post-merge authority inputs must be supplied together")
+    trusted_authority: IssueAuthority | None = None
+    if comments_payload is not None and repository is not None:
+        if (
+            not isinstance(comments_payload, list)
+            or any(not isinstance(comment, dict) for comment in comments_payload)
+            or not repository
+        ):
+            raise ValueError("post-merge authority inputs are malformed")
+        trusted_authority = resolve_post_merge_issue_authority(
+            comments_payload,
+            pr=pr,
+            repository=repository,
+        )
+    linked = _linked_issues(body, issue, trusted_authority)
     unknowns = _unknowns(
         pr=pr,
         linked_issues=linked,
@@ -262,9 +285,11 @@ def classify(
         evidence.append("available evidence does not match a deterministic classification rule")
         action = "Collect missing evidence or classify manually; do not mutate owner docs automatically."
 
+    raw_number = pr.get("number")
+    raw_title = pr.get("title")
     return PostMergeDocsClassification(
-        merged_pr_number=pr.get("number") if isinstance(pr.get("number"), int) else None,
-        merged_pr_title=pr.get("title") if isinstance(pr.get("title"), str) else "",
+        merged_pr_number=raw_number if isinstance(raw_number, int) else None,
+        merged_pr_title=raw_title if isinstance(raw_title, str) else "",
         merged_pr_sha=_nested_str(pr, "merge_commit", "sha") or _nested_str(pr, "head", "sha"),
         linked_issues=linked,
         changed_files=files,
@@ -331,6 +356,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--pr-json", type=Path, required=True)
     parser.add_argument("--files-json", type=Path, required=True)
     parser.add_argument("--issue-json", type=Path)
+    parser.add_argument("--comments-json", type=Path, required=True)
+    parser.add_argument("--repository", required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-markdown", type=Path, required=True)
     return parser
@@ -342,6 +369,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         pr=_as_dict(_load_json(args.pr_json, {})),
         files_payload=_load_json(args.files_json, []),
         issue=_as_dict(_load_json(args.issue_json, {})),
+        comments_payload=_load_json(args.comments_json, []),
+        repository=args.repository,
     )
     _write_outputs(result, args.output_json, args.output_markdown)
     return 0

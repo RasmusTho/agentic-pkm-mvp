@@ -215,6 +215,48 @@ def test_verified_merge_neutralized_authority_matches_javascript_and_python() ->
     assert javascript["issueLinkMentions"] == []
 
 
+@pytest.mark.parametrize("separator", [",", ", ", ",\t", ", \t\t"])
+def test_verified_merge_neutralized_separator_grammar_matches_javascript_and_python(
+    separator: str,
+) -> None:
+    body = (
+        "Governing-Issue: #3821\n"
+        "Refs #3820\n"
+        "Refs #3823\n"
+        f"Verified-Closing-Issues: #3820{separator}#3823\n"
+    )
+
+    assert resolve_neutralized_issue_authority(body) == IssueAuthority(
+        governing_issue=3821,
+        closing_issues=(3820, 3823),
+        supporting_issues=(3820, 3823),
+    )
+    assert _js_issue_authority(body)["neutralizedValid"] is True
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "#3820,,#3823",
+        "#3820,",
+        "#3820,\v#3823",
+        "#3820, #invalid",
+    ],
+)
+def test_verified_merge_malformed_neutralized_separator_fails_closed(
+    marker: str,
+) -> None:
+    body = (
+        "Governing-Issue: #3821\n"
+        "Refs #3820\n"
+        "Refs #3823\n"
+        f"Verified-Closing-Issues: {marker}\n"
+    )
+
+    assert resolve_neutralized_issue_authority(body) is None
+    assert _js_issue_authority(body)["neutralizedValid"] is False
+
+
 @pytest.mark.parametrize(
     "body",
     [

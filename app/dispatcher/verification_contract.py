@@ -204,7 +204,13 @@ def resolve_neutralized_issue_authority(pr_body: object) -> IssueAuthority | Non
         or CLOSING_ISSUE_ATTEMPT_PATTERN.search(canonical_body)
     ):
         return None
-    closing = tuple(int(token[1:]) for token in marker_matches[0].split(", "))
+    try:
+        closing = tuple(
+            int(token[1:])
+            for token in re.split(r",[ \t]*", marker_matches[0])
+        )
+    except ValueError:
+        return None
     if (
         tuple(sorted(set(closing))) != closing
         or len(closing) > MAX_CLOSING_ISSUES

@@ -263,7 +263,29 @@ def resolve_post_merge_governing_issue(
     pr: Mapping[str, object],
     repository: str,
 ) -> int | None:
-    """Resolve classifier authority, failing closed on a trusted bad receipt."""
+    """Compatibility projection for post-merge consumers needing the governor."""
+
+    authority = resolve_post_merge_issue_authority(
+        comments,
+        pr=pr,
+        repository=repository,
+    )
+    return authority.governing_issue if authority is not None else None
+
+
+def resolve_post_merge_issue_authority(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+) -> IssueAuthority | None:
+    """Resolve full post-merge issue authority from the trusted receipt.
+
+    During the neutralized merge window the body marker is evidence only. It
+    cannot replace the collaborator-authored exact-head authority receipt.
+    Restored/legacy bodies without a receipt may still use the ordinary PR-body
+    authority grammar.
+    """
 
     trusted_attempt = any(
         comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
@@ -276,11 +298,31 @@ def resolve_post_merge_governing_issue(
     )
     if receipt is not None:
         governing_issue = receipt.get("governing_issue")
-        return cast(int, governing_issue) if _positive_int(governing_issue) else None
+        if not _positive_int(governing_issue):
+            raise ValueError("trusted verified merge authority receipt is invalid")
+        try:
+            closing = _issue_tuple(
+                receipt.get("closing_issues"),
+                field="closing issues",
+                allow_empty=False,
+                maximum=MAX_CLOSING_ISSUES,
+            )
+            supporting = _issue_tuple(
+                receipt.get("live_supporting_issues"),
+                field="live supporting issues",
+                allow_empty=True,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "trusted verified merge authority receipt is invalid"
+            ) from exc
+        return IssueAuthority(cast(int, governing_issue), closing, supporting)
     if trusted_attempt:
         raise ValueError("trusted verified merge authority receipt is invalid")
-    authority = _body_authority(pr.get("body"))
-    return authority.governing_issue if authority is not None else None
+    # A neutralized marker is intentionally not standalone post-merge
+    # authority. Without a trusted receipt, only the restored canonical body
+    # can supply the compatibility fallback.
+    return resolve_issue_authority(pr.get("body"))
 
 
 def build_verified_merge_phase(

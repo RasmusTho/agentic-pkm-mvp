@@ -9,13 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import IssueAuthority, MAX_CLOSING_ISSUES
 from app.dispatcher.verified_merge import (
     VERIFIED_MERGE_AUTHORITY_CONTRACT,
     build_verified_merge_phase,
     plan_post_merge_reconciliation,
     prepare_verified_merge,
     resolve_post_merge_governing_issue,
+    resolve_post_merge_issue_authority,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
 )
@@ -268,16 +269,26 @@ def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comment
         is None
     )
     assert (
-        resolve_post_merge_governing_issue(
+        resolve_post_merge_issue_authority(
             [original_comment], pr=neutral_pr, repository=REPOSITORY
         )
-        == 3821
+        == IssueAuthority(
+            governing_issue=3821,
+            closing_issues=(3820, 3823),
+            supporting_issues=(3820, 3823, 3900),
+        )
+    )
+    assert (
+        resolve_post_merge_issue_authority(
+            [forged], pr=neutral_pr, repository=REPOSITORY
+        )
+        is None
     )
     assert (
         resolve_post_merge_governing_issue(
             [forged], pr=neutral_pr, repository=REPOSITORY
         )
-        == 3821
+        is None
     )
     assert (
         resolve_verified_merge_authority_receipt(
@@ -287,6 +298,12 @@ def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comment
         )
         is None
     )
+    with pytest.raises(ValueError, match="trusted verified merge authority"):
+        resolve_post_merge_issue_authority(
+            [original_comment],
+            pr={**neutral_pr, "head": {"sha": "b" * 40}},
+            repository=REPOSITORY,
+        )
     conflicting_receipt = copy.deepcopy(plan["authority_receipt"])
     assert isinstance(conflicting_receipt, dict)
     conflicting_receipt["repair_budget"] = {
@@ -307,7 +324,7 @@ def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comment
         is None
     )
     with pytest.raises(ValueError, match="trusted verified merge authority"):
-        resolve_post_merge_governing_issue(
+        resolve_post_merge_issue_authority(
             [original_comment, conflicting_comment],
             pr=neutral_pr,
             repository=REPOSITORY,

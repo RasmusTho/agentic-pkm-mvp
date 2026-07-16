@@ -1206,6 +1206,11 @@ def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
                         "state": "closed",
                         "closed_at": "2026-07-15T00:00:03Z",
                     },
+                    {
+                        "number": 5000,
+                        "state": "closed",
+                        "closed_at": "2026-07-15T00:00:04Z",
+                    },
                 ]
             )
         if "/issues/3603/events?per_page=100" in endpoint:
@@ -1227,6 +1232,17 @@ def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
                         "actor": {"login": "verification-closer"},
                         "created_at": "2026-07-15T00:00:03Z",
                         "commit_id": "b" * 40,
+                    }
+                ]
+            )
+        if "/issues/5000/events?per_page=100" in endpoint:
+            return Result(
+                [
+                    {
+                        "event": "closed",
+                        "actor": {"login": "verification-closer"},
+                        "created_at": "2026-07-15T00:00:04Z",
+                        "commit_id": None,
                     }
                 ]
             )
@@ -1259,6 +1275,107 @@ def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
             "state": "closed",
         },
     ]
+
+
+def test_merged_recovery_uses_durable_authority_after_rebind_and_budget_advance(
+    tmp_path,
+) -> None:
+    repaired_head = "c" * 40
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    persisted_pack = verification_consumer.context_pack(
+        claimed,
+        eligible_pr(),
+        repair_budget=state.repair_budget_projection(run.run_id),
+    )
+    launch_budget = persisted_pack["repair_budget"]
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000030",
+        persisted_pack,
+    )
+    rebound = state.rebind_head(
+        run.run_id,
+        repaired_head,
+        expected_head_sha=HEAD,
+        observed_repository=REPO,
+        observed_pr_number=3603,
+        observed_head_sha=repaired_head,
+        holder="crashed-host",
+        lease_id=running.lease_id or "",
+    )
+    state.record_attempt(
+        run.run_id,
+        "standard_repair",
+        "repair-session",
+        "gpt-5.6-terra",
+        "high",
+        {"head_sha": repaired_head},
+        "fixed",
+        {
+            "finding_id": "F-recovery",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "same-session-repair",
+        },
+        holder="crashed-host",
+        lease_id=rebound.lease_id or "",
+    )
+    advanced_budget = state.repair_budget_projection(run.run_id)
+    plan = _merge_plan(repaired_head, repair_budget=launch_budget)
+    crashed_pr = merged_pr(
+        body=plan["neutralized_body"],
+        head={"ref": "branch", "sha": repaired_head},
+    )
+
+    class RecoveryTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(crashed_pr, green_checks(repaired_head))
+            self.phase = "prepared"
+
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(
+                self._last_pr,
+                phase=self.phase,
+                repair_budget=launch_budget,
+            )
+
+    truth = RecoveryTruth()
+
+    class RecoveryLauncher(DeliveredLauncher):
+        def launch(self, context_pack, **kwargs):
+            assert context_pack["head_sha"] == repaired_head
+            assert context_pack["repair_budget"] == advanced_budget
+            assert context_pack["requested_head_sha"] == HEAD
+            truth.pr = merged_pr(head={"ref": "branch", "sha": repaired_head})
+            truth._last_pr = truth.pr
+            truth.phase = "restored"
+            session, receipt = super().launch(context_pack, **kwargs)
+            return session, {**receipt, "head_sha": repaired_head}
+
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", run.run_id),
+        )
+        conn.commit()
+
+    completed = VerificationConsumer(
+        state, truth, Auth(), RecoveryLauncher(), "recovery-host"
+    ).recover(run.run_id)
+
+    assert completed.status == "completed"
+    assert completed.head_sha == repaired_head
+    assert completed.requested_head_sha == HEAD
+    assert [row["kind"] for row in state.attempts(run.run_id)] == [
+        "standard_repair",
+        "verification",
+        "review",
+        "review",
+    ]
+    assert state.repair_budget_projection(run.run_id) == advanced_budget
 
 
 def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id: int = 123):

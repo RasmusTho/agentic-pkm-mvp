@@ -5,6 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from app.dispatcher.verified_merge import prepare_verified_merge
 from scripts.post_merge_docs_classifier import classify, render_markdown
 
 
@@ -41,6 +44,7 @@ def test_classifier_emits_markdown_and_json(tmp_path: Path) -> None:
     pr_json = tmp_path / "pr.json"
     files_json = tmp_path / "files.json"
     issue_json = tmp_path / "issue.json"
+    comments_json = tmp_path / "comments.json"
     out_json = tmp_path / "classification.json"
     out_md = tmp_path / "classification.md"
     pr_json.write_text(
@@ -49,6 +53,7 @@ def test_classifier_emits_markdown_and_json(tmp_path: Path) -> None:
     )
     files_json.write_text(json.dumps([{"filename": "tests/scripts/test_example.py"}]), encoding="utf-8")
     issue_json.write_text(json.dumps({"number": 3217}), encoding="utf-8")
+    comments_json.write_text("[]\n", encoding="utf-8")
 
     subprocess.run(
         [
@@ -61,6 +66,10 @@ def test_classifier_emits_markdown_and_json(tmp_path: Path) -> None:
             str(files_json),
             "--issue-json",
             str(issue_json),
+            "--comments-json",
+            str(comments_json),
+            "--repository",
+            "RasmusTho/agentic-pkm-mvp",
             "--output-json",
             str(out_json),
             "--output-markdown",
@@ -76,6 +85,116 @@ def test_classifier_emits_markdown_and_json(tmp_path: Path) -> None:
     assert payload["merged_pr_sha"] == "def456"
     assert payload["impact_classification"] == "no_change_likely"
     assert "# Post-Merge Docs/Spec Classifier" in markdown
+
+
+def _neutralized_multi_issue_evidence() -> tuple[dict[str, object], list[dict[str, object]]]:
+    head = "a" * 40
+    body = (
+        "Governing-Issue: #3821\n"
+        "Refs #3821\n"
+        "Fixes #3820\n"
+        "Closes #3823\n"
+        "\n## Owner-Doc Writeback\n"
+        "- [x] No owner-doc change implied.\n"
+    )
+    pr = {
+        "number": 3822,
+        "title": "governance: deterministic issue-set closure",
+        "body": body,
+        "state": "open",
+        "merged_at": None,
+        "draft": False,
+        "head": {"sha": head},
+    }
+    plan = prepare_verified_merge(
+        context={
+            "contract": "verification_closer_dispatch_context.v2",
+            "run_id": "vrun-classifier",
+            "repository": "RasmusTho/agentic-pkm-mvp",
+            "pr_number": 3822,
+            "governing_issue": 3821,
+            "closing_issues": [3820, 3823],
+            "supporting_issues": [3820, 3823],
+            "head_sha": head,
+            "repair_budget": {
+                "policy_version": "v2",
+                "mechanism_count": 0,
+                "truncated": False,
+                "omitted_count": 0,
+                "mechanisms": [],
+            },
+        },
+        pr=pr,
+        live_closing_issues=[3820, 3823],
+    )
+    neutralized_pr = {**pr, "body": plan["neutralized_body"]}
+    comments = [
+        {
+            "author_association": "COLLABORATOR",
+            "body": plan["authority_receipt_comment"],
+        }
+    ]
+    return neutralized_pr, comments
+
+
+def test_classifier_carries_trusted_closing_set_during_neutralized_window() -> None:
+    pr, comments = _neutralized_multi_issue_evidence()
+
+    result = classify(
+        pr=pr,
+        files_payload=["tests/governance/test_policy.py"],
+        issue={"number": 3821},
+        comments_payload=comments,
+        repository="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert result.linked_issues == [3820, 3821, 3823]
+
+
+def test_classifier_rejects_forged_stale_and_conflicting_merge_authority() -> None:
+    pr, comments = _neutralized_multi_issue_evidence()
+    forged = [{**comments[0], "author_association": "NONE"}]
+    forged_result = classify(
+        pr=pr,
+        files_payload=["tests/governance/test_policy.py"],
+        issue={},
+        comments_payload=forged,
+        repository="RasmusTho/agentic-pkm-mvp",
+    )
+    assert forged_result.linked_issues == []
+
+    with pytest.raises(ValueError, match="trusted verified merge authority"):
+        classify(
+            pr={**pr, "head": {"sha": "b" * 40}},
+            files_payload=["tests/governance/test_policy.py"],
+            issue={},
+            comments_payload=comments,
+            repository="RasmusTho/agentic-pkm-mvp",
+        )
+
+    conflicting = json.loads(
+        str(comments[0]["body"]).split("```json\n", 1)[1].split("\n```", 1)[0]
+    )
+    conflicting["repair_budget"] = {
+        "policy_version": "v2",
+        "mechanisms": [],
+    }
+    conflicting_comment = {
+        "author_association": "COLLABORATOR",
+        "body": (
+            "verified issue-set merge authority:\n```json\n"
+            + json.dumps(conflicting, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        ),
+    }
+    with pytest.raises(ValueError, match="trusted verified merge authority"):
+        classify(
+            pr=pr,
+            files_payload=["tests/governance/test_policy.py"],
+            issue={},
+            comments_payload=[*comments, conflicting_comment],
+            repository="RasmusTho/agentic-pkm-mvp",
+        )
 
 
 def test_classifier_fixture_matrix() -> None:

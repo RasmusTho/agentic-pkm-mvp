@@ -50,6 +50,7 @@ from app.dispatcher.verification_agent_loop import (
     valid_human_exception_packet,
 )
 from app.dispatcher.verification_contract import (
+    IssueAuthority,
     resolve_issue_authority,
 )
 from app.dispatcher.verified_merge import (
@@ -998,7 +999,7 @@ class GhCliVerificationSource:
                 )
             except ValueError as exc:
                 raise RuntimeError("malformed GitHub issue event timestamp") from exc
-            closed_by_delivery = bool(
+            actor_time_close = bool(
                 issue.get("state") == "closed"
                 and latest is not None
                 and latest.get("event") == "closed"
@@ -1006,14 +1007,20 @@ class GhCliVerificationSource:
                 and latest_instant is not None
                 and latest_instant >= merged_instant
             )
+            commit_matches_delivery = bool(
+                latest is not None
+                and latest.get("commit_id") == merge_commit_sha
+            )
+            closed_by_delivery = bool(
+                actor_time_close
+                and (number in expected or commit_matches_delivery)
+            )
             if closed_by_delivery:
                 observed.append(number)
             if number not in expected and not closed_by_delivery:
                 continue
             closed_by_pr = bool(
-                closed_by_delivery
-                and latest is not None
-                and latest.get("commit_id") == merge_commit_sha
+                closed_by_delivery and commit_matches_delivery
             )
             evidence.append(
                 {
@@ -2596,19 +2603,17 @@ def _checks_rejection(
     return None
 
 
-def context_pack(
+def _context_pack_from_authority(
     run: VerificationRun,
-    pr: Mapping[str, object],
+    issue_authority: IssueAuthority,
     *,
-    repair_budget: Mapping[str, object] | None = None,
+    repair_budget: Mapping[str, object],
 ) -> dict[str, object]:
-    """Return the immutable minimum; no issue/diff/log/untrusted body text."""
+    """Build the minimum context from already-authenticated issue authority."""
     linked_issue = run.request.get("linked_issue")
-    issue_authority = resolve_issue_authority(pr.get("body"))
     if (
-        issue_authority is None
-        or issue_authority.governing_issue != linked_issue
-        or set(issue_authority.closing_issues) != set(run.closing_authority)
+        issue_authority.governing_issue != linked_issue
+        or issue_authority.closing_issues != run.closing_authority
         or not set(run.supporting_authority).issubset(
             issue_authority.supporting_issues
         )
@@ -2637,14 +2642,36 @@ def context_pack(
             "scripts/build_verified_issue_set_merge_phase.py"
         ),
         "idempotency_key": run.idempotency_key,
-        "repair_budget": dict(repair_budget) if repair_budget is not None else {
+        "repair_budget": dict(repair_budget),
+    }
+
+
+def context_pack(
+    run: VerificationRun,
+    pr: Mapping[str, object],
+    *,
+    repair_budget: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Return the immutable minimum; no issue/diff/log/untrusted body text."""
+    issue_authority = resolve_issue_authority(pr.get("body"))
+    if issue_authority is None:
+        raise ValueError("verification context authority does not match live PR")
+    budget = (
+        repair_budget
+        if repair_budget is not None
+        else {
             "policy_version": run.repair_budget_policy,
             "mechanism_count": 0,
             "truncated": False,
             "omitted_count": 0,
             "mechanisms": [],
-        },
-    }
+        }
+    )
+    return _context_pack_from_authority(
+        run,
+        issue_authority,
+        repair_budget=budget,
+    )
 
 
 def _retry_at(value: object = None) -> str:
@@ -2748,7 +2775,7 @@ class VerificationConsumer:
         run: VerificationRun,
         pr: Mapping[str, object],
         checks: Sequence[Mapping[str, object]],
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], dict[str, object]]:
         if (
             pr.get("number") != run.pr_number
             or _nested(pr, "base", "repo", "full_name") != run.repository
@@ -2769,21 +2796,7 @@ class VerificationConsumer:
             raise ValueError(
                 f"verification run is no longer resumable: {checks_rejection}"
             )
-        persisted = run.context_pack
         current_repair_budget = self.ledger.repair_budget_projection(run.run_id)
-        if (
-            not isinstance(persisted, Mapping)
-            or persisted.get("contract")
-            != "verification_closer_dispatch_context.v2"
-            or persisted.get("run_id") != run.run_id
-            or persisted.get("head_sha") != run.head_sha
-            or persisted.get("repository") != run.repository
-            or persisted.get("pr_number") != run.pr_number
-            or persisted.get("repair_budget") != current_repair_budget
-        ):
-            raise ValueError(
-                "verification run is no longer resumable: context_authority_mismatch"
-            )
         comments = list(
             self.truth.pull_request_comments(run.repository, run.pr_number)
         )
@@ -2792,12 +2805,42 @@ class VerificationConsumer:
             pr=pr,
             repository=run.repository,
             expected_run_id=run.run_id,
-            expected_repair_budget=current_repair_budget,
         )
         if authority is None:
             raise ValueError(
                 "verification run is no longer resumable: merge_authority_missing"
             )
+        try:
+            authority_repair_budget = authority["repair_budget"]
+            if (
+                not isinstance(authority_repair_budget, Mapping)
+                or authority_repair_budget.get("policy_version")
+                != run.repair_budget_policy
+            ):
+                raise ValueError("recovered repair-budget policy changed")
+            recovered_authority = IssueAuthority(
+                governing_issue=cast(int, authority["governing_issue"]),
+                closing_issues=tuple(
+                    cast(Sequence[int], authority["closing_issues"])
+                ),
+                supporting_issues=tuple(
+                    cast(
+                        Sequence[int],
+                        authority["authenticated_supporting_issues"],
+                    )
+                ),
+            )
+            if recovered_authority.supporting_issues != run.supporting_authority:
+                raise ValueError("recovered supporting authority changed")
+            recovered_pack = _context_pack_from_authority(
+                run,
+                recovered_authority,
+                repair_budget=current_repair_budget,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "verification run is no longer resumable: context_authority_mismatch"
+            ) from exc
         phase = resolve_verified_merge_phase(
             comments, authority_receipt=authority, pr=pr
         )
@@ -2817,24 +2860,31 @@ class VerificationConsumer:
             else "neutralized"
         )
         return {
-            **dict(persisted),
+            **recovered_pack,
             "merge_recovery": {
                 "body_state": body_state,
                 "merge_commit_sha": pr["merge_commit_sha"],
                 "merged_at": pr["merged_at"],
                 "phase": phase["phase"],
             },
-        }
+        }, dict(authority_repair_budget)
 
     def _recover_merged_run(
         self, run: VerificationRun, pr: Mapping[str, object]
     ) -> VerificationRun:
         checks = self.truth.checks(run.repository, run.head_sha)
-        pack = self._merged_recovery_pack(run, pr, checks)
+        pack, authority_repair_budget = self._merged_recovery_pack(
+            run, pr, checks
+        )
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
-        return self._launch(claimed, pr, pack_override=pack)
+        return self._launch(
+            claimed,
+            pr,
+            pack_override=pack,
+            merge_authority_repair_budget=authority_repair_budget,
+        )
 
     def _terminal_event_application_failure(
         self,
@@ -3251,6 +3301,7 @@ class VerificationConsumer:
         pr: Mapping[str, object],
         *,
         pack_override: Mapping[str, object] | None = None,
+        merge_authority_repair_budget: Mapping[str, object] | None = None,
     ) -> VerificationRun:
         lease_id = claimed.lease_id
         if not lease_id:
@@ -3512,15 +3563,18 @@ class VerificationConsumer:
             live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
             live_checks = self.truth.checks(claimed.repository, receipt_head)
             if verdict == "delivered":
+                expected_merge_repair_budget = (
+                    merge_authority_repair_budget
+                    if merge_authority_repair_budget is not None
+                    else self.ledger.repair_budget_projection(claimed.run_id)
+                )
                 rejection = delivered_live_truth_rejection(
                     claimed,
                     live_pr,
                     live_checks,
                     {},
                     expected_head_sha=receipt_head,
-                    expected_repair_budget=self.ledger.repair_budget_projection(
-                        claimed.run_id
-                    ),
+                    expected_repair_budget=expected_merge_repair_budget,
                 )
                 if rejection == "merge_authority_missing":
                     rejection = delivered_live_truth_rejection(
@@ -3529,9 +3583,7 @@ class VerificationConsumer:
                         live_checks,
                         self._read_delivery_evidence(claimed, live_pr),
                         expected_head_sha=receipt_head,
-                        expected_repair_budget=self.ledger.repair_budget_projection(
-                            claimed.run_id
-                        ),
+                        expected_repair_budget=expected_merge_repair_budget,
                     )
             else:
                 rejection = live_truth_rejection(
