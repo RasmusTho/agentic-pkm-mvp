@@ -1761,7 +1761,6 @@ class PostgresBuilderOpsStore:
 
     def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
         """Bind a locally committed claim/receipt before recovery marks it unknown."""
-        candidate_lsn = self._flushed_lsn()
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, claim_receipt_sequence, "
@@ -1787,6 +1786,7 @@ class PostgresBuilderOpsStore:
             ).fetchone()
             if receipt is None:
                 raise DurabilityPending("outbox claim receipt identity is missing")
+            candidate_lsn = self._flushed_lsn()
             claim_lsn = str(row["claim_lsn"] or receipt["recovery_lsn"] or candidate_lsn)
             updated = conn.execute(
                 "UPDATE builderops_outbox SET claim_lsn = %s "

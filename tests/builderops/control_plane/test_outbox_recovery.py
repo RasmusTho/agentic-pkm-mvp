@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Event
 
 import pytest
 
@@ -229,6 +231,80 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
         worker_id="replacement-executor",
     )
     assert retried.fencing_token > orphaned_claim.fencing_token
+
+
+def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
+    control_plane_store, envelope, monkeypatch
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="claim-binding-race",
+        key="claim-binding-race",
+        effect_type="github.merge",
+        payload={"pr": 3852},
+    )
+    with pytest.raises(RuntimeError, match="after_claim_commit"):
+        control_plane_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="crashed-executor",
+            fault_at="after_claim_commit",
+        )
+
+    recovering = type(control_plane_store)(control_plane_store.dsn)
+    contender = type(control_plane_store)(control_plane_store.dsn)
+    sampling_started = Event()
+    release_sampling = Event()
+    contender_started = Event()
+    original_flushed_lsn = recovering._flushed_lsn
+
+    def delayed_flushed_lsn() -> str:
+        sampling_started.set()
+        assert release_sampling.wait(timeout=10)
+        return original_flushed_lsn()
+
+    monkeypatch.setattr(recovering, "_flushed_lsn", delayed_flushed_lsn)
+
+    def recover_first():
+        return recovering.outbox_claim(envelope.repository, result.operation_key)
+
+    def recover_concurrently():
+        contender_started.set()
+        return contender.outbox_claim(envelope.repository, result.operation_key)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(recover_first)
+        assert sampling_started.wait(timeout=10)
+        contender_future = pool.submit(recover_concurrently)
+        assert contender_started.wait(timeout=10)
+        assert contender_future.done() is False
+        release_sampling.set()
+        first_claim = first_future.result(timeout=10)
+        same_claim = contender_future.result(timeout=10)
+
+    assert same_claim == first_claim
+    assert first_claim.claim_lsn != "0/0"
+    reconciliation = recovering.reconcile_outbox(
+        first_claim,
+        observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+    replacement = contender.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="replacement-executor",
+    )
+    assert replacement.fencing_token > first_claim.fencing_token
+    with recovering._connect() as conn:
+        historical = conn.execute(
+            "SELECT claim_lsn::text AS claim_lsn FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s AND claim_fencing_token = %s",
+            (envelope.repository, result.operation_key, first_claim.fencing_token),
+        ).fetchone()
+    assert historical is not None
+    assert historical["claim_lsn"] == first_claim.claim_lsn
+    assert reconciliation.claim_receipt_sequence == first_claim.receipt_sequence
 
 
 def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelope) -> None:
