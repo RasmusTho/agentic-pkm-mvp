@@ -59,7 +59,7 @@ true
 
 ## Why This Matters
 
-The Mac mini is operated headlessly over SSH; live acceptance, automation, and every runbook step
+The runtime host is operated headlessly over SSH; live acceptance, automation, and every runbook step
 stand on these commands. Unstable JSON or a secret in output breaks scripts or leaks credentials.
 
 ## Acceptance Criteria

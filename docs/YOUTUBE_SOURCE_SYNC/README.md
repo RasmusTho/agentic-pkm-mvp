@@ -208,8 +208,8 @@ subsystem selection. `ruff check app tests` + `mypy app` per the validation base
 
 The parent feature issue is the live validation hub: each delivered child posts a receipt there.
 Capability acceptance additionally requires the operator live-acceptance run in
-`OPERATOR_RUNBOOK.md :: Live acceptance` (Mac mini test channel; OAuth consent, real playlist,
-revoke drill). Items not live-verifiable while the Mac mini is offline are tracked as unchecked
+`OPERATOR_RUNBOOK.md :: Live acceptance` (operator runtime host, test channel; OAuth consent, real playlist,
+revoke drill). Items not live-verifiable while the runtime host is offline are tracked as unchecked
 checklist entries on the parent issue — never claimed shipped in owner docs until checked.
 
 ## Relationship to GitHub issues

@@ -71,9 +71,9 @@ Per-child test suites named in each task file; full `not pg` suite on hot-path s
 
 ## Validation / Acceptance Path
 
-Child receipts accumulate here → live acceptance on the Mac mini test channel
+Child receipts accumulate here → live acceptance on the operator runtime host (test channel)
 (`OPERATOR_RUNBOOK.md :: Live acceptance`) → owner-doc promotion (ARCHITECTURE/STATUS) only after
-that run passes. Items not live-verifiable while the Mac mini is offline remain unchecked here and
+that run passes. Items not live-verifiable while the runtime host is offline remain unchecked here and
 block only the *shipped-operator-verified* claim, not child merges.
 
 ## Out of Scope

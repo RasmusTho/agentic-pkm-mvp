@@ -70,7 +70,7 @@ Reason codes and their remedies:
 | `paused_global` / `paused_source` | operator pause | resume when ready |
 | `runner_offline` | no scheduler tick within the staleness window | confirm the watcher service is running (`docker compose ps` for the channel); UI shows offline, never "up to date" |
 
-## Live acceptance (pending — requires the Mac mini; run on the test channel first)
+## Live acceptance (pending — requires the operator runtime host; run on the test channel first)
 
 Execute after all child slices are merged and promoted to the test channel. Every item below is
 **unchecked until an operator runs it live**; fixture-based CI cannot discharge these.
