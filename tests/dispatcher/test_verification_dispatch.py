@@ -488,6 +488,130 @@ def test_migrated_repaired_head_v1_recovers_only_on_preserved_current_head(
     audit = json.loads(rows[0]["legacy_recovery_audit_json"])
     assert audit["quarantined_row"]["current_head_sha"] == repaired_head
 
+    claimed = state.claim(run_id, "repair-host")
+    running = state.start(
+        run_id,
+        "repair-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000051",
+        {"head_sha": repaired_head},
+    )
+    rebound = state.rebind_head(
+        run_id,
+        unrelated_head,
+        expected_head_sha=repaired_head,
+        observed_repository=recovered.repository,
+        observed_pr_number=recovered.pr_number,
+        observed_head_sha=unrelated_head,
+        holder="repair-host",
+        lease_id=running.lease_id or "",
+    )
+
+    assert rebound.requested_head_sha == requested_head
+    assert rebound.request["current_head_sha"] == repaired_head
+    assert rebound.current_head_sha == unrelated_head
+    assert state.get(run_id) == rebound
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+
+    deferred = state.backoff(
+        run_id,
+        {"outcome": "deferred", "head_sha": unrelated_head},
+        "2030-01-01T00:00:00+00:00",
+        holder="repair-host",
+        lease_id=rebound.lease_id or "",
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", run_id),
+        )
+        conn.commit()
+    replayed = state.ingest(
+        _live_observed_request(state, request(unrelated_head))
+    )
+    reclaimed = state.claim(run_id, "recovery-host")
+
+    assert deferred.run_id == replayed.run_id == reclaimed.run_id == run_id
+    assert replayed.current_head_sha == reclaimed.current_head_sha == unrelated_head
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+    with state.store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_runs"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["malformed_archived_current_head", "archived_head_not_recovered_identity"],
+)
+def test_recovered_legacy_audit_rejects_invalid_archived_current_head(
+    tmp_path,
+    corruption: str,
+) -> None:
+    requested_head = request()["current_head_sha"]
+    assert isinstance(requested_head, str)
+    repaired_head = "b" * 40
+    initial = ledger(tmp_path / corruption)
+    run_id, _legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[]
+    )
+    with sqlite3.connect(initial.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, "
+            "terminal_receipt_json=? WHERE run_id=?",
+            (
+                repaired_head,
+                json.dumps({"outcome": "deferred", "head_sha": repaired_head}),
+                run_id,
+            ),
+        )
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    state = ledger(tmp_path / corruption)
+    recovered = state.ingest(
+        _live_observed_request(state, request(repaired_head))
+    )
+    assert recovered.requested_head_sha == requested_head
+    with state.store._connect() as conn:
+        audit = json.loads(
+            conn.execute(
+                "SELECT legacy_recovery_audit_json FROM verification_runs "
+                "WHERE run_id=?",
+                (run_id,),
+            ).fetchone()[0]
+        )
+        archived = audit["quarantined_row"]
+        corrupt_head = (
+            "not-a-sha"
+            if corruption == "malformed_archived_current_head"
+            else "c" * 40
+        )
+        archived["current_head_sha"] = corrupt_head
+        archived["terminal_receipt_json"] = json.dumps(
+            {"outcome": "deferred", "head_sha": corrupt_head}
+        )
+        conn.execute(
+            "UPDATE verification_runs SET legacy_recovery_audit_json=? "
+            "WHERE run_id=?",
+            (json.dumps(audit, sort_keys=True), run_id),
+        )
+        conn.commit()
+
+    before = _verification_state_snapshot(state)
+    with pytest.raises(ValueError, match="legacy verification"):
+        state.get(run_id)
+    with pytest.raises(ValueError, match="legacy verification"):
+        state.claim(run_id, "must-not-claim")
+    assert _verification_state_snapshot(state) == before
+
 
 def test_same_head_v2_recovery_preserves_compatible_legacy_issue_authority(
     tmp_path,

@@ -935,23 +935,37 @@ def test_merged_incomplete_run_recovers_idempotently_after_coordinator_crash(
     assert recovered_pack["merge_recovery"]["body_state"] == crash_body_state
 
 
+@pytest.mark.parametrize("entrypoint", ["consume", "recover"])
 @pytest.mark.parametrize("recovery_shape", ["merged", "open-neutralized"])
 def test_retained_recovery_artifact_does_not_extend_pending_backoff(
     tmp_path,
+    entrypoint: str,
     recovery_shape: str,
 ) -> None:
     plan = _merge_plan(HEAD)
     if recovery_shape == "merged":
         retained_pr = merged_pr(body=plan["neutralized_body"])
-        comments = _merge_comments(retained_pr, phase="prepared")
     else:
-        _plan, retained_pr, comments = _open_neutralized_recovery_evidence()
+        _plan, retained_pr, _comments = _open_neutralized_recovery_evidence()
 
     class RecoveryTruth(Truth):
-        def pull_request_comments(self, repository, pr_number):
-            return comments
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.remote_calls: list[str] = []
 
-    state = ledger(tmp_path / recovery_shape)
+        def pull_request(self, repository, pr_number):
+            self.remote_calls.append("pull_request")
+            if entrypoint == "consume" and len(self.remote_calls) == 1:
+                # Authenticated artifact intake performs one live observation.
+                # Any second pull would be retained-artifact recovery I/O.
+                return self.pr
+            raise RuntimeError("retained recovery pull outage")
+
+        def checks(self, repository, head_sha):
+            self.remote_calls.append("checks")
+            raise RuntimeError("retained recovery checks outage")
+
+    state = ledger(tmp_path / f"{recovery_shape}-{entrypoint}")
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "crashed-host")
     running = state.start(
@@ -996,16 +1010,21 @@ def test_retained_recovery_artifact_does_not_extend_pending_backoff(
 
     before = durable_snapshot()
     launcher = Launcher()
+    truth = RecoveryTruth(retained_pr, GREEN)
     consumer = VerificationConsumer(
         state,
-        RecoveryTruth(retained_pr, GREEN),
+        truth,
         Auth(),
         launcher,
         "recovery-host",
     )
 
-    first = consumer.consume(_authenticated_verification_request(request()))
-    second = consumer.consume(_authenticated_verification_request(request()))
+    if entrypoint == "consume":
+        first = consumer.consume(_authenticated_verification_request(request()))
+        second = consumer.consume(request())
+    else:
+        first = consumer.recover(run.run_id)
+        second = consumer.recover(run.run_id)
 
     assert first == second == deferred
     assert first.retry_after == retry_after
@@ -1016,6 +1035,7 @@ def test_retained_recovery_artifact_does_not_extend_pending_backoff(
     }
     assert durable_snapshot() == before
     assert launcher.calls == []
+    assert truth.remote_calls == (["pull_request"] if entrypoint == "consume" else [])
 
 
 def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(

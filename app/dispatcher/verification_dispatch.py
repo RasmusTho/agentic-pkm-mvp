@@ -641,20 +641,21 @@ def _validated_legacy_recovery_audit(
     ):
         raise ValueError("legacy verification recovery audit is malformed")
     legacy_request = _validated_legacy_row_request(archived)
+    recovered_request = _validated_stored_request(
+        row["request_json"] if isinstance(row["request_json"], str) else None
+    )
     if (
         archived["run_id"] != row["run_id"]
         or archived["repository"] != row["repository"]
         or archived["pr_number"] != row["pr_number"]
         or archived["head_sha"] != row["head_sha"]
-        or archived["current_head_sha"] != row["current_head_sha"]
+        or archived["current_head_sha"] != recovered_request["current_head_sha"]
         or archived["stage"] != row["stage"]
         or archived["repair_budget_policy"] != row["repair_budget_policy"]
         or archived["created_at"] != row["created_at"]
         or archived["idempotency_key"] == row["idempotency_key"]
         or legacy_request.get("linked_issue")
-        != _validated_stored_request(
-            row["request_json"] if isinstance(row["request_json"], str) else None
-        ).get("linked_issue")
+        != recovered_request.get("linked_issue")
     ):
         raise ValueError("legacy verification recovery audit is malformed")
     if contract == _LEGACY_RECOVERY_AUDIT_CONTRACT:

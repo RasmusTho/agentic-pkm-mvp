@@ -3129,6 +3129,20 @@ class VerificationConsumer:
         )
 
     @staticmethod
+    def _backoff_is_pending(run: VerificationRun) -> bool:
+        if run.status != "backoff" or not run.retry_after:
+            return False
+        try:
+            retry_after = datetime.fromisoformat(
+                run.retry_after.replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError("verification run has malformed retry_after") from exc
+        if retry_after.tzinfo is None:
+            raise ValueError("verification run has malformed retry_after")
+        return retry_after.astimezone(timezone.utc) > datetime.now(timezone.utc)
+
+    @staticmethod
     def _rate_limited(receipt: Mapping[str, object]) -> bool:
         return receipt.get("failure_class") == "rate_limit" or (
             receipt.get("verdict") == "retry"
@@ -3804,6 +3818,11 @@ class VerificationConsumer:
             # An active delivery is already owned. Restart recovery is an
             # explicit operation so replayed artifacts cannot duplicate it.
             return run
+        if self._backoff_is_pending(run):
+            # The durable retry fence outranks retained merge-recovery
+            # artifacts. Do not perform recovery reads that can fail and
+            # rewrite the exact retry/receipt before the run is claimable.
+            return run
         pending_delivered = self._pending_delivered_receipt(run)
         if pending_delivered is not None:
             return self._replay_pending_delivered(run, pending_delivered)
@@ -4404,6 +4423,8 @@ class VerificationConsumer:
         ):
             raise ValueError("verification run is not resumable")
         if self._lease_is_live(run):
+            return run
+        if self._backoff_is_pending(run):
             return run
         pr = self.truth.pull_request(run.repository, run.pr_number)
         observed_head = _nested(pr, "head", "sha")
