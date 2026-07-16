@@ -123,7 +123,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/settings/",
             "tests/config/",
         ),
-        ("tests/settings", "tests/config"),
+        (
+            "tests/settings",
+            "tests/config",
+            "tests/cli/test_settings_explain_cli.py",
+            "tests/services/test_companion_eligibility.py",
+        ),
     ),
     (
         "vault",
