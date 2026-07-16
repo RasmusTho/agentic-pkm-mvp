@@ -59,5 +59,18 @@ def pre_trust_request(head: str = HEAD) -> dict[str, object]:
     return result
 
 
+def b4e2310_pre_trust_request(head: str = HEAD) -> dict[str, object]:
+    """Return the exact b4e2310 producer shape.
+
+    This shape bound verification artifacts to GitHub provenance
+    (``artifact_provenance`` present) but still predates ``supporting_issues``.
+    """
+    result = request(head)
+    result.pop("supporting_issues")
+    result["base_ref"] = "main"
+    result["head_ref"] = "codex/issue-3603"
+    return result
+
+
 def ledger(tmp_path: Path) -> VerificationDispatchLedger:
     return VerificationDispatchLedger(SqliteStore(tmp_path / "dispatcher.sqlite3"))

@@ -12,6 +12,7 @@ import pytest
 import app.dispatcher.verification_dispatch as verification_dispatch
 from app.dispatcher.verification_dispatch import VerificationRun
 from tests.dispatcher.verification_helpers import (
+    b4e2310_pre_trust_request,
     downgrade_verification_schema_to_v3,
     ledger,
     pre_trust_request,
@@ -24,10 +25,11 @@ CLAIM_PRE_LOCK = "2030-01-01T00:00:00.000000+00:00"
 CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
 
 
-def _migrated_legacy_ledger(tmp_path):
+def _migrated_legacy_ledger(tmp_path, legacy_request: dict | None = None):
     state = ledger(tmp_path)
     original = state.ingest(request())
-    legacy_request = pre_trust_request()
+    if legacy_request is None:
+        legacy_request = pre_trust_request()
     with sqlite3.connect(state.store.db_path) as conn:
         conn.execute(
             "UPDATE verification_runs SET request_json=? WHERE run_id=?",
@@ -125,79 +127,81 @@ def test_canonical_request_projection_preserves_idempotent_replay(tmp_path) -> N
         assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        lambda state, run: state.claim(run.run_id, "host"),
-        lambda state, run: state.heartbeat(run.run_id, "host", "lease"),
-        lambda state, run: state.start(
-            run.run_id, "host", "lease", "session", {"head": run.head_sha}
-        ),
-        lambda state, run: state.terminal(
-            run.run_id,
-            "failed",
-            {"outcome": "blocked"},
-            holder="host",
-            lease_id="lease",
-        ),
-        lambda state, run: state.rebind_head(
-            run.run_id,
-            "b" * 40,
-            expected_head_sha=run.head_sha,
-            observed_repository=run.repository,
-            observed_pr_number=run.pr_number,
-            observed_head_sha="b" * 40,
-            holder="host",
-            lease_id="lease",
-        ),
-        lambda state, run: state.backoff(
-            run.run_id,
-            {"outcome": "retry"},
-            "2030-01-01T00:00:00+00:00",
-            holder="host",
-            lease_id="lease",
-        ),
-        lambda state, run: state.defer_unclaimed(
-            run.run_id,
-            {"outcome": "retry"},
-            "2030-01-01T00:00:00+00:00",
-        ),
-        lambda state, run: state.supersede_unclaimed(
-            run.run_id, {"outcome": "superseded"}, reason="stale_head"
-        ),
-        lambda state, run: state.record_attempt(
-            run.run_id,
-            "review",
-            "session",
-            "terra",
-            "high",
-            {"head": run.head_sha},
-            "clean",
-            holder="host",
-            lease_id="lease",
-        ),
-        lambda state, run: state.record_attempt_batch(
-            run.run_id,
-            "batch",
-            1,
-            run.head_sha,
-            lambda _attempts, _attempt_id: [],
-            holder="host",
-            lease_id="lease",
-        ),
-        lambda state, run: state.exception(
-            run.run_id,
-            "technical",
-            {"failure_class": "technical"},
-            holder="host",
-            lease_id="lease",
-        ),
-    ],
-)
-def test_inert_legacy_run_rejects_every_mutation_entrypoint(
-    tmp_path, mutation
+_INERT_MUTATION_ENTRYPOINTS = [
+    lambda state, run: state.claim(run.run_id, "host"),
+    lambda state, run: state.heartbeat(run.run_id, "host", "lease"),
+    lambda state, run: state.start(
+        run.run_id, "host", "lease", "session", {"head": run.head_sha}
+    ),
+    lambda state, run: state.terminal(
+        run.run_id,
+        "failed",
+        {"outcome": "blocked"},
+        holder="host",
+        lease_id="lease",
+    ),
+    lambda state, run: state.rebind_head(
+        run.run_id,
+        "b" * 40,
+        expected_head_sha=run.head_sha,
+        observed_repository=run.repository,
+        observed_pr_number=run.pr_number,
+        observed_head_sha="b" * 40,
+        holder="host",
+        lease_id="lease",
+    ),
+    lambda state, run: state.backoff(
+        run.run_id,
+        {"outcome": "retry"},
+        "2030-01-01T00:00:00+00:00",
+        holder="host",
+        lease_id="lease",
+    ),
+    lambda state, run: state.defer_unclaimed(
+        run.run_id,
+        {"outcome": "retry"},
+        "2030-01-01T00:00:00+00:00",
+    ),
+    lambda state, run: state.supersede_unclaimed(
+        run.run_id, {"outcome": "superseded"}, reason="stale_head"
+    ),
+    lambda state, run: state.record_attempt(
+        run.run_id,
+        "review",
+        "session",
+        "terra",
+        "high",
+        {"head": run.head_sha},
+        "clean",
+        holder="host",
+        lease_id="lease",
+    ),
+    lambda state, run: state.record_attempt_batch(
+        run.run_id,
+        "batch",
+        1,
+        run.head_sha,
+        lambda _attempts, _attempt_id: [],
+        holder="host",
+        lease_id="lease",
+    ),
+    lambda state, run: state.exception(
+        run.run_id,
+        "technical",
+        {"failure_class": "technical"},
+        holder="host",
+        lease_id="lease",
+    ),
+]
+
+
+def _assert_inert_legacy_run_rejects_mutation(
+    tmp_path, legacy_request: dict | None, mutation
 ) -> None:
-    state, legacy = _migrated_legacy_ledger(tmp_path)
+    """Shared mutation-fencing contract for every recognized historical shape."""
+    state, legacy = _migrated_legacy_ledger(tmp_path, legacy_request)
+    if legacy_request is not None:
+        assert legacy.request == legacy_request
     with state.store._connect() as conn:
         before = dict(
             conn.execute(
@@ -215,6 +219,22 @@ def test_inert_legacy_run_rejects_every_mutation_entrypoint(
             ).fetchone()
         )
     assert after == before
+
+
+@pytest.mark.parametrize("mutation", _INERT_MUTATION_ENTRYPOINTS)
+def test_inert_legacy_run_rejects_every_mutation_entrypoint(
+    tmp_path, mutation
+) -> None:
+    _assert_inert_legacy_run_rejects_mutation(tmp_path, None, mutation)
+
+
+@pytest.mark.parametrize("mutation", _INERT_MUTATION_ENTRYPOINTS)
+def test_inert_artifact_provenance_legacy_run_rejects_mutations(
+    tmp_path, mutation
+) -> None:
+    legacy_request = b4e2310_pre_trust_request()
+    assert "artifact_provenance" in legacy_request
+    _assert_inert_legacy_run_rejects_mutation(tmp_path, legacy_request, mutation)
 
 
 def test_authenticated_artifact_starts_fresh_chain_beside_inert_legacy_audit(
