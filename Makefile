@@ -55,7 +55,11 @@ fmt:
 
 lint:
 	$(PYTHON) -m ruff check .
-	$(PYTHON) -m mypy app || true
+	# mypy is enforced (issue #3894): it passed cleanly against app/ under the
+	# per-module strictness configured in mypy.ini, so a failure here is a real
+	# regression, not decoration. Tighten coverage by removing ignore_errors
+	# sections from mypy.ini module by module.
+	$(PYTHON) -m mypy app
 
 test:
 	@PYTEST_PLUGIN_ARGS=""; \

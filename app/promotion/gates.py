@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Mapping
 from uuid import UUID
@@ -8,6 +9,8 @@ from app.agents.base.audit import audit_log
 from app.events.types import PROMOTION_ORPHAN_OVERRIDE, RELATION_MISSING
 from app.stores import get_relation_index
 from app.stores.relation_candidates import extract_semantic_relations, register_relation_candidates
+
+logger = logging.getLogger(__name__)
 
 
 class OrphanPromotionError(RuntimeError):
@@ -41,6 +44,12 @@ def ensure_object_has_relations(
     try:
         oid = UUID(str(object_id))
     except Exception:
+        # Intentional swallow: a non-UUID object id means there is nothing to
+        # gate against the RelationIndex, but skipping the gate silently would
+        # hide malformed ids — log it (#3894).
+        logger.warning(
+            "Orphan gate skipped: object_id %r is not a valid UUID", object_id, exc_info=True
+        )
         return
     if rel_index.has_any(oid):
         return
@@ -74,6 +83,13 @@ def prepare_relations_for_promotion(
     try:
         oid = UUID(str(object_id))
     except Exception:
+        # Intentional swallow: relation extraction is keyed by UUID, so a
+        # non-UUID id yields no relations — but never silently (#3894).
+        logger.warning(
+            "Relation preparation skipped: object_id %r is not a valid UUID",
+            object_id,
+            exc_info=True,
+        )
         return 0
     candidates = extract_semantic_relations(metadata or {}, body or "")
     added, _ = register_relation_candidates(oid, candidates, relation_index=rel_index)

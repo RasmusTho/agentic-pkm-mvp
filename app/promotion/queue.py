@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import time
@@ -27,6 +28,8 @@ from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.models import PromotionSettings, SettingsBundle
 from app.settings.runtime import subscribe_settings
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path().resolve()
 VAULT: Path | None = None
@@ -104,6 +107,12 @@ def _apply_global_settings(bundle: SettingsBundle) -> None:
     try:
         _NOTE_MOVES_ENABLED = bool(bundle.global_.note_moves_enable)
     except Exception:
+        # Intentional swallow: a broken settings bundle must not take down the
+        # settings subscriber; fall back to the permissive default — but loudly.
+        logger.warning(
+            "Failed to read note_moves_enable from settings bundle; defaulting to enabled",
+            exc_info=True,
+        )
         _NOTE_MOVES_ENABLED = True
 
 
@@ -158,6 +167,12 @@ def _resolve_target_dir(target: Path, note_path: Path, vault_root: Path | None =
         try:
             base = _resolve_promotion_vault_root()
         except Exception:
+            # Intentional swallow: fall back to the note's own directory below,
+            # but record why the vault root could not be resolved.
+            logger.warning(
+                "Failed to resolve promotion vault root; falling back to note directory",
+                exc_info=True,
+            )
             base = None
     if base is None:
         base = note_path.parent
@@ -180,6 +195,9 @@ def _select_target(meta: Dict[str, Any], move_policy: Dict[str, Any], legacy_con
     try:
         target_path = _pick_target(meta, policy)
     except Exception as exc:
+        # Intentional swallow: a bad move policy downgrades to a skip-move,
+        # never a failed promotion — but the cause must be visible in logs.
+        logger.warning("Move-target selection failed; skipping note move", exc_info=True)
         return None, str(exc)
     return target_path, None
 
@@ -342,6 +360,11 @@ def run_once() -> int:
                         },
                     )
                 except Exception as exc:
+                    # Intentional swallow: a failed move must not abort the rest
+                    # of the queue; the item is receipted as promote.error.
+                    logger.exception(
+                        "Promotion move failed for %s -> %s (uuid=%s)", p, dst_dir, uuid
+                    )
                     _append_jsonl(
                         log_path,
                         {
@@ -359,6 +382,10 @@ def run_once() -> int:
 
                 processed += 1
         except Exception:
+            # Intentional swallow: one poisoned queue entry must not abort the
+            # remaining entries; it is receipted as promote.error and logged
+            # with full traceback so failures are never silent (#3894).
+            logger.exception("Promotion queue entry failed; payload=%r", ev)
             _append_jsonl(
                 log_path,
                 {
