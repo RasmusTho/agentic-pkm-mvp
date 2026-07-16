@@ -61,3 +61,19 @@ def test_initialize_refuses_mismatched_applied_migration_lineage(
 def test_initialize_is_idempotent_for_exact_current_lineage(control_plane_store, envelope) -> None:
     control_plane_store.initialize()
     assert control_plane_store.readiness() == {"authority_epoch": 1, "schema_version": 1}
+
+
+def test_initialize_refuses_to_recreate_a_missing_applied_migration_receipt(
+    control_plane_store, envelope
+) -> None:
+    store = control_plane_store
+    with store._connect() as conn:
+        conn.execute("DELETE FROM builderops_schema_migrations WHERE version = 1")
+
+    with pytest.raises(RuntimeError, match="ledger is empty or non-contiguous"):
+        store.initialize()
+
+    with store._connect() as conn:
+        row = conn.execute("SELECT count(*) AS count FROM builderops_schema_migrations").fetchone()
+    assert row is not None
+    assert row["count"] == 0

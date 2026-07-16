@@ -66,10 +66,24 @@ class PostgresBuilderOpsStore:
     def initialize(self) -> None:
         with self._connect() as conn:
             migration_rows: dict[int, Mapping[str, Any]] = {}
-            migration_relation = conn.execute(
-                "SELECT to_regclass('builderops_schema_migrations') AS relation"
-            ).fetchone()
-            if migration_relation and migration_relation["relation"] is not None:
+            existing_tables = {
+                str(row["table_name"])
+                for row in conn.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = current_schema() AND table_name LIKE 'builderops_%'"
+                ).fetchall()
+            }
+            has_migration_ledger = "builderops_schema_migrations" in existing_tables
+            has_authority_metadata = "builderops_authority_metadata" in existing_tables
+            if existing_tables and not (has_migration_ledger and has_authority_metadata):
+                raise RuntimeError(
+                    "existing BuilderOps schema is missing migration or authority metadata"
+                )
+            if has_migration_ledger != has_authority_metadata:
+                raise RuntimeError(
+                    "BuilderOps migration ledger and authority metadata must exist together"
+                )
+            if has_migration_ledger:
                 columns = {
                     str(row["column_name"])
                     for row in conn.execute(
@@ -87,6 +101,11 @@ class PostgresBuilderOpsStore:
                         "ORDER BY version"
                     ).fetchall()
                 }
+                applied_versions = sorted(migration_rows)
+                if not applied_versions or applied_versions != list(
+                    range(1, applied_versions[-1] + 1)
+                ):
+                    raise RuntimeError("BuilderOps migration ledger is empty or non-contiguous")
                 for version, row in migration_rows.items():
                     if version < 1 or version > SCHEMA_VERSION:
                         raise RuntimeError(
@@ -98,20 +117,21 @@ class PostgresBuilderOpsStore:
                         raise RuntimeError(
                             f"BuilderOps migration {version} does not match this release lineage"
                         )
-
-            metadata_relation = conn.execute(
-                "SELECT to_regclass('builderops_authority_metadata') AS relation"
-            ).fetchone()
-            if metadata_relation and metadata_relation["relation"] is not None:
+            if has_authority_metadata:
                 metadata = conn.execute(
                     "SELECT authority_epoch, schema_version "
                     "FROM builderops_authority_metadata WHERE singleton FOR UPDATE"
                 ).fetchone()
-                if metadata is not None:
-                    if int(metadata["schema_version"]) > SCHEMA_VERSION:
-                        raise RuntimeError("BuilderOps database schema is newer than this release")
-                    if int(metadata["authority_epoch"]) > AUTHORITY_EPOCH:
-                        raise RuntimeError("BuilderOps authority epoch is newer than this release")
+                if metadata is None:
+                    raise RuntimeError("BuilderOps authority metadata row is missing")
+                if int(metadata["schema_version"]) > SCHEMA_VERSION:
+                    raise RuntimeError("BuilderOps database schema is newer than this release")
+                if int(metadata["authority_epoch"]) > AUTHORITY_EPOCH:
+                    raise RuntimeError("BuilderOps authority epoch is newer than this release")
+                if int(metadata["schema_version"]) != max(migration_rows):
+                    raise RuntimeError(
+                        "BuilderOps schema metadata does not match the migration ledger"
+                    )
 
             for version, path in enumerate(MIGRATIONS, start=1):
                 if version not in migration_rows:
