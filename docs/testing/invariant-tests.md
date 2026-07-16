@@ -275,8 +275,9 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Protected principle:** matrix #10; doctrine §execution cannot self-authorize.
 - **Affected boundaries:** CAO, GOV, EXE.
 - **Required fixture / data:** [`schemas/context-envelope.schema.json`](../../schemas/context-envelope.schema.json) (`execution_policy.requires_authorization`), [`schemas/authority-transition.schema.json`](../../schemas/authority-transition.schema.json); a future EXE/GOV runtime.
-- **Expected failure mode:** an `ExecutionEffect` proceeds (or grants authority) without a prior GOV
-  grant/receipt.
+- **Expected failure mode:** an `ExecutionEffect` proceeds (or grants authority) without a prior bound
+  GOV grant (`DecisionToken`); the post-effect `AuthorityReceipt` is accountability only and never an
+  acceptable authorization artifact. See `orchestrator_effect_requires_prevalidated_decision_token`.
 - **Current enforcement:** `schema_enforced` in part (`requires_authorization` pinned `true`) + `xfail_runtime_skeleton`.
 - **Eventual test path:** `tests/invariants/test_authority_transition.py::test_execution_cannot_authorize_itself` (xfail).
 - **Related docs / contracts / ADRs:** [authority-transition-flow](../architecture/authority-transition-flow.md) §4, [EXE charter](../boundaries/EXE.md), [EXECUTION_REQUEST](../contracts/EXECUTION_REQUEST.md); ADR-0019, ADR-0031.
