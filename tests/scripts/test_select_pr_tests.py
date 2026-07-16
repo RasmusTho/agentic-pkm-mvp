@@ -297,6 +297,21 @@ def test_outbox_worker_change_selects_worker_regressions() -> None:
     assert "tests/workers/test_outbox_worker.py" in selection.targets
 
 
+def test_worker_metrics_module_change_has_a_ci_owner() -> None:
+    """The worker /metrics endpoint module is outbox_worker surface: its
+    coverage lives in tests/workers/test_worker_metrics.py, so a change must
+    route to the worker regressions rather than fail-close as unowned."""
+    selection = select_tests(
+        ["app/workers/metrics.py", "tests/workers/test_worker_metrics.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("outbox_worker",)
+    assert selection.unowned_paths == ()
+    assert "tests/workers" in selection.targets
+    assert "tests/workers/test_worker_metrics.py" in selection.targets
+
+
 def test_heimdal_capture_adapter_change_has_a_ci_owner() -> None:
     selection = select_tests(["app/heimdal/capture_adapter.py", "tests/heimdal/test_capture_adapter.py"])
 

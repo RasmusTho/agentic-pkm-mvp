@@ -367,6 +367,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "outbox_worker",
         (
             "app/workers/outbox_worker.py",
+            # Opt-in /metrics endpoint for the outbox worker; its coverage
+            # lives in tests/workers/test_worker_metrics.py.
+            "app/workers/metrics.py",
             "tests/workers/",
             "tests/worker/",
             "tests/services/test_outbox_idempotency.py",
