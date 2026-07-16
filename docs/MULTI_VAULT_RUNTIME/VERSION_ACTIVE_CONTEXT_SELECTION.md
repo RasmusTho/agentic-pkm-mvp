@@ -87,6 +87,17 @@ generation unknown. A process-global mutable manager cannot safely represent con
   ambiguous auth state fails closed without overwriting either lineage. The floor may be lowered
   only by a later explicitly verified reversible migration, never by scalar rollback.
 - Add production Companion endpoints to create, replace, inspect, and clear a TTL-bound selection.
+  Those endpoints accept only selection intent (binding IDs and an optional validated dimension ID),
+  never a client-authored workspace, scope, sphere-membership, situated-identity, principal, action,
+  or permission payload. The server derives `workspace_id` from the authenticated WSP workspace
+  binding, or emits the typed `no_workspace` state when none exists; it derives `scope` from the
+  server-owned WSP context policy and uses its canonical `"default"` value when no narrower scope is
+  declared. It derives `sphere_memberships` and `situated_identity` from the authenticated WSP
+  context, with the canonical legal defaults `[]` and `null`. An optional dimension selection is
+  resolved only through the durable dimension registry and contributes its stored server-validated
+  context projection; an arbitrary client string cannot become a dimension or any cognitive field.
+  Auth/GOV independently supplies principal and operation authority. The stored snapshot therefore
+  contains server-owned context even when a caller attempts to spoof richer cognitive fields.
   Creation returns the server-minted ID; later selection-record mutation/read requires that bearer
   ID plus the #2223 gate, the same server-resolved principal/instance, and the selection-management
   command's independently derived scope. The existing
@@ -237,6 +248,12 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - [ ] Production create/replace/inspect/clear commands drive the selection store, enforce #2223
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
+- [ ] Selection endpoints accept binding/dimension intent only and derive workspace/no-workspace,
+  canonical scope (including the server-owned `"default"` fallback), sphere memberships, situated
+  identity, principal, action, and permission from WSP, the validated dimension registry, auth, GOV,
+  and the endpoint contract. Client-authored cognitive or authority fields are rejected and cannot
+  enter the stored snapshot.
+  - Verify: `tests/api/test_active_context_selection_api.py::test_selection_endpoints_derive_workspace_and_cognitive_dimensions_server_side`
 - [ ] Production success and failure paths redact the raw selection bearer from access/application
       logs, validation errors, traces, metrics labels, and receipts; only a non-reversible digest may
       appear in bounded context identity.
@@ -266,7 +283,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_resolution.py::test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding tests/api/test_active_context_selection_api.py tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py tests/ops/test_mvr03_principal_mixed_version_fence.py::test_every_legacy_auth_producer_stops_before_principal_floor_write tests/ops/test_mvr03_principal_mixed_version_fence.py::test_principal_fence_inventory_covers_every_enabled_auth_producer`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_resolution.py::test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding tests/api/test_active_context_selection_api.py tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts tests/api/test_active_context_selection_api.py::test_selection_endpoints_derive_workspace_and_cognitive_dimensions_server_side tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py tests/ops/test_mvr03_principal_mixed_version_fence.py::test_every_legacy_auth_producer_stops_before_principal_floor_write tests/ops/test_mvr03_principal_mixed_version_fence.py::test_principal_fence_inventory_covers_every_enabled_auth_producer`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`

@@ -58,6 +58,19 @@ producer and consumer has a replacement and proves reversibility to the single-v
   drains/removals complete. The standing channel's compatibility/explicit mode, members, default,
   revisions, projections, and operator state remain byte-for-byte unchanged; if isolation cannot be
   established, fail before the first governed mutation.
+- Provide the governed topology-reduction path required by topology rule 6. The operator chooses one
+  explicit target binding; the reducer fences new effects, drains every source binding, and creates a
+  deterministic collision-safe reduction manifest before any source is deactivated. Every source is
+  represented under an unambiguous source namespace in the target (or an equivalently human-openable
+  attached package), preserving original `vault_binding_id`, vault-relative path, artifact identity,
+  source provenance, receipt/outbox lineage, settings scope, and content checksums. It never silently
+  merges or overwrites conflicting paths or identities.
+- Commit the reduction manifest, copied content, lineage map, and complete projection rebuild as one
+  recoverable transition. Failure before commit leaves the original topology authoritative; recovery
+  after commit rolls forward until the single target exposes all material and derived projections are
+  healthy. Only then may source registrations be deactivated. The manifest supports lossless
+  re-expansion/reattachment to the original binding boundaries, so receipts and provenance continue to
+  name their original sources even while the runtime operates with one active content vault.
 
 ## Concretely
 
@@ -85,7 +98,8 @@ can break startup or strand durable state. Both failures are latent outages rath
 - Authority impact: no change
 - Persistence impact: validates migrated registry/settings producers and rollback-read compatibility
 - Derived/rebuildable impact: validates caches/indexes rebuild per binding
-- Human knowledge impact: no data move or attribution loss
+- Human knowledge impact: deterministic reduction may copy material into a human-openable target
+  namespace but never semantically merges it; attribution and source identity remain lossless
 - Memory impact: validates single-vault retrieval/memory parity
 - Retrieval/context impact: removes unapproved scalar resolution after consumer migrations
 - Sync/deployment impact: validates dev/test/prod bootstrap and promotion assumptions
@@ -103,6 +117,9 @@ can break startup or strand durable state. Both failures are latent outages rath
 - A rollback to one configured vault preserves meaning, attribution, receipts, and data. After the
   MVR-05 minimum-runtime floor is recorded, this means a rollback image that understands binding-
   keyed database/outbox state; scalar pre-MVR rollback remains fail-closed.
+- Topology reduction is a governed, quiesced, collision-safe copy plus lineage transition. It cannot
+  deactivate a source until checksums, provenance, receipts, projections, and reversible
+  reattachment have all been verified.
 
 ## Acceptance Criteria
 
@@ -135,13 +152,25 @@ can break startup or strand durable state. Both failures are latent outages rath
 - [ ] Test and promotion channel bootstrap still provisions one deterministic vault and passes its
   fail-loud preflight.
   - Verify: `tests/runtime/test_multi_vault_channel_bootstrap.py::test_test_channel_keeps_deterministic_single_vault_preflight`
+- [ ] Two distinct content vaults can be reduced to one explicitly selected target without losing
+  content, meaning, original binding attribution, settings scope, receipt/outbox lineage, or human-
+  readable provenance; conflicts remain namespaced rather than overwritten, and the manifest can
+  reattach the material to its original source boundaries.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_two_distinct_vaults_reduce_to_one_without_losing_content_provenance_or_receipts`
+- [ ] A topology reduction failure is atomic and recoverable: pre-commit failure preserves the
+  original active topology, post-commit recovery rolls forward and rebuilds every binding-keyed
+  projection before healthy reads, and source registrations remain active until the complete
+  reduction receipt is durable.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
 - [ ] Any retained compatibility adapter is named in transition debt with owner, removal condition,
   and production guard; otherwise the old app-local import path is removed.
   - Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`
 
 ## Out of Scope
 
-- New UX, data consolidation between content vaults, multi-writer policy, or broad env renaming.
+- New UX, arbitrary/manual semantic merging between content vaults, multi-writer policy, or broad
+  env renaming. The only content movement in scope is the deterministic governed topology-reduction
+  package required to prove rule-6 reversibility.
 
 ## How to Verify (Pre-Merge)
 
@@ -150,6 +179,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py::test_real_vault_manager_context_accessor_cannot_escape_inventory`
+- `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_two_distinct_vaults_reduce_to_one_without_losing_content_provenance_or_receipts tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
