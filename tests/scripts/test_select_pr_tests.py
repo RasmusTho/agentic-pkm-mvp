@@ -35,6 +35,19 @@ def test_canvas_chat_change_selects_chat_coverage() -> None:
     assert "tests/chat/test_session_log_writer.py" in selection.targets
 
 
+def test_instance_registry_change_selects_vault_coverage() -> None:
+    selection = select_tests(
+        ["app/instance/vault_registry.py", "tests/instance/test_vault_registry.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("vault",)
+    assert selection.unowned_paths == ()
+    assert "tests/instance" in selection.targets
+    assert "tests/vault" in selection.targets
+    assert "tests/instance/test_vault_registry.py" in selection.targets
+
+
 def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci.yml"])
 
