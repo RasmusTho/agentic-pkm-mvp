@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.index.doctor import diagnose_index
 from app.middleware.trace import TraceIdMiddleware
-from app.observability import configure_metrics
+from app.observability import configure_metrics, setup_logging
 from app.observability.status_service import register_source_understanding_availability_provider
 
 try:
@@ -238,6 +238,10 @@ async def lifespan(app: FastAPI):
 
 
 def _create_app() -> FastAPI:
+    # Process-level structured logging (#3895): JSON lines on stdout with
+    # span-schema field names (trace_id, status, extra); logging.getLogger
+    # call sites stay untouched.
+    setup_logging()
     application = FastAPI(title="Agentic PKM API", lifespan=lifespan)
     application.add_middleware(TraceIdMiddleware)
     application.mount("/static", StaticFiles(directory=static_dir), name="static")

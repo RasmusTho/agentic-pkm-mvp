@@ -4,7 +4,6 @@ import errno
 import hashlib
 import logging
 import os
-import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -37,6 +36,7 @@ from app.events.topic_schema_registry import (
 )
 from app.indexer.consumer import process_event as process_indexer_event
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
+from app.observability.logging_setup import configure_json_logging
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created, purge_object_vectors
@@ -751,19 +751,20 @@ def handle_knowledge_acquisition_stage_dead_lettered(
 
 
 def _ensure_logging_configured() -> None:
-    if logger.handlers:
-        # pytest's capsys replaces sys.stderr; keep the handler stream aligned so tests
-        # can assert on startup logging even if another test configured logging first.
-        for h in logger.handlers:
-            if isinstance(h, logging.StreamHandler):
-                h.stream = sys.stderr
-        return
-    handler = logging.StreamHandler(stream=sys.stderr)
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
+    """Install the shared process-level JSON formatter (structured logging #3895).
+
+    Root-logger wiring via ``configure_json_logging`` keeps every
+    ``logging.getLogger(__name__)`` call site untouched and renders each
+    worker log line as one JSON object on stdout with the span-schema field
+    conventions (trace_id, status, extra) from
+    ``docs/OBSERVABILITY.md :: JSON log and span schema``. Re-invocation
+    rebinds the handler to the current stdout so pytest's capsys-replaced
+    streams stay aligned (same contract the previous local stderr setup had).
+    """
+    configure_json_logging()
+    # Records must reach the root JSON handler; the pre-#3895 local handler
+    # setup switched this off.
+    logger.propagate = True
 
 
 def _resolve_optional_vault_root(vault_root: Path | None = None) -> Path | None:

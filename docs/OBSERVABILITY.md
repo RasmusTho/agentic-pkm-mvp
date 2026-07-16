@@ -177,6 +177,20 @@ Example (QA response):
 }
 ```
 
+### Service-process JSON logs (API, worker, watcher)
+The API, worker, and watcher processes install a shared JSON formatter (`app/observability/logging_setup.py`) on the root logger at process setup — `app/api/app.py::_create_app` (API), `app/workers/outbox_worker.py::run` via `_ensure_logging_configured` (worker), and `app/cli/watcher.py` `watcher run`/`watcher once` (watcher). Every stdlib `logging.getLogger(__name__)` call site renders as one JSON object per line on stdout; call sites keep the stdlib logging API and there is no external aggregation stack.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `timestamp` | str | ISO-8601 UTC record time. |
+| `level` / `logger` / `message` | str | Standard stdlib record fields. |
+| `status` | "ok" \| "error" | `error` for records at ERROR and above (span-schema convention). |
+| `trace_id` | str (optional) | Present when the `app/observability/tracer.py` contextvar is bound; the API trace middleware binds the request `x-trace-id` for the request duration. |
+| `extra` | dict (optional) | Fields passed via `logger.*(..., extra={...})`. |
+| `exc` | str (optional) | Formatted traceback when exception info is attached. |
+
+`trace_id`, `status`, and `extra` reuse the span-schema names above, so the same jq recipes correlate instrumented spans and general service logs.
+
 ## jq recipes
 - Latency per node (average):  
   ```bash
