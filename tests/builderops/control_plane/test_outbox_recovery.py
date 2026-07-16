@@ -136,6 +136,8 @@ def test_unknown_external_effect_requires_readback_before_retry(
             worker_id="executor-2",
             watermark=intent_watermark,
         )
+    with pytest.raises(DurabilityPending):
+        restarted_store.outbox_status(envelope.repository, result.operation_key)
     retryable = restarted_store.reconcile_outbox(
         orphaned_claim, observed_applied=False, evidence={"readback": "not-found"}
     )
@@ -155,11 +157,20 @@ def test_unknown_external_effect_requires_readback_before_retry(
             observed_applied=False,
             evidence={"readback": "different"},
         )
+    retry_watermark = _observed_reconciliation(intent_watermark, retryable)
+    assert (
+        restarted_store.outbox_status(
+            envelope.repository,
+            result.operation_key,
+            watermark=retry_watermark,
+        )
+        == "pending"
+    )
     claim = restarted_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-2",
-        watermark=_observed_reconciliation(intent_watermark, retryable),
+        watermark=retry_watermark,
     )
     assert claim.fencing_token > first_claim.fencing_token
     assert (

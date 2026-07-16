@@ -1123,13 +1123,16 @@ class PostgresBuilderOpsStore:
     ) -> str:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT status, claim_fencing_token FROM builderops_outbox "
+                "SELECT status, claim_fencing_token, reconciliation_receipt_sequence "
+                "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s",
                 (repository, operation_key),
             ).fetchone()
             if row is None:
                 raise KeyError(operation_key)
-            if row["status"] == "succeeded":
+            if row["status"] == "succeeded" or (
+                row["status"] == "pending" and row["reconciliation_receipt_sequence"] is not None
+            ):
                 reconciliation = self._load_reconciliation(
                     conn,
                     repository,
@@ -1138,7 +1141,7 @@ class PostgresBuilderOpsStore:
                 )
                 if watermark is None or not watermark.covers_reconciliation(reconciliation):
                     raise DurabilityPending(
-                        "terminal outbox reconciliation has not reached the recovery watermark"
+                        "outbox reconciliation has not reached the recovery watermark"
                     )
         return str(row["status"])
 
