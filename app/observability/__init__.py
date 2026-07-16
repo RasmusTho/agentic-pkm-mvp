@@ -11,32 +11,16 @@ from __future__ import annotations
 
 
 def setup_logging() -> None:
-    import json
-    import logging
-    import sys
-    from datetime import timezone, datetime
-    from typing import Any
+    """Install the process-wide JSON log formatter (structured logging #3895).
 
-    class JsonFormatter(logging.Formatter):
-        """Minimal JSON formatter for structured logs."""
+    Delegates to :mod:`app.observability.logging_setup` so API, worker, and
+    watcher processes share one formatter implementation (span-schema field
+    conventions: trace_id, status, extra). Import stays deferred per this
+    module's contract above.
+    """
+    from app.observability.logging_setup import configure_json_logging
 
-        def format(self, record: logging.LogRecord) -> str:  # pragma: no cover
-            payload: dict[str, Any] = {
-                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-            }
-            if record.exc_info:
-                payload["exc"] = self.formatException(record.exc_info)
-            return json.dumps(payload, ensure_ascii=False)
-
-    root = logging.getLogger()
-    root.handlers.clear()
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
+    configure_json_logging()
 
 
 def configure_metrics(app: object) -> None:

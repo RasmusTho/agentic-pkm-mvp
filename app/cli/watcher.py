@@ -6,6 +6,7 @@ from pathlib import Path
 
 import click
 
+from app.observability.logging_setup import configure_json_logging
 from app.runtime.runtime_loop import OutboxPathError, _resolve_watcher_run_log, resolve_outbox_path
 from app.settings.tiering import require_lab_profile
 from app.settings.validate import validate_settings
@@ -85,6 +86,9 @@ def watcher_group() -> None:
     help="Run a single watcher scan respecting scope, debounce, and rate limits.",
 )
 def watcher_once() -> None:
+    # Process-level structured logging (#3895): JSON lines on stdout with
+    # span-schema field names (trace_id, status, extra).
+    configure_json_logging()
     _validate_settings_or_exit()
     try:
         cfg = WatcherConfig.from_env()
@@ -130,6 +134,10 @@ def watcher_once() -> None:
     help="Optional safety: stop after N ticks (defaults to run forever).",
 )
 def watcher_run(config: Path, max_ticks: int | None) -> None:
+    # Process-level structured logging (#3895): the watcher container runs
+    # `python -m app.cli watcher run` (docker-compose.yaml / Makefile), so
+    # this is the watcher process's logging setup boundary.
+    configure_json_logging()
     _validate_settings_or_exit()
     try:
         cfg = load_registry_config(config)
