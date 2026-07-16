@@ -301,15 +301,21 @@ When all prerequisites are met:
    budget. Never reject or restart an authenticated merged-but-incomplete delivery merely because
    the PR can no longer satisfy the pre-merge intake predicate
 8. re-read post-merge closing references and issue state before explicit closure. Independently
-   enumerate exact-merge issue closures through the repository issue-events feed: validate observed
-   reverse-time ordering within and across bounded pages until the feed covers `merged_at`, fail
-   closed on any ordering violation or when the cap is reached first, authenticate embedded
-   repository/issue plus commit identity, and retain only issue numbers whose
-   `closed` event names the exact merge commit. Union those numbers with authenticated and phase-known
-   candidates under the existing candidate cap, then use `plan_post_merge_reconciliation` with
-   complete per-issue evidence; reopen only an unauthorized closure GitHub attributes to this PR, and
-   block the final receipt on any unresolved unauthorized closure. This is the defensive race
-   reconciliation, not a substitute for pre-effect neutralization
+   enumerate every non-PR `closed` candidate at or after `merged_at` through the repository
+   issue-events feed, including live-shaped events whose REST `commit_id` is null: validate observed
+   reverse-time ordering within and across bounded pages until the feed covers `merged_at`, and fail
+   closed on any ordering, coverage, repository, issue, or response-bound violation. Union those
+   numbers with authenticated and phase-known candidates under the existing candidate cap. Validate
+   each candidate's REST node identity, then resolve exactly one bounded static GraphQL `nodes(ids:)`
+   batch using raw string fields (never typed `gh api -F` fields) and prove cardinality, unique node,
+   repository/issue/state, latest `ClosedEvent` timestamp/actor, and `closer` identity. Only an exact
+   target PR number, repository, and merge SHA may promote a repository-discovered candidate to this
+   delivery; a same-number foreign repository or SHA fails closed, while a valid null or different
+   closer remains unrelated. Authenticated expected and phase-known candidates retain their existing
+   authority. Then use `plan_post_merge_reconciliation` with complete per-issue evidence; reopen only
+   an unauthorized closure GitHub attributes to this PR, and block the final receipt on any unresolved
+   unauthorized closure. This is the defensive race reconciliation, not a substitute for pre-effect
+   neutralization
 9. explicitly close every and only the authenticated `closing_issues`, verify their state, post the
    `reconciled` phase receipt, then
    restore the authenticated original PR body and prove its governing/closing identities equal the
@@ -318,7 +324,7 @@ When all prerequisites are met:
     bounded repository-event enumeration and live-read each bounded candidate's state and closure
     attribution. A terminal delivery receipt is forbidden unless every and only authenticated
     closing issue is closed by this delivery and no unrelated issue closure remains attributable to
-    the exact merge commit
+    the exact target PR/repository/merge identity
 11. if issue-backed, complete or release each applicable closing-issue dispatcher task
 12. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
    labels from a distinct governing parent unless its own lifecycle contract is complete

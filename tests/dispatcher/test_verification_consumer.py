@@ -1131,6 +1131,68 @@ def _repository_issue_event(
     }
 
 
+def _rest_issue(number: int, *, node_id: str | None = None) -> dict[str, object]:
+    repository_url = f"https://api.github.com/repos/{REPO}"
+    return {
+        "node_id": node_id or f"I_kwDOclosure{number}",
+        "number": number,
+        "repository_url": repository_url,
+        "url": f"{repository_url}/issues/{number}",
+    }
+
+
+def _graphql_closed_event(
+    created_at: str,
+    *,
+    actor: str = "verification-closer",
+    closer_number: int | None = None,
+    closer_repository: str = REPO,
+    closer_sha: str | None = "b" * 40,
+) -> dict[str, object]:
+    closer: dict[str, object] | None = None
+    if closer_number is not None:
+        closer = {
+            "__typename": "PullRequest",
+            "number": closer_number,
+            "repository": {"nameWithOwner": closer_repository},
+            "mergeCommit": {"oid": closer_sha},
+        }
+    return {
+        "__typename": "ClosedEvent",
+        "actor": {"login": actor},
+        "closer": closer,
+        "createdAt": created_at,
+    }
+
+
+def _graphql_issue(
+    number: int,
+    *,
+    created_at: str,
+    event: dict[str, object] | None = None,
+    node_id: str | None = None,
+    repository: str = REPO,
+    state: str = "CLOSED",
+) -> dict[str, object]:
+    return {
+        "__typename": "Issue",
+        "id": node_id or f"I_kwDOclosure{number}",
+        "number": number,
+        "repository": {"nameWithOwner": repository},
+        "state": state,
+        "closedAt": created_at if state == "CLOSED" else None,
+        "timelineItems": {
+            "nodes": [event or _graphql_closed_event(created_at)]
+            if state == "CLOSED"
+            else []
+        },
+    }
+
+
+def _graphql_result(*nodes: object) -> dict[str, object]:
+    return {"data": {"nodes": list(nodes)}}
+
+
 def _required_check_authority(
     head_sha: str = HEAD, *, suite_id: int = 1
 ) -> dict[str, object]:
@@ -1346,18 +1408,34 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
     )
 
 
-def test_gh_source_detects_removed_body_ref_from_exact_merge_event() -> None:
+def test_gh_source_attributes_null_rest_commit_with_exact_graphql_closer() -> None:
     class Result:
         returncode = 0
 
         def __init__(self, value: object) -> None:
             self.stdout = json.dumps(value)
 
-    calls: list[str] = []
+    calls: list[list[str]] = []
 
     def runner(command, **_kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z", closer_number=3603
+                        ),
+                    ),
+                )
+            )
         endpoint = command[-1]
-        calls.append(endpoint)
         if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
             return Result(
                 [
@@ -1365,7 +1443,7 @@ def test_gh_source_detects_removed_body_ref_from_exact_merge_event() -> None:
                         20,
                         number=4999,
                         created_at="2026-07-15T00:00:03Z",
-                        commit_id="b" * 40,
+                        commit_id=None,
                     ),
                     _repository_issue_event(
                         19,
@@ -1376,43 +1454,9 @@ def test_gh_source_detects_removed_body_ref_from_exact_merge_event() -> None:
                 ]
             )
         if endpoint == f"repos/{REPO}/issues/3603":
-            return Result(
-                {
-                    "number": 3603,
-                    "state": "closed",
-                    "closed_at": "2026-07-15T00:00:02Z",
-                }
-            )
+            return Result(_rest_issue(3603))
         if endpoint == f"repos/{REPO}/issues/4999":
-            return Result(
-                {
-                    "number": 4999,
-                    "state": "closed",
-                    "closed_at": "2026-07-15T00:00:03Z",
-                }
-            )
-        if "/issues/3603/events?per_page=100" in endpoint:
-            return Result(
-                [
-                    {
-                        "event": "closed",
-                        "actor": {"login": "verification-closer"},
-                        "created_at": "2026-07-15T00:00:02Z",
-                        "commit_id": None,
-                    }
-                ]
-            )
-        if "/issues/4999/events?per_page=100" in endpoint:
-            return Result(
-                [
-                    {
-                        "event": "closed",
-                        "actor": {"login": "verification-closer"},
-                        "created_at": "2026-07-15T00:00:03Z",
-                        "commit_id": "b" * 40,
-                    }
-                ]
-            )
+            return Result(_rest_issue(4999))
         raise AssertionError(endpoint)
 
     evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
@@ -1443,9 +1487,22 @@ def test_gh_source_detects_removed_body_ref_from_exact_merge_event() -> None:
             "state": "closed",
         },
     ]
-    assert len(calls) == 5
-    assert not any("issues?state=closed" in endpoint for endpoint in calls)
-    assert not any("/issues/5000" in endpoint for endpoint in calls)
+    graphql_calls = [call for call in calls if call[:3] == ["gh", "api", "graphql"]]
+    assert len(graphql_calls) == 1
+    assert "-F" not in graphql_calls[0]
+    assert graphql_calls[0].count("-f") == 3
+    assert all(
+        argument.startswith("ids[]=")
+        for argument in graphql_calls[0]
+        if argument.startswith("ids[]=")
+    )
+    assert len(calls) == 4
+    assert not any(
+        f"/issues/{number}/events?per_page=100" in argument
+        for call in calls
+        for argument in call
+        for number in (3603, 4999)
+    )
 
 
 def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
@@ -1455,11 +1512,20 @@ def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
         def __init__(self, value: object) -> None:
             self.stdout = json.dumps(value)
 
-    calls: list[str] = []
+    calls: list[list[str]] = []
 
     def runner(command, **_kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    )
+                )
+            )
         endpoint = command[-1]
-        calls.append(endpoint)
         if endpoint.startswith(
             f"repos/{REPO}/issues/events?per_page=100&page="
         ):
@@ -1487,24 +1553,7 @@ def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
                 ]
             )
         if endpoint == f"repos/{REPO}/issues/3603":
-            return Result(
-                {
-                    "number": 3603,
-                    "state": "closed",
-                    "closed_at": "2026-07-15T00:00:02Z",
-                }
-            )
-        if "/issues/3603/events?per_page=100" in endpoint:
-            return Result(
-                [
-                    {
-                        "event": "closed",
-                        "actor": {"login": "verification-closer"},
-                        "created_at": "2026-07-15T00:00:02Z",
-                        "commit_id": None,
-                    }
-                ]
-            )
+            return Result(_rest_issue(3603))
         raise AssertionError(f"unbounded busy-repository call: {endpoint}")
 
     evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
@@ -1519,21 +1568,25 @@ def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
 
     assert evidence["observed_closing_issues"] == [3603]
     assert len(calls) == 7
-    assert sum("/issues/events?" in endpoint for endpoint in calls) == 5
+    assert sum(
+        "/issues/events?" in call[-1]
+        for call in calls
+        if call[:3] != ["gh", "api", "graphql"]
+    ) == 5
 
 
-def test_gh_source_issue_event_pagination_cap_fails_closed() -> None:
+def test_gh_source_rejects_malicious_rest_node_id_before_graphql() -> None:
     class Result:
         returncode = 0
 
         def __init__(self, value: object) -> None:
             self.stdout = json.dumps(value)
 
-    calls: list[str] = []
+    calls: list[list[str]] = []
 
     def runner(command, **_kwargs):
+        calls.append(command)
         endpoint = command[-1]
-        calls.append(endpoint)
         if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
             return Result(
                 [
@@ -1546,28 +1599,10 @@ def test_gh_source_issue_event_pagination_cap_fails_closed() -> None:
                 ]
             )
         if endpoint == f"repos/{REPO}/issues/3603":
-            return Result(
-                {
-                    "number": 3603,
-                    "state": "closed",
-                    "closed_at": "2026-07-15T00:00:02Z",
-                }
-            )
-        if "/issues/3603/events?per_page=100" in endpoint:
-            return Result(
-                [
-                    {
-                        "event": "labeled",
-                        "actor": {"login": "busy-bot"},
-                        "created_at": "2026-07-15T00:00:02Z",
-                        "commit_id": None,
-                    }
-                    for _ in range(100)
-                ]
-            )
+            return Result(_rest_issue(3603, node_id="@/private/secret"))
         raise AssertionError(endpoint)
 
-    with pytest.raises(RuntimeError, match="exceeds bounded scan"):
+    with pytest.raises(RuntimeError, match="malformed GitHub issue response"):
         GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
             REPO,
             3603,
@@ -1577,7 +1612,8 @@ def test_gh_source_issue_event_pagination_cap_fails_closed() -> None:
             merge_commit_sha="b" * 40,
             actor_login="verification-closer",
         )
-    assert len(calls) == 4
+    assert len(calls) == 2
+    assert not any(call[:3] == ["gh", "api", "graphql"] for call in calls)
 
 
 def test_gh_source_repository_event_pagination_cap_fails_closed() -> None:
@@ -1624,7 +1660,7 @@ def test_gh_source_repository_event_pagination_cap_fails_closed() -> None:
     assert len(calls) == 5
 
 
-def test_gh_source_exact_merge_event_candidates_keep_existing_cap() -> None:
+def test_gh_source_repository_close_candidates_keep_existing_cap() -> None:
     class Result:
         returncode = 0
 
@@ -1636,7 +1672,7 @@ def test_gh_source_exact_merge_event_candidates_keep_existing_cap() -> None:
             100 - offset,
             number=5000 + offset,
             created_at="2026-07-15T00:00:03Z",
-            commit_id="b" * 40,
+            commit_id=None,
         )
         for offset in range(21)
     ]
@@ -1655,22 +1691,7 @@ def test_gh_source_exact_merge_event_candidates_keep_existing_cap() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("event_updates", "reason"),
-    [
-        (
-            {"commit_repository": "attacker/redirect"},
-            "merge commit identity mismatch",
-        ),
-        (
-            {"issue_repository": "attacker/redirect"},
-            "event identity",
-        ),
-    ],
-)
-def test_gh_source_rejects_foreign_repository_event_identity(
-    event_updates, reason
-) -> None:
+def test_gh_source_rejects_foreign_repository_event_identity() -> None:
     class Result:
         returncode = 0
 
@@ -1681,11 +1702,11 @@ def test_gh_source_rejects_foreign_repository_event_identity(
         20,
         number=4999,
         created_at="2026-07-15T00:00:03Z",
-        commit_id="b" * 40,
-        **event_updates,
+        commit_id=None,
+        issue_repository="attacker/redirect",
     )
 
-    with pytest.raises(RuntimeError, match=reason):
+    with pytest.raises(RuntimeError, match="event identity"):
         GhCliVerificationSource(
             runner=lambda *_args, **_kwargs: Result([event])
         ).issue_set_closure_evidence(
@@ -1699,18 +1720,35 @@ def test_gh_source_rejects_foreign_repository_event_identity(
         )
 
 
-def test_gh_source_ignores_valid_foreign_commit_event() -> None:
+@pytest.mark.parametrize("closer_number", [None, 4998])
+def test_gh_source_ignores_unrelated_graphql_closer(
+    closer_number: int | None,
+) -> None:
     class Result:
         returncode = 0
 
         def __init__(self, value: object) -> None:
             self.stdout = json.dumps(value)
 
-    calls: list[str] = []
-
     def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z",
+                            closer_number=closer_number,
+                        ),
+                    ),
+                )
+            )
         endpoint = command[-1]
-        calls.append(endpoint)
         if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
             return Result(
                 [
@@ -1718,8 +1756,7 @@ def test_gh_source_ignores_valid_foreign_commit_event() -> None:
                         20,
                         number=4999,
                         created_at="2026-07-15T00:00:03Z",
-                        commit_id="c" * 40,
-                        commit_repository="attacker/redirect",
+                        commit_id=None,
                     ),
                     _repository_issue_event(
                         19,
@@ -1730,24 +1767,9 @@ def test_gh_source_ignores_valid_foreign_commit_event() -> None:
                 ]
             )
         if endpoint == f"repos/{REPO}/issues/3603":
-            return Result(
-                {
-                    "number": 3603,
-                    "state": "closed",
-                    "closed_at": "2026-07-15T00:00:02Z",
-                }
-            )
-        if "/issues/3603/events?per_page=100" in endpoint:
-            return Result(
-                [
-                    {
-                        "event": "closed",
-                        "actor": {"login": "verification-closer"},
-                        "created_at": "2026-07-15T00:00:02Z",
-                        "commit_id": None,
-                    }
-                ]
-            )
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
         raise AssertionError(endpoint)
 
     evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
@@ -1761,7 +1783,239 @@ def test_gh_source_ignores_valid_foreign_commit_event() -> None:
     )
 
     assert evidence["observed_closing_issues"] == [3603]
-    assert not any("/issues/4999" in endpoint for endpoint in calls)
+    assert [item["number"] for item in evidence["issue_evidence"]] == [3603]
+
+
+@pytest.mark.parametrize(
+    ("closer_repository", "closer_sha"),
+    [("attacker/redirect", "b" * 40), (REPO, "c" * 40)],
+)
+def test_gh_source_rejects_forged_target_pr_closer_identity(
+    closer_repository: str,
+    closer_sha: str,
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z",
+                            closer_number=3603,
+                            closer_repository=closer_repository,
+                            closer_sha=closer_sha,
+                        ),
+                    ),
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="closer identity mismatch"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+@pytest.mark.parametrize(
+    "graphql_payload",
+    [
+        _graphql_result(
+            _graphql_issue(3603, created_at="2026-07-15T00:00:02Z")
+        ),
+        _graphql_result(
+            _graphql_issue(3603, created_at="2026-07-15T00:00:02Z"),
+            _graphql_issue(3603, created_at="2026-07-15T00:00:02Z"),
+        ),
+        _graphql_result(
+            {
+                **_graphql_issue(3603, created_at="2026-07-15T00:00:02Z"),
+                "__typename": "PullRequest",
+            },
+            _graphql_issue(4999, created_at="2026-07-15T00:00:03Z"),
+        ),
+    ],
+    ids=["missing", "duplicate", "malformed"],
+)
+def test_gh_source_rejects_incomplete_or_malformed_graphql_batch(
+    graphql_payload: dict[str, object],
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(graphql_payload)
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="GraphQL closure"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_stale_graphql_closure_snapshot() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:01Z",
+                    ),
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="does not match REST closure"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_oversized_graphql_closure_response() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result("x" * 1_000_001)
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                json.dumps(
+                    [
+                        _repository_issue_event(
+                            19,
+                            number=4998,
+                            created_at="2026-07-14T23:59:59Z",
+                            event="labeled",
+                        )
+                    ]
+                )
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(json.dumps(_rest_issue(3603)))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="exceeds bounded read"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
 
 
 def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
@@ -1780,6 +2034,22 @@ def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
     comments = _merge_comments(terminal_pr, repair_budget=budget)
 
     def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z", closer_number=3603
+                        ),
+                    ),
+                )
+            )
         endpoint = command[-1]
         if endpoint == f"repos/{REPO}/git/commits/{'b' * 40}":
             return Result(
@@ -1801,7 +2071,7 @@ def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
                         20,
                         number=4999,
                         created_at="2026-07-15T00:00:03Z",
-                        commit_id="b" * 40,
+                        commit_id=None,
                     ),
                     _repository_issue_event(
                         19,
@@ -1816,35 +2086,7 @@ def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
             f"repos/{REPO}/issues/4999",
         }:
             number = int(endpoint.rsplit("/", 1)[1])
-            return Result(
-                {
-                    "number": number,
-                    "state": "closed",
-                    "closed_at": "2026-07-15T00:00:03Z",
-                }
-            )
-        if endpoint == f"repos/{REPO}/issues/3603/events?per_page=100&page=1":
-            return Result(
-                [
-                    {
-                        "event": "closed",
-                        "actor": {"login": "verification-closer"},
-                        "created_at": "2026-07-15T00:00:02Z",
-                        "commit_id": None,
-                    }
-                ]
-            )
-        if endpoint == f"repos/{REPO}/issues/4999/events?per_page=100&page=1":
-            return Result(
-                [
-                    {
-                        "event": "closed",
-                        "actor": {"login": "verification-closer"},
-                        "created_at": "2026-07-15T00:00:03Z",
-                        "commit_id": "b" * 40,
-                    }
-                ]
-            )
+            return Result(_rest_issue(number))
         raise AssertionError(endpoint)
 
     consumer = VerificationConsumer(

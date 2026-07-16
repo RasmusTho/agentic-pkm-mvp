@@ -83,10 +83,15 @@ def test_terminal_delivery_requires_trusted_merge_and_closure_proof() -> None:
         "_repository_merge_closed_issues",
         "repos/{repository}/issues/events?per_page=100",
         "repository issue-events cap reached before merge coverage",
+        "nodes(ids:$ids)",
+        "GraphQL PullRequest closer identity mismatch",
+        're.fullmatch(r"[A-Za-z0-9_-]{1,256}", node_id)',
         "observed_issue_numbers",
         "closure_evidence_incomplete",
         "unauthorized_closure",
         "_recover_merged_run",
     ):
         assert token in text
+    assert 'command.extend(("-f", f"ids[]={node_id}"))' in text
+    assert 'command.extend(("-F", f"ids[]={node_id}"))' not in text
     assert "issues?state=closed" not in text

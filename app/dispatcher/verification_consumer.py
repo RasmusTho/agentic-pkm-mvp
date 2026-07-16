@@ -314,15 +314,46 @@ _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_REQUEST_BYTES = 1_000_000
 _MAX_CLOSURE_CANDIDATES = 20
-_MAX_CLOSURE_EVENTS_PER_ISSUE = 200
 _MAX_REPOSITORY_CLOSURE_EVENTS = 500
 _MAX_REPOSITORY_ISSUE_EVENTS_RESPONSE_BYTES = 8_000_000
+_MAX_CLOSURE_GRAPHQL_RESPONSE_BYTES = 1_000_000
 _MAX_MERGE_COMMIT_RESPONSE_BYTES = 64_000
 _MAX_MERGE_COMMIT_MESSAGE_BYTES = 16_000
 _VERIFICATION_REQUEST_WORKFLOW_NAME = "Verification Dispatch Request"
 _VERIFICATION_REQUEST_WORKFLOW_PATH = (
     ".github/workflows/verification-dispatch-request.yml"
 )
+_CLOSURE_NODES_QUERY = """
+query($ids:[ID!]!){
+  nodes(ids:$ids){
+    __typename
+    ... on Issue{
+      id
+      number
+      repository{nameWithOwner}
+      state
+      closedAt
+      timelineItems(last:1,itemTypes:[CLOSED_EVENT]){
+        nodes{
+          ... on ClosedEvent{
+            __typename
+            createdAt
+            actor{login}
+            closer{
+              __typename
+              ... on PullRequest{
+                number
+                repository{nameWithOwner}
+                mergeCommit{oid}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+""".strip()
 
 
 def verification_attempt_idempotency_key(
@@ -965,9 +996,8 @@ class GhCliVerificationSource:
         repository: str,
         *,
         merged_instant: datetime,
-        merge_commit_sha: str,
-    ) -> set[int]:
-        """Enumerate exact-merge issue closures from a bounded repository feed.
+    ) -> dict[int, datetime]:
+        """Enumerate every merge-window issue close from a bounded feed.
 
         The endpoint does not document a sort guarantee, so every row must
         prove the observed reverse-time ordering within and across pages.  A
@@ -976,17 +1006,15 @@ class GhCliVerificationSource:
         hitting the fixed page cap first, is not evidence of absence and fails
         closed.
 
-        Only issue numbers survive this boundary.  Unrelated event payloads
-        are validated for ordering and repository/issue identity, then
-        discarded instead of being persisted in a delivery receipt.
+        Only issue numbers and their latest observed close timestamps survive
+        this boundary. GraphQL ``ClosedEvent.closer`` performs attribution;
+        REST ``commit_id`` is commonly null for GitHub auto-closure and is
+        never used as merge authority.
         """
 
         expected_repository_url = f"https://api.github.com/repos/{repository}"
-        expected_commit_url = (
-            f"{expected_repository_url}/commits/{merge_commit_sha}"
-        )
         endpoint = f"repos/{repository}/issues/events?per_page=100"
-        discovered: set[int] = set()
+        discovered: dict[int, datetime] = {}
         seen_ids: set[int] = set()
         newest_previous: datetime | None = None
         pages = _MAX_REPOSITORY_CLOSURE_EVENTS // 100
@@ -1082,16 +1110,10 @@ class GhCliVerificationSource:
                         "malformed repository issue event commit identity"
                     )
 
-                if (
-                    event.get("event") == "closed"
-                    and pull_request is None
-                    and commit_id == merge_commit_sha
-                ):
-                    if commit_url != expected_commit_url:
-                        raise RuntimeError(
-                            "repository issue event merge commit identity mismatch"
-                        )
-                    discovered.add(number)
+                if event.get("event") == "closed" and pull_request is None:
+                    # The feed is newest-first once its observed ordering has
+                    # been proved, so retain the latest close for a candidate.
+                    discovered.setdefault(number, created_instant)
                     if len(discovered) > _MAX_CLOSURE_CANDIDATES:
                         raise RuntimeError(
                             "issue-set closure candidates exceed bounded scan"
@@ -1103,6 +1125,85 @@ class GhCliVerificationSource:
         raise RuntimeError(
             "repository issue-events cap reached before merge coverage"
         )
+
+    def _closure_nodes(
+        self,
+        repository: str,
+        candidates: Mapping[int, str],
+    ) -> dict[int, Mapping[str, object]]:
+        """Fetch one bounded GraphQL batch and authenticate every Issue node."""
+
+        command = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={_CLOSURE_NODES_QUERY}",
+        ]
+        for node_id in candidates.values():
+            # `gh api -F` treats values beginning with `@` as local-file
+            # inputs. Node IDs are untrusted REST data, so pass them as raw
+            # strings and never authorize field-magic or filesystem reads.
+            command.extend(("-f", f"ids[]={node_id}"))
+        result = self.runner(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("gh GraphQL closure read failed")
+        size = (
+            len(result.stdout.encode("utf-8"))
+            if isinstance(result.stdout, str)
+            else len(result.stdout)
+        )
+        if size > _MAX_CLOSURE_GRAPHQL_RESPONSE_BYTES:
+            raise RuntimeError("GraphQL closure response exceeds bounded read")
+        try:
+            payload = json.loads(result.stdout)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RuntimeError("malformed GraphQL closure response") from exc
+        data = payload.get("data") if isinstance(payload, Mapping) else None
+        nodes = data.get("nodes") if isinstance(data, Mapping) else None
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("errors") is not None
+            or not isinstance(nodes, list)
+            or len(nodes) != len(candidates)
+        ):
+            raise RuntimeError("malformed GraphQL closure response")
+
+        expected_by_id = {
+            candidate_node_id: number
+            for number, candidate_node_id in candidates.items()
+        }
+        resolved: dict[int, Mapping[str, object]] = {}
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                raise RuntimeError("malformed GraphQL closure issue node")
+            raw_node_id = node.get("id")
+            number = node.get("number")
+            expected_number = (
+                expected_by_id.get(raw_node_id)
+                if isinstance(raw_node_id, str)
+                else None
+            )
+            if (
+                node.get("__typename") != "Issue"
+                or expected_number is None
+                or number != expected_number
+                or not isinstance(number, int)
+                or isinstance(number, bool)
+                or _nested(node, "repository", "nameWithOwner") != repository
+                or number in resolved
+            ):
+                raise RuntimeError("GraphQL closure issue identity mismatch")
+            resolved[number] = node
+        if set(resolved) != set(candidates):
+            raise RuntimeError("GraphQL closure issue evidence incomplete")
+        return resolved
 
     def issue_set_closure_evidence(
         self,
@@ -1149,7 +1250,6 @@ class GhCliVerificationSource:
         repository_closing_issues = self._repository_merge_closed_issues(
             repository,
             merged_instant=merged_instant,
-            merge_commit_sha=merge_commit_sha,
         )
         candidate_numbers = sorted(
             {
@@ -1160,39 +1260,52 @@ class GhCliVerificationSource:
         )
         if len(candidate_numbers) > _MAX_CLOSURE_CANDIDATES:
             raise RuntimeError("issue-set closure candidates exceed bounded scan")
-        candidates: dict[int, Mapping[str, object]] = {}
+        candidate_node_ids: dict[int, str] = {}
         for number in candidate_numbers:
             issue = self._json(f"repos/{repository}/issues/{number}")
+            node_id = issue.get("node_id") if isinstance(issue, Mapping) else None
             if (
                 not isinstance(issue, Mapping)
                 or issue.get("number") != number
-                or isinstance(issue.get("pull_request"), Mapping)
+                or issue.get("pull_request") is not None
+                or not isinstance(node_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,256}", node_id) is None
+                or issue.get("repository_url")
+                != f"https://api.github.com/repos/{repository}"
+                or issue.get("url")
+                != f"https://api.github.com/repos/{repository}/issues/{number}"
+                or node_id in candidate_node_ids.values()
             ):
                 raise RuntimeError("malformed GitHub issue response")
-            candidates[number] = issue
+            candidate_node_ids[number] = node_id
+
+        candidates = self._closure_nodes(repository, candidate_node_ids)
 
         expected = set(issue_numbers)
         observed_candidates = set(observed_issue_numbers)
         evidence: list[dict[str, object]] = []
         observed: list[int] = []
         for number, issue in sorted(candidates.items()):
-            events = self._json_pages(
-                f"repos/{repository}/issues/{number}/events?per_page=100",
-                limit=_MAX_CLOSURE_EVENTS_PER_ISSUE,
+            state = issue.get("state")
+            closed_at = issue.get("closedAt")
+            timeline = issue.get("timelineItems")
+            timeline_nodes = (
+                timeline.get("nodes") if isinstance(timeline, Mapping) else None
             )
-            transitions: list[Mapping[str, object]] = []
-            for event in events:
-                if not isinstance(event, Mapping):
-                    raise RuntimeError("malformed GitHub issue event response")
-                if event.get("event") in {"closed", "reopened"}:
-                    transitions.append(event)
-            latest = transitions[-1] if transitions else None
-            latest_actor = (
-                _nested(latest, "actor", "login")
-                if isinstance(latest, Mapping)
-                else None
-            )
-            latest_created_at = latest.get("created_at") if latest else None
+            if (
+                state not in {"OPEN", "CLOSED"}
+                or not isinstance(timeline_nodes, list)
+                or len(timeline_nodes) > 1
+                or (state == "CLOSED" and len(timeline_nodes) != 1)
+                or (state == "CLOSED" and not isinstance(closed_at, str))
+                or (state == "OPEN" and closed_at is not None)
+            ):
+                raise RuntimeError("malformed GraphQL closure issue state")
+            latest = timeline_nodes[0] if timeline_nodes else None
+            if latest is not None and not isinstance(latest, Mapping):
+                raise RuntimeError("malformed GraphQL ClosedEvent")
+            latest_actor = _nested(latest, "actor", "login") if latest else None
+            latest_created_at = latest.get("createdAt") if latest else None
             try:
                 latest_instant = (
                     datetime.fromisoformat(
@@ -1202,25 +1315,94 @@ class GhCliVerificationSource:
                     else None
                 )
             except ValueError as exc:
-                raise RuntimeError("malformed GitHub issue event timestamp") from exc
+                raise RuntimeError("malformed GraphQL ClosedEvent timestamp") from exc
+            if latest is not None and (
+                latest.get("__typename") != "ClosedEvent"
+                or not isinstance(latest_actor, str)
+                or not latest_actor
+                or latest_instant is None
+                or latest_instant.tzinfo is None
+            ):
+                raise RuntimeError("malformed GraphQL ClosedEvent")
+
+            try:
+                closed_instant = (
+                    datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+                    if isinstance(closed_at, str)
+                    else None
+                )
+            except ValueError as exc:
+                raise RuntimeError("malformed GraphQL issue closedAt") from exc
+            if state == "CLOSED" and (
+                closed_instant is None
+                or closed_instant.tzinfo is None
+                or closed_instant != latest_instant
+            ):
+                raise RuntimeError("GraphQL issue closure timestamp mismatch")
+
+            repository_close = repository_closing_issues.get(number)
+            if repository_close is not None and latest_instant != repository_close:
+                raise RuntimeError("GraphQL ClosedEvent does not match REST closure")
+
+            closer = latest.get("closer") if latest else None
+            exact_pr_closer = False
+            if closer is not None:
+                if not isinstance(closer, Mapping) or not isinstance(
+                    closer.get("__typename"), str
+                ):
+                    raise RuntimeError("malformed GraphQL ClosedEvent closer")
+                if closer.get("__typename") == "PullRequest":
+                    closer_number = closer.get("number")
+                    closer_repository = _nested(
+                        closer, "repository", "nameWithOwner"
+                    )
+                    closer_oid = _nested(closer, "mergeCommit", "oid")
+                    if (
+                        not isinstance(closer_number, int)
+                        or isinstance(closer_number, bool)
+                        or closer_number <= 0
+                        or not isinstance(closer_repository, str)
+                        or re.fullmatch(
+                            r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+",
+                            closer_repository,
+                        )
+                        is None
+                        or (
+                            closer_oid is not None
+                            and (
+                                not isinstance(closer_oid, str)
+                                or re.fullmatch(r"[0-9a-fA-F]{40}", closer_oid)
+                                is None
+                            )
+                        )
+                    ):
+                        raise RuntimeError("malformed GraphQL PullRequest closer")
+                    if closer_number == pr_number:
+                        if (
+                            closer_repository != repository
+                            or closer_oid != merge_commit_sha
+                        ):
+                            raise RuntimeError(
+                                "GraphQL PullRequest closer identity mismatch"
+                            )
+                        exact_pr_closer = True
+                        if latest_actor != actor_login:
+                            raise RuntimeError(
+                                "GraphQL PullRequest closer actor mismatch"
+                            )
             actor_time_close = bool(
-                issue.get("state") == "closed"
+                state == "CLOSED"
                 and latest is not None
-                and latest.get("event") == "closed"
                 and latest_actor == actor_login
                 and latest_instant is not None
                 and latest_instant >= merged_instant
-            )
-            commit_matches_delivery = bool(
-                latest is not None
-                and latest.get("commit_id") == merge_commit_sha
             )
             closed_by_delivery = bool(
                 actor_time_close
                 and (
                     number in expected
                     or number in observed_candidates
-                    or commit_matches_delivery
+                    or exact_pr_closer
                 )
             )
             if closed_by_delivery:
@@ -1229,15 +1411,15 @@ class GhCliVerificationSource:
                 continue
             closed_by_pr = bool(
                 closed_by_delivery
-                and (number in observed_candidates or commit_matches_delivery)
+                and (number in observed_candidates or exact_pr_closer)
             )
             evidence.append(
                 {
-                    "closed_at": issue.get("closed_at"),
+                    "closed_at": closed_at,
                     "closed_by_delivery": closed_by_delivery,
                     "closed_by_pull_requests": [pr_number] if closed_by_pr else [],
                     "number": number,
-                    "state": issue.get("state"),
+                    "state": cast(str, state).lower(),
                 }
             )
         return {
