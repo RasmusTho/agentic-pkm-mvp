@@ -187,10 +187,6 @@ class StorePort(Protocol):
         request: Mapping[str, Any],
         outbox: Mapping[str, Any] | None = None,
         lease: Lease | None = None,
-        claim_holder: str | None = None,
-        claim_ttl_seconds: int = 5400,
-        release_on_commit: bool = False,
-        lease_now: datetime | None = None,
         expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult: ...

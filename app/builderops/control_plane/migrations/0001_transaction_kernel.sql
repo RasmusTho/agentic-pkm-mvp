@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS builderops_receipts (
     task_id text NOT NULL,
     event_type text NOT NULL,
     idempotency_key text NOT NULL,
+    lease_holder text,
+    lease_fencing_token bigint CHECK (lease_fencing_token IS NULL OR lease_fencing_token > 0),
     authority_envelope jsonb NOT NULL,
     recovery_lsn pg_lsn,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
