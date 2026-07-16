@@ -109,8 +109,7 @@ means D2/D3's strongest requirements carry no independent review receipt. Repair
 targeted re-inquiry scoped only to the 07-15 deltas (watermark regime, API-only fail-closed,
 Postgres-vs-alternatives), or an explicit owner risk-acceptance note recorded in the ADR.
 
-### F4 — Major: D3's uniform watermark gate carries an unstated availability consequence and an
-internal tension with D6
+### F4 — Major: D3's watermark gate — unstated availability consequence and D3↔D6 tension
 
 D3 requires every authority-bearing success response — including lease claims — to wait for the
 independent recovery watermark (off-host encrypted target). Two problems:
