@@ -26,7 +26,8 @@ Declare the active cognitive context as a versioned set of bindings rather than 
 - ActiveContextSet identifier and generation/version.
 - Effective workspace, scope, sphere, situated identity, principal, and topology posture.
 - Source-binding list treated as implementation detail.
-- Degraded-mode posture when no binding is active.
+- Typed healthy/degraded posture: ordinary no-vault is a healthy zero-binding state; unavailable,
+  invalid, unauthorized, or stale requested binding is degraded with a bounded reason.
 
 ## Commands
 
@@ -56,6 +57,25 @@ Declare the active cognitive context as a versioned set of bindings rather than 
 - Zero-binding and many-binding modes are valid target states.
 - WSP does not grant permission to act; GOV owns admissibility.
 
+## Multi-Vault Runtime V1 Decision
+
+This owner contract delegates the decided implementation-level V1 schema, transition, persistence,
+and migration details to `docs/MULTI_VAULT_RUNTIME/README.md` and its bounded task specifications.
+That capability specification is subordinate to this contract's WSP/GOV boundary and may not widen
+authority. V1 requires an opaque context ID, monotonic generation, explicit workspace identity (or
+a typed no-workspace state), zero/one/many immutable source bindings, server-derived principal,
+cognitive operational scope, sphere memberships, situated identity, topology posture, selection provenance,
+expiry where applicable, non-reversible selection-capability digest, and a typed degraded posture
+(`healthy` or `degraded`) with a bounded machine-readable reason when degraded. A zero-binding
+healthy no-vault context is distinct from an unavailable, invalid, unauthorized, or stale binding;
+the latter cannot be represented as an ordinary empty set. Cache and receipt identity
+includes workspace and every scope-affecting input; each binding is independently GOV-authorized. Current-state
+owner docs remain shipped truth until the relevant implementation child writes them back.
+
+Endpoint action, write class, and required permission are separate GOV decision inputs. They are
+not WSP `scope`, do not mutate the selected cognitive context, and are recorded separately in
+authority decisions/receipts.
+
 ## Allowed Producers
 
 - HIX human selection surfaces.
@@ -65,6 +85,11 @@ Declare the active cognitive context as a versioned set of bindings rather than 
 ## Allowed Consumers
 
 - HIX, HKA, SIP, GOV, RCA, MEM, CAO, EXE, SFC, OEF.
+- EBF may consume only the bounded source-binding/topology projection needed to configure an
+  adapter; PDM may consume only context identity/revision plus bounded source-binding identity and
+  binding revision needed to namespace and persist mechanical state. It never receives a host path or
+  treats binding identity as authority. Neither subsystem derives principal/permission or owns WSP
+  semantics.
 
 ## Forbidden Use
 
@@ -84,7 +109,6 @@ Current runtime may still carry active vault/path concepts. New work should wrap
 
 ## Open Questions
 
-- What exact minimal fields are required for ActiveContextSet V1?
 - Which context transitions need human review versus policy-only validation?
 
 ## Linked Source-Of-Truth Docs

@@ -5,7 +5,7 @@ Owner: Architecture / product
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: SoT
-Last reviewed: 2026-06-02
+Last reviewed: 2026-07-15
 Last verified against: docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md, #1488
 
 # Vault Topology Contract
@@ -43,6 +43,28 @@ When a future topology source is missing, stale, conflicting, or not configured,
 Topology-derived zones may be used as explanatory metadata only until a later bounded implementation issue defines their source, fields, UI treatment, and tests. Any future use for ordering, overlays, or filters must surface the contributing topology signal, weight or deterministic rule, provenance, and degradation state in the browser response or UI. Opaque semantic ranking remains out of scope.
 
 #1473 remains deferred after this decision. It may be rewritten or split only into bounded implementation issues that name the concrete topology source, the projection fields, the degradation behavior, and the visible ranking/filter/overlay signals. Until then, the shipped Vault Browser posture remains frontmatter-preferred/path-derived zone projection over the active vault.
+
+## Runtime selection model
+
+The future runtime-selection model for registered vaults is specified in
+`docs/MULTI_VAULT_RUNTIME/README.md` and tracked by parent validation hub #2143. It separates four
+concepts that topology must not collapse:
+
+- an instance-local registry records known content-vault identities, paths, and provenance;
+- an explicit instance default is distinct from interaction history and deployment bootstrap;
+- request/session selection resolves a versioned zero/one/many-binding `ActiveContextSet`;
+- dimensions are non-authoritative groupings over registered vaults.
+
+That specification does **not** make registry, selector, or dimensions authoritative for shipped
+Vault Browser reads today. The active-vault-only decision above remains current until #2143's
+bounded implementation children merge and their owner-doc promotion verifies the production
+call sites. Even after delivery, selection does not determine content authority: GOV evaluates
+each selected binding independently, and topology-derived browser fields retain the explicit
+source/authority/provenance/degradation requirements above.
+
+Single-vault remains the floor throughout the migration. No-vault and one-vault states stay valid,
+and an invalid explicit selection must fail closed rather than fall back silently to another
+registry member, CWD, or `./vault`.
 
 ## Allowed topologies
 

@@ -25,13 +25,14 @@ writers. Findings F1-F7 and invariants SET-1..SET-7:
 | 2 | [SINGLE_DEFAULT_REGISTRY.md](SINGLE_DEFAULT_REGISTRY.md) | Every behavior-shaping default declared once; duplicated env-default literals collapsed | SET-4 | — (parallel with 1) |
 | 3 | [CANONICALIZE_SETTINGS_LOCATION.md](CANONICALIZE_SETTINGS_LOCATION.md) | One vault settings root `<vault>/settings/`; legacy paths compat-read with loud deprecation | SET-2 | 1 |
 | 4 | [RECEIPT_EVERY_SETTINGS_WRITE.md](RECEIPT_EVERY_SETTINGS_WRITE.md) | Every settings writer (API, watcher delta, auto-heal, agent) emits a durable actor-tagged receipt | SET-3 | 1 |
-| 5 | [REBIND_ON_VAULT_SELECTION.md](REBIND_ON_VAULT_SELECTION.md) | Vault selection rebinds every vault-scoped settings consumer, watcher included | SET-7 | 1 |
+| 5 | [REBIND_ON_VAULT_SELECTION.md](REBIND_ON_VAULT_SELECTION.md) | Vault selection rebinds every vault-scoped settings consumer, watcher included | SET-7 | 1, 3, 4 |
 | 6 | [PROMPTS_AS_SETTINGS.md](PROMPTS_AS_SETTINGS.md) | `settings/prompts/*.md` become the runtime prompt SoT; validation loader migrated, stale mirrors retired once superseded | SET-6 | 3 |
 | 7 | [DEHARDCODE_WAVE_ONE.md](DEHARDCODE_WAVE_ONE.md) | Highest-value hardcoded values (models/voices/rerank/thresholds/watcher tunables) migrate into the registry, tier-gated | SET-4/SET-1 | 2, 3 |
 | 8 | [CONSOLIDATE_SETTINGS_OWNER_DOCS.md](CONSOLIDATE_SETTINGS_OWNER_DOCS.md) | One settings owner doc; orphan schema deleted; location wording reconciled; parent-closure handoff | SET-6 | 1-7 (all — its closure handoff verifies the full capability checklist) |
 
 Tasks 1 and 2 can run in parallel (disjoint surfaces: ingestion wiring vs default declarations).
-Everything else lands on the spine they define.
+After task 1, tasks 3 and 4 may run in parallel; task 5 starts only after both merge because its
+protected-state cutover fences and migrates their canonical-location and receipt writers.
 
 ## Capability acceptance criteria
 
@@ -67,10 +68,10 @@ Tasks 1, 3, 4, 5 and 7 all touch the settings read/write path. The seams:
   receipted; if task 4 has not landed, task 3 records the migration in its PR receipt and task 4's
   backfill scope explicitly includes migration-era writes. A migrated file with no receipt anywhere
   is a defect, not an acceptable interim state.
-- **Rebind implies reload (tasks 1↔5).** Vault selection rebinding (task 5) must trigger the same
-  reload path task 1 builds — not a second loader. If task 5 merges first, its rebind may
-  temporarily rebind only the per-request readers (stack B) and must state in its PR that bundle
-  consumers rebind when task 1 lands; the parent issue tracks that residue.
+- **Rebind implies reload and serialized writers (tasks 1→3/4→5).** Vault selection rebinding (task
+  5) triggers the same reload path task 1 builds—not a second loader—and lands only after tasks 3 and
+  4 have frozen the canonical locations and receipted every writer that its cutover fences. No
+  temporary unreceipted or legacy-location rebind is an accepted partial-delivery state.
 - **Prompt SoT moves exactly once (tasks 3→6).** Task 6 places prompt files only under the
   canonical location. If task 6 were cut before task 3 merges, it would move the prompt SoT twice;
   the dependency is therefore hard, not advisory.
@@ -112,14 +113,12 @@ respectively — task 8 marks them so.
 
 ## Follow-up capability flagged, not in this spec
 
-While ruling on SETTINGS-05 (rebind on vault selection), the owner flagged a larger wanted
-capability: spinning up additional, time-limited watchers on demand (not just one watcher
-following one active selection). SETTINGS-05's rebind mechanism (subscribe to
-`VaultChangedEvent`, re-resolve, resume) is the reusable building block a future multi-watcher
-task would instantiate per watcher, but running more than one watcher concurrently is a distinct
-capability (watcher lifecycle management: spin up, tear down, scope, resource limits) and is
-explicitly out of scope here. Worth its own bounded issue once SETTINGS-05 ships and the
-single-watcher-follows-selection mechanism is proven.
+While ruling on SETTINGS-05 (rebind on vault selection), the owner also flagged multi-binding
+watcher lifecycle supervision. That scope is now owned—without a duplicate issue—by
+`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md` (MVR-06 under #2143), which reuses
+SETTINGS-05's monotonic cross-process rebind seam. The only residual follow-up not owned there is
+time-limited scheduling/resource policy for on-demand lifecycles; create a bounded issue for that
+policy only after MVR-06 ships and only if no existing scheduling/resource-policy contract owns it.
 
 ## Related docs
 
