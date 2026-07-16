@@ -129,7 +129,7 @@ docker compose -f ops/observability/docker-compose.yaml up
 
 Grafana should use Prometheus at `http://prometheus:9090` as a data source.
 
-Alerting: `ops/observability/alerts.yml` ships basic rules (scrape target down for 5m, API 5xx rate > 5% over 15m from the instrumentator's `http_requests_total`, worker poll loop stalled via `pkm_worker_last_tick_timestamp_seconds`). Alertmanager runs with a log/UI-only null receiver — no external notification channels.
+Alerting: `ops/observability/alerts.yml` ships basic rules (always-on scrape target down for 5m, API 5xx rate > 5% over 15m from the instrumentator's `http_requests_total`, worker poll loop stalled via `pkm_worker_last_tick_timestamp_seconds`). The opt-in worker target is deliberately excluded from the generic down rule — it would otherwise fire a permanent false critical while `WORKER_METRICS_PORT` is unset (the default) — and is instead covered by `WorkerMetricsDown`, which only fires once the worker `/metrics` endpoint has been seen up within the last hour and then become unreachable. Alertmanager runs with a log/UI-only null receiver — no external notification channels.
 
 When finished:
 
