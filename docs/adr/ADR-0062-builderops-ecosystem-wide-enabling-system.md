@@ -1,4 +1,4 @@
-State: Accepted (owner decision, 2026-07-15). Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with an independent Demerzel deployment and one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here.
+State: Accepted (owner decision, 2026-07-15). Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with an independent Demerzel deployment and one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here. Amended 2026-07-16 (A1-A3, owner ruling): asynchronous recovery durability replaces the synchronous watermark regime; failure-domain separation and a degraded-mode contract are added; CKM/CEG (ADR-0057) is named as a D6 migration source.
 Doc role: Decision record (ADR)
 Authority: Authoritative for BuilderOps scope, deployment/trust boundary, operational authority, client access, and extraction posture. Layers on ADR-0010 without changing repo/GitHub delivery authority.
 Owner: BuilderOps governance / Architecture spine (Rasmus)
@@ -93,6 +93,10 @@ transaction:
 3. the append-only BuilderOps receipt; and
 4. an outbox intent.
 
+> **Amended by A1 (2026-07-16):** the watermark/acknowledged-LSN gating in the two paragraphs below
+> is superseded — the local PostgreSQL commit is the acknowledgement and eligibility gate, and
+> recovery durability is asynchronous. See `## Amendments`.
+
 The transaction records its commit/recovery LSN. No authority-bearing success response, idempotent
 replay, dependent authority transition, or outbox claim may pass until the independent recovery
 watermark covers that LSN in an encrypted target outside Demerzel's primary host and storage failure
@@ -119,6 +123,11 @@ adapter. Production paths contain no SQLite authority or automatic SQLite fallba
 
 ### D4 — Independent deployment, lifecycle, and trust zone
 
+> **Amended by A2 (2026-07-16):** “reuse” below means Demerzel's operational patterns and
+> capability, not a shared container engine or runtime failure domain. This delivery runs the
+> BuilderOps-only Compose project on a separate BuilderOps VM/container engine on Demerzel. See
+> `## Amendments`.
+
 BuilderOps reuses Demerzel's Docker/PostgreSQL operational capability but has its own Compose project
 and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns distinct:
 
@@ -127,7 +136,10 @@ and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns dist
 - versioned migration lineage and migration gate;
 - immutable release pin and deployment/rollback receipt;
 - `/healthz`, `/readyz`, structured status/metrics, and alert/probe path;
-- scheduled full backup plus continuous encrypted WAL/recovery durability in a target that survives
+- *(amended by A1, 2026-07-16: an asynchronous backup/WAL-archive regime and a restore-from-backup
+  drill replace every synchronous/acknowledged-LSN item in this bullet, including the
+  "restore-through-acknowledged-LSN drill" at its end)* scheduled full backup plus
+  continuous encrypted WAL/recovery durability in a target that survives
   loss of Demerzel's primary host/storage failure domain, independently recoverable key/KMS custody,
   retention, restore tooling, and a proved restore-through-acknowledged-LSN drill with Demerzel's
   host secret store unavailable; and
@@ -177,6 +189,11 @@ control plane starts a new authority epoch with fresh fencing tokens. Idempotenc
 events, artifact identities, and receipts are imported only under deterministic uniqueness and
 conflict rules. A pre-import backup, dry run, production import receipt, and post-import count/hash
 reconciliation are required.
+
+> **Amended by A1 (2026-07-16):** the acknowledged-LSN/watermark recovery language in the paragraph
+> below is superseded — post-activation recovery restores the latest archived point, reconciles
+> external effects against GitHub, and starts a new fencing epoch before writes reopen. See
+> `## Amendments`.
 
 The cutover gate proves authenticated API clients and the Demerzel executor against PostgreSQL
 before disabling every legacy writer. It then removes Product Runtime BuilderOps routes/startup,
@@ -262,9 +279,74 @@ requires an owner decision before specification and backlog preparation.
   identity/provenance, limits plain quarantine to evidence-only material, and emits a reviewable
   duplicate-preventing tombstone/conflict receipt for unresolved authority-bearing inputs.
 - Independent full-backup + continuous-WAL restore-through-watermark with independently recoverable
-  key/KMS custody is a launch gate. A persistent volume or snapshot alone is not recoverability.
+  key/KMS custody is a launch gate *(superseded by A1, 2026-07-16: the launch gate is a
+  restore-from-backup drill + GitHub reconciliation + new-epoch activation)*. A persistent volume or
+  snapshot alone is not recoverability.
 - Product availability and BuilderOps availability are independent: either may be down without the
   other process owning or restarting it.
+
+## Amendments
+
+### A1 (2026-07-16, owner ruling) — Local-commit authority; asynchronous recovery durability; watermark regime removed
+
+Owner clarification: the 2026-07-15 direction requested one stable, shared, Demerzel-owned database
+as the single source of truth. It did not request synchronous off-host durability gating; that
+machinery arrived with the revision, not with the owner's ask, and is removed as a requirement:
+
+- D3's single-transaction atomicity (idempotency + guarded mutation + receipt + outbox intent in one
+  PostgreSQL transaction) stands unchanged, as do fencing, deterministic reconciliation,
+  readback-before-terminal, and unknown-not-failed semantics.
+- An authority-bearing success response, idempotent replay, dependent authority transition, outbox
+  claim, and external effect require the **local PostgreSQL commit only**. Every sentence in D2, D3,
+  D4, and D6 that gates acknowledgement, outbox claim, executor effects, readiness, or write-reopen
+  on an "independent recovery watermark" or "acknowledged LSN" is superseded.
+- Recovery durability is **asynchronous**: scheduled encrypted full backups plus WAL archiving on an
+  operator-chosen cadence to a target outside Demerzel's primary host and storage failure domains.
+  Cadence and destination are implementation choices. A co-resident volume or snapshot alone still
+  does not count as recovery durability, and independently recoverable key/KMS custody is unchanged.
+  A structurally misconfigured recovery target (co-resident with the primary host/storage failure
+  domain) fails readiness — misconfiguration stays fail-closed; a correctly configured but stalled or
+  lagging archiving pipeline alerts loudly without gating acknowledgement.
+- Accepted consequence (explicit): destructive loss of Demerzel's storage may lose the operational
+  tail written since the last archived point. Recovery restores the latest backup/WAL point, starts a
+  new lease/fencing authority epoch (D6 semantics), and **mandatorily reconciles external effects
+  against GitHub** — which remains delivery authority per D1 — before the executor resumes external
+  effects. No recovery path rewinds state that survived, and SQLite is never reactivated (unchanged).
+- The launch gate becomes: a proved restore-from-backup drill to the latest archived point in an
+  isolated target with Demerzel's host secret store unavailable, plus post-restore GitHub
+  reconciliation and new-epoch activation. "Restore-through-acknowledged-LSN" is superseded
+  accordingly. `docs/BUILDEROPS_CONTROL_PLANE/` is rewritten in the same change to match.
+
+### A2 (2026-07-16, owner ruling) — Failure-domain separation on Demerzel; degraded-mode contract
+
+Owner concern: a central database must not couple builder availability to the host's least stable
+components. The observed instability lives in the shared container VM and Product stacks, not in the
+host itself.
+
+- The BuilderOps service and database must not share a container-VM/runtime failure domain with the
+  `pkm-dev`/`pkm-test`/`pkm-prod` stacks. Product deploys, restarts, resource pressure, and
+  container-VM lifecycle events must not be able to stop the builder plane. The BCP delivery selects
+  a separate BuilderOps VM/container engine on Demerzel with the BuilderOps-only Compose project
+  required by D4; a native host service is not an alternate target for this delivery. This
+  strengthens D4's "own Compose project" to "own Compose project and failure domain".
+- Degraded-mode contract (explicit): when the control plane is unreachable, repo-authorized direct
+  git/GitHub work continues per D2 without fabricating BuilderOps state; orchestration-gated actions
+  (claims, promotions, executor merges) wait. Control-plane unavailability is a loss of
+  orchestration, not a work stoppage.
+- BuilderOps `/healthz` joins the operator alerting path so control-plane outages are observed
+  rather than discovered.
+
+### A3 (2026-07-16) — CKM/CEG is a named migration source; ADR-0057 substrate clause superseded at cutover
+
+ADR-0057 OD-K4 pins the Capability Evidence Graph to the SQLite BuilderOps substrate, and the
+shipped `app/builderops/ckm/store.py` writes its rebuildable projection state and BuilderOps receipts
+through that substrate, while D6's inventory did not name CKM.
+
+- CKM/CEG tables are added to the D6 cutover inventory and to BCP-03's migration scope.
+- Until cutover, CKM continues building on the SQLite substrate as a migration source; each schema
+  addition is migration surface and must stay import-coverable.
+- At cutover, ADR-0057 OD-K4's substrate clause is superseded by D3: the CEG lives in the BuilderOps
+  PostgreSQL authority. ADR-0057's capability model and projection-only semantics are unchanged.
 
 ## Source docs and evidence
 

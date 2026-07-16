@@ -372,7 +372,7 @@ if [ "${dry_run}" = "1" ]; then
 fi
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
-  echo "browser preflight failed before channel mutation" >&2
+  echo "companion UI preflight failed before channel mutation" >&2
   exit 86
 fi
 

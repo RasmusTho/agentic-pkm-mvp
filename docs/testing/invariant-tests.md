@@ -976,6 +976,27 @@ added as their child slices land.
   `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F3`.
 - **Related issues:** #3160; parent #3156.
 
+### every_settings_write_receipted
+
+- **Purpose:** Every settings writer emits a durable, actor-tagged, key-scoped receipt after a
+  successful mutation; receipt observation never authorizes or gates the mutation.
+- **Protected principle:** SET-3 (every settings write is receipted); closes audit F5 without adding
+  an approval loop.
+- **Affected boundaries:** GOV (receipt accountability), WSP (settings writers), OEF (queryable
+  observability).
+- **Required fixture / data:** compiler auto-heal source, watcher `settings/local.md` delta,
+  pre-vault app-local store, and the durable settings-receipt query projection.
+- **Expected failure mode:** a writer mutates settings with no durable evidence, or a receipt-sink
+  failure blocks an otherwise valid settings write.
+- **Current enforcement:** `runtime_test` — delivered by #3162 (SETTINGS-04); production compiler,
+  watcher, settings-service, and app-local call sites use the shared best-effort dual-sink seam.
+- **Runtime test path:** `tests/vault/test_settings_receipt_durable.py`,
+  `tests/watcher/test_settings_delta_receipts.py` (pass today).
+- **Related docs / contracts:** `docs/SETTINGS_SPINE/RECEIPT_EVERY_SETTINGS_WRITE.md`,
+  `docs/EVENTS.md :: settings.write.receipt`,
+  `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F5`.
+- **Related issues:** #3162; parent #3156.
+
 ## Related documents
 
 - [Traceability matrix](../architecture/traceability-matrix.md) — principle → contract → **this registry** → test → issue

@@ -6,6 +6,7 @@ from typing import Any, Dict
 import yaml
 
 from app.knowledge.write_ops import write_note_from_absolute
+from app.receipts.settings_write import emit_settings_write_receipts_for_changes
 
 from .loader import read_text
 
@@ -41,7 +42,13 @@ def write_markdown_via_knowledge_port(path: Path, markdown: str, *, vault_root: 
     write_note_from_absolute(resolved, markdown, vault_root=root)
 
 
-def writeback_settings_block(path: Path, canonical: Dict[str, Any], *, vault_root: Path | None = None) -> None:
+def writeback_settings_block(
+    path: Path,
+    canonical: Dict[str, Any],
+    *,
+    previous: Dict[str, Any],
+    vault_root: Path | None = None,
+) -> None:
     markdown = read_text(path)
     body = yaml.safe_dump(canonical, allow_unicode=True, sort_keys=True)
     replacement = f"{FENCE_START}\n{body}{FENCE_END}"
@@ -55,3 +62,12 @@ def writeback_settings_block(path: Path, canonical: Dict[str, Any], *, vault_roo
     else:
         markdown = markdown.rstrip() + "\n\n" + replacement + "\n"
     write_markdown_via_knowledge_port(path, markdown, vault_root=vault_root)
+    emit_settings_write_receipts_for_changes(
+        old_values=previous,
+        new_values=canonical,
+        surface="auto-heal",
+        actor="agent",
+        file=path,
+        key_prefix=path.stem,
+        flatten_nested=True,
+    )

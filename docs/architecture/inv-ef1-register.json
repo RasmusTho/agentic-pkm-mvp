@@ -1346,6 +1346,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/audits/ADR-0062_POST_RATIFICATION_2026-07-16.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
       "artifact": "docs/contracts/MIMER_CLIENT_CONTRACT.md",
       "category": "iv",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",

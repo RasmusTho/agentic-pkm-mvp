@@ -25,6 +25,12 @@ deploy_channel_compose() {
   local -a compose_args
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
+  # Resolve the governed runtime env file path. It is used below ONLY to read
+  # VAULT_HOST_ROOT for the overlay decision and to pin WATCHER_RUNTIME_ENV_FILE
+  # for the service `env_file:` layer. It is NEVER passed to Compose as a CLI
+  # `--env-file`: that would expose its DSNs and other values to Compose
+  # interpolation (#3875 — a previous dead `env_args` block here looked like it
+  # did exactly that; do not reintroduce it).
   runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
   runtime_env_file=""
   if [ -n "${runtime_env_ref}" ]; then
@@ -33,9 +39,6 @@ deploy_channel_compose() {
       ./*) runtime_env_file="${root}/${runtime_env_ref#./}" ;;
       *) runtime_env_file="${root}/${runtime_env_ref}" ;;
     esac
-    if [ -f "${runtime_env_file}" ]; then
-      env_args+=(--env-file "${runtime_env_file}")
-    fi
   fi
 
   vault_host_root="$(_deploy_channel_env_value "${channel_env_file}" VAULT_HOST_ROOT)"

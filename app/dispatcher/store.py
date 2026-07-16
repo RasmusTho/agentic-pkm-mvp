@@ -86,6 +86,16 @@ _PRE_TRUST_NESTED_FIELDS = {
         {"repository", "pr_number", "current_head_sha", "source_run_id"}
     ),
 }
+# The b4e2310 producer bound verification artifacts to GitHub provenance,
+# adding exactly one top-level field (``artifact_provenance``) to the pre-trust
+# shape and no ``supporting_issues``. Its provenance object is descriptive audit
+# metadata only and is never authoritative for execution.
+_PRE_TRUST_ARTIFACT_PROVENANCE_FIELDS = _PRE_TRUST_REQUEST_FIELDS | {
+    "artifact_provenance"
+}
+_PRE_TRUST_ARTIFACT_PROVENANCE_NESTED = frozenset(
+    {"workflow_run_id", "repository_id", "artifact_name"}
+)
 _CANONICAL_VERIFICATION_STATUSES = frozenset(
     {
         "queued",
@@ -108,29 +118,45 @@ def recognized_pre_trust_verification_request(
     row: Mapping[str, Any] | sqlite3.Row,
     request: Mapping[str, object],
 ) -> bool:
-    """Recognize the exact request contract deployed before artifact authority.
+    """Recognize the exact request contracts deployed before trust closure.
 
-    These requests are audit evidence only. Recognition never upgrades them to
-    the current closed request contract; it only permits an atomic migration to
-    a permanently inert ledger state.
+    Two historical producer shapes are recognized: the original pre-trust shape
+    (no ``artifact_provenance``) and the b4e2310 shape, which added exactly one
+    top-level field, ``artifact_provenance``, and still predates
+    ``supporting_issues``. Both are audit evidence only. Recognition never
+    upgrades them to the current closed request contract; it only permits an
+    atomic migration to a permanently inert ledger state. The recognizer stays
+    exact-shape and fail-closed: any other field set, extra key, or malformed
+    provenance object is rejected.
     """
-    if (
-        row["request_json"]
-        != json.dumps(
-            request,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        or set(request) != _PRE_TRUST_REQUEST_FIELDS
+    fields = set(request)
+    if fields == _PRE_TRUST_REQUEST_FIELDS:
+        has_artifact_provenance = False
+    elif fields == _PRE_TRUST_ARTIFACT_PROVENANCE_FIELDS:
+        has_artifact_provenance = True
+    else:
+        return False
+    if row["request_json"] != json.dumps(
+        request,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     ):
         return False
     nested: dict[str, Mapping[str, object]] = {}
-    for field, fields in _PRE_TRUST_NESTED_FIELDS.items():
+    for field, fields_set in _PRE_TRUST_NESTED_FIELDS.items():
         value = request.get(field)
-        if not isinstance(value, Mapping) or set(value) != fields:
+        if not isinstance(value, Mapping) or set(value) != fields_set:
             return False
         nested[field] = value
+    if has_artifact_provenance:
+        provenance = request.get("artifact_provenance")
+        if (
+            not isinstance(provenance, Mapping)
+            or set(provenance) != _PRE_TRUST_ARTIFACT_PROVENANCE_NESTED
+        ):
+            return False
+        nested["artifact_provenance"] = provenance
 
     repository = request.get("repository")
     pr_number = request.get("pr_number")
@@ -169,8 +195,15 @@ def recognized_pre_trust_verification_request(
     source = nested["source_workflow"]
     evidence = nested["evidence_pack"]
     live_truth = nested["live_truth"]
+    artifact_provenance_ok = not has_artifact_provenance or bool(
+        _positive_int(nested["artifact_provenance"].get("workflow_run_id"))
+        and _positive_int(nested["artifact_provenance"].get("repository_id"))
+        and nested["artifact_provenance"].get("artifact_name")
+        == f"verification-dispatch-{pr_number}-{head_sha}"
+    )
     return bool(
-        idempotency_key == expected_idempotency
+        artifact_provenance_ok
+        and idempotency_key == expected_idempotency
         and row["run_id"] == f"vrun-{idempotency_key[:16]}"
         and row["idempotency_key"] == idempotency_key
         and row["contract_version"] == request["contract_version"]

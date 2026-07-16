@@ -24,6 +24,7 @@ from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
+from app.receipts.settings_write import emit_settings_write_receipts_for_changes
 
 
 CURRENT_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v1"
@@ -1070,20 +1071,35 @@ class AppLocalSettingsStore:
             }
             for ref, item in sorted(settings.known_vaults.items())
         }
+        old_frontmatter: dict[str, object] = {}
+        if self.path.exists():
+            try:
+                old_frontmatter = dict(self.markdown_store.read(self.path).frontmatter)
+            except Exception:
+                # Receipt observation must never prevent recovery from a corrupt file.
+                old_frontmatter = {}
+        new_frontmatter = {
+            "schema": APP_LOCAL_SCHEMA,
+            "scope": "app-local",
+            "appInstallId": settings.app_install_id,
+            "lastActiveVaultRef": settings.last_active_vault_ref,
+            "knownVaults": known,
+        }
         self.markdown_store.write_frontmatter(
             self.path,
-            {
-                "schema": APP_LOCAL_SCHEMA,
-                "scope": "app-local",
-                "appInstallId": settings.app_install_id,
-                "lastActiveVaultRef": settings.last_active_vault_ref,
-                "knownVaults": known,
-            },
+            new_frontmatter,
             body=(
                 "# App Local Settings\n"
                 "This file stores local application preferences and recently used vaults.\n"
                 "It does not define project behavior.\n"
             ),
+        )
+        emit_settings_write_receipts_for_changes(
+            old_values=old_frontmatter,
+            new_values=new_frontmatter,
+            surface="app-local",
+            actor="system",
+            file=self.path,
         )
 
     def upsert_known_vault(self, item: KnownVaultRef, *, make_active: bool = True) -> AppLocalSettings:

@@ -16,10 +16,11 @@ from pydantic import ValidationError
 
 from app.events.bus import emit
 from app.components.settings.models_loader import load_models
+from app.receipts.settings_write import SettingsWriteReceipt, emit_settings_write_receipt
 from app.settings.panel_actions_settings import PanelActionsSettings, load_panel_actions_settings
 from app.settings.watcher_settings import WatcherSettings, load_watcher_settings
 from .constraints import as_bool, clamp_int, enum_or_default
-from .docs import inject_reference, render_reference
+from .docs import BEGIN, END, inject_reference, render_reference
 from .loader import read_text, split_sections
 from .models import (
     ClassifierSettings,
@@ -376,6 +377,22 @@ def _update_reference(path: Path, title: str, model: Any, auto_heal: bool, *, va
     updated = inject_reference(markdown, block)
     if updated != markdown:
         write_markdown_via_knowledge_port(path, updated, vault_root=vault_root)
+        old_reference = None
+        if BEGIN in markdown and END in markdown:
+            _, tail = markdown.split(BEGIN, 1)
+            old_reference, _ = tail.split(END, 1)
+            old_reference = old_reference.strip()
+        emit_settings_write_receipt(
+            SettingsWriteReceipt(
+                key=f"{path.stem}.__reference__",
+                value=block,
+                old_value=old_reference,
+                new_value=block,
+                file=str(path),
+                surface="auto-heal",
+                actor="agent",
+            )
+        )
 
 
 def compile_all(
@@ -406,7 +423,7 @@ def compile_all(
     global_model, global_canonical, global_fixed = _hydrate_model(payload=global_payload, model_cls=GlobalSettings)
     bundle.global_ = global_model
     if auto_heal_enabled and global_fixed and "global" in file_paths:
-        writeback_settings_block(file_paths["global"], global_canonical, vault_root=vault_root)
+        writeback_settings_block(file_paths["global"], global_canonical, previous=global_payload, vault_root=vault_root)
     if "global" in file_paths:
         _update_reference(file_paths["global"], "Global", bundle.global_, auto_heal_enabled, vault_root=vault_root)
 
@@ -416,7 +433,7 @@ def compile_all(
     )
     bundle.providers = providers_model
     if auto_heal_enabled and providers_fixed and "providers" in file_paths:
-        writeback_settings_block(file_paths["providers"], providers_canonical, vault_root=vault_root)
+        writeback_settings_block(file_paths["providers"], providers_canonical, previous=provider_payload, vault_root=vault_root)
     if "providers" in file_paths:
         _update_reference(file_paths["providers"], "Providers", bundle.providers, auto_heal_enabled, vault_root=vault_root)
 
@@ -429,7 +446,7 @@ def compile_all(
     )
     bundle.llm_routing = LLMRoutingSettings(**resolved_llm_routing_payload)
     if auto_heal_enabled and llm_routing_fixed and "llm_routing" in file_paths:
-        writeback_settings_block(file_paths["llm_routing"], llm_routing_canonical, vault_root=vault_root)
+        writeback_settings_block(file_paths["llm_routing"], llm_routing_canonical, previous=llm_routing_source_payload, vault_root=vault_root)
     if "llm_routing" in file_paths:
         _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, auto_heal_enabled, vault_root=vault_root)
 
@@ -439,7 +456,7 @@ def compile_all(
     )
     bundle.embedding_profiles = embeddings_model
     if auto_heal_enabled and embeddings_fixed and "embeddings" in file_paths:
-        writeback_settings_block(file_paths["embeddings"], embeddings_canonical, vault_root=vault_root)
+        writeback_settings_block(file_paths["embeddings"], embeddings_canonical, previous=embedding_payload, vault_root=vault_root)
     if "embeddings" in file_paths:
         _update_reference(file_paths["embeddings"], "Embeddings", bundle.embedding_profiles, auto_heal_enabled, vault_root=vault_root)
 
@@ -451,7 +468,7 @@ def compile_all(
         )
         bundle.yggdrasil_paths = ygg_model
         if auto_heal_enabled and ygg_fixed and "yggdrasil" in file_paths:
-            writeback_settings_block(file_paths["yggdrasil"], ygg_canonical, vault_root=vault_root)
+            writeback_settings_block(file_paths["yggdrasil"], ygg_canonical, previous=yggdrasil_payload, vault_root=vault_root)
         if "yggdrasil" in file_paths:
             _update_reference(file_paths["yggdrasil"], "Yggdrasil", ygg_model, auto_heal_enabled, vault_root=vault_root)
 
@@ -470,7 +487,7 @@ def compile_all(
                 model_cls=model_cls,
             )
             if auto_heal_enabled and normalized and agent_paths.get(agent_name):
-                writeback_settings_block(agent_paths[agent_name], healed_payload, vault_root=vault_root)
+                writeback_settings_block(agent_paths[agent_name], healed_payload, previous=merged, vault_root=vault_root)
             agents_cfg[agent_name] = instance
             if auto_heal_enabled and agent_paths.get(agent_name):
                 _update_reference(
