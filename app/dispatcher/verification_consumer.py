@@ -3345,7 +3345,6 @@ class VerificationConsumer:
             or pr.get("draft") is not False
             or pr.get("merged") is True
             or pr.get("merged_at") is not None
-            or pr.get("merge_commit_sha") is not None
             or neutralized_authority is None
         ):
             raise ValueError(

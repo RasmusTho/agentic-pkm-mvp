@@ -682,11 +682,15 @@ def _expired_running_verification(state):
     return running
 
 
-def _open_neutralized_recovery_evidence():
+def _open_neutralized_recovery_evidence(*, merge_commit_sha: object = None):
     plan = _merge_plan(HEAD)
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
-    neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    neutral_pr = eligible_pr(
+        body=plan["neutralized_body"],
+        merged=False,
+        merge_commit_sha=merge_commit_sha,
+    )
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
@@ -706,11 +710,21 @@ def _open_neutralized_recovery_evidence():
 
 
 @pytest.mark.parametrize("entrypoint", ["consume", "recover"])
+@pytest.mark.parametrize(
+    "merge_commit_sha",
+    [
+        pytest.param("7dd63b80" + "0" * 32, id="synthetic-test-merge-sha"),
+        pytest.param("not-a-merge-sha", id="malformed-ignored-field"),
+    ],
+)
 def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
     tmp_path,
     entrypoint: str,
+    merge_commit_sha: object,
 ) -> None:
-    plan, neutral_pr, comments = _open_neutralized_recovery_evidence()
+    plan, neutral_pr, comments = _open_neutralized_recovery_evidence(
+        merge_commit_sha=merge_commit_sha
+    )
 
     class RecoveryTruth(Truth):
         def pull_request_comments(self, repository, pr_number):
