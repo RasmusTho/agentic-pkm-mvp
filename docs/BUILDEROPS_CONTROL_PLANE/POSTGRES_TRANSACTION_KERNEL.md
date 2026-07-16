@@ -69,6 +69,9 @@ by BuilderOps governance and remains outside Product persistence authority.
 - A transaction result binds its committed receipt sequence and recovery LSN for observability and
   post-restore reconciliation; acknowledgement, replay, and outbox eligibility require the local
   PostgreSQL commit only (ADR-0062 A1).
+- If a response is lost after that local commit but before its observability LSN is bound, replay,
+  outbox claim, or status read completes the local binding under the committed identity; no
+  independent recovery proof may gate the committed operation.
 - Missing/ambiguous repo scope fails closed; an identity, lease, idempotency key, or promotion in one
   repo namespace cannot collide with or authorize another.
 - Do not yet switch production clients or remove Product routes.

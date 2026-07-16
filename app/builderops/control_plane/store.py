@@ -24,7 +24,6 @@ from app.builderops.control_plane.models import (
     LeaseUnavailable,
     OutboxClaim,
     OutboxReconciliation,
-    RecoveryWatermark,
     StateConflict,
     StaleFencingToken,
     TransactionResult,
@@ -66,16 +65,29 @@ class PostgresBuilderOpsStore:
     def initialize(self) -> None:
         with self._connect() as conn:
             migration_rows: dict[int, Mapping[str, Any]] = {}
-            existing_tables = {
-                str(row["table_name"])
+            existing_relations = {
+                str(row["relname"])
                 for row in conn.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = current_schema() AND table_name LIKE 'builderops_%'"
+                    "SELECT class.relname FROM pg_class AS class "
+                    "JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace "
+                    "WHERE namespace.nspname = current_schema() "
+                    "AND class.relname LIKE 'builderops_%'"
                 ).fetchall()
             }
-            has_migration_ledger = "builderops_schema_migrations" in existing_tables
-            has_authority_metadata = "builderops_authority_metadata" in existing_tables
-            if existing_tables and not (has_migration_ledger and has_authority_metadata):
+            existing_functions = {
+                str(row["proname"])
+                for row in conn.execute(
+                    "SELECT procedure.proname FROM pg_proc AS procedure "
+                    "JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace "
+                    "WHERE namespace.nspname = current_schema() "
+                    "AND procedure.proname LIKE 'builderops_%'"
+                ).fetchall()
+            }
+            has_migration_ledger = "builderops_schema_migrations" in existing_relations
+            has_authority_metadata = "builderops_authority_metadata" in existing_relations
+            if (existing_relations or existing_functions) and not (
+                has_migration_ledger and has_authority_metadata
+            ):
                 raise RuntimeError(
                     "existing BuilderOps schema is missing migration or authority metadata"
                 )
@@ -402,6 +414,21 @@ class PostgresBuilderOpsStore:
                 raise RuntimeError("committed idempotency record disappeared")
             provisional = self._result(row["result"], replayed=replayed)
             if provisional.recovery_lsn != "0/0":
+                conn.execute(
+                    "UPDATE builderops_receipts SET recovery_lsn = COALESCE(recovery_lsn, %s) "
+                    "WHERE receipt_sequence = %s",
+                    (provisional.recovery_lsn, provisional.receipt_sequence),
+                )
+                if provisional.operation_key is not None:
+                    conn.execute(
+                        "UPDATE builderops_outbox SET intent_lsn = COALESCE(intent_lsn, %s) "
+                        "WHERE repository = %s AND operation_key = %s",
+                        (
+                            provisional.recovery_lsn,
+                            repository,
+                            provisional.operation_key,
+                        ),
+                    )
                 return provisional
             result = TransactionResult(
                 provisional.repository,
@@ -954,7 +981,7 @@ class PostgresBuilderOpsStore:
         return dict(row)
 
     def replay(
-        self, repository: str, idempotency_key: str, *, watermark: RecoveryWatermark
+        self, repository: str, idempotency_key: str
     ) -> TransactionResult | AuthorityObjectResult | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -965,12 +992,69 @@ class PostgresBuilderOpsStore:
         if row is None or row["result"] is None:
             return None
         if row["result"].get("result_type") == "authority_object":
-            result: TransactionResult | AuthorityObjectResult = self._authority_result(
+            authority_result = self._authority_result(
                 row["result"], replayed=True
             )
-        else:
-            result = self._result(row["result"], replayed=True)
-        return result if watermark.covers_transition(result) else None
+            if authority_result.recovery_lsn == "0/0":
+                return self._finalize_authority_object(
+                    repository,
+                    idempotency_key,
+                    authority_result.receipt_sequence,
+                    self._flushed_lsn(),
+                    replayed=True,
+                )
+            return authority_result
+        transaction_result = self._result(row["result"], replayed=True)
+        if transaction_result.recovery_lsn == "0/0":
+            return self._finalize_transition(
+                repository,
+                idempotency_key,
+                transaction_result.receipt_sequence,
+                transaction_result.operation_key,
+                self._flushed_lsn(),
+                replayed=True,
+            )
+        return transaction_result
+
+    def _repair_outbox_bindings(self, repository: str, operation_key: str) -> None:
+        """Finish local observability bindings left incomplete by a lost response."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT outbox.intent_lsn::text AS intent_lsn, "
+                "outbox.intent_receipt_sequence, receipt.idempotency_key, "
+                "outbox.claim_fencing_token, outbox.reconciliation_receipt_sequence, "
+                "outbox.reconciliation_lsn::text AS reconciliation_lsn "
+                "FROM builderops_outbox AS outbox "
+                "LEFT JOIN builderops_receipts AS receipt "
+                "ON receipt.receipt_sequence = outbox.intent_receipt_sequence "
+                "WHERE outbox.repository = %s AND outbox.operation_key = %s",
+                (repository, operation_key),
+            ).fetchone()
+        if row is None:
+            return
+        if row["intent_lsn"] is None:
+            if not row["idempotency_key"]:
+                raise DurabilityPending("outbox intent has no local idempotency binding")
+            self._finalize_transition(
+                repository,
+                str(row["idempotency_key"]),
+                int(row["intent_receipt_sequence"]),
+                operation_key,
+                self._flushed_lsn(),
+                replayed=True,
+            )
+        if (
+            row["reconciliation_receipt_sequence"] is not None
+            and row["reconciliation_lsn"] is None
+        ):
+            self._finalize_reconciliation(
+                repository,
+                operation_key,
+                int(row["claim_fencing_token"]),
+                int(row["reconciliation_receipt_sequence"]),
+                self._flushed_lsn(),
+                replayed=True,
+            )
 
     def claim_task(
         self,
@@ -1462,7 +1546,6 @@ class PostgresBuilderOpsStore:
         envelope: AuthorityEnvelope,
         operation_key: str | None,
         worker_id: str,
-        watermark: RecoveryWatermark,
         claim_ttl_seconds: int = 300,
         fault_at: str | None = None,
     ) -> OutboxClaim:
@@ -1470,6 +1553,7 @@ class PostgresBuilderOpsStore:
             raise ValueError(
                 "operation_key, worker_id, and positive claim_ttl_seconds are mandatory"
             )
+        self._repair_outbox_bindings(envelope.repository, operation_key)
         expired_attempt = False
         with self._connect() as conn:
             conn.execute("SET LOCAL synchronous_commit = on")
@@ -1487,42 +1571,24 @@ class PostgresBuilderOpsStore:
                     "external effect outcome is unknown; readback required"
                 )
             if row["status"] == "succeeded":
-                reconciliation = self._load_reconciliation(
+                self._load_reconciliation(
                     conn,
                     envelope.repository,
                     operation_key,
                     int(row["claim_fencing_token"]),
                 )
-                if not watermark.covers_reconciliation(reconciliation):
-                    raise DurabilityPending(
-                        "terminal outbox reconciliation has not reached the recovery watermark"
-                    )
                 raise LeaseUnavailable("outbox operation is terminal: succeeded")
             if row["status"] == "dead_letter":
                 raise LeaseUnavailable("outbox operation is terminal: dead_letter")
             if row["status"] == "pending" and row["reconciliation_receipt_sequence"] is not None:
-                reconciliation = self._load_reconciliation(
+                self._load_reconciliation(
                     conn,
                     envelope.repository,
                     operation_key,
                     int(row["claim_fencing_token"]),
                 )
-                if not watermark.covers_reconciliation(reconciliation):
-                    raise DurabilityPending(
-                        "outbox reconciliation has not reached the recovery watermark"
-                    )
             if row["intent_lsn"] is None:
                 raise DurabilityPending("outbox intent durability binding is incomplete")
-            intent = TransactionResult(
-                repository=envelope.repository,
-                task_id=str(row["task_id"]),
-                state="outbox_pending",
-                receipt_sequence=int(row["intent_receipt_sequence"]),
-                recovery_lsn=str(row["intent_lsn"]),
-                operation_key=operation_key,
-            )
-            if not watermark.covers_intent(intent):
-                raise DurabilityPending("outbox intent has not reached the recovery watermark")
             effective_now = self._database_now(conn)
             if row["status"] == "claimed":
                 if row["claim_expires_at"] and row["claim_expires_at"] > effective_now:
@@ -1599,6 +1665,7 @@ class PostgresBuilderOpsStore:
 
     def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim:
         """Recover a process-lost attempt as unknown for mandatory readback."""
+        self._repair_outbox_bindings(repository, operation_key)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
@@ -1637,11 +1704,7 @@ class PostgresBuilderOpsStore:
     def effect_eligible(
         self,
         claim: OutboxClaim,
-        *,
-        watermark: RecoveryWatermark,
     ) -> bool:
-        if not watermark.covers_claim(claim):
-            return False
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, claim_expires_at, "
@@ -1902,9 +1965,10 @@ class PostgresBuilderOpsStore:
         self,
         repository: str,
         operation_key: str | None,
-        *,
-        watermark: RecoveryWatermark | None = None,
     ) -> str:
+        if not operation_key:
+            raise ValueError("operation_key is mandatory")
+        self._repair_outbox_bindings(repository, operation_key)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT status, claim_fencing_token, reconciliation_receipt_sequence "
@@ -1917,16 +1981,12 @@ class PostgresBuilderOpsStore:
             if row["status"] == "succeeded" or (
                 row["status"] == "pending" and row["reconciliation_receipt_sequence"] is not None
             ):
-                reconciliation = self._load_reconciliation(
+                self._load_reconciliation(
                     conn,
                     repository,
                     str(operation_key),
                     int(row["claim_fencing_token"]),
                 )
-                if watermark is None or not watermark.covers_reconciliation(reconciliation):
-                    raise DurabilityPending(
-                        "outbox reconciliation has not reached the recovery watermark"
-                    )
         return str(row["status"])
 
     def authority_counts(self, repository: str) -> dict[str, int]:

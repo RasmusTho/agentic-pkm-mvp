@@ -127,6 +127,22 @@ def test_idempotency_replay_and_conflict(control_plane_store, envelope) -> None:
             task_id="response-lost-task",
             fault_at="after_commit",
         )
+    replayed_after_commit = control_plane_store.replay(
+        envelope.repository, "response-lost"
+    )
+    assert replayed_after_commit is not None
+    assert replayed_after_commit.replayed is True
+    assert replayed_after_commit.recovery_lsn != "0/0"
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=replayed_after_commit.operation_key,
+        worker_id="response-lost-worker",
+    )
+    assert control_plane_store.effect_eligible(claim) is True
+    control_plane_store.mark_effect_unknown(claim, detail="test cleanup")
+    control_plane_store.reconcile_outbox(
+        claim, observed_applied=False, evidence={"readback": "not-found"}
+    )
     recovered = _commit(
         control_plane_store,
         envelope,

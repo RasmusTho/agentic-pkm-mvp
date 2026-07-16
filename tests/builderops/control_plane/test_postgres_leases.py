@@ -13,7 +13,6 @@ from app.builderops.control_plane import (
     Lease,
     LeaseRequired,
     LeaseUnavailable,
-    RecoveryWatermark,
     StateConflict,
     StaleFencingToken,
     StorePort,
@@ -55,15 +54,6 @@ def _heartbeat(store, envelope, lease: Lease, *, key: str, ttl_seconds: int = 30
     )
 
 
-def _observed(result) -> RecoveryWatermark:
-    return RecoveryWatermark(
-        recovered_through=result.recovery_lsn,
-        observed_receipts=frozenset(
-            {(result.repository, result.receipt_sequence, result.recovery_lsn)}
-        ),
-    )
-
-
 def test_generic_lease_operations_are_atomic_durable_and_replay_exact_snapshots(
     control_plane_store, envelope
 ) -> None:
@@ -88,16 +78,8 @@ def test_generic_lease_operations_are_atomic_durable_and_replay_exact_snapshots(
     assert receipt["lease_holder"] == lease.holder
     assert receipt["lease_fencing_token"] == lease.fencing_token
     assert receipt["recovery_lsn"] == claimed.recovery_lsn
-    assert (
-        store.replay(
-            envelope.repository,
-            claim_args["idempotency_key"],
-            watermark=RecoveryWatermark(recovered_through=claimed.recovery_lsn),
-        )
-        is None
-    )
     assert store.replay(
-        envelope.repository, claim_args["idempotency_key"], watermark=_observed(claimed)
+        envelope.repository, claim_args["idempotency_key"]
     ) == replace(claimed, replayed=True)
     replayed_claim, replayed_lease = store.claim_lease(**claim_args)
     assert replayed_claim == replace(claimed, replayed=True)

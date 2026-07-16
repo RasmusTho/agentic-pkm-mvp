@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import uuid4
+
+import psycopg
 import pytest
+from psycopg import sql
+
+from app.builderops.control_plane import PostgresBuilderOpsStore
 
 pytestmark = pytest.mark.pg
+
+
+def _isolated_schema_dsn(dsn: str, schema: str) -> str:
+    parts = urlsplit(dsn)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["options"] = f"-csearch_path={schema},public"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def test_initialize_refuses_newer_schema_and_authority_epoch(control_plane_store, envelope) -> None:
@@ -77,3 +91,36 @@ def test_initialize_refuses_to_recreate_a_missing_applied_migration_receipt(
         row = conn.execute("SELECT count(*) AS count FROM builderops_schema_migrations").fetchone()
     assert row is not None
     assert row["count"] == 0
+
+
+@pytest.mark.parametrize(
+    "partial_ddl",
+    (
+        "CREATE SEQUENCE builderops_receipt_sequence INCREMENT BY 7 START WITH 42",
+        "CREATE FUNCTION builderops_partial() RETURNS boolean "
+        "LANGUAGE sql IMMUTABLE AS 'SELECT true'",
+    ),
+)
+def test_initialize_refuses_partial_non_table_builderops_schema(
+    control_plane_store, envelope, partial_ddl: str
+) -> None:
+    schema = f"builderops_partial_{uuid4().hex}"
+    with control_plane_store._connect() as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+    store = PostgresBuilderOpsStore(_isolated_schema_dsn(control_plane_store.dsn, schema))
+    try:
+        with store._connect() as conn:
+            conn.execute(partial_ddl)
+        with pytest.raises(RuntimeError, match="missing migration or authority metadata"):
+            store.initialize()
+        with store._connect() as conn:
+            assert (
+                conn.execute(
+                    "SELECT to_regclass(%s) AS relation",
+                    (f"{schema}.builderops_schema_migrations",),
+                ).fetchone()["relation"]
+                is None
+            )
+    finally:
+        with psycopg.connect(control_plane_store.dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))

@@ -9,20 +9,10 @@ import pytest
 from app.builderops.control_plane import (
     IdempotencyConflict,
     LeaseRequired,
-    RecoveryWatermark,
     StateConflict,
 )
 
 pytestmark = pytest.mark.pg
-
-
-def _observed(result) -> RecoveryWatermark:
-    return RecoveryWatermark(
-        recovered_through=result.recovery_lsn,
-        observed_receipts=frozenset(
-            {(result.repository, result.receipt_sequence, result.recovery_lsn)}
-        ),
-    )
 
 
 def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
@@ -39,17 +29,7 @@ def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
     )
     assert record.object_kind == "record"
     assert store.get_record(envelope.repository, "learning-1")["state"] == "active"
-    assert (
-        store.replay(
-            envelope.repository,
-            "record-create",
-            watermark=RecoveryWatermark(recovered_through=record.recovery_lsn),
-        )
-        is None
-    )
-    assert store.replay(
-        envelope.repository, "record-create", watermark=_observed(record)
-    ) == replace(record, replayed=True)
+    assert store.replay(envelope.repository, "record-create") == replace(record, replayed=True)
     assert store.commit_record(
         envelope=envelope,
         record_id="learning-1",
@@ -363,6 +343,13 @@ def test_authority_object_response_loss_replays_one_receipted_result(
             idempotency_key="response-loss-promotion",
             fault_at="after_authority_commit",
         )
+
+    replayed_after_commit = control_plane_store.replay(
+        envelope.repository, "response-loss-promotion"
+    )
+    assert replayed_after_commit is not None
+    assert replayed_after_commit.replayed is True
+    assert replayed_after_commit.recovery_lsn != "0/0"
 
     recovered = control_plane_store.commit_promotion(
         envelope=envelope,

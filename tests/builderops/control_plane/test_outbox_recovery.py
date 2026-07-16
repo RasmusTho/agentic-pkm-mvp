@@ -5,10 +5,8 @@ from dataclasses import replace
 import pytest
 
 from app.builderops.control_plane import (
-    DurabilityPending,
     IdempotencyConflict,
     LeaseUnavailable,
-    RecoveryWatermark,
     StaleFencingToken,
     UnknownEffectNeedsReconciliation,
 )
@@ -23,67 +21,6 @@ def _expire_outbox_claim(store, repository: str, operation_key: str) -> None:
             "WHERE repository = %s AND operation_key = %s",
             (repository, operation_key),
         )
-
-
-def _observed_transition(result) -> RecoveryWatermark:
-    assert result.operation_key is not None
-    return RecoveryWatermark(
-        recovered_through=result.recovery_lsn,
-        observed_receipts=frozenset(
-            {(result.repository, result.receipt_sequence, result.recovery_lsn)}
-        ),
-        observed_intents=frozenset(
-            {(result.repository, result.operation_key, result.recovery_lsn)}
-        ),
-    )
-
-
-def _observed_claim(intent: RecoveryWatermark, claim) -> RecoveryWatermark:
-    return RecoveryWatermark(
-        recovered_through=claim.claim_lsn,
-        observed_receipts=intent.observed_receipts
-        | {(claim.repository, claim.receipt_sequence, claim.claim_lsn)},
-        observed_intents=intent.observed_intents,
-        observed_claims=frozenset(
-            {
-                (
-                    claim.repository,
-                    claim.operation_key,
-                    claim.fencing_token,
-                    claim.receipt_sequence,
-                    claim.claim_lsn,
-                )
-            }
-        ),
-    )
-
-
-def _observed_reconciliation(prior: RecoveryWatermark, reconciliation) -> RecoveryWatermark:
-    return RecoveryWatermark(
-        recovered_through=reconciliation.recovery_lsn,
-        observed_receipts=prior.observed_receipts
-        | {
-            (
-                reconciliation.repository,
-                reconciliation.receipt_sequence,
-                reconciliation.recovery_lsn,
-            )
-        },
-        observed_intents=prior.observed_intents,
-        observed_claims=prior.observed_claims,
-        observed_reconciliations=frozenset(
-            {
-                (
-                    reconciliation.repository,
-                    reconciliation.operation_key,
-                    reconciliation.fencing_token,
-                    reconciliation.receipt_sequence,
-                    reconciliation.recovery_lsn,
-                    reconciliation.status,
-                )
-            }
-        ),
-    )
 
 
 def _commit_outbox_task(
@@ -125,25 +62,17 @@ def test_unknown_external_effect_requires_readback_before_retry(
         effect_type="github.merge",
         payload={"pr": 4000},
     )
-    intent_watermark = _observed_transition(result)
     first_claim = control_plane_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-1",
-        watermark=intent_watermark,
         claim_ttl_seconds=1,
     )
     restarted_store = type(control_plane_store)(control_plane_store.dsn)
     orphaned_claim = restarted_store.outbox_claim(envelope.repository, result.operation_key)
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
     assert orphaned_claim == first_claim
-    assert (
-        restarted_store.effect_eligible(
-            first_claim,
-            watermark=_observed_claim(intent_watermark, first_claim),
-        )
-        is False
-    )
+    assert restarted_store.effect_eligible(first_claim) is False
     with pytest.raises(StaleFencingToken):
         restarted_store.reconcile_outbox(
             replace(orphaned_claim, worker_id="wrong-holder"),
@@ -157,15 +86,7 @@ def test_unknown_external_effect_requires_readback_before_retry(
             evidence={"readback": "not-found"},
             fault_at="after_reconciliation_commit",
         )
-    with pytest.raises(DurabilityPending):
-        restarted_store.claim_outbox(
-            envelope=envelope,
-            operation_key=result.operation_key,
-            worker_id="executor-2",
-            watermark=intent_watermark,
-        )
-    with pytest.raises(DurabilityPending):
-        restarted_store.outbox_status(envelope.repository, result.operation_key)
+    assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "pending"
     retryable = restarted_store.reconcile_outbox(
         orphaned_claim, observed_applied=False, evidence={"readback": "not-found"}
     )
@@ -175,39 +96,20 @@ def test_unknown_external_effect_requires_readback_before_retry(
     assert retry_receipt["lease_holder"] == orphaned_claim.worker_id
     assert retry_receipt["lease_fencing_token"] == orphaned_claim.fencing_token
     assert retry_receipt["recovery_lsn"] == retryable.recovery_lsn
-    assert (
-        RecoveryWatermark(recovered_through=retryable.recovery_lsn).covers_reconciliation(retryable)
-        is False
-    )
     with pytest.raises(IdempotencyConflict):
         restarted_store.reconcile_outbox(
             orphaned_claim,
             observed_applied=False,
             evidence={"readback": "different"},
         )
-    retry_watermark = _observed_reconciliation(intent_watermark, retryable)
-    assert (
-        restarted_store.outbox_status(
-            envelope.repository,
-            result.operation_key,
-            watermark=retry_watermark,
-        )
-        == "pending"
-    )
+    assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "pending"
     claim = restarted_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-2",
-        watermark=retry_watermark,
     )
     assert claim.fencing_token > first_claim.fencing_token
-    assert (
-        restarted_store.effect_eligible(
-            first_claim,
-            watermark=_observed_claim(intent_watermark, first_claim),
-        )
-        is False
-    )
+    assert restarted_store.effect_eligible(first_claim) is False
     with pytest.raises(StaleFencingToken):
         control_plane_store.mark_effect_unknown(first_claim, detail="late stale worker")
     restarted_store.mark_effect_unknown(claim, detail="network timeout after request")
@@ -217,7 +119,6 @@ def test_unknown_external_effect_requires_readback_before_retry(
             envelope=envelope,
             operation_key=result.operation_key,
             worker_id="executor-2",
-            watermark=intent_watermark,
         )
 
     terminal = restarted_store.reconcile_outbox(
@@ -228,31 +129,13 @@ def test_unknown_external_effect_requires_readback_before_retry(
     assert terminal_receipt["lease_holder"] == claim.worker_id
     assert terminal_receipt["lease_fencing_token"] == claim.fencing_token
     assert terminal_receipt["recovery_lsn"] == terminal.recovery_lsn
-    with pytest.raises(DurabilityPending):
-        restarted_store.claim_outbox(
-            envelope=envelope,
-            operation_key=result.operation_key,
-            worker_id="executor-3",
-            watermark=intent_watermark,
-        )
-    terminal_watermark = _observed_reconciliation(intent_watermark, terminal)
     with pytest.raises(LeaseUnavailable, match="terminal"):
         restarted_store.claim_outbox(
             envelope=envelope,
             operation_key=result.operation_key,
             worker_id="executor-3",
-            watermark=terminal_watermark,
         )
-    with pytest.raises(DurabilityPending):
-        restarted_store.outbox_status(envelope.repository, result.operation_key)
-    assert (
-        restarted_store.outbox_status(
-            envelope.repository,
-            result.operation_key,
-            watermark=terminal_watermark,
-        )
-        == "succeeded"
-    )
+    assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "succeeded"
 
 
 @pytest.mark.parametrize(
@@ -278,7 +161,6 @@ def test_reconciliation_receipt_state_and_evidence_commit_atomically(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor",
-        watermark=_observed_transition(result),
     )
     control_plane_store.mark_effect_unknown(claim, detail="response lost")
     receipt_count = control_plane_store.authority_counts(envelope.repository)["receipts"]
@@ -312,14 +194,11 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
         effect_type="github.merge",
         payload={"pr": 3852},
     )
-    intent_watermark = _observed_transition(result)
-
     with pytest.raises(RuntimeError, match="after_claim_commit"):
         control_plane_store.claim_outbox(
             envelope=envelope,
             operation_key=result.operation_key,
             worker_id="crashed-executor",
-            watermark=intent_watermark,
             fault_at="after_claim_commit",
         )
 
@@ -327,8 +206,8 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
     orphaned_claim = recovered.outbox_claim(envelope.repository, result.operation_key)
     assert orphaned_claim.claim_lsn == "0/0"
     assert recovered.outbox_status(envelope.repository, result.operation_key) == "unknown"
-    assert recovered.effect_eligible(orphaned_claim, watermark=RecoveryWatermark.stalled()) is False
-    retryable = recovered.reconcile_outbox(
+    assert recovered.effect_eligible(orphaned_claim) is False
+    recovered.reconcile_outbox(
         orphaned_claim,
         observed_applied=False,
         evidence={"readback": "not-found"},
@@ -337,7 +216,6 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="replacement-executor",
-        watermark=_observed_reconciliation(intent_watermark, retryable),
     )
     assert retried.fencing_token > orphaned_claim.fencing_token
 
@@ -351,12 +229,10 @@ def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelo
         effect_type="github.merge",
         payload={"pr": 3852},
     )
-    intent_watermark = _observed_transition(result)
     first = control_plane_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="expired-executor",
-        watermark=intent_watermark,
         claim_ttl_seconds=1,
     )
     _expire_outbox_claim(control_plane_store, envelope.repository, result.operation_key)
@@ -366,7 +242,6 @@ def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelo
             envelope=envelope,
             operation_key=result.operation_key,
             worker_id="replacement-executor",
-            watermark=intent_watermark,
         )
     recovered = control_plane_store.outbox_claim(envelope.repository, result.operation_key)
     assert recovered.operation_key == first.operation_key

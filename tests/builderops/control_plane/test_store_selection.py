@@ -93,10 +93,19 @@ def test_store_port_exposes_complete_recovery_and_durability_surface() -> None:
         "get_record": ("self", "repository", "record_id"),
         "get_attempt": ("self", "repository", "task_id", "attempt_id"),
         "get_promotion": ("self", "repository", "promotion_id"),
-        "replay": ("self", "repository", "idempotency_key", "watermark"),
+        "replay": ("self", "repository", "idempotency_key"),
+        "claim_outbox": (
+            "self",
+            "envelope",
+            "operation_key",
+            "worker_id",
+            "claim_ttl_seconds",
+            "fault_at",
+        ),
+        "effect_eligible": ("self", "claim"),
         "outbox_claim": ("self", "repository", "operation_key"),
         "mark_effect_unknown": ("self", "claim", "detail"),
-        "outbox_status": ("self", "repository", "operation_key", "watermark"),
+        "outbox_status": ("self", "repository", "operation_key"),
     }
 
     for method_name, parameters in required_parameters.items():
