@@ -1,8 +1,9 @@
 # Multi-vault runtime selection
 
 State: Active future-state capability specification. Parent validation hub **#2143** remains
-blocked and must never be claimed as an implementation issue. No text in this directory claims
-that multi-vault runtime behavior is shipped.
+blocked and must never be claimed as an implementation issue. The 17 executable children are filed
+as **#3853–#3869**; only #3853 is initially pickup-ready. No text in this directory claims that
+multi-vault runtime behavior is shipped.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -222,25 +223,25 @@ member binding independently. Removing a dimension does not remove its vault reg
 
 ## Implementation tasks
 
-| Order | Task | Adds | Dependency | Initial capability |
-| --- | --- | --- | --- | --- |
-| 01A | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | registry identity/store, package relocation, recovery, and concurrency | none | Sol/high |
-| 01B | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | durable volume migration, ownership/key fencing, and scalar-compatible rollback export | 01A | Sol/xhigh |
-| 01C | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | scalar rollback gateway, exports, and roll-forward lineage | 01B | Sol/xhigh |
-| 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
-| 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
-| 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | non-authoritative dimension membership and context resolution | 01A–01C, 03 | Sol/high design; Terra/high execution after contract freeze |
-| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | binding-keyed persistence cutover | 03, 04 | Sol/xhigh |
-| 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | request ingress, picker, reads, retrieval, and read-race fence | 05A, #3163 | Sol/high; Terra/high mechanical consumers |
-| 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | governed write target/token/receipt migration | 05B | Sol/xhigh |
-| 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | outbox producers, interim worker delivery, aggregate proof, owner docs | 05C | Sol/high; Terra/high mechanical consumers |
-| 06A | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | durable intent, service role, admin, and runtime floor | 05D | Sol/xhigh |
-| 06B | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | #3163 compatibility bridge handoff and settings rebind | 06A, #3163 | Sol/xhigh |
-| 06C | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | isolated zero/one/many lifecycle supervision | 06B | Sol/xhigh |
-| 06D | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | queued-work convergence and aggregate proof | 06C | Sol/xhigh |
-| 07A | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md#bounded-implementation-issue-decomposition) | compatibility inventory, isolated smoke, and no/one-vault fitness | 04, 05A–05D, 06A–06D | Terra/high |
-| 07B | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md#bounded-implementation-issue-decomposition) | runtime floor, reservation, governed topology reduction, and rollback | 07A | Sol/xhigh |
-| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01A–01C, 02–04, 05A–05D, 06A–06D, 07A–07B | Terra/high review; Sol/high if residual architecture risk |
+| Order | Task | Issue | Adds | Dependency | Initial capability |
+| --- | --- | --- | --- | --- | --- |
+| 01A | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | [#3853](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3853) | registry identity/store, package relocation, recovery, and concurrency | none | Sol/high |
+| 01B | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | [#3854](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3854) | durable volume migration, ownership/key fencing, and scalar-compatible rollback export | 01A | Sol/xhigh |
+| 01C | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | [#3855](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3855) | scalar rollback gateway, exports, and roll-forward lineage | 01B | Sol/xhigh |
+| 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | [#3856](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3856) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
+| 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | [#3857](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3857) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
+| 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | [#3858](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3858) | non-authoritative dimension membership and context resolution | 01A–01C, 03 | Sol/high design; Terra/high execution after contract freeze |
+| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859) | binding-keyed persistence cutover | 03, 04 | Sol/xhigh |
+| 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | request ingress, picker, reads, retrieval, and read-race fence | 05A, #3163 | Sol/high; Terra/high mechanical consumers |
+| 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3861](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3861) | governed write target/token/receipt migration | 05B | Sol/xhigh |
+| 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3862](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3862) | outbox producers, interim worker delivery, aggregate proof, owner docs | 05C | Sol/high; Terra/high mechanical consumers |
+| 06A | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | [#3863](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3863) | durable intent, service role, admin, and runtime floor | 05D, #3163 | Sol/xhigh |
+| 06B | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | [#3864](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3864) | #3163 compatibility bridge handoff and settings rebind | 06A, #3163 | Sol/xhigh |
+| 06C | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | [#3865](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3865) | isolated zero/one/many lifecycle supervision | 06B | Sol/xhigh |
+| 06D | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | [#3866](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3866) | queued-work convergence and aggregate proof | 06C | Sol/xhigh |
+| 07A | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md#bounded-implementation-issue-decomposition) | [#3867](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3867) | compatibility inventory, isolated smoke, and no/one-vault fitness | 04, 05A–05D, 06A–06D | Terra/high |
+| 07B | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md#bounded-implementation-issue-decomposition) | [#3868](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3868) | runtime floor, reservation, governed topology reduction, and rollback | 07A | Sol/xhigh |
+| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | [#3869](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3869) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01A–01C, 02–04, 05A–05D, 06A–06D, 07A–07B | Terra/high review; Sol/high if residual architecture risk |
 
 Execution is serial through issue 06D: task 04 and the 05/06 families evolve shared registry,
 projection, auth, queue, and lifecycle contracts, and their producer/preflight sets are not disjoint.
