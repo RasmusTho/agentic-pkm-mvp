@@ -137,6 +137,9 @@ def test_migration_preserves_unowned_fixed_backup_directory(
     legacy = vault / "@Settings" / "global.md"
     legacy.parent.mkdir(parents=True)
     legacy.write_text("# legacy\n", encoding="utf-8")
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# canonical\n", encoding="utf-8")
     unowned_backup = vault / ".settings-before-migration"
     unowned_backup.mkdir(parents=True)
     sentinel = unowned_backup / "recovery-copy.md"
@@ -151,6 +154,7 @@ def test_migration_preserves_unowned_fixed_backup_directory(
 
     assert sentinel.read_text(encoding="utf-8") == "preserve me\n"
     assert (vault / "settings" / "global.md").read_text(encoding="utf-8") == "# legacy\n"
+    assert canonical.read_text(encoding="utf-8") == "# canonical\n"
     assert not list(vault.glob(".settings-before-migration-*"))
 
 

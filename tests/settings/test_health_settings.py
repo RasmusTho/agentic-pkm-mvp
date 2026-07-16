@@ -93,18 +93,24 @@ def test_missing_file_returns_defaults(
     assert result.errors == []
 
 
-@pytest.mark.parametrize("configured_dir", ["../outside", "/tmp/outside-settings"])
+@pytest.mark.parametrize("escape_kind", ["parent", "absolute"])
 def test_configured_legacy_health_path_must_remain_inside_vault(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    configured_dir: str,
+    escape_kind: str,
 ) -> None:
     vault = tmp_path / "vault"
+    outside = tmp_path / "outside"
     vault.mkdir()
+    outside_health = outside / "Settings" / "health.md"
+    outside_health.parent.mkdir(parents=True)
+    outside_health.write_text(_VALID_FRONTMATTER, encoding="utf-8")
+    configured_dir = "../outside" if escape_kind == "parent" else str(outside)
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", configured_dir)
 
     with pytest.raises(ValueError, match="escapes vault root"):
         _load(vault)
+    assert outside_health.read_text(encoding="utf-8") == _VALID_FRONTMATTER
 
 
 def test_configured_legacy_health_symlink_must_remain_inside_vault(
@@ -114,11 +120,15 @@ def test_configured_legacy_health_symlink_must_remain_inside_vault(
     outside = tmp_path / "outside"
     vault.mkdir()
     outside.mkdir()
+    outside_health = outside / "Settings" / "health.md"
+    outside_health.parent.mkdir()
+    outside_health.write_text(_VALID_FRONTMATTER, encoding="utf-8")
     (vault / "linked-system").symlink_to(outside, target_is_directory=True)
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "linked-system")
 
     with pytest.raises(ValueError, match="escapes vault root"):
         _load(vault)
+    assert outside_health.read_text(encoding="utf-8") == _VALID_FRONTMATTER
 
 
 def test_valid_thresholds_load_ok(
