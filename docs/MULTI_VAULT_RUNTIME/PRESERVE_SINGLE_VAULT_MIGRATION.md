@@ -77,17 +77,22 @@ producer and consumer has a replacement and proves reversibility to the single-v
   re-expansion/reattachment to the original binding boundaries, so receipts and provenance continue to
   name their original sources even while the runtime operates with one active content vault.
 - Retire sources only through a batch coordinator over MVR-06B's authoritative removal journal. It
-  acquires the existing host-global ownership fence/ownership-ledger lock first, then the target and
-  every source mutation gate plus exclusive binding-effect lease in one canonical binding-ID order.
-  The target participates in fencing/proof but is never included in the retirement tombstone set. The
-  coordinator closes new MVR-06D queue claims for the target and every source and runs its
-  authoritative recovery for every queued, claimed, dispatched, and `effect_pending` row bound to
+  first atomically closes new MVR-06D queue claims/producers for the target and every source while
+  leaving the normal host-global/shared-lease effect path available to already-owned work, then runs
+  MVR-06D's authoritative recovery for every queued, claimed, dispatched, and `effect_pending` row bound to
   any participant. An effect that completed before its receipt is reconstructed and receipted under
   its original target/source binding before the final target rescan; every row must reach one proven
   terminal outcome. Missing or ambiguous effect/receipt evidence on either side blocks the batch
   before publish and leaves every source active and the target unselectable—reduction never relabels,
-  drops, or quarantines unsettled work to manufacture completion. The coordinator then completes
-  every final scan/buffer drain, stages every
+  drops, or quarantines unsettled work to manufacture completion. Only after that drain is terminal
+  does the coordinator acquire the existing host-global ownership fence/ownership-ledger lock, then
+  the target and every source mutation gate plus exclusive binding-effect lease in one canonical
+  binding-ID order. Exclusive acquisition waits for any final shared effect/receipt holder; under the
+  locks the coordinator reloads the queue and rechecks that every participant row is terminal before
+  proof. A non-terminal row releases the exclusives and returns to the gated recovery phase rather
+  than redispatching under an exclusive lock. The target participates in fencing/proof but is never
+  included in the retirement tombstone set. The coordinator then completes every final scan/buffer
+  drain, stages every
   dimension/default/background-intent repair and immutable tombstone, and proves the target
   package/rebuild before publishing anything. It then takes
   the instance/channel registry's existing exclusive sidecar lock and uses that store's normal
@@ -97,8 +102,7 @@ producer and consumer has a replacement and proves reversibility to the single-v
   projection proof plus that publish, so a concurrent target write or rebuild cannot stale or be
   overwritten by the accepted manifest. While the ownership-ledger lock remains held, ownership
   release executes only from that committed journal; crash recovery reacquires the same locks in the
-  same order. No
-  cross-channel registry lock or authority is introduced. The coordinator never directly deletes
+  same order. No cross-channel registry lock or authority is introduced. The coordinator never directly deletes
   a registration or bypasses MVR-06B lineage rules. A crash after preparing any strict subset leaves
   every source active and the target incomplete/unselectable; a crash after the single commit rolls
   forward all ownership releases. Governed abort before commit removes copied artifacts and restores
@@ -210,8 +214,8 @@ can break startup or strand durable state. Both failures are latent outages rath
   target-and-source per-binding leases → instance-registry sidecar lock, keeps the target out of the
   tombstone set, and holds its lease through target proof and one durable registry batch commit. A
   crash after the first or any later per-source prepare leaves every source registration active and
-  the target unselectable, while a
-  crash after commit recovers all tombstones, repaired references, target selectability, ownership
+  the target unselectable, while a crash after commit recovers all tombstones, repaired references,
+  target selectability, ownership
   releases, and the complete receipt without a partially retired topology or lock-order inversion.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
 - [ ] A target content write or projection rebuild racing reduction waits for the target's exclusive
@@ -219,11 +223,16 @@ can break startup or strand durable state. Both failures are latent outages rath
   the exact published target revision and no accepted target mutation is overwritten.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_fences_target_write_and_projection_races`
 - [ ] Before target proof or retirement publish, reduction gates new target- and source-bound claims
-  and uses MVR-06D recovery to terminally reconcile and receipt every participant's
-  queued/claimed/dispatched/effect-pending row. A crash after effect but before receipt is recovered
+  and uses the normal MVR-06D global/shared-lease path to terminally reconcile and receipt every
+  participant's queued/claimed/dispatched/effect-pending row. A crash after effect but before receipt is recovered
   under its original binding and included by the final target rescan; ambiguous evidence on either
   side blocks with all sources active, target unselectable, and no complete reduction receipt.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_effect_pending_before_retirement_commit`
+- [ ] A valid pending participant row with proven no prior effect redispatches and reaches its normal
+  terminal receipt while claims are gated but before reduction takes participant-exclusive leases.
+  After exclusives are acquired the reducer only reloads/rechecks the terminal invariant; it never
+  deadlocks by trying to redispatch through a shared lease it already excludes.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_drains_valid_pending_no_effect_before_exclusive_leases`
 - [ ] A target-bound effect that commits and crashes before receipt/ack is terminally recovered and
   receipted before target proof; an ambiguous target effect blocks publish rather than allowing a
   complete manifest/receipt with missing target lineage.
@@ -250,6 +259,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_fences_target_write_and_projection_races`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_effect_pending_before_retirement_commit`
+- `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_drains_valid_pending_no_effect_before_exclusive_leases`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_target_effect_pending_before_target_proof`
 - `mypy app`
 - `pytest -q -m "not pg"`
