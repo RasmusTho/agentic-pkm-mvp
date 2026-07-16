@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
 
+from app.instance.vault_registry import AppLocalSettingsStore
 from app.receipts.settings_write import (
     SettingsWriteReceipt,
     emit_settings_write_receipt,
     resolve_settings_receipt_old_value,
 )
-from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore
 

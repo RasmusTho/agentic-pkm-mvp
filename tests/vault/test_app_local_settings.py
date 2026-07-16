@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import app.vault.app_local as app_local
+import app.instance.vault_registry as app_local
 from app.vault.app_local import (
     AppLocalSettingsStore,
     KnownVaultRef,

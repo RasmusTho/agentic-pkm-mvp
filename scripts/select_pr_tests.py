@@ -132,8 +132,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "vault",
-        ("app/vault/", "tests/vault/", "tests/knowledge/", "docs/VAULT", "docs/builderops/BUILDEROPS_VAULT"),
-        ("tests/vault", "tests/knowledge", "tests/ports"),
+        (
+            "app/instance/",
+            "app/vault/",
+            "tests/instance/",
+            "tests/vault/",
+            "tests/knowledge/",
+            "docs/VAULT",
+            "docs/builderops/BUILDEROPS_VAULT",
+        ),
+        ("tests/instance", "tests/vault", "tests/knowledge", "tests/ports"),
     ),
     (
         "companion_ui",
