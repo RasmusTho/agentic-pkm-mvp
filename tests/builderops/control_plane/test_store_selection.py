@@ -28,8 +28,33 @@ def test_production_store_fails_closed_without_postgres(tmp_path: Path) -> None:
 
 def test_store_port_exposes_complete_recovery_and_durability_surface() -> None:
     required_parameters = {
-        "claim_lease": ("self", "envelope", "resource_id", "holder", "ttl_seconds"),
-        "release_lease": ("self", "lease"),
+        "claim_lease": (
+            "self",
+            "envelope",
+            "resource_id",
+            "holder",
+            "idempotency_key",
+            "request",
+            "ttl_seconds",
+            "fault_at",
+        ),
+        "heartbeat_lease": (
+            "self",
+            "envelope",
+            "lease",
+            "idempotency_key",
+            "request",
+            "ttl_seconds",
+            "fault_at",
+        ),
+        "release_lease": (
+            "self",
+            "envelope",
+            "lease",
+            "idempotency_key",
+            "request",
+            "fault_at",
+        ),
         "commit_record": (
             "self",
             "envelope",

@@ -247,8 +247,6 @@ class StorePort(Protocol):
         fault_at: str | None = None,
     ) -> tuple[TransactionResult, Lease]: ...
 
-    def heartbeat_lease(self, lease: Lease, *, ttl_seconds: int) -> Lease: ...
-
     def release_task(
         self,
         *,
@@ -275,10 +273,32 @@ class StorePort(Protocol):
         envelope: AuthorityEnvelope,
         resource_id: str,
         holder: str,
+        idempotency_key: str,
+        request: Mapping[str, Any],
         ttl_seconds: int = 5400,
-    ) -> Lease: ...
+        fault_at: str | None = None,
+    ) -> tuple[TransactionResult, Lease]: ...
 
-    def release_lease(self, lease: Lease) -> None: ...
+    def heartbeat_lease(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        ttl_seconds: int,
+        fault_at: str | None = None,
+    ) -> tuple[TransactionResult, Lease]: ...
+
+    def release_lease(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        fault_at: str | None = None,
+    ) -> TransactionResult: ...
 
     def commit_record(
         self,

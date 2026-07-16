@@ -75,10 +75,12 @@ def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
             idempotency_key="record-update-unleased",
             expected_states=("active",),
         )
-    record_lease = store.claim_lease(
+    _, record_lease = store.claim_lease(
         envelope=envelope,
         resource_id="record:learning-1",
         holder="record-worker",
+        idempotency_key="record-lease-claim",
+        request={"command": "claim-lease"},
     )
     processed = store.commit_record(
         envelope=envelope,
@@ -92,10 +94,12 @@ def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
     )
     assert processed.state == "processed"
 
-    forged_task_lease = store.claim_lease(
+    _, forged_task_lease = store.claim_lease(
         envelope=envelope,
         resource_id="missing-task",
         holder="executor",
+        idempotency_key="forged-task-lease-claim",
+        request={"command": "claim-lease"},
     )
     with pytest.raises(StateConflict, match="existing claimed task"):
         store.commit_attempt(

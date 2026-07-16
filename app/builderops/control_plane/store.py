@@ -970,18 +970,199 @@ class PostgresBuilderOpsStore:
         envelope: AuthorityEnvelope,
         resource_id: str,
         holder: str,
+        idempotency_key: str,
+        request: Mapping[str, Any],
         ttl_seconds: int = 5400,
-    ) -> Lease:
-        if not resource_id or not holder or ttl_seconds <= 0:
-            raise ValueError("resource_id, holder, and positive ttl_seconds are mandatory")
-        with self._connect() as conn:
-            return self._claim_lease_in_tx(
-                conn,
-                envelope=envelope,
-                resource_id=resource_id,
-                holder=holder,
-                ttl_seconds=ttl_seconds,
+        fault_at: str | None = None,
+    ) -> tuple[TransactionResult, Lease]:
+        return self._commit_lease_operation(
+            envelope=envelope,
+            operation="claimed",
+            resource_id=resource_id,
+            holder=holder,
+            idempotency_key=idempotency_key,
+            request=request,
+            ttl_seconds=ttl_seconds,
+            fault_at=fault_at,
+        )
+
+    def heartbeat_lease(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        ttl_seconds: int,
+        fault_at: str | None = None,
+    ) -> tuple[TransactionResult, Lease]:
+        return self._commit_lease_operation(
+            envelope=envelope,
+            operation="heartbeat",
+            resource_id=lease.resource_id,
+            holder=lease.holder,
+            idempotency_key=idempotency_key,
+            request=request,
+            ttl_seconds=ttl_seconds,
+            lease=lease,
+            fault_at=fault_at,
+        )
+
+    def release_lease(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        fault_at: str | None = None,
+    ) -> TransactionResult:
+        result, _ = self._commit_lease_operation(
+            envelope=envelope,
+            operation="released",
+            resource_id=lease.resource_id,
+            holder=lease.holder,
+            idempotency_key=idempotency_key,
+            request=request,
+            lease=lease,
+            fault_at=fault_at,
+        )
+        return result
+
+    def _commit_lease_operation(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        operation: str,
+        resource_id: str,
+        holder: str,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        ttl_seconds: int | None = None,
+        lease: Lease | None = None,
+        fault_at: str | None = None,
+    ) -> tuple[TransactionResult, Lease]:
+        if (
+            not resource_id
+            or not holder
+            or not idempotency_key
+            or operation not in {"claimed", "heartbeat", "released"}
+        ):
+            raise ValueError(
+                "resource_id, holder, idempotency_key, and a valid lease operation are mandatory"
             )
+        if operation != "released" and (ttl_seconds is None or ttl_seconds <= 0):
+            raise ValueError("positive ttl_seconds is mandatory")
+        if operation == "claimed" and lease is not None:
+            raise ValueError("claim cannot supply an existing lease")
+        if operation != "claimed" and lease is None:
+            raise ValueError("heartbeat/release require an existing lease")
+        request_hash = _hash(
+            {
+                "authority_envelope": envelope.as_json(),
+                "operation": operation,
+                "resource_id": resource_id,
+                "holder": holder,
+                "ttl_seconds": ttl_seconds,
+                "lease_identity": self._lease_identity_json(lease) if lease else None,
+                "request": dict(request),
+            }
+        )
+        envelope_json = Jsonb(envelope.as_json())
+        replayed = False
+        with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"idempotency:{envelope.repository}:{idempotency_key}",),
+            )
+            existing = conn.execute(
+                "SELECT request_hash, result FROM builderops_idempotency "
+                "WHERE repository = %s AND idempotency_key = %s FOR UPDATE",
+                (envelope.repository, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_hash"] != request_hash:
+                    raise IdempotencyConflict(
+                        "lease idempotency key was already committed for another operation"
+                    )
+                provisional = self._result(existing["result"], replayed=True)
+                persisted_lease = self._lease(existing["result"]["lease"])
+                if provisional.recovery_lsn != "0/0":
+                    return provisional, persisted_lease
+                receipt_sequence = provisional.receipt_sequence
+                operation_lease = persisted_lease
+                replayed = True
+            else:
+                if operation == "claimed":
+                    assert ttl_seconds is not None
+                    operation_lease = self._claim_lease_in_tx(
+                        conn,
+                        envelope=envelope,
+                        resource_id=resource_id,
+                        holder=holder,
+                        ttl_seconds=ttl_seconds,
+                    )
+                elif operation == "heartbeat":
+                    assert lease is not None and ttl_seconds is not None
+                    operation_lease = self._heartbeat_lease_in_tx(
+                        conn, lease=lease, ttl_seconds=ttl_seconds
+                    )
+                else:
+                    assert lease is not None
+                    self._release_lease_in_tx(conn, lease)
+                    operation_lease = lease
+                self._fault(fault_at, "after_lease_mutation")
+                receipt = conn.execute(
+                    "INSERT INTO builderops_receipts(repository, task_id, event_type, "
+                    "idempotency_key, lease_holder, lease_fencing_token, authority_envelope) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING receipt_sequence",
+                    (
+                        envelope.repository,
+                        resource_id,
+                        f"lease.{operation}",
+                        idempotency_key,
+                        operation_lease.holder,
+                        operation_lease.fencing_token,
+                        envelope_json,
+                    ),
+                ).fetchone()
+                assert receipt is not None
+                receipt_sequence = int(receipt["receipt_sequence"])
+                self._fault(fault_at, "after_lease_receipt")
+                provisional = TransactionResult(
+                    repository=envelope.repository,
+                    task_id=resource_id,
+                    state=f"lease.{operation}",
+                    receipt_sequence=receipt_sequence,
+                    recovery_lsn="0/0",
+                    operation_key=None,
+                )
+                result_document = self._result_json(provisional)
+                result_document["lease"] = self._lease_json(operation_lease)
+                conn.execute(
+                    "INSERT INTO builderops_idempotency(repository, idempotency_key, request_hash, "
+                    "result, authority_envelope) VALUES (%s, %s, %s, %s, %s)",
+                    (
+                        envelope.repository,
+                        idempotency_key,
+                        request_hash,
+                        Jsonb(result_document),
+                        envelope_json,
+                    ),
+                )
+                self._fault(fault_at, "after_lease_idempotency")
+        self._fault(fault_at, "after_lease_commit")
+        recovery_lsn = self._flushed_lsn()
+        result = self._finalize_transition(
+            envelope.repository,
+            idempotency_key,
+            receipt_sequence,
+            None,
+            recovery_lsn,
+            replayed=replayed,
+        )
+        return result, operation_lease
 
     @staticmethod
     def _claim_lease_in_tx(
@@ -1032,47 +1213,44 @@ class PostgresBuilderOpsStore:
         )
         return Lease(envelope.repository, resource_id, holder, token, expires_at)
 
-    def heartbeat_lease(self, lease: Lease, *, ttl_seconds: int) -> Lease:
+    @staticmethod
+    def _heartbeat_lease_in_tx(
+        conn: psycopg.Connection[dict[str, Any]], *, lease: Lease, ttl_seconds: int
+    ) -> Lease:
         if ttl_seconds <= 0:
             raise ValueError("positive ttl_seconds is mandatory")
-        with self._connect() as conn:
-            current = conn.execute(
-                "SELECT holder, fencing_token, expires_at FROM builderops_leases "
-                "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-                (lease.repository, lease.resource_id),
-            ).fetchone()
-            effective_now = self._database_now(conn)
-            expires_at = effective_now + timedelta(seconds=ttl_seconds)
-            if (
-                current is None
-                or current["holder"] != lease.holder
-                or int(current["fencing_token"]) != lease.fencing_token
-                or current["expires_at"] <= effective_now
-            ):
-                raise StaleFencingToken("lease expired or was reassigned")
-            updated = conn.execute(
-                "UPDATE builderops_leases SET expires_at = %s, updated_at = clock_timestamp() "
-                "WHERE repository = %s AND resource_id = %s AND holder = %s AND fencing_token = %s "
-                "AND expires_at > %s RETURNING resource_id",
-                (
-                    expires_at,
-                    lease.repository,
-                    lease.resource_id,
-                    lease.holder,
-                    lease.fencing_token,
-                    effective_now,
-                ),
-            ).fetchone()
-            if updated is None:
-                raise StaleFencingToken("lease expired or was reassigned")
+        current = conn.execute(
+            "SELECT holder, fencing_token, expires_at FROM builderops_leases "
+            "WHERE repository = %s AND resource_id = %s FOR UPDATE",
+            (lease.repository, lease.resource_id),
+        ).fetchone()
+        effective_now = PostgresBuilderOpsStore._database_now(conn)
+        expires_at = effective_now + timedelta(seconds=ttl_seconds)
+        if (
+            current is None
+            or current["holder"] != lease.holder
+            or int(current["fencing_token"]) != lease.fencing_token
+            or current["expires_at"] <= effective_now
+        ):
+            raise StaleFencingToken("lease expired or was reassigned")
+        updated = conn.execute(
+            "UPDATE builderops_leases SET expires_at = %s, updated_at = clock_timestamp() "
+            "WHERE repository = %s AND resource_id = %s AND holder = %s AND fencing_token = %s "
+            "AND expires_at > %s RETURNING resource_id",
+            (
+                expires_at,
+                lease.repository,
+                lease.resource_id,
+                lease.holder,
+                lease.fencing_token,
+                effective_now,
+            ),
+        ).fetchone()
+        if updated is None:
+            raise StaleFencingToken("lease expired or was reassigned")
         return Lease(
             lease.repository, lease.resource_id, lease.holder, lease.fencing_token, expires_at
         )
-
-    def release_lease(self, lease: Lease) -> None:
-        """Release a generic lease while preserving its monotonic fencing row."""
-        with self._connect() as conn:
-            self._release_lease_in_tx(conn, lease)
 
     @staticmethod
     def _release_lease_in_tx(conn: psycopg.Connection[dict[str, Any]], lease: Lease) -> None:

@@ -41,8 +41,20 @@ def test_authority_envelope_is_required_and_repo_namespaces_are_isolated(
         outbox={"effect_type": "github.comment", "payload": {}},
     )
     assert first.operation_key != second.operation_key
-    lease_a = control_plane_store.claim_lease(envelope=envelope, resource_id="same-id", holder="a")
-    lease_b = control_plane_store.claim_lease(envelope=repo_b, resource_id="same-id", holder="b")
+    _, lease_a = control_plane_store.claim_lease(
+        envelope=envelope,
+        resource_id="same-id",
+        holder="a",
+        idempotency_key="claim-same-id",
+        request={"command": "claim-lease"},
+    )
+    _, lease_b = control_plane_store.claim_lease(
+        envelope=repo_b,
+        resource_id="same-id",
+        holder="b",
+        idempotency_key="claim-same-id",
+        request={"command": "claim-lease"},
+    )
     assert lease_a.repository != lease_b.repository
     assert lease_a.fencing_token == lease_b.fencing_token == 1
 
