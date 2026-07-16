@@ -508,8 +508,12 @@ Post-merge docs/spec loop: triggered after merged PR; actor is post-merge skill 
 outputs a docs PR, follow-up issue, or no-change result, then records the same PR-specific result on
 every closed child and any distinct open governing parent. Issue-free lanes use the PR thread. The
 classifier and watchdog trust the same unique collaborator-authored same-head authority receipt during
-the temporary neutralized-body window; forged, stale, conflicting, generic, or different-PR receipts
-cannot select an issue [`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-docs-classifier.yml`], [`.github/workflows/post-merge-owner-doc-watchdog.yml`].
+the temporary neutralized-body window. The watchdog additionally requires the receipt's governing,
+closing, and live supporting sets to exactly match the canonically parsed live original or neutralized
+body. Forged, stale, conflicting, generic, different-PR, or body-mismatched receipts cannot select a
+watchdog target
+[`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-docs-classifier.yml`],
+[`.github/workflows/post-merge-owner-doc-watchdog.yml`].
 
 Learning/retrospective loop: triggered by divergence or approximately 10 delivery-learning records; actor is capture-learning/learning-retrospective; default mode proposes edits for human review; autonomous mode only when explicitly requested [`.codex/skills/learning-retrospective/SKILL.md`:25-32], [`.codex/skills/learning-retrospective/SKILL.md`:108-145].
 

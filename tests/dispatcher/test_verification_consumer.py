@@ -68,12 +68,16 @@ class Truth:
             repair_budget=self.merge_repair_budget,
         )
 
+    def merge_commit(self, repository, merge_commit_sha):
+        return _merge_commit(repository=repository, sha=merge_commit_sha)
+
     def issue_set_closure_evidence(
         self,
         repository,
         pr_number,
         *,
         issue_numbers,
+        observed_issue_numbers,
         merged_at,
         merge_commit_sha,
         actor_login,
@@ -300,12 +304,16 @@ class TransitionTruth:
             authenticated_supporting=self.authenticated_supporting,
         )
 
+    def merge_commit(self, repository, merge_commit_sha):
+        return _merge_commit(repository=repository, sha=merge_commit_sha)
+
     def issue_set_closure_evidence(
         self,
         repository,
         pr_number,
         *,
         issue_numbers,
+        observed_issue_numbers,
         merged_at,
         merge_commit_sha,
         actor_login,
@@ -566,6 +574,42 @@ def test_delivered_receipt_rejects_unattributed_unauthorized_issue_closure(
     assert result.status == "failed"
     assert result.stop_reason == "receipt_live_truth_unauthorized_closure"
     assert result.verified_head_sha is None
+
+
+def test_delivered_receipt_scans_phase_observed_unauthorized_candidate(
+    tmp_path,
+) -> None:
+    class PhaseObservedClosureTruth(TransitionTruth):
+        observed_candidates: list[int] | None = None
+
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(
+                self._last_pr,
+                reopened_unauthorized=(4999,),
+            )
+
+        def issue_set_closure_evidence(
+            self,
+            *args,
+            issue_numbers,
+            observed_issue_numbers,
+            **kwargs,
+        ):
+            self.observed_candidates = list(observed_issue_numbers)
+            return _closure_evidence(issue_numbers, unauthorized=(4999,))
+
+    truth = PhaseObservedClosureTruth(merged_pr())
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        truth,
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert truth.observed_candidates == [4999]
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_unauthorized_closure"
 
 
 def test_delivered_receipt_requires_trusted_exact_head_merge_authority(
@@ -909,6 +953,15 @@ def merged_pr(**updates: object) -> dict[str, object]:
     return value
 
 
+def _merge_commit(
+    *,
+    repository: str = REPO,
+    sha: str = "b" * 40,
+    message: str = "Merge verified issue set",
+) -> dict[str, object]:
+    return {"repository": repository, "sha": sha, "message": message}
+
+
 def _verification_run_id() -> str:
     idempotency_key = request()["idempotency_key"]
     assert isinstance(idempotency_key, str)
@@ -955,6 +1008,7 @@ def _merge_comments(
     *,
     phase: str = "restored",
     authenticated_supporting: tuple[int, ...] = (),
+    reopened_unauthorized: tuple[int, ...] = (),
     repair_budget: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
     head_sha = pr.get("head", {}).get("sha") if isinstance(pr.get("head"), Mapping) else None
@@ -998,12 +1052,14 @@ def _merge_comments(
             phase="reconciled",
             pr=merged_neutral,
             closed_issues=[3603],
+            reopened_unauthorized_issues=list(reopened_unauthorized),
         ),
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="restored",
             pr=restored,
             closed_issues=[3603],
+            reopened_unauthorized_issues=list(reopened_unauthorized),
         ),
     ]
     phase_index = {"prepared": 1, "merged": 2, "reconciled": 3, "restored": 4}[phase]
@@ -1258,34 +1314,33 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
     )
 
 
-def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
+def test_gh_source_scans_only_bounded_pr_related_closure_candidates() -> None:
     class Result:
         returncode = 0
 
         def __init__(self, value: object) -> None:
             self.stdout = json.dumps(value)
 
+    calls: list[str] = []
+
     def runner(command, **_kwargs):
         endpoint = command[-1]
-        if "/issues?state=closed" in endpoint:
+        calls.append(endpoint)
+        if endpoint == f"repos/{REPO}/issues/3603":
             return Result(
-                [
-                    {
-                        "number": 3603,
-                        "state": "closed",
-                        "closed_at": "2026-07-15T00:00:02Z",
-                    },
-                    {
-                        "number": 4999,
-                        "state": "closed",
-                        "closed_at": "2026-07-15T00:00:03Z",
-                    },
-                    {
-                        "number": 5000,
-                        "state": "closed",
-                        "closed_at": "2026-07-15T00:00:04Z",
-                    },
-                ]
+                {
+                    "number": 3603,
+                    "state": "closed",
+                    "closed_at": "2026-07-15T00:00:02Z",
+                }
+            )
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(
+                {
+                    "number": 4999,
+                    "state": "closed",
+                    "closed_at": "2026-07-15T00:00:03Z",
+                }
             )
         if "/issues/3603/events?per_page=100" in endpoint:
             return Result(
@@ -1309,23 +1364,13 @@ def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
                     }
                 ]
             )
-        if "/issues/5000/events?per_page=100" in endpoint:
-            return Result(
-                [
-                    {
-                        "event": "closed",
-                        "actor": {"login": "verification-closer"},
-                        "created_at": "2026-07-15T00:00:04Z",
-                        "commit_id": None,
-                    }
-                ]
-            )
         raise AssertionError(endpoint)
 
     evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
         REPO,
         3603,
         issue_numbers=[3603],
+        observed_issue_numbers=[4999],
         merged_at="2026-07-15T00:00:00Z",
         merge_commit_sha="b" * 40,
         actor_login="verification-closer",
@@ -1349,6 +1394,171 @@ def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
             "state": "closed",
         },
     ]
+    assert len(calls) == 4
+    assert not any("issues?state=closed" in endpoint for endpoint in calls)
+    assert not any("/issues/5000" in endpoint for endpoint in calls)
+
+
+def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[str] = []
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        calls.append(endpoint)
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(
+                {
+                    "number": 3603,
+                    "state": "closed",
+                    "closed_at": "2026-07-15T00:00:02Z",
+                }
+            )
+        if "/issues/3603/events?per_page=100" in endpoint:
+            return Result(
+                [
+                    {
+                        "event": "closed",
+                        "actor": {"login": "verification-closer"},
+                        "created_at": "2026-07-15T00:00:02Z",
+                        "commit_id": None,
+                    }
+                ]
+            )
+        raise AssertionError(f"unbounded busy-repository call: {endpoint}")
+
+    evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+        REPO,
+        3603,
+        issue_numbers=[3603],
+        observed_issue_numbers=[],
+        merged_at="2026-07-15T00:00:00Z",
+        merge_commit_sha="b" * 40,
+        actor_login="verification-closer",
+    )
+
+    assert evidence["observed_closing_issues"] == [3603]
+    assert len(calls) == 2
+
+
+def test_gh_source_issue_event_pagination_cap_fails_closed() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[str] = []
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        calls.append(endpoint)
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(
+                {
+                    "number": 3603,
+                    "state": "closed",
+                    "closed_at": "2026-07-15T00:00:02Z",
+                }
+            )
+        if "/issues/3603/events?per_page=100" in endpoint:
+            return Result(
+                [
+                    {
+                        "event": "labeled",
+                        "actor": {"login": "busy-bot"},
+                        "created_at": "2026-07-15T00:00:02Z",
+                        "commit_id": None,
+                    }
+                    for _ in range(100)
+                ]
+            )
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="exceeds bounded scan"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+    assert len(calls) == 3
+
+
+def test_gh_source_fetches_exact_bounded_merge_commit_identity() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    sha = "b" * 40
+    endpoint = f"repos/{REPO}/git/commits/{sha}"
+
+    def runner(command, **_kwargs):
+        assert command[-1] == endpoint
+        return Result(
+            {
+                "sha": sha,
+                "url": f"https://api.github.com/repos/{REPO}/git/commits/{sha}",
+                "message": "Merge verified issue set\n\nAuthority retained by receipt.",
+                "verification": {"payload": "must-not-cross-boundary"},
+            }
+        )
+
+    assert GhCliVerificationSource(runner=runner).merge_commit(REPO, sha) == {
+        "repository": REPO,
+        "sha": sha,
+        "message": "Merge verified issue set\n\nAuthority retained by receipt.",
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "sha": "c" * 40,
+            "url": f"https://api.github.com/repos/{REPO}/git/commits/{'c' * 40}",
+            "message": "Merge verified issue set",
+        },
+        {
+            "sha": "b" * 40,
+            "url": (
+                "https://api.github.com/repos/attacker/redirect/git/commits/"
+                + "b" * 40
+            ),
+            "message": "Merge verified issue set",
+        },
+    ],
+)
+def test_gh_source_rejects_mismatched_merge_commit_identity(payload) -> None:
+    class Result:
+        returncode = 0
+        stdout = json.dumps(payload)
+
+    with pytest.raises(RuntimeError, match="merge commit identity mismatch"):
+        GhCliVerificationSource(runner=lambda *_args, **_kwargs: Result()).merge_commit(
+            REPO, "b" * 40
+        )
+
+
+def test_gh_source_merge_commit_read_is_size_bounded() -> None:
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"padding": "x" * 70_000})
+
+    with pytest.raises(RuntimeError, match="exceeds bounded read"):
+        GhCliVerificationSource(runner=lambda *_args, **_kwargs: Result()).merge_commit(
+            REPO, "b" * 40
+        )
 
 
 def test_merged_recovery_pending_replay_uses_durable_authority_budget_after_advance(
@@ -2698,6 +2908,91 @@ def test_delivered_receipt_rejects_closed_unmerged_or_mismatched_merge(
 
     assert result.status == "failed"
     assert result.stop_reason == reason
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fixes #3603\n\ncaller supplied body",
+        "Merge verified issue set\n\nCloses #not-a-number",
+        "Merge verified issue set\n\nResolves other/repository#4999",
+        (
+            "Merge verified issue set\n\nFixes "
+            "https://github.com/other/repository/issues/4999"
+        ),
+    ],
+)
+def test_delivered_receipt_rejects_merge_commit_closing_attempts(
+    tmp_path, message
+) -> None:
+    class ClosingCommitTruth(TransitionTruth):
+        def merge_commit(self, repository, merge_commit_sha):
+            return _merge_commit(
+                repository=repository,
+                sha=merge_commit_sha,
+                message=message,
+            )
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        ClosingCommitTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_commit_closing_attempt"
+
+
+def test_delivered_receipt_rejects_cross_repository_merge_commit_evidence(
+    tmp_path,
+) -> None:
+    class CrossRepositoryCommitTruth(TransitionTruth):
+        def merge_commit(self, repository, merge_commit_sha):
+            return _merge_commit(
+                repository="attacker/redirect",
+                sha=merge_commit_sha,
+            )
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        CrossRepositoryCommitTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_commit_repository_mismatch"
+
+
+def test_merged_recovery_rejects_closing_merge_commit_before_phase_acceptance(
+    tmp_path,
+) -> None:
+    class ClosingCommitTruth(Truth):
+        def merge_commit(self, repository, merge_commit_sha):
+            return _merge_commit(
+                repository=repository,
+                sha=merge_commit_sha,
+                message="Merge verified issue set\n\nFixes other/repository#4999",
+            )
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    consumer = VerificationConsumer(
+        state,
+        ClosingCommitTruth(merged_pr(), GREEN),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="merge_commit_closing_attempt",
+    ):
+        consumer._merged_recovery_pack(run, merged_pr(), GREEN)
 
 
 def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_path, monkeypatch) -> None:

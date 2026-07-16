@@ -77,9 +77,13 @@ def test_terminal_delivery_requires_trusted_merge_and_closure_proof() -> None:
     for token in (
         "resolve_verified_merge_authority_receipt",
         "resolve_verified_merge_phase",
+        "merge_commit",
+        "merge_commit_closing_attempt",
         "issue_set_closure_evidence",
+        "observed_issue_numbers",
         "closure_evidence_incomplete",
         "unauthorized_closure",
         "_recover_merged_run",
     ):
         assert token in text
+    assert "issues?state=closed" not in text

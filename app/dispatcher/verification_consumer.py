@@ -29,7 +29,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlsplit
-from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import jsonschema
@@ -51,6 +50,7 @@ from app.dispatcher.verification_agent_loop import (
 )
 from app.dispatcher.verification_contract import (
     IssueAuthority,
+    has_closing_issue_attempt,
     resolve_issue_authority,
 )
 from app.dispatcher.verified_merge import (
@@ -77,12 +77,17 @@ class LiveTruthSource(Protocol):
         self, repository: str, pr_number: int
     ) -> Sequence[Mapping[str, object]]: ...
 
+    def merge_commit(
+        self, repository: str, merge_commit_sha: str
+    ) -> Mapping[str, object]: ...
+
     def issue_set_closure_evidence(
         self,
         repository: str,
         pr_number: int,
         *,
         issue_numbers: Sequence[int],
+        observed_issue_numbers: Sequence[int],
         merged_at: str,
         merge_commit_sha: str,
         actor_login: str,
@@ -308,6 +313,10 @@ _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_REQUEST_BYTES = 1_000_000
+_MAX_CLOSURE_CANDIDATES = 20
+_MAX_CLOSURE_EVENTS_PER_ISSUE = 200
+_MAX_MERGE_COMMIT_RESPONSE_BYTES = 64_000
+_MAX_MERGE_COMMIT_MESSAGE_BYTES = 16_000
 _VERIFICATION_REQUEST_WORKFLOW_NAME = "Verification Dispatch Request"
 _VERIFICATION_REQUEST_WORKFLOW_PATH = (
     ".github/workflows/verification-dispatch-request.yml"
@@ -553,12 +562,22 @@ class GhCliVerificationSource:
     def __init__(self, runner: ProcessRunner | None = None) -> None:
         self.runner = runner if runner is not None else cast(ProcessRunner, subprocess.run)
 
-    def _json(self, endpoint: str) -> object:
+    def _json(
+        self, endpoint: str, *, max_response_bytes: int | None = None
+    ) -> object:
         result = self.runner(
             ["gh", "api", endpoint], capture_output=True, text=True, check=False, timeout=60
         )
         if result.returncode != 0:
             raise RuntimeError(f"gh read failed for {endpoint}")
+        if max_response_bytes is not None:
+            size = (
+                len(result.stdout.encode("utf-8"))
+                if isinstance(result.stdout, str)
+                else len(result.stdout)
+            )
+            if size > max_response_bytes:
+                raise RuntimeError("GitHub response exceeds bounded read")
         return json.loads(result.stdout)
 
     def _json_pages(self, endpoint: str, *, limit: int = 1_000) -> list[object]:
@@ -908,12 +927,44 @@ class GhCliVerificationSource:
             raise RuntimeError("malformed GitHub pull request comments response")
         return [row for row in rows if isinstance(row, Mapping)]
 
+    def merge_commit(
+        self, repository: str, merge_commit_sha: str
+    ) -> Mapping[str, object]:
+        """Fetch only the bounded, non-secret exact Git commit identity."""
+
+        if (
+            re.fullmatch(r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+", repository) is None
+            or re.fullmatch(r"[0-9a-fA-F]{40}", merge_commit_sha) is None
+        ):
+            raise RuntimeError("malformed merge commit query")
+        endpoint = f"repos/{repository}/git/commits/{merge_commit_sha}"
+        payload = self._json(
+            endpoint,
+            max_response_bytes=_MAX_MERGE_COMMIT_RESPONSE_BYTES,
+        )
+        expected_url = f"https://api.github.com/repos/{repository}/git/commits/{merge_commit_sha}"
+        message = payload.get("message") if isinstance(payload, Mapping) else None
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("sha") != merge_commit_sha
+            or payload.get("url") != expected_url
+            or not isinstance(message, str)
+            or len(message.encode("utf-8")) > _MAX_MERGE_COMMIT_MESSAGE_BYTES
+        ):
+            raise RuntimeError("merge commit identity mismatch")
+        return {
+            "repository": repository,
+            "sha": merge_commit_sha,
+            "message": message,
+        }
+
     def issue_set_closure_evidence(
         self,
         repository: str,
         pr_number: int,
         *,
         issue_numbers: Sequence[int],
+        observed_issue_numbers: Sequence[int],
         merged_at: str,
         merge_commit_sha: str,
         actor_login: str,
@@ -938,43 +989,39 @@ class GhCliVerificationSource:
             )
         ):
             raise RuntimeError("malformed issue-set closure query")
-        endpoint = "repos/{}/issues?{}".format(
-            repository,
-            urlencode(
-                {
-                    "state": "closed",
-                    "since": merged_at,
-                    "per_page": 100,
-                }
-            ),
-        )
-        recent_rows = self._json_pages(endpoint)
+        if (
+            len(set(issue_numbers)) != len(issue_numbers)
+            or len(set(observed_issue_numbers)) != len(observed_issue_numbers)
+            or any(
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or number <= 0
+                for number in observed_issue_numbers
+            )
+        ):
+            raise RuntimeError("malformed issue-set closure query")
+        candidate_numbers = sorted({*issue_numbers, *observed_issue_numbers})
+        if len(candidate_numbers) > _MAX_CLOSURE_CANDIDATES:
+            raise RuntimeError("issue-set closure candidates exceed bounded scan")
         candidates: dict[int, Mapping[str, object]] = {}
-        for row in recent_rows:
-            if not isinstance(row, Mapping):
-                raise RuntimeError("malformed GitHub issue scan response")
-            number = row.get("number")
-            if (
-                isinstance(number, int)
-                and not isinstance(number, bool)
-                and number > 0
-                and not isinstance(row.get("pull_request"), Mapping)
-            ):
-                candidates[number] = row
-        for number in issue_numbers:
-            if number in candidates:
-                continue
+        for number in candidate_numbers:
             issue = self._json(f"repos/{repository}/issues/{number}")
-            if not isinstance(issue, Mapping) or issue.get("number") != number:
+            if (
+                not isinstance(issue, Mapping)
+                or issue.get("number") != number
+                or isinstance(issue.get("pull_request"), Mapping)
+            ):
                 raise RuntimeError("malformed GitHub issue response")
             candidates[number] = issue
 
         expected = set(issue_numbers)
+        observed_candidates = set(observed_issue_numbers)
         evidence: list[dict[str, object]] = []
         observed: list[int] = []
         for number, issue in sorted(candidates.items()):
             events = self._json_pages(
-                f"repos/{repository}/issues/{number}/events?per_page=100"
+                f"repos/{repository}/issues/{number}/events?per_page=100",
+                limit=_MAX_CLOSURE_EVENTS_PER_ISSUE,
             )
             transitions: list[Mapping[str, object]] = []
             for event in events:
@@ -1013,14 +1060,19 @@ class GhCliVerificationSource:
             )
             closed_by_delivery = bool(
                 actor_time_close
-                and (number in expected or commit_matches_delivery)
+                and (
+                    number in expected
+                    or number in observed_candidates
+                    or commit_matches_delivery
+                )
             )
             if closed_by_delivery:
                 observed.append(number)
             if number not in expected and not closed_by_delivery:
                 continue
             closed_by_pr = bool(
-                closed_by_delivery and commit_matches_delivery
+                closed_by_delivery
+                and (number in observed_candidates or commit_matches_delivery)
             )
             evidence.append(
                 {
@@ -2453,6 +2505,28 @@ def live_truth_rejection(
     )
 
 
+def _merge_commit_rejection(
+    repository: str,
+    merge_commit_sha: str,
+    commit: object,
+) -> str | None:
+    if not isinstance(commit, Mapping):
+        return "merge_commit_evidence_missing"
+    if commit.get("repository") != repository:
+        return "merge_commit_repository_mismatch"
+    if commit.get("sha") != merge_commit_sha:
+        return "merge_commit_sha_mismatch"
+    message = commit.get("message")
+    if (
+        not isinstance(message, str)
+        or len(message.encode("utf-8")) > _MAX_MERGE_COMMIT_MESSAGE_BYTES
+    ):
+        return "merge_commit_message_malformed"
+    if has_closing_issue_attempt(message):
+        return "merge_commit_closing_attempt"
+    return None
+
+
 def delivered_live_truth_rejection(
     run: VerificationRun,
     pr: Mapping[str, object],
@@ -2487,6 +2561,13 @@ def delivered_live_truth_rejection(
         r"[0-9a-fA-F]{40}", merge_commit_sha
     ):
         return "missing_merge_evidence"
+    commit_rejection = _merge_commit_rejection(
+        run.repository,
+        merge_commit_sha,
+        delivery_evidence.get("merge_commit"),
+    )
+    if commit_rejection:
+        return commit_rejection
     comments = delivery_evidence.get("comments")
     if not isinstance(comments, list) or any(
         not isinstance(comment, Mapping) for comment in comments
@@ -2743,7 +2824,11 @@ class VerificationConsumer:
         return f"{match.group(1)}{unit}"
 
     def _read_delivery_evidence(
-        self, run: VerificationRun, pr: Mapping[str, object]
+        self,
+        run: VerificationRun,
+        pr: Mapping[str, object],
+        *,
+        expected_repair_budget: Mapping[str, object],
     ) -> dict[str, object]:
         merged_at = pr.get("merged_at")
         merge_commit_sha = pr.get("merge_commit_sha")
@@ -2757,18 +2842,49 @@ class VerificationConsumer:
             or not actor_login
         ):
             raise RuntimeError("merged delivery identity is incomplete")
+        merge_commit = self.truth.merge_commit(
+            run.repository, merge_commit_sha
+        )
         comments = self.truth.pull_request_comments(
             run.repository, run.pr_number
         )
+        evidence: dict[str, object] = {
+            "comments": list(comments),
+            "merge_commit": dict(merge_commit),
+        }
+        if _merge_commit_rejection(
+            run.repository, merge_commit_sha, merge_commit
+        ):
+            return evidence
+        authority = resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=run.repository,
+            expected_run_id=run.run_id,
+            expected_repair_budget=expected_repair_budget,
+        )
+        if authority is None:
+            return evidence
+        phase = resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority,
+            pr=pr,
+        )
+        if phase is None:
+            return evidence
+        observed_issue_numbers = phase.get("reopened_unauthorized_issues")
+        if not isinstance(observed_issue_numbers, list):
+            return evidence
         closure = self.truth.issue_set_closure_evidence(
             run.repository,
             run.pr_number,
             issue_numbers=run.closing_authority,
+            observed_issue_numbers=observed_issue_numbers,
             merged_at=merged_at,
             merge_commit_sha=merge_commit_sha,
             actor_login=actor_login,
         )
-        return {**dict(closure), "comments": list(comments)}
+        return {**evidence, **dict(closure)}
 
     def _merged_recovery_pack(
         self,
@@ -2795,6 +2911,18 @@ class VerificationConsumer:
         if checks_rejection:
             raise ValueError(
                 f"verification run is no longer resumable: {checks_rejection}"
+            )
+        merge_commit_sha = cast(str, pr["merge_commit_sha"])
+        merge_commit = self.truth.merge_commit(
+            run.repository, merge_commit_sha
+        )
+        commit_rejection = _merge_commit_rejection(
+            run.repository, merge_commit_sha, merge_commit
+        )
+        if commit_rejection:
+            raise ValueError(
+                "verification run is no longer resumable: "
+                f"{commit_rejection}"
             )
         current_repair_budget = self.ledger.repair_budget_projection(run.run_id)
         comments = list(
@@ -3040,12 +3168,19 @@ class VerificationConsumer:
                 expected_head_sha=receipt_head,
                 expected_repair_budget=expected_merge_budget,
             )
-            if rejection == "merge_authority_missing":
+            if rejection in {
+                "merge_commit_evidence_missing",
+                "merge_authority_missing",
+            }:
                 rejection = delivered_live_truth_rejection(
                     claimed,
                     live_pr,
                     live_checks,
-                    self._read_delivery_evidence(claimed, live_pr),
+                    self._read_delivery_evidence(
+                        claimed,
+                        live_pr,
+                        expected_repair_budget=expected_merge_budget,
+                    ),
                     expected_head_sha=receipt_head,
                     expected_repair_budget=expected_merge_budget,
                 )
@@ -3610,12 +3745,19 @@ class VerificationConsumer:
                     expected_head_sha=receipt_head,
                     expected_repair_budget=expected_merge_repair_budget,
                 )
-                if rejection == "merge_authority_missing":
+                if rejection in {
+                    "merge_commit_evidence_missing",
+                    "merge_authority_missing",
+                }:
                     rejection = delivered_live_truth_rejection(
                         claimed,
                         live_pr,
                         live_checks,
-                        self._read_delivery_evidence(claimed, live_pr),
+                        self._read_delivery_evidence(
+                            claimed,
+                            live_pr,
+                            expected_repair_budget=expected_merge_repair_budget,
+                        ),
                         expected_head_sha=receipt_head,
                         expected_repair_budget=expected_merge_repair_budget,
                     )

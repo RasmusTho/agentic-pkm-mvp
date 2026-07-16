@@ -50,7 +50,7 @@ def _authority_comment(body: str | None = None) -> dict[str, object]:
     original = _body() if body is None else body
     neutralized = original.replace("Fixes #3820", "Refs #3820").replace(
         "Closes #3823", "Refs #3823"
-    )
+    ) + "Verified-Closing-Issues: #3820, #3823\n"
     receipt = {
         "authenticated_supporting_issues": [3820, 3823],
         "body_sha256": hashlib.sha256(original.encode()).hexdigest(),
@@ -130,7 +130,7 @@ def test_watchdog_accepts_authenticated_receipt_for_original_or_neutral_body() -
     original = _body()
     neutralized = original.replace("Fixes #3820", "Refs #3820").replace(
         "Closes #3823", "Refs #3823"
-    )
+    ) + "Verified-Closing-Issues: #3820, #3823\n"
     comment = _authority_comment()
 
     for body in (original, neutralized):
@@ -154,14 +154,8 @@ def test_watchdog_rejects_forged_stale_or_conflicting_authority_receipts() -> No
     conflicting_body = conflicting["body"]
     assert isinstance(conflicting_body, str)
     conflicting["body"] = conflicting_body.replace(
-        '"closing_issues":[3820,3823]',
-        '"closing_issues":[3820,4999]',
-    ).replace(
-        '"authenticated_supporting_issues":[3820,3823]',
-        '"authenticated_supporting_issues":[3820,4999]',
-    ).replace(
-        '"live_supporting_issues":[3820,3823]',
-        '"live_supporting_issues":[3820,4999]',
+        '"run_id":"vrun-authority"',
+        '"run_id":"vrun-conflict"',
     )
 
     assert (
@@ -197,6 +191,45 @@ def test_watchdog_rejects_forged_stale_or_conflicting_authority_receipts() -> No
     ) is None
 
 
+def test_watchdog_rejects_single_receipt_that_mismatches_live_authority() -> None:
+    mismatched = _authority_comment()
+    mismatched_body = mismatched["body"]
+    assert isinstance(mismatched_body, str)
+    mismatched["body"] = mismatched_body.replace(
+        '"closing_issues":[3820,3823]',
+        '"closing_issues":[3820,4999]',
+    ).replace(
+        '"authenticated_supporting_issues":[3820,3823]',
+        '"authenticated_supporting_issues":[3820,4999]',
+    ).replace(
+        '"live_supporting_issues":[3820,3823]',
+        '"live_supporting_issues":[3820,4999]',
+    )
+
+    assert (
+        _node(
+            "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+            [mismatched],
+            _pr(),
+            REPOSITORY,
+        )
+        is None
+    )
+
+
+def test_watchdog_rejects_receipt_that_omits_live_supporting_authority() -> None:
+    body = _body() + "Refs #4999\n"
+    assert (
+        _node(
+            "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+            [_authority_comment(body)],
+            _pr(body),
+            REPOSITORY,
+        )
+        is None
+    )
+
+
 def test_watchdog_governing_parser_matches_canonical_line_constraints() -> None:
     accepted = _node("resolveGoverningIssue(inputs[0])", "Governing-Issue: #3821\r\n")
     assert accepted == 3821
@@ -214,7 +247,8 @@ def test_watchdog_production_path_uses_authority_receipt_and_pr_specific_targets
     text = WORKFLOW.read_text(encoding="utf-8")
     for fragment in (
         "const authorityReceipt = resolveAuthorityReceipt",
-        "authorityReceipt ? authorityReceipt.closing_issues : linkedIssues",
+        'liveAuthority?.mode === "canonical"',
+        "authorityReceipt.closing_issues",
         "governingState = governing.state",
         "const targets = receiptTargets",
         "if (targets.length === 0)",

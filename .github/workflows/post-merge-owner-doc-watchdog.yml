@@ -23,7 +23,89 @@ jobs:
             const NUDGE_PREFIX = "post-merge owner-doc watchdog:";
 
             // owner-doc-watchdog-helpers:start
-            const resolveGoverningIssue = (candidateBody) => {
+            const resolveIssueAuthority = (candidateBody) => {
+              if (typeof candidateBody !== "string" || /\r(?!\n)|[\u2028\u2029]/.test(candidateBody)) {
+                return null;
+              }
+              const canonicalBody = candidateBody.replace(/\r\n/g, "\n");
+              const governingKeyword = "[Gg][Oo][Vv][Ee][Rr][Nn][Ii][Nn][Gg]-[Ii][Ss][Ss][Uu][Ee]";
+              const closingKeyword = "(?:[Ff][Ii][Xx](?:[Ee][Ss]|[Ee][Dd])?|[Cc][Ll][Oo][Ss][Ee](?:[Ss]|[Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee](?:[Ss]|[Dd])?)";
+              const issueTokenPrefix = "(?:^|[^0-9A-Za-z_])";
+              const issueTokenTerminator = "(?=$|[ \\t\\r\\n.,;:)\\]}])";
+              const asciiClosingSeparator = "(?:[ \\t]+|[ \\t]*:[ \\t]*)";
+              const explicitWhitespace = "[ \\t\\n\\v\\f\\r\\x85\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
+              const closingAttemptSeparator = `(?:${explicitWhitespace}+|${explicitWhitespace}*:${explicitWhitespace}*)`;
+              const githubIssueUrlTarget = "[Hh][Tt][Tt][Pp][Ss]?://[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+/[Ii][Ss][Ss][Uu][Ee][Ss]/";
+              const closingAttemptTarget = `(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#|${githubIssueUrlTarget})`;
+              const governingLines = canonicalBody.match(
+                new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
+              ) || [];
+              const exactGoverning = [...canonicalBody.matchAll(
+                new RegExp(`^[ \\t]*${governingKeyword}:[ \\t]*#([1-9][0-9]*)[ \\t]*$`, "gm")
+              )];
+              const closingMentions = canonicalBody.match(
+                new RegExp(`${issueTokenPrefix}${closingKeyword}${closingAttemptSeparator}${closingAttemptTarget}`, "gm")
+              ) || [];
+              const closingMatches = canonicalBody.match(
+                new RegExp(`${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+              ) || [];
+              const refsMatches = canonicalBody.match(
+                new RegExp(`${issueTokenPrefix}[Rr][Ee][Ff][Ss][ \\t]+#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+              ) || [];
+              const neutralizedLines = canonicalBody.match(
+                /^[ \t]*Verified-Closing-Issues[ \t]*:.*$/gm
+              ) || [];
+              const exactNeutralized = canonicalBody.match(
+                /^[ \t]*Verified-Closing-Issues:[ \t]*#[1-9][0-9]*(?:,[ \t]*#[1-9][0-9]*)*[ \t]*$/gm
+              ) || [];
+              if (governingLines.length !== 1 || exactGoverning.length !== 1) return null;
+              const governingIssue = Number(exactGoverning[0][1]);
+              const issueNumber = match => {
+                const token = match.match(/#([1-9][0-9]*)(?=$|[ \t\r\n.,;:)\]}])/);
+                return token ? Number(token[1]) : 0;
+              };
+              const supportingIssues = [...new Set(
+                [...closingMatches, ...refsMatches]
+                  .map(issueNumber)
+                  .filter(number => number > 0 && number !== governingIssue)
+              )].sort((a, b) => a - b);
+              const canonicalClosing = [...new Set(closingMatches.map(issueNumber))]
+                .filter(number => number > 0)
+                .sort((a, b) => a - b);
+              const neutralizedClosing = exactNeutralized.length === 1
+                ? exactNeutralized[0]
+                    .split(":", 2)[1]
+                    .split(",")
+                    .map(token => Number(token.trim().slice(1)))
+                : [];
+              const canonicalValid =
+                neutralizedLines.length === 0 &&
+                closingMatches.length > 0 &&
+                closingMentions.length === closingMatches.length &&
+                canonicalClosing.length <= 10;
+              const referenced = new Set([governingIssue, ...supportingIssues]);
+              const neutralizedValid =
+                closingMentions.length === 0 &&
+                neutralizedLines.length === 1 &&
+                exactNeutralized.length === 1 &&
+                neutralizedClosing.length > 0 &&
+                neutralizedClosing.length <= 10 &&
+                new Set(neutralizedClosing).size === neutralizedClosing.length &&
+                neutralizedClosing.every((number, index) =>
+                  Number.isInteger(number) && number > 0 &&
+                  (index === 0 || neutralizedClosing[index - 1] < number) &&
+                  referenced.has(number)
+                );
+              if (!canonicalValid && !neutralizedValid) return null;
+              return {
+                governing_issue: governingIssue,
+                closing_issues: canonicalValid ? canonicalClosing : neutralizedClosing,
+                supporting_issues: supportingIssues,
+                mode: canonicalValid ? "canonical" : "neutralized",
+              };
+            };
+
+            const resolveGoverningIssue = candidateBody => {
               if (typeof candidateBody !== "string" || /\r(?!\n)|[\u2028\u2029]/.test(candidateBody)) {
                 return null;
               }
@@ -40,8 +122,10 @@ jobs:
 
             const resolveAuthorityReceipt = (comments, livePr, expectedRepository) => {
               const trusted = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-              const governing = resolveGoverningIssue(livePr.body || "");
+              const liveAuthority = resolveIssueAuthority(livePr.body || "");
               const digest = bodySha256(livePr.body || "");
+              const arraysEqual = (left, right) =>
+                left.length === right.length && left.every((value, index) => value === right[index]);
               const receipts = [];
               for (const comment of comments) {
                 if (!trusted.has(comment.author_association) || typeof comment.body !== "string") continue;
@@ -59,7 +143,8 @@ jobs:
                   receipt.repository !== expectedRepository ||
                   receipt.pr_number !== livePr.number ||
                   receipt.head_sha !== livePr.head.sha ||
-                  governing !== receipt.governing_issue ||
+                  liveAuthority === null ||
+                  liveAuthority.governing_issue !== receipt.governing_issue ||
                   !Array.isArray(closing) || closing.length === 0 || closing.length > 10 ||
                   closing.some(n => !Number.isInteger(n) || n <= 0) ||
                   new Set(closing).size !== closing.length ||
@@ -72,8 +157,10 @@ jobs:
                   liveSupporting.some(n => !Number.isInteger(n) || n <= 0) ||
                   new Set(liveSupporting).size !== liveSupporting.length ||
                   liveSupporting.some((n, index) => index > 0 && liveSupporting[index - 1] >= n) ||
+                  !arraysEqual(closing, liveAuthority.closing_issues) ||
+                  !arraysEqual(liveSupporting, liveAuthority.supporting_issues) ||
                   supporting.some(n => !liveSupporting.includes(n)) ||
-                  closing.some(n => n !== governing && !supporting.includes(n)) ||
+                  closing.some(n => n !== receipt.governing_issue && !supporting.includes(n)) ||
                   ![receipt.body_sha256, receipt.neutralized_body_sha256].includes(digest) ||
                   typeof receipt.run_id !== "string" || receipt.run_id.length === 0 ||
                   typeof receipt.repair_budget !== "object" || receipt.repair_budget === null
@@ -154,10 +241,14 @@ jobs:
             linkedIssues = [...new Set(linkedIssues)].sort((a, b) => a - b);
 
             const authorityReceipt = resolveAuthorityReceipt(prComments, livePr, repository);
-            const authoritativeClosing = authorityReceipt ? authorityReceipt.closing_issues : linkedIssues;
+            const liveAuthority = resolveIssueAuthority(livePr.body || "");
+            const canonicalLiveAuthority = liveAuthority?.mode === "canonical" ? liveAuthority : null;
+            const authoritativeClosing = authorityReceipt
+              ? authorityReceipt.closing_issues
+              : (canonicalLiveAuthority ? canonicalLiveAuthority.closing_issues : linkedIssues);
             const governingIssue = authorityReceipt
               ? authorityReceipt.governing_issue
-              : resolveGoverningIssue(livePr.body || "");
+              : (canonicalLiveAuthority ? canonicalLiveAuthority.governing_issue : null);
             let governingState = null;
             if (governingIssue && !authoritativeClosing.includes(governingIssue)) {
               const { data: governing } = await github.rest.issues.get({
