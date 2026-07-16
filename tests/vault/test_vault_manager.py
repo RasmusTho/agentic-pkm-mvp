@@ -48,6 +48,7 @@ def test_initialize_vault_creates_expected_settings_files(tmp_path: Path) -> Non
         "settings/workflow.md",
         "settings/design-handoff.md",
         "settings/companion-ui.md",
+        "settings/youtube.md",
         "settings/local.md",
         "settings/.gitignore",
     }

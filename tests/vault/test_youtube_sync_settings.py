@@ -1,0 +1,179 @@
+"""YSS-01 (#3916): youtubeSync.* settings model.
+
+Single comprehensive Verify: target, matching the issue's AC text exactly:
+"youtubeSync.* settings resolve with defaults, scopes, and provenance;
+invalid values degrade to defaults with a validation error; the two gating
+keys are WriteGuard-gated on write from the production call site."
+
+Pattern borrowed from `tests/vault/test_settings_service.py` (hand-built
+`VaultContext` + raw frontmatter files, no `VaultManager` needed) and
+`tests/companion_ui/test_runtime_control_settings_authority.py` (WriteGuard
+blocked-write pattern: patch `DEFAULT_WRITE_GUARD.snapshot_fn` directly,
+because the singleton is imported fresh inside `SettingsService.update_setting`
+at call time).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from app.vault.manager import VaultContext
+from app.vault.settings_service import RUNTIME_GATING_SETTINGS, SettingsService, SettingsWriteError
+
+pytestmark = pytest.mark.not_pg
+
+
+def _write(path: Path, frontmatter: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(frontmatter, encoding="utf-8")
+
+
+def _init_minimal_vault(vault_root: Path) -> Path:
+    """A minimal valid vault-shared/vault-local settings set, deliberately
+    WITHOUT settings/youtube.md -- proves the built-in default path holds even
+    when the capability's own settings file has never been scaffolded (e.g. a
+    vault created before this capability shipped)."""
+    settings_dir = vault_root / "settings"
+    files = {
+        "vault.md": (
+            "---\nschema: design-handoff.vault.v1\nscope: vault-shared\n"
+            "vaultId: vault-test\nvaultName: Test\n---\n"
+        ),
+        "local.md": (
+            "---\nschema: design-handoff.local.v1\nscope: vault-local\n"
+            "localInstanceId: l1\nmachineRole: primary\n---\n"
+        ),
+    }
+    for name, content in files.items():
+        _write(settings_dir / name, content)
+    return settings_dir
+
+
+_EXPECTED_DEFAULTS: dict[str, object] = {
+    "youtubeSync.enabled": False,
+    "youtubeSync.inboxPollSeconds": 180,
+    "youtubeSync.playlistPollSeconds": 3600,
+    "youtubeSync.subscriptionsPollSeconds": 21600,
+    "youtubeSync.reconcileIntervalDays": 7,
+    "youtubeSync.maxConcurrentAcquisitions": 2,
+    "youtubeSync.subscriptionDefaultPolicy": "discover_only",
+    "youtubeSync.captionsEnabled": True,
+    "youtubeSync.mediaDownloadEnabled": False,
+    "youtubeSync.runnerEnabled": False,
+}
+
+
+def test_defaults_scopes_provenance_and_gated_writes(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(status="selected", active_vault_path=str(vault_root), settings_path=str(settings_dir))
+    service = SettingsService()
+
+    # --- 1. Defaults resolve built-in when youtube.md/local.md carry no override ---
+    resolution = service.resolve(context)
+    for key, expected in _EXPECTED_DEFAULTS.items():
+        effective = resolution.settings[key]
+        assert effective.value == expected, key
+        assert effective.scope == "built-in", key
+        assert effective.source == "built-in", key
+
+    # --- 2. RUNTIME_GATING_SETTINGS names exactly the two authority-bearing keys ---
+    assert "youtubeSync.enabled" in RUNTIME_GATING_SETTINGS
+    assert "youtubeSync.runnerEnabled" in RUNTIME_GATING_SETTINGS
+
+    # --- 3. Vault-shared override + provenance (settings/youtube.md) ---
+    youtube_md = settings_dir / "youtube.md"
+    _write(
+        youtube_md,
+        "---\nscope: vault-shared\nyoutubeSync.enabled: true\nyoutubeSync.inboxPollSeconds: 90\n---\n",
+    )
+    resolution = service.resolve(context)
+    enabled_setting = resolution.settings["youtubeSync.enabled"]
+    assert enabled_setting.value is True
+    assert enabled_setting.scope == "vault-shared"
+    assert enabled_setting.source_file == str(youtube_md)
+    inbox_setting = resolution.settings["youtubeSync.inboxPollSeconds"]
+    assert inbox_setting.value == 90
+    assert inbox_setting.scope == "vault-shared"
+    assert inbox_setting.source_file == str(youtube_md)
+    # An untouched key in the same file still resolves to its default.
+    assert resolution.settings["youtubeSync.captionsEnabled"].value is True
+
+    # --- 4. Vault-local override + provenance (settings/local.md) for runnerEnabled ---
+    local_md = settings_dir / "local.md"
+    _write(
+        local_md,
+        (
+            "---\nschema: design-handoff.local.v1\nscope: vault-local\n"
+            "localInstanceId: l1\nmachineRole: primary\nyoutubeSync.runnerEnabled: true\n---\n"
+        ),
+    )
+    resolution = service.resolve(context)
+    runner_setting = resolution.settings["youtubeSync.runnerEnabled"]
+    assert runner_setting.value is True
+    assert runner_setting.scope == "vault-local"
+    assert runner_setting.source_file == str(local_md)
+
+    # --- 5. Invalid values degrade to defaults with a surfaced validation error ---
+    _write(
+        youtube_md,
+        (
+            "---\nscope: vault-shared\nyoutubeSync.inboxPollSeconds: -5\n"
+            "youtubeSync.subscriptionDefaultPolicy: not_a_real_mode\n---\n"
+        ),
+    )
+    resolution = service.resolve(context)
+    degraded_inbox = resolution.settings["youtubeSync.inboxPollSeconds"]
+    assert degraded_inbox.value == 180  # default, not -5 -- never a silent apply
+    assert degraded_inbox.scope == "built-in"
+    assert any(
+        err.key == "youtubeSync.inboxPollSeconds" and err.source_file == str(youtube_md)
+        for err in resolution.validation_errors
+    )
+    degraded_policy = resolution.settings["youtubeSync.subscriptionDefaultPolicy"]
+    assert degraded_policy.value == "discover_only"
+    assert any(
+        err.key == "youtubeSync.subscriptionDefaultPolicy" and err.source_file == str(youtube_md)
+        for err in resolution.validation_errors
+    )
+
+    # Restore a valid youtube.md for the write-gating section below.
+    _write(youtube_md, "---\nscope: vault-shared\n---\n")
+
+    # --- 6. WriteGuard gates the two runtime-gating keys at the production call site ---
+    import app.write_guard as _wg_module
+
+    healthy_snapshot = {"state": "healthy", "reason": None}
+    blocked_snapshot = {"state": "safe_mode", "reason": "maintenance window"}
+
+    # Positive control: a healthy snapshot lets the governed write through and
+    # emits a receipt tagged is_runtime_gating -- proves the gate is genuinely
+    # exercised, not merely present-but-vacuous.
+    with patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=healthy_snapshot):
+        effective, receipt = service.update_setting(
+            context, "youtubeSync.enabled", True, surface="cli", actor="human"
+        )
+        assert effective.value is True
+        assert receipt.is_runtime_gating is True
+        assert receipt.key == "youtubeSync.enabled"
+
+    for gated_key, value in (("youtubeSync.enabled", False), ("youtubeSync.runnerEnabled", True)):
+        with (
+            patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=blocked_snapshot),
+            pytest.raises(SettingsWriteError) as excinfo,
+        ):
+            service.update_setting(context, gated_key, value, surface="cli", actor="human")
+        message = str(excinfo.value).lower()
+        assert "blocked" in message or "health gate" in message
+
+    # A non-gating youtubeSync.* key is NOT WriteGuard-gated (mirrors the
+    # existing enableVaultWatcher/enableAutoIndexing precedent).
+    with patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=blocked_snapshot):
+        effective, receipt = service.update_setting(
+            context, "youtubeSync.captionsEnabled", False, surface="cli", actor="human"
+        )
+        assert effective.value is False
+        assert receipt.is_runtime_gating is False

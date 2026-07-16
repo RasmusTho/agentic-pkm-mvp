@@ -134,6 +134,11 @@ ALLOW_FILES = (
     # append-only receipt table, direct DSN connection, no ORM layer to
     # route through.
     'app/heimdal/retention.py',
+    # YouTube Source Sync durable source registry (YSS-01, #3916). Same bounded
+    # pattern as app/heimdal/cursor_store.py above: a dedicated table
+    # (acquisition_source_registry) with a self-contained dual memory/pg
+    # backend, direct DSN connection, no ORM layer to route through.
+    'app/knowledge_acquisition/source_registry.py',
 )
 
 def _allowed(p: Path) -> bool:

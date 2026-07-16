@@ -85,6 +85,8 @@ health-gate and emits an actor-tagged receipt.
 |-------------|--------|-----------------|---------------|
 | `enableVaultWatcher` | Gates watcher startup (`registry.py:734`, `config.py:92`) | Authority-bearing | WriteGuard + `SettingsWriteReceipt` |
 | `enableAutoIndexing` | Gates auto-indexing runtime | Authority-bearing | WriteGuard + `SettingsWriteReceipt` |
+| `youtubeSync.enabled` | Master switch for the YouTube Source Sync capability (YSS-01, #3916) | Authority-bearing | WriteGuard + `SettingsWriteReceipt` |
+| `youtubeSync.runnerEnabled` | Gates whether this machine runs the YouTube sync loop (the DB lease remains the hard guard) | Authority-bearing | WriteGuard + `SettingsWriteReceipt` |
 
 **Governed seam** (`app/vault/settings_service.py :: SettingsService.update_setting`):
 1. `RUNTIME_GATING_SETTINGS` classifies the key as authority-bearing.

@@ -469,10 +469,13 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line."
     ),
-    ("app/vault/settings_service.py", 348): (
-        "guarded: SettingsService.set_effective_setting asserts "
+    ("app/vault/settings_service.py", 492): (
+        "guarded: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
-        "earlier in the same method before persist=True reaches this write."
+        "earlier in the same method before persist=True reaches this write. "
+        "Line drifted 348 -> 492 (site unchanged); re-pinned per this census's "
+        "own directly-related-repair convention when YSS-01 (#3916) added the "
+        "youtubeSync.* SettingDefinitions earlier in the file."
     ),
     ("app/instance/vault_registry.py", 1088): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
