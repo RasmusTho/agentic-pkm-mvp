@@ -17,6 +17,7 @@ from app.builderops.control_plane.models import (
     StorePort,
     TransactionResult,
     UnknownEffectNeedsReconciliation,
+    canonical_repository,
 )
 from app.builderops.control_plane.selection import ExplicitSqliteAdapter, production_store
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
@@ -41,4 +42,5 @@ __all__ = [
     "TransactionResult",
     "UnknownEffectNeedsReconciliation",
     "production_store",
+    "canonical_repository",
 ]

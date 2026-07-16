@@ -119,6 +119,8 @@ def test_initialize_refuses_to_recreate_a_missing_applied_migration_receipt(
         "CREATE SEQUENCE builderops_receipt_sequence INCREMENT BY 7 START WITH 42",
         "CREATE FUNCTION builderops_partial() RETURNS boolean "
         "LANGUAGE sql IMMUTABLE AS 'SELECT true'",
+        "CREATE TABLE unrelated(id integer); "
+        "CREATE INDEX idx_builderops_orphan ON unrelated(id)",
     ),
 )
 def test_initialize_refuses_partial_non_table_builderops_schema(

@@ -28,6 +28,7 @@ from app.builderops.control_plane.models import (
     StaleFencingToken,
     TransactionResult,
     UnknownEffectNeedsReconciliation,
+    canonical_repository,
 )
 
 
@@ -143,7 +144,8 @@ class PostgresBuilderOpsStore:
                     "SELECT class.relname FROM pg_class AS class "
                     "JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace "
                     "WHERE namespace.nspname = current_schema() "
-                    "AND class.relname LIKE 'builderops_%'"
+                    "AND (class.relname LIKE 'builderops_%' "
+                    "OR class.relname LIKE 'idx_builderops_%')"
                 ).fetchall()
             }
             existing_functions = {
@@ -1026,6 +1028,7 @@ class PostgresBuilderOpsStore:
         return result
 
     def get_record(self, repository: str, record_id: str) -> Mapping[str, Any]:
+        repository = canonical_repository(repository)
         with self._connect() as conn:
             row = self._authority_object_row(
                 conn,
@@ -1041,6 +1044,7 @@ class PostgresBuilderOpsStore:
         return dict(row)
 
     def get_attempt(self, repository: str, task_id: str, attempt_id: str) -> Mapping[str, Any]:
+        repository = canonical_repository(repository)
         with self._connect() as conn:
             row = self._authority_object_row(
                 conn,
@@ -1056,6 +1060,7 @@ class PostgresBuilderOpsStore:
         return dict(row)
 
     def get_promotion(self, repository: str, promotion_id: str) -> Mapping[str, Any]:
+        repository = canonical_repository(repository)
         with self._connect() as conn:
             row = self._authority_object_row(
                 conn,
@@ -1073,6 +1078,7 @@ class PostgresBuilderOpsStore:
     def replay(
         self, repository: str, idempotency_key: str
     ) -> TransactionResult | AuthorityObjectResult | None:
+        repository = canonical_repository(repository)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT result, recovery_lsn::text AS recovery_lsn FROM builderops_idempotency "
@@ -1755,6 +1761,7 @@ class PostgresBuilderOpsStore:
 
     def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim:
         """Recover a process-lost attempt as unknown for mandatory readback."""
+        repository = canonical_repository(repository)
         self._repair_outbox_bindings(repository, operation_key)
         with self._connect() as conn:
             row = conn.execute(
@@ -2056,6 +2063,7 @@ class PostgresBuilderOpsStore:
         repository: str,
         operation_key: str | None,
     ) -> str:
+        repository = canonical_repository(repository)
         if not operation_key:
             raise ValueError("operation_key is mandatory")
         self._repair_outbox_bindings(repository, operation_key)
@@ -2080,6 +2088,7 @@ class PostgresBuilderOpsStore:
         return str(row["status"])
 
     def authority_counts(self, repository: str) -> dict[str, int]:
+        repository = canonical_repository(repository)
         tables = {
             "tasks": "builderops_tasks",
             "attempts": "builderops_attempts",
@@ -2101,6 +2110,7 @@ class PostgresBuilderOpsStore:
         return counts
 
     def receipt(self, repository: str, sequence: int) -> dict[str, Any]:
+        repository = canonical_repository(repository)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT task_id, event_type, idempotency_key, lease_holder, lease_fencing_token, "

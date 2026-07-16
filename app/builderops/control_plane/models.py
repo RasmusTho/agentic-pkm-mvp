@@ -47,6 +47,15 @@ class UnknownEffectNeedsReconciliation(ControlPlaneError):
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
+def canonical_repository(repository: str) -> str:
+    """Return the canonical GitHub owner/repository identity or fail closed."""
+    if not _REPOSITORY.fullmatch(repository) or any(
+        part in {".", ".."} for part in repository.split("/")
+    ):
+        raise EnvelopeValidationError("repository must be an unambiguous owner/name reference")
+    return repository.lower()
+
+
 @dataclass(frozen=True)
 class AuthorityEnvelope:
     """Mandatory multi-repository authority context persisted on every row."""
@@ -59,18 +68,14 @@ class AuthorityEnvelope:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", canonical_repository(self.repository))
         values = (self.scope, self.stack, self.actor)
-        if not _REPOSITORY.fullmatch(self.repository) or any(
-            part in {".", ".."} for part in self.repository.split("/")
-        ):
-            raise EnvelopeValidationError("repository must be an unambiguous owner/name reference")
         if any(not value.strip() for value in values):
             raise EnvelopeValidationError("scope, stack, and actor are mandatory")
         if not self.source_refs or any(not ref.strip() for ref in self.source_refs):
             raise EnvelopeValidationError("at least one non-empty source reference is mandatory")
         if self.schema_version <= 0:
             raise EnvelopeValidationError("schema_version must be positive")
-        object.__setattr__(self, "repository", self.repository.lower())
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -93,6 +98,9 @@ class TransactionResult:
     operation_key: str | None
     replayed: bool = field(default=False, compare=False)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", canonical_repository(self.repository))
+
 
 @dataclass(frozen=True)
 class AuthorityObjectResult:
@@ -103,6 +111,9 @@ class AuthorityObjectResult:
     receipt_sequence: int
     recovery_lsn: str
     replayed: bool = field(default=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", canonical_repository(self.repository))
 
 
 @dataclass(frozen=True)
@@ -115,6 +126,7 @@ class Lease:
     lease_kind: str = "task"
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", canonical_repository(self.repository))
         if self.lease_kind not in {"task", "generic"}:
             raise ValueError("lease_kind must be task or generic")
 
@@ -129,6 +141,9 @@ class OutboxClaim:
     claim_lsn: str
     receipt_sequence: int
     expires_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", canonical_repository(self.repository))
 
 
 @dataclass(frozen=True)
@@ -145,6 +160,9 @@ class OutboxReconciliation:
     receipt_sequence: int
     recovery_lsn: str
     replayed: bool = field(default=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", canonical_repository(self.repository))
 
 
 @runtime_checkable

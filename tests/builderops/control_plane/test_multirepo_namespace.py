@@ -14,7 +14,8 @@ pytestmark = pytest.mark.pg
 def test_repository_case_aliases_share_one_authority_namespace(
     control_plane_store, envelope
 ) -> None:
-    mixed_case = replace(envelope, repository="RASMUSTHO/AGENTIC-PKM-MVP")
+    raw_alias = "RASMUSTHO/AGENTIC-PKM-MVP"
+    mixed_case = replace(envelope, repository=raw_alias)
     assert mixed_case.repository == envelope.repository == "rasmustho/agentic-pkm-mvp"
 
     control_plane_store.commit_transition(
@@ -51,6 +52,65 @@ def test_repository_case_aliases_share_one_authority_namespace(
     )
     assert replayed.replayed is True
     assert replayed.operation_key == first.operation_key
+    assert control_plane_store.replay(raw_alias, "case-stable-effect") == replayed
+    assert control_plane_store.outbox_status(raw_alias, first.operation_key) == "pending"
+
+    outbox_claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=first.operation_key,
+        worker_id="case-stable-executor",
+    )
+    assert control_plane_store.outbox_status(raw_alias, first.operation_key) == "claimed"
+    assert control_plane_store.outbox_claim(raw_alias, first.operation_key) == outbox_claim
+    assert control_plane_store.outbox_status(raw_alias, first.operation_key) == "unknown"
+
+    record = control_plane_store.commit_record(
+        envelope=envelope,
+        record_id="case-stable-record",
+        record_type="LearningSignal",
+        state="active",
+        payload={"summary": "canonical"},
+        idempotency_key="case-stable-record-create",
+    )
+    assert control_plane_store.get_record(raw_alias, record.object_id)["state"] == "active"
+    assert control_plane_store.replay(raw_alias, "case-stable-record-create") is not None
+
+    promotion = control_plane_store.commit_promotion(
+        envelope=envelope,
+        promotion_id="case-stable-promotion",
+        status="pending",
+        payload={"target": "issue:3792"},
+        idempotency_key="case-stable-promotion-create",
+    )
+    assert control_plane_store.get_promotion(raw_alias, promotion.object_id)["state"] == "pending"
+
+    control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id="case-stable-attempt-task",
+        to_state="ready",
+        idempotency_key="case-stable-attempt-task-create",
+        request={"command": "create"},
+    )
+    _, attempt_lease = control_plane_store.claim_task(
+        envelope=envelope,
+        task_id="case-stable-attempt-task",
+        holder="executor",
+        idempotency_key="case-stable-attempt-task-claim",
+        request={"command": "claim"},
+    )
+    attempt = control_plane_store.commit_attempt(
+        envelope=envelope,
+        task_id="case-stable-attempt-task",
+        attempt_id="attempt-1",
+        state="running",
+        payload={},
+        idempotency_key="case-stable-attempt-create",
+        lease=attempt_lease,
+    )
+    assert attempt.object_id == "case-stable-attempt-task:attempt-1"
+    assert control_plane_store.get_attempt(
+        raw_alias, "case-stable-attempt-task", "attempt-1"
+    )["state"] == "running"
 
     _, lease = control_plane_store.claim_lease(
         envelope=mixed_case,
@@ -76,6 +136,12 @@ def test_repository_case_aliases_share_one_authority_namespace(
             (first.operation_key,),
         ).fetchall()
     assert [row["repository"] for row in repositories] == [envelope.repository]
+    assert control_plane_store.authority_counts(raw_alias) == control_plane_store.authority_counts(
+        envelope.repository
+    )
+    assert control_plane_store.receipt(raw_alias, first.receipt_sequence) == (
+        control_plane_store.receipt(envelope.repository, first.receipt_sequence)
+    )
 
 
 def test_authority_envelope_is_required_and_repo_namespaces_are_isolated(
