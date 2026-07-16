@@ -77,12 +77,16 @@ producer and consumer has a replacement and proves reversibility to the single-v
   re-expansion/reattachment to the original binding boundaries, so receipts and provenance continue to
   name their original sources even while the runtime operates with one active content vault.
 - Retire sources only through a batch coordinator over MVR-06B's authoritative removal journal. It
-  acquires every source's mutation gate and exclusive binding-effect lease in canonical binding order,
+  acquires the existing host-global ownership fence/ownership-ledger lock first, then every source's
+  mutation gate and exclusive binding-effect lease in canonical binding order,
   completes every final scan/buffer drain, stages every dimension/default/background-intent repair and
-  immutable tombstone, and proves the target package/rebuild before publishing anything. Under the
-  host-global registry lock, one durable commit point then installs all source tombstones, repaired
-  references, target selectability, ownership-release intents, and the complete reduction receipt;
-  ownership release executes only from that committed journal. The coordinator never directly deletes
+  immutable tombstone, and proves the target package/rebuild before publishing anything. It then takes
+  the instance/channel registry's existing exclusive sidecar lock and uses that store's normal
+  revision/CAS + fsync + atomic-replace transaction as the one durable commit point for all source
+  tombstones, repaired references, target selectability, ownership-release intents, and the complete
+  reduction receipt. While the ownership-ledger lock remains held, ownership release executes only
+  from that committed journal; crash recovery reacquires the same locks in the same order. No
+  cross-channel registry lock or authority is introduced. The coordinator never directly deletes
   a registration or bypasses MVR-06B lineage rules. A crash after preparing any strict subset leaves
   every source active and the target incomplete/unselectable; a crash after the single commit rolls
   forward all ownership releases. Governed abort before commit removes copied artifacts and restores
@@ -190,10 +194,12 @@ can break startup or strand durable state. Both failures are latent outages rath
   dimension, default, background-intent, projection, ownership, and tombstone lineage references;
   injected failure cannot leave a directly deleted registration or a selectable incomplete target.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
-- [ ] Multi-source retirement has one durable batch commit: a crash after the first or any later
+- [ ] Multi-source retirement acquires host-global ownership-ledger fence → canonical exclusive
+  per-binding leases → instance-registry sidecar lock, and has one durable registry batch commit. A
+  crash after the first or any later
   per-source prepare leaves every source registration active and the target unselectable, while a
   crash after commit recovers all tombstones, repaired references, target selectability, ownership
-  releases, and the complete receipt without a partially retired topology.
+  releases, and the complete receipt without a partially retired topology or lock-order inversion.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
 - [ ] Any retained compatibility adapter is named in transition debt with owner, removal condition,
   and production guard; otherwise the old app-local import path is removed.
