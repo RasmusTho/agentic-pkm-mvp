@@ -149,6 +149,15 @@ def _lsn_value(lsn: str) -> int:
         raise ValueError(f"invalid PostgreSQL LSN: {lsn!r}") from exc
 
 
+def _covers_bound_lsn(recovered_through: str, bound_lsn: str) -> bool:
+    """Fail closed for provisional, missing, or malformed durability bindings."""
+    try:
+        bound_value = _lsn_value(bound_lsn)
+        return bound_value > 0 and _lsn_value(recovered_through) >= bound_value
+    except (TypeError, ValueError):
+        return False
+
+
 @dataclass(frozen=True)
 class RecoveryWatermark:
     """Independent recovery readback, not a client-asserted scalar LSN.
@@ -170,7 +179,7 @@ class RecoveryWatermark:
 
     def covers_transition(self, result: TransactionResult | AuthorityObjectResult) -> bool:
         return bool(
-            _lsn_value(self.recovered_through) >= _lsn_value(result.recovery_lsn)
+            _covers_bound_lsn(self.recovered_through, result.recovery_lsn)
             and (result.repository, result.receipt_sequence, result.recovery_lsn)
             in self.observed_receipts
         )
@@ -192,7 +201,7 @@ class RecoveryWatermark:
             claim.claim_lsn,
         )
         return bool(
-            _lsn_value(self.recovered_through) >= _lsn_value(claim.claim_lsn)
+            _covers_bound_lsn(self.recovered_through, claim.claim_lsn)
             and identity in self.observed_claims
             and (claim.repository, claim.receipt_sequence, claim.claim_lsn)
             in self.observed_receipts
@@ -208,7 +217,7 @@ class RecoveryWatermark:
             result.status,
         )
         return bool(
-            _lsn_value(self.recovered_through) >= _lsn_value(result.recovery_lsn)
+            _covers_bound_lsn(self.recovered_through, result.recovery_lsn)
             and identity in self.observed_reconciliations
             and (result.repository, result.receipt_sequence, result.recovery_lsn)
             in self.observed_receipts

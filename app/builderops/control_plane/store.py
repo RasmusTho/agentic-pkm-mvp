@@ -1381,6 +1381,8 @@ class PostgresBuilderOpsStore:
                     raise DurabilityPending(
                         "outbox reconciliation has not reached the recovery watermark"
                     )
+            if row["intent_lsn"] is None:
+                raise DurabilityPending("outbox intent durability binding is incomplete")
             intent = TransactionResult(
                 repository=envelope.repository,
                 task_id=str(row["task_id"]),
@@ -1482,6 +1484,8 @@ class PostgresBuilderOpsStore:
                 or row["claim_expires_at"] is None
             ):
                 raise KeyError(operation_key)
+            if row["intent_lsn"] is None:
+                raise DurabilityPending("outbox intent durability binding is incomplete")
             if row["status"] == "claimed":
                 conn.execute(
                     "UPDATE builderops_outbox SET status = 'unknown', "

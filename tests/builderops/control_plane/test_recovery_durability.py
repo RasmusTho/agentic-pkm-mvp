@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
-from app.builderops.control_plane import DurabilityPending, RecoveryWatermark
+from app.builderops.control_plane import (
+    DurabilityPending,
+    OutboxClaim,
+    OutboxReconciliation,
+    RecoveryWatermark,
+    TransactionResult,
+)
 
 pytestmark = pytest.mark.pg
 
@@ -60,6 +68,64 @@ def _observed_reconciliation(prior: RecoveryWatermark, result) -> RecoveryWaterm
             }
         ),
     )
+
+
+def test_unbound_or_malformed_lsn_never_authorizes_exact_observed_identity() -> None:
+    transition = TransactionResult("owner/repo", "task", "ready", 1, "0/0", "operation")
+    claim = OutboxClaim("owner/repo", "operation", "worker", 1, "0/0", "0/0", 2, datetime.now(UTC))
+    reconciliation = OutboxReconciliation(
+        "owner/repo", "operation", "task", "succeeded", "worker", 1, 2, 3, "0/0"
+    )
+    proof = RecoveryWatermark(
+        recovered_through="0/0",
+        observed_receipts=frozenset(
+            {("owner/repo", 1, "0/0"), ("owner/repo", 2, "0/0"), ("owner/repo", 3, "0/0")}
+        ),
+        observed_intents=frozenset({("owner/repo", "operation", "0/0")}),
+        observed_claims=frozenset({("owner/repo", "operation", 1, 2, "0/0")}),
+        observed_reconciliations=frozenset({("owner/repo", "operation", 1, 3, "0/0", "succeeded")}),
+    )
+    assert proof.covers_transition(transition) is False
+    assert proof.covers_intent(transition) is False
+    assert proof.covers_claim(claim) is False
+    assert proof.covers_reconciliation(reconciliation) is False
+    assert RecoveryWatermark(recovered_through="invalid").covers_transition(transition) is False
+    bound = TransactionResult("owner/repo", "task", "ready", 4, "0/1", None)
+    invalid_recovery = RecoveryWatermark(
+        recovered_through="invalid",
+        observed_receipts=frozenset({("owner/repo", 4, "0/1")}),
+    )
+    malformed_binding = TransactionResult("owner/repo", "task", "ready", 5, "invalid", None)
+    malformed_proof = RecoveryWatermark(
+        recovered_through="0/10",
+        observed_receipts=frozenset({("owner/repo", 5, "invalid")}),
+    )
+    assert invalid_recovery.covers_transition(bound) is False
+    assert malformed_proof.covers_transition(malformed_binding) is False
+
+
+def test_unbound_intent_lsn_is_durability_pending(control_plane_store, envelope) -> None:
+    result = control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id="unbound-intent",
+        to_state="ready",
+        idempotency_key="unbound-intent",
+        request={"command": "create"},
+        outbox={"effect_type": "github.comment", "payload": {}},
+    )
+    with control_plane_store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_outbox SET intent_lsn = NULL "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        )
+    with pytest.raises(DurabilityPending, match="binding is incomplete"):
+        control_plane_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="worker",
+            watermark=_observed_transition(result),
+        )
 
 
 def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
