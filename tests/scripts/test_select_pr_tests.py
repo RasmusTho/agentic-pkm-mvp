@@ -94,17 +94,16 @@ def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
     assert selection.reason == "shared CI/test/runtime configuration changed"
     assert "tests --ignore=tests/e2e" in selection.pytest_args
 
-    focused_selection = select_tests(
-        [
-            "app/cli/settings_explain.py",
-            "app/services/companion_eligibility.py",
-            "app/services/settings.py",
-        ]
-    )
-    assert focused_selection.subsystems == ("settings",)
-    assert focused_selection.unowned_paths == ()
-    assert "tests/cli/test_settings_explain_cli.py" in focused_selection.targets
-    assert "tests/services/test_companion_eligibility.py" in focused_selection.targets
+    for adapter_path in (
+        "app/cli/settings_explain.py",
+        "app/services/companion_eligibility.py",
+        "app/services/settings.py",
+    ):
+        focused_selection = select_tests([adapter_path])
+        assert focused_selection.subsystems == ("settings",)
+        assert focused_selection.unowned_paths == ()
+        assert "tests/cli/test_settings_explain_cli.py" in focused_selection.targets
+        assert "tests/services/test_companion_eligibility.py" in focused_selection.targets
 
 
 def test_settings_adapter_cannot_mask_unknown_runtime_path() -> None:
