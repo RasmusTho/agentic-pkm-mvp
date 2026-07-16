@@ -23,7 +23,12 @@ Related docs:
 Runtime settings are compiled from vault-backed Markdown settings into `runtime/settings/`.
 
 Primary source folder:
-- `vault/@Settings/`
+- `<vault>/settings/`
+
+`<vault>/settings/` is the only canonical per-vault settings root. During the
+bounded compatibility release, retired source locations remain readable with a
+warning; a canonical file shadows the corresponding legacy file and their
+contents are never merged.
 
 Compiler:
 - `python -m app.cli settings compile`
@@ -31,7 +36,7 @@ Compiler:
 Runtime settings cover the panel action catalog, watcher policy, and compiled runtime bundles under `runtime/settings/`.
 Today, `python -m app.cli settings-explain` is a narrow operator-facing diagnostics surface for environment/database state plus panel-action and watcher provenance/gating; it is not a full dump of every compiled runtime YAML.
 Compiled bundle files such as `runtime/settings/llm_routing.yaml` remain the direct artifact for the broader runtime payload, while `python -m app.cli settings-validate` checks registries, panel/watcher source artifacts, and any compiled-runtime unresolved-secret sentinels visible locally.
-They also include task-specific LLM routing policy via `vault/@Settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
+They also include task-specific LLM routing policy via `<vault>/settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
 
 Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described below.
 Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).
@@ -150,4 +155,9 @@ The registry lists canonical event IDs, producers/consumers, and optional schema
 - Use `python -m app.cli settings-validate --json` to validate registries, panel/watcher source artifacts, and locally compiled unresolved-secret sentinels.
 - Use `python -m app.cli settings-explain --json` to inspect environment/database resolution plus watcher/panel provenance and gate state.
 - When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.
-- Treat `vault/@Settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.
+- Treat `<vault>/settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.
+- Migrate an existing vault only through the explicit governed command:
+  `python -m app.cli settings migrate-location --vault-root <path>`. The command
+  checks WriteGuard before its first mutation, refuses canonical/legacy
+  conflicts instead of overwriting or merging them, publishes the canonical
+  tree as one swap, and emits a settings-write receipt.

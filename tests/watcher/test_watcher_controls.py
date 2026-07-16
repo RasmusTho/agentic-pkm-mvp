@@ -73,7 +73,7 @@ def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
 def test_settings_source_uses_configured_vault_and_is_not_emitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Legacy watcher treats @Settings as bound control input, outside note scope."""
+    """Watcher treats the compatibility root as control input, outside note scope."""
     cfg = _config(tmp_path)
     (cfg.vault_path / _inbox_dir(tmp_path)).mkdir(parents=True)
     source = cfg.vault_path / "@Settings" / "global.md"
@@ -81,9 +81,9 @@ def test_settings_source_uses_configured_vault_and_is_not_emitted(
     source.write_text("```yaml settings\nlog_level: DEBUG\n```\n", encoding="utf-8")
     observed: dict[str, Path] = {}
 
-    def reload_source(*, rel_path: Path, vault_settings_dir: Path | None = None):
+    def reload_source(*, rel_path: Path, vault_root: Path | None = None):
         observed["rel_path"] = rel_path
-        observed["vault_settings_dir"] = vault_settings_dir
+        observed["vault_root"] = vault_root
         return SettingsSourceDeltaResult(is_source=True, reloaded=True)
 
     monkeypatch.setattr(watcher, "handle_settings_source_delta", reload_source)
@@ -92,7 +92,7 @@ def test_settings_source_uses_configured_vault_and_is_not_emitted(
 
     assert observed == {
         "rel_path": Path("@Settings/global.md"),
-        "vault_settings_dir": cfg.vault_path / "@Settings",
+        "vault_root": cfg.vault_path,
     }
     assert summary["settings_source_reloads_in_tick"] == 1
     assert summary["emitted_in_tick"] == 0

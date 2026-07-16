@@ -19,6 +19,7 @@ from app.watcher.settings_delta import (
     handle_settings_source_delta,
     is_settings_source_path,
 )
+from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 from app.watcher.state import WatcherState
 from app.vault.manager import iter_vault_markdown_files
 
@@ -274,9 +275,10 @@ def run_tick(
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
     scan_roots = derive_scope_roots(cfg.vault_path, cfg.scope_glob)
-    settings_sources_root = cfg.vault_path / "@Settings"
-    if settings_sources_root.exists() and settings_sources_root.is_dir():
-        scan_roots = [*scan_roots, settings_sources_root]
+    for source_name in (CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR.name):
+        settings_sources_root = cfg.vault_path / source_name
+        if settings_sources_root.exists() and settings_sources_root.is_dir():
+            scan_roots = [*scan_roots, settings_sources_root]
     changed_entries: list[tuple[Path, float, str | None]] = []
     scanned_paths: list[str] = []
     for rel, mtime, path in _scan_markdown_many(cfg.vault_path, scan_roots, cfg.scope_glob):
@@ -305,6 +307,7 @@ def run_tick(
 
     emitted_in_tick = 0
     rate_limited_in_tick = 0
+    settings_source_processed = False
 
     for rel, mtime, digest in changed_entries:
         rel_str = str(rel)
@@ -330,13 +333,23 @@ def run_tick(
             hashed = _hash_file(cfg.vault_path / rel)
             if hashed is not None:
                 digest = hashed[0]
-        # A settings source edit (@Settings/*.md) re-ingests the effective bundle
+        # A settings source edit re-ingests the effective bundle
         # so the running services honor it within one tick (SETTINGS-01 / F1).
+        if is_settings_source_path(rel) and settings_source_processed:
+            state.update_file_state(
+                rel_str,
+                mtime=mtime,
+                content_hash=digest,
+                settings_runtime_values=settings_delta.values,
+                seen_at=now,
+            )
+            continue
         source_delta = handle_settings_source_delta(
             rel_path=rel,
-            vault_settings_dir=cfg.vault_path / "@Settings",
+            vault_root=cfg.vault_path,
         )
         if source_delta.is_source:
+            settings_source_processed = True
             if source_delta.reloaded:
                 summary["settings_source_reloads_in_tick"] = int(
                     summary.get("settings_source_reloads_in_tick", 0)

@@ -30,6 +30,7 @@ from app.services.outbox import (
     write_outbox_event,
 )
 from app.settings.env_defaults import env_str
+from app.settings.locations import LEGACY_COMPILED_DIR
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
@@ -1002,13 +1003,13 @@ def _collect_changed_entries(
             # content.  Record it as seen for every spec, reload it only once
             # per registry tick, then keep it out of panel/ingest emissions.
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
-            if handled_settings_sources is not None and rel in handled_settings_sources:
+            if handled_settings_sources:
                 continue
             if handled_settings_sources is not None:
                 handled_settings_sources.add(rel)
             source_delta = handle_settings_source_delta(
                 rel_path=rel,
-                vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
+                vault_root=cfg.vault_path,
             )
             if source_delta.reloaded:
                 summary["settings_source_reloads_in_tick"] = (
@@ -1235,6 +1236,7 @@ def _run_spec_tick(
     handled_settings_sources: set[Path] | None = None,
 ) -> dict[str, object]:
     tick_start = now
+    handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
     state.ticks_run += 1
     errors_before = state.errors
 
@@ -1280,9 +1282,10 @@ def _run_spec_tick(
 
     try:
         scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
-        settings_sources_root = cfg.vault_path / SETTINGS_SOURCE_DIR_NAME
-        if settings_sources_root.exists():
-            scan_roots = [*scan_roots, settings_sources_root]
+        for source_name in (SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name):
+            settings_sources_root = cfg.vault_path / source_name
+            if settings_sources_root.exists():
+                scan_roots = [*scan_roots, settings_sources_root]
     except FileNotFoundError as exc:
         # Static scope-prefix directory does not exist under the bound vault
         # (e.g. an env scope glob naming a folder the vault does not have).
@@ -1429,7 +1432,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
 
         ingest_settings(
             reason="registry_watcher_startup",
-            vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
+            vault_root=cfg.vault_path,
         )
     except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
         logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)

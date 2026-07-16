@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.config.paths import resolve_flow_settings_path
 
-DEFAULT_FLOW_PATH = Path("vault/_system/settings/flows.settings.yaml")
+DEFAULT_FLOW_PATH = Path("vault/settings/flows.settings.yaml")
 FALLBACK_FLOW_PATH = Path("docs/settings/flows.settings.yaml")
 
 _cached_path: Path | None = None
