@@ -153,6 +153,8 @@ class PostgresBuilderOpsStore:
             raise ValueError("claim_holder and an existing lease are mutually exclusive")
         if release_on_commit and lease is None:
             raise ValueError("release_on_commit requires an existing fenced lease")
+        if to_state == "claimed" and claim_holder is None:
+            raise LeaseRequired("claimed task state requires atomically bound fenced ownership")
         request_document = {
             "authority_envelope": envelope.as_json(),
             "task_id": task_id,

@@ -6,20 +6,18 @@ from threading import Barrier
 
 import pytest
 
-from app.builderops.control_plane import IdempotencyConflict
+from app.builderops.control_plane import IdempotencyConflict, LeaseRequired
 
 pytestmark = pytest.mark.pg
 
 
-def _commit(
-    store, envelope, *, key="request-1", state="claimed", task_id="task-3792", fault_at=None
-):
+def _commit(store, envelope, *, key="request-1", state="ready", task_id="task-3792", fault_at=None):
     return store.commit_transition(
         envelope=envelope,
         task_id=task_id,
         to_state=state,
         idempotency_key=key,
-        request={"command": "claim", "expected": "ready"},
+        request={"command": "transition", "expected": None},
         outbox={"effect_type": "github.comment", "payload": {"issue": 3792}},
         fault_at=fault_at,
     )
@@ -43,7 +41,7 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
     }
 
     result = _commit(store, envelope)
-    assert result.state == "claimed"
+    assert result.state == "ready"
     assert store.readiness() == {"authority_epoch": 1, "schema_version": 1}
     assert store.authority_counts(envelope.repository) == {
         "tasks": 1,
@@ -119,6 +117,20 @@ def test_idempotency_distinguishes_absent_and_empty_outbox(control_plane_store, 
     control_plane_store.commit_transition(**kwargs)
     with pytest.raises(IdempotencyConflict):
         control_plane_store.commit_transition(**kwargs, outbox={})
+
+
+def test_new_claimed_task_requires_atomic_fenced_ownership(control_plane_store, envelope) -> None:
+    before = control_plane_store.authority_counts(envelope.repository)
+    with pytest.raises(LeaseRequired, match="atomically bound fenced ownership"):
+        control_plane_store.commit_transition(
+            envelope=envelope,
+            task_id="unowned-claimed-task",
+            to_state="claimed",
+            idempotency_key="unowned-claimed-task",
+            request={"command": "claim"},
+            outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
+        )
+    assert control_plane_store.authority_counts(envelope.repository) == before
 
 
 def test_transaction_result_binds_receipt_sequence_and_recovery_lsn(

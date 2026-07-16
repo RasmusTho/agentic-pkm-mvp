@@ -135,9 +135,9 @@ def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
     result = store.commit_transition(
         envelope=envelope,
         task_id="task-3792",
-        to_state="claimed",
+        to_state="ready",
         idempotency_key="durability-gate",
-        request={"command": "claim"},
+        request={"command": "create"},
         outbox={"effect_type": "github.comment", "payload": {"issue": 3792}},
     )
     calls: list[str] = []

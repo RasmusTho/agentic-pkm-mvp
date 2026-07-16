@@ -92,9 +92,9 @@ def test_unknown_external_effect_requires_readback_before_retry(
     result = control_plane_store.commit_transition(
         envelope=envelope,
         task_id="task-3792",
-        to_state="claimed",
+        to_state="ready",
         idempotency_key="unknown-effect",
-        request={"command": "claim"},
+        request={"command": "create"},
         outbox={"effect_type": "github.merge", "payload": {"pr": 4000}},
     )
     intent_watermark = _observed_transition(result)
