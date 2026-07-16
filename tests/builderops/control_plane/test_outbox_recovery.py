@@ -204,14 +204,25 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
 
     recovered = type(control_plane_store)(control_plane_store.dsn)
     orphaned_claim = recovered.outbox_claim(envelope.repository, result.operation_key)
-    assert orphaned_claim.claim_lsn == "0/0"
+    assert orphaned_claim.claim_lsn != "0/0"
+    claim_receipt = recovered.receipt(envelope.repository, orphaned_claim.receipt_sequence)
+    assert claim_receipt["recovery_lsn"] == orphaned_claim.claim_lsn
     assert recovered.outbox_status(envelope.repository, result.operation_key) == "unknown"
     assert recovered.effect_eligible(orphaned_claim) is False
-    recovered.reconcile_outbox(
+    reconciliation = recovered.reconcile_outbox(
         orphaned_claim,
         observed_applied=False,
         evidence={"readback": "not-found"},
     )
+    with recovered._connect() as conn:
+        persisted = conn.execute(
+            "SELECT claim_lsn::text AS claim_lsn FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s AND claim_fencing_token = %s",
+            (envelope.repository, result.operation_key, orphaned_claim.fencing_token),
+        ).fetchone()
+    assert persisted is not None
+    assert persisted["claim_lsn"] == orphaned_claim.claim_lsn
+    assert reconciliation.claim_receipt_sequence == orphaned_claim.receipt_sequence
     retried = recovered.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,

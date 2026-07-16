@@ -1759,10 +1759,62 @@ class PostgresBuilderOpsStore:
             expires_at,
         )
 
+    def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
+        """Bind a locally committed claim/receipt before recovery marks it unknown."""
+        candidate_lsn = self._flushed_lsn()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, worker_id, claim_fencing_token, claim_receipt_sequence, "
+                "claim_lsn::text AS claim_lsn FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s FOR UPDATE",
+                (repository, operation_key),
+            ).fetchone()
+            if row is None or row["status"] not in {"claimed", "unknown"}:
+                return
+            if row["worker_id"] is None or row["claim_receipt_sequence"] is None:
+                raise DurabilityPending("outbox claim has no local receipt binding")
+            receipt = conn.execute(
+                "SELECT recovery_lsn::text AS recovery_lsn FROM builderops_receipts "
+                "WHERE repository = %s AND receipt_sequence = %s "
+                "AND event_type = 'outbox.claimed' AND lease_holder = %s "
+                "AND lease_fencing_token = %s FOR UPDATE",
+                (
+                    repository,
+                    int(row["claim_receipt_sequence"]),
+                    str(row["worker_id"]),
+                    int(row["claim_fencing_token"]),
+                ),
+            ).fetchone()
+            if receipt is None:
+                raise DurabilityPending("outbox claim receipt identity is missing")
+            claim_lsn = str(row["claim_lsn"] or receipt["recovery_lsn"] or candidate_lsn)
+            updated = conn.execute(
+                "UPDATE builderops_outbox SET claim_lsn = %s "
+                "WHERE repository = %s AND operation_key = %s AND worker_id = %s "
+                "AND claim_fencing_token = %s AND claim_receipt_sequence = %s "
+                "RETURNING operation_key",
+                (
+                    claim_lsn,
+                    repository,
+                    operation_key,
+                    str(row["worker_id"]),
+                    int(row["claim_fencing_token"]),
+                    int(row["claim_receipt_sequence"]),
+                ),
+            ).fetchone()
+            if updated is None:
+                raise StaleFencingToken("outbox claim changed before local binding repair")
+            conn.execute(
+                "UPDATE builderops_receipts SET recovery_lsn = %s "
+                "WHERE repository = %s AND receipt_sequence = %s",
+                (claim_lsn, repository, int(row["claim_receipt_sequence"])),
+            )
+
     def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim:
         """Recover a process-lost attempt as unknown for mandatory readback."""
         repository = canonical_repository(repository)
         self._repair_outbox_bindings(repository, operation_key)
+        self._repair_outbox_claim_binding(repository, operation_key)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
@@ -1793,7 +1845,7 @@ class PostgresBuilderOpsStore:
             worker_id=str(row["worker_id"]),
             fencing_token=int(row["claim_fencing_token"]),
             intent_lsn=str(row["intent_lsn"]),
-            claim_lsn=str(row["claim_lsn"] or "0/0"),
+            claim_lsn=str(row["claim_lsn"]),
             receipt_sequence=int(row["claim_receipt_sequence"]),
             expires_at=row["claim_expires_at"],
         )
