@@ -586,6 +586,11 @@ class PostgresBuilderOpsStore:
                     (f"authority:{envelope.repository}:{object_kind}:{object_id}",),
                 )
                 if object_kind == "attempt":
+                    assert primary_id is not None
+                    conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"task:{envelope.repository}:{primary_id}",),
+                    )
                     task = conn.execute(
                         "SELECT state FROM builderops_tasks WHERE repository = %s "
                         "AND task_id = %s FOR UPDATE",

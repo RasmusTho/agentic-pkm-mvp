@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Barrier
 
 import pytest
 
@@ -157,6 +159,66 @@ def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
     )
     assert promotion.object_kind == "promotion"
     assert store.get_promotion(envelope.repository, "promotion-1")["state"] == "pending"
+
+
+@pytest.mark.parametrize("iteration", range(8))
+def test_attempt_and_task_completion_serialize_without_deadlock(
+    control_plane_store, envelope, iteration: int
+) -> None:
+    store = control_plane_store
+    task_id = f"attempt-complete-race-{iteration}"
+    store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="ready",
+        idempotency_key=f"{task_id}-create",
+        request={"command": "create"},
+    )
+    _, lease = store.claim_task(
+        envelope=envelope,
+        task_id=task_id,
+        holder="executor",
+        idempotency_key=f"{task_id}-claim",
+        request={"command": "claim"},
+    )
+    barrier = Barrier(2)
+
+    def write_attempt():
+        contender = type(store)(store.dsn)
+        barrier.wait()
+        try:
+            return contender.commit_attempt(
+                envelope=envelope,
+                task_id=task_id,
+                attempt_id="attempt-1",
+                state="running",
+                payload={},
+                idempotency_key=f"{task_id}-attempt",
+                lease=lease,
+            )
+        except StateConflict as exc:
+            return exc
+
+    def complete_task():
+        contender = type(store)(store.dsn)
+        barrier.wait()
+        return contender.complete_task(
+            envelope=envelope,
+            lease=lease,
+            idempotency_key=f"{task_id}-complete",
+            request={"command": "complete"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        attempt_future = pool.submit(write_attempt)
+        complete_future = pool.submit(complete_task)
+        attempt_outcome = attempt_future.result(timeout=10)
+        completed = complete_future.result(timeout=10)
+
+    assert completed.state == "completed"
+    if not isinstance(attempt_outcome, StateConflict):
+        assert attempt_outcome.object_kind == "attempt"
+        assert attempt_outcome.state == "running"
 
 
 @pytest.mark.parametrize(
