@@ -36,9 +36,9 @@ Product ownership.
   retention, documented point-in-time restore, and an automated restore-from-backup drill with
   Demerzel's host secret store unavailable (ADR-0062 A1: recovery durability is asynchronous and
   never gates acknowledgement);
-- run the BuilderOps service and database in a failure domain separate from the `pkm-*` container
-  VM (native host service or separate VM), so Product deploys, restarts, resource pressure, and
-  container-VM lifecycle events cannot stop the builder plane (ADR-0062 A2);
+- run the BuilderOps-only Compose project and database on a separate VM/container engine on
+  Demerzel, outside the `pkm-*` container-VM failure domain, so Product deploys, restarts, resource
+  pressure, and container-VM lifecycle events cannot stop the builder plane (ADR-0062 A2);
 - wire BuilderOps `/healthz` into the operator alerting path so control-plane outages are observed
   rather than discovered (ADR-0062 A2); and
 - prove Product Compose and Product credentials/config are not dependencies.
@@ -89,9 +89,9 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - A persistent volume or snapshot alone is not accepted as recoverability. Full backup + archived
   WAL must restore to the latest archived point; backup/restore negative scans must also prove the
   credential exclusion boundary.
-- The BuilderOps service and database do not run inside the `pkm-*` container VM or share its
-  runtime failure domain; no Product lifecycle event can stop, restart, or resource-starve the
-  builder plane (ADR-0062 A2).
+- The BuilderOps-only Compose project and database run on a separate VM/container engine from the
+  `pkm-*` stacks; no Product lifecycle event can stop, restart, or resource-starve the builder plane
+  (ADR-0062 A2). A native host service is outside this task's selected deployment contract.
 - Do not cut production clients or expose the service as authority until BCP-03/04/05 gates pass.
 
 ## Acceptance Criteria
@@ -111,7 +111,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - [ ] Deploy and rollback use a BuilderOps-specific immutable pin and emit receipts that identify
   image SHA, schema version, and authority epoch without restoring an older authoritative snapshot.
   Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
-- [ ] The BuilderOps service and database run outside the `pkm-*` container-VM failure domain, and
+- [ ] The BuilderOps-only Compose project and database run on a separate VM/container engine from
+  the `pkm-*` stacks, and
   stopping, restarting, or load-cycling the Product stacks leaves BuilderOps ready and mutating
   normally; a co-resident recovery target fails `/readyz`, while a stalled backup/WAL-archiving
   pipeline raises a loud alert/status condition without blocking acknowledgement.

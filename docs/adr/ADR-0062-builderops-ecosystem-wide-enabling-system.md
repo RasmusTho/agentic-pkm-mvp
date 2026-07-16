@@ -316,9 +316,10 @@ host itself.
 
 - The BuilderOps service and database must not share a container-VM/runtime failure domain with the
   `pkm-dev`/`pkm-test`/`pkm-prod` stacks. Product deploys, restarts, resource pressure, and
-  container-VM lifecycle events must not be able to stop the builder plane. A native host service or
-  a separate VM are both acceptable (implementation choice). This strengthens D4's "own Compose
-  project" to "own failure domain".
+  container-VM lifecycle events must not be able to stop the builder plane. The BCP delivery selects
+  a separate BuilderOps VM/container engine on Demerzel with the BuilderOps-only Compose project
+  required by D4; a native host service is not an alternate target for this delivery. This
+  strengthens D4's "own Compose project" to "own Compose project and failure domain".
 - Degraded-mode contract (explicit): when the control plane is unreachable, repo-authorized direct
   git/GitHub work continues per D2 without fabricating BuilderOps state; orchestration-gated actions
   (claims, promotions, executor merges) wait. Control-plane unavailability is a loss of
@@ -328,9 +329,9 @@ host itself.
 
 ### A3 (2026-07-16) — CKM/CEG is a named migration source; ADR-0057 substrate clause superseded at cutover
 
-Post-ratification audit finding F1 (`docs/audits/ADR-0062_POST_RATIFICATION_2026-07-16.md`):
-ADR-0057 OD-K4 pins the Capability Evidence Graph to the SQLite BuilderOps substrate, and
-`app/builderops/ckm/` writes production receipts through it, while D6's inventory did not name CKM.
+ADR-0057 OD-K4 pins the Capability Evidence Graph to the SQLite BuilderOps substrate, and the
+shipped `app/builderops/ckm/store.py` writes its rebuildable projection state and BuilderOps receipts
+through that substrate, while D6's inventory did not name CKM.
 
 - CKM/CEG tables are added to the D6 cutover inventory and to BCP-03's migration scope.
 - Until cutover, CKM continues building on the SQLite substrate as a migration source; each schema
