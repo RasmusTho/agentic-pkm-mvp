@@ -556,6 +556,140 @@ def test_resumed_v1_launcher_accepts_legacy_repair_receipt(tmp_path) -> None:
     assert repairs[0]["mechanism_id"] is None
 
 
+def test_v1_pending_clean_review_receipt_ignores_legacy_binding_fields(
+    tmp_path,
+) -> None:
+    """A migrated policy-v1 pending receipt may carry a clean review event
+    with a stale ``finding_id``/``failure_domain``/``mechanism_id`` left over
+    from the legacy schema (the legacy application ignored those fields on a
+    clean outcome). Replay must not terminalize the run as an invalid
+    persisted receipt, and the legacy binding must never become durable."""
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET repair_budget_policy='v1' WHERE run_id=?",
+            (run.run_id,),
+        )
+        conn.commit()
+    truth = Truth(eligible_pr(), GREEN)
+    first = VerificationConsumer(
+        state,
+        truth,
+        Auth(),
+        RateLimitedLauncher(),
+        "host",
+    ).consume(request())
+    assert first.status == "backoff"
+    assert first.coordinator_session_id is not None
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (run.run_id,),
+        )
+        conn.commit()
+
+    class LegacyCleanReviewLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            resume_session_id = kwargs.get("resume_session_id")
+            self.calls.append((context_pack, resume_session_id))
+            if callback := kwargs.get("on_thread_started"):
+                callback(resume_session_id)
+            return resume_session_id, {
+                "verdict": "blocked",
+                "head_sha": HEAD,
+                "summary": "legacy clean review carries stale binding",
+                "receipt_ids": ["review-v1"],
+                "retry_after": None,
+                "review_events": [
+                    {
+                        "kind": "review",
+                        "session_id": "review-v1",
+                        "capability": "gpt-5.6-terra",
+                        "reasoning_effort": "high",
+                        "outcome": "clean",
+                        "finding_id": "F1",
+                        "failure_domain": CODE,
+                        "mechanism_id": "parser",
+                        "strongest": None,
+                    }
+                ],
+                "human_exception": None,
+            }
+
+    launcher = LegacyCleanReviewLauncher()
+    result = VerificationConsumer(state, truth, Auth(), launcher, "host").consume(
+        request()
+    )
+
+    assert launcher.calls[0][1] == first.coordinator_session_id
+    assert result.status == "failed"
+    assert isinstance(result.terminal_receipt, dict)
+    assert result.terminal_receipt.get("outcome") != "invalid_persisted_verification_receipt"
+    assert result.stop_reason != "invalid_receipt_contract"
+    reviews = [
+        attempt
+        for attempt in state.attempts(run.run_id)
+        if attempt["kind"] == "review"
+    ]
+    assert len(reviews) == 1
+    assert reviews[0]["outcome"] == "clean"
+    assert reviews[0]["finding_id"] is None
+    assert reviews[0]["failure_domain"] is None
+    assert reviews[0]["mechanism_id"] is None
+
+
+def test_v2_clean_review_rejects_failure_binding_fields(tmp_path) -> None:
+    """Policy-v2 clean review events must still fail closed on any binding
+    field — the legacy-compatibility scrub is scoped to policy-v1 only."""
+
+    schema = (
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+    )
+    receipt = {
+        "verdict": "blocked",
+        "head_sha": HEAD,
+        "summary": "v2 clean review must not carry a failure binding",
+        "receipt_ids": ["review-v2"],
+        "retry_after": None,
+        "review_events": [
+            {
+                "kind": "review",
+                "session_id": "review-v2",
+                "capability": "terra",
+                "reasoning_effort": "high",
+                "outcome": "clean",
+                "finding_id": "F1",
+                "failure_domain": CODE,
+                "mechanism_id": "parser",
+                "strongest": None,
+            }
+        ],
+        "human_exception": None,
+    }
+
+    with pytest.raises(ReceiptContractError):
+        load_and_validate_verification_closer_receipt(
+            receipt,
+            schema,
+            trusted_repository="RasmusTho/agentic-pkm-mvp",
+            trusted_evidence_urls=frozenset(),
+            repair_budget_policy="v2",
+        )
+
+    # Unset/default policy (not policy-v1) must also stay strict.
+    with pytest.raises(ReceiptContractError):
+        load_and_validate_verification_closer_receipt(
+            receipt,
+            schema,
+            trusted_repository="RasmusTho/agentic-pkm-mvp",
+            trusted_evidence_urls=frozenset(),
+        )
+
+
 def test_declared_v4_missing_budget_identity_fails_closed_without_repair(
     tmp_path,
 ) -> None:

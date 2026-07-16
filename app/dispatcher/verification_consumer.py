@@ -414,12 +414,39 @@ def validate_verification_closer_receipt(
                 f"review event {index} requires a stable finding, failure domain, "
                 "and mechanism binding"
             )
-        if event.get("kind") == "review" and event.get("outcome") == "clean" and any(
-            value is not None for value in binding
+        if (
+            event.get("kind") == "review"
+            and event.get("outcome") == "clean"
+            and not allow_legacy_unbound_repairs
+            and any(value is not None for value in binding)
         ):
             raise jsonschema.ValidationError(
                 f"clean review event {index} cannot carry a failure binding"
             )
+
+
+def _normalize_v1_review_event(event: Mapping[str, object]) -> dict[str, object]:
+    """Normalize one policy-v1 review event before validation.
+
+    Policy-v1 pending receipts predate the policy-v2 binding contract: the
+    legacy schema allowed ``finding_id``/``failure_domain``/``mechanism_id``
+    on every review event, and the legacy application ignored those fields
+    on a clean review. Fill in missing binding keys as ``None`` so schema
+    validation sees the key, and scrub a clean review's binding fields to
+    ``None`` so a stale legacy value is never treated as authoritative
+    failure-domain or mechanism data, nor carried into durable state.
+    """
+
+    normalized: dict[str, object] = {
+        **dict(event),
+        "failure_domain": event.get("failure_domain"),
+        "mechanism_id": event.get("mechanism_id"),
+    }
+    if event.get("kind") == "review" and event.get("outcome") == "clean":
+        normalized["finding_id"] = None
+        normalized["failure_domain"] = None
+        normalized["mechanism_id"] = None
+    return normalized
 
 
 def load_and_validate_verification_closer_receipt(
@@ -453,11 +480,7 @@ def load_and_validate_verification_closer_receipt(
         candidate.get("review_events"), list
     ):
         candidate["review_events"] = [
-            {
-                **dict(event),
-                "failure_domain": event.get("failure_domain"),
-                "mechanism_id": event.get("mechanism_id"),
-            }
+            _normalize_v1_review_event(event)
             if isinstance(event, Mapping)
             else event
             for event in candidate["review_events"]
