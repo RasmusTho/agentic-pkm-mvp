@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 from pathlib import Path
 from typing import Iterator, Optional
 
 from app.config.paths import resolve_system_settings_path
+
+logger = logging.getLogger(__name__)
 
 try:
     from opentelemetry import trace
@@ -16,6 +19,8 @@ try:
 
     _OTEL_AVAILABLE = True
 except Exception:  # pragma: no cover - best effort optional dependency
+    # Intentionally silent optional-import guard: opentelemetry is not a
+    # required dependency; tracing degrades to no-ops when it is absent.
     _OTEL_AVAILABLE = False
     trace = None  # type: ignore
 
@@ -24,6 +29,9 @@ def _settings_path() -> Optional[Path]:
     try:
         return resolve_system_settings_path()
     except Exception:
+        # Intentional swallow: no resolvable settings path means tracing stays
+        # disabled — logged so a misconfigured vault root is not invisible.
+        logger.warning("Could not resolve system settings path for tracing", exc_info=True)
         return None
 
 
@@ -35,7 +43,9 @@ def _read_settings() -> dict:
         if path and path.exists():
             return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
-        pass
+        # Intentional swallow: unreadable/invalid settings disable tracing
+        # rather than break startup — but never silently (#3894).
+        logger.warning("Failed to read tracing settings; tracing stays disabled", exc_info=True)
     return {}
 
 
@@ -78,5 +88,8 @@ def current_trace_id() -> Optional[str]:
         if ctx and ctx.is_valid:
             return f"{ctx.trace_id:032x}"
     except Exception:
-        pass
+        # Intentional swallow on a hot path: this is called for every event
+        # append, so log at DEBUG (with traceback) to avoid log spam while
+        # keeping the failure observable when debugging tracing issues.
+        logger.debug("Failed to read current trace id", exc_info=True)
     return None
