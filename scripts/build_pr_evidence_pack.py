@@ -10,6 +10,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    closing_issue_authority_exceeds_limit,
+    resolve_issue_authority,
+)
+
 
 @dataclass(frozen=True)
 class CheckSummary:
@@ -19,14 +25,23 @@ class CheckSummary:
 
 
 @dataclass(frozen=True)
+class IssueEvidence:
+    issue_number: int
+    authority_roles: list[str]
+    labels: list[str]
+    readiness_state: str
+    snapshot_available: bool
+
+
+@dataclass(frozen=True)
 class EvidencePack:
     pr_number: int | None
     pr_title: str
     head_sha: str
     base_branch: str
-    linked_issues: list[int]
-    issue_labels: list[str]
-    issue_readiness_state: str
+    governing_issue: int | None
+    closing_issues: list[int]
+    issue_evidence: list[IssueEvidence]
     changed_files: list[str]
     lane_classification: str
     validation_check_summary: list[CheckSummary]
@@ -64,16 +79,6 @@ def _nested_str(data: dict[str, object], *keys: str) -> str:
     return current if isinstance(current, str) else ""
 
 
-def _linked_issues(body: str) -> list[int]:
-    numbers = {
-        int(match.group(2))
-        for match in re.finditer(
-            r"\b(Fixes|Closes|Resolves)\s+#(\d+)\b", body, flags=re.I
-        )
-    }
-    return sorted(numbers)
-
-
 def _labels(issue: dict[str, object]) -> list[str]:
     labels: list[str] = []
     for label in _as_list(issue.get("labels")):
@@ -82,6 +87,45 @@ def _labels(issue: dict[str, object]) -> list[str]:
         elif isinstance(label, dict) and isinstance(label.get("name"), str):
             labels.append(str(label["name"]))
     return sorted(labels)
+
+
+def _issue_evidence(
+    *, governing_issue: int | None, closing_issues: list[int], payload: object
+) -> list[IssueEvidence]:
+    if len(set(closing_issues)) > MAX_CLOSING_ISSUES:
+        raise ValueError("PR closing issue authority exceeds the bounded limit")
+    raw_snapshots: list[object] = (
+        [payload] if isinstance(payload, dict) else _as_list(payload)
+    )
+    snapshots = {
+        snapshot["number"]: snapshot
+        for snapshot in raw_snapshots
+        if isinstance(snapshot, dict)
+        and isinstance(snapshot.get("number"), int)
+        and not isinstance(snapshot.get("number"), bool)
+    }
+    relevant = set(closing_issues)
+    if governing_issue is not None:
+        relevant.add(governing_issue)
+    evidence: list[IssueEvidence] = []
+    for issue_number in sorted(relevant):
+        snapshot = snapshots.get(issue_number, {})
+        labels = _labels(snapshot)
+        roles: list[str] = []
+        if issue_number == governing_issue:
+            roles.append("governing")
+        if issue_number in closing_issues:
+            roles.append("closing")
+        evidence.append(
+            IssueEvidence(
+                issue_number=issue_number,
+                authority_roles=roles,
+                labels=labels,
+                readiness_state=_readiness(labels, snapshot),
+                snapshot_available=bool(snapshot),
+            )
+        )
+    return evidence
 
 
 def _readiness(labels: list[str], issue: dict[str, object]) -> str:
@@ -204,16 +248,17 @@ def _risk_hints(files: list[str], codeowners_path: Path | None) -> list[str]:
 
 
 def _unknowns(
-    linked_issues: list[int],
-    issue_labels: list[str],
+    governing_issue: int | None,
+    issue_evidence: list[IssueEvidence],
     checks: list[CheckSummary],
     owner_doc_declaration: str,
 ) -> list[str]:
     missing: list[str] = []
-    if not linked_issues:
-        missing.append("linked issue not found in PR body")
-    if linked_issues and not issue_labels:
-        missing.append("linked issue labels unavailable")
+    if governing_issue is None:
+        missing.append("governing issue not found in PR body")
+    for evidence in issue_evidence:
+        if not evidence.snapshot_available:
+            missing.append(f"issue snapshot unavailable: #{evidence.issue_number}")
     if not checks:
         missing.append("check run evidence unavailable")
     if owner_doc_declaration == "unknown":
@@ -226,14 +271,25 @@ def build_pack(
     pr: dict[str, object],
     files_payload: object,
     checks_payload: object,
-    issue: dict[str, object],
+    issue: object,
     codeowners_path: Path | None = None,
 ) -> EvidencePack:
-    body = pr.get("body") if isinstance(pr.get("body"), str) else ""
+    raw_body = pr.get("body")
+    raw_number = pr.get("number")
+    raw_title = pr.get("title")
+    body = raw_body if isinstance(raw_body, str) else ""
     files = _changed_files(files_payload)
     checks = _checks(checks_payload)
-    linked_issues = _linked_issues(body)
-    labels = _labels(issue)
+    authority = resolve_issue_authority(body)
+    if closing_issue_authority_exceeds_limit(body):
+        raise ValueError("PR issue authority exceeds the bounded limit")
+    governing_issue = authority.governing_issue if authority is not None else None
+    closing_issues = list(authority.closing_issues) if authority is not None else []
+    issue_evidence = _issue_evidence(
+        governing_issue=governing_issue,
+        closing_issues=closing_issues,
+        payload=issue,
+    )
     failing = [
         check
         for check in checks
@@ -242,20 +298,20 @@ def build_pack(
     ]
     risks = _risk_hints(files, codeowners_path)
     owner_doc = _owner_doc_declaration(body)
-    unknowns = _unknowns(linked_issues, labels, checks, owner_doc)
+    unknowns = _unknowns(governing_issue, issue_evidence, checks, owner_doc)
     human_exception_required = (
         owner_doc == "conflicting_declarations"
         or any(hint.startswith("codeowner_required:") for hint in risks)
-        or "agent:needs-human" in labels
+        or any("agent:needs-human" in evidence.labels for evidence in issue_evidence)
     )
     return EvidencePack(
-        pr_number=pr.get("number") if isinstance(pr.get("number"), int) else None,
-        pr_title=pr.get("title") if isinstance(pr.get("title"), str) else "",
+        pr_number=raw_number if isinstance(raw_number, int) else None,
+        pr_title=raw_title if isinstance(raw_title, str) else "",
         head_sha=_nested_str(pr, "head", "sha"),
         base_branch=_nested_str(pr, "base", "ref"),
-        linked_issues=linked_issues,
-        issue_labels=labels,
-        issue_readiness_state=_readiness(labels, issue),
+        governing_issue=governing_issue,
+        closing_issues=closing_issues,
+        issue_evidence=issue_evidence,
         changed_files=files,
         lane_classification=_lane(body, files),
         validation_check_summary=checks,
@@ -269,7 +325,7 @@ def build_pack(
 
 
 def render_markdown(pack: EvidencePack) -> str:
-    linked = ", ".join(f"#{number}" for number in pack.linked_issues) or "unknown"
+    closing = ", ".join(f"#{number}" for number in pack.closing_issues) or "unknown"
     files = "\n".join(f"- `{filename}`" for filename in pack.changed_files) or "- none"
     checks = (
         "\n".join(
@@ -287,6 +343,16 @@ def render_markdown(pack: EvidencePack) -> str:
     )
     unknowns = "\n".join(f"- {item}" for item in pack.unknowns_missing_evidence) or "- none"
     risks = "\n".join(f"- {item}" for item in pack.risk_hints) or "- none"
+    issue_evidence = (
+        "\n".join(
+            f"- #{item.issue_number}: roles={','.join(item.authority_roles)}, "
+            f"readiness={item.readiness_state}, "
+            f"labels={','.join(item.labels) or 'none'}, "
+            f"snapshot_available={str(item.snapshot_available).lower()}"
+            for item in pack.issue_evidence
+        )
+        or "- none"
+    )
     return "\n".join(
         [
             "# PR Evidence Pack",
@@ -295,13 +361,16 @@ def render_markdown(pack: EvidencePack) -> str:
             f"- Title: {pack.pr_title or 'unknown'}",
             f"- Head SHA: `{pack.head_sha or 'unknown'}`",
             f"- Base branch: `{pack.base_branch or 'unknown'}`",
-            f"- Linked issue(s): {linked}",
-            f"- Issue labels: `{', '.join(pack.issue_labels) or 'unknown'}`",
-            f"- Issue readiness: `{pack.issue_readiness_state}`",
+            f"- Governing issue: #{pack.governing_issue or 'unknown'}",
+            f"- Closing issue(s): {closing}",
             f"- Lane: `{pack.lane_classification}`",
             f"- PR contract status: `{pack.pr_contract_status}`",
             f"- Owner-doc writeback: `{pack.owner_doc_writeback_declaration}`",
             f"- Human exception required: `{pack.human_exception_required}`",
+            "",
+            "## Issue Evidence",
+            "",
+            issue_evidence,
             "",
             "## Changed Files",
             "",
@@ -352,7 +421,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pr=_as_dict(_load_json(args.pr_json, {})),
         files_payload=_load_json(args.files_json, []),
         checks_payload=_load_json(args.checks_json, {}),
-        issue=_as_dict(_load_json(args.issue_json, {})),
+        issue=_load_json(args.issue_json, []),
         codeowners_path=args.codeowners,
     )
     _write_outputs(pack, args.output_json, args.output_markdown)

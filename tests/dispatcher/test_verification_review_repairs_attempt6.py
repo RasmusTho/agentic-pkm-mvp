@@ -953,10 +953,14 @@ class _RepeatedReplayOutageTruth(Truth):
     def pull_request(self, repository, pr_number):
         self.pull_calls += 1
         if self.pull_calls <= 2:
-            return eligible_pr()
+            result = eligible_pr()
+            self._last_pr = result
+            return result
         if self.pull_calls <= 4:
             raise RuntimeError("simulated repeated post-merge terminal outage")
-        return merged_pr()
+        result = merged_pr()
+        self._last_pr = result
+        return result
 
 
 def test_schema_valid_receipt_text_is_sanitized_before_all_durable_writes(

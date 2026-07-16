@@ -15,7 +15,10 @@ This is a cold-path maintenance check, not a hot-path implementation step.
 For the merged PR, read:
 
 1. The merge diff (files changed, with their before/after).
-2. The closed issue(s) referenced by the PR, including their `Source Docs` list.
+2. The exact authenticated closing issue(s), plus any distinct open governing parent, including their
+   `Source Docs` lists. Recover these identities from the trusted
+   `verified_issue_set_merge_authority.v1` PR receipt; do not infer them from a temporarily
+   neutralized body or from `closingIssuesReferences` alone.
 3. Every owner doc the diff could plausibly affect. Pick these by judgment from:
    - paths touched in the diff (e.g. changes under `app/retrieval/` implicate `docs/ARCHITECTURE.md` and any retrieval-specific owner doc),
    - the closed issue's `Source Docs`,
@@ -39,9 +42,15 @@ semantics or followed a Product System authority path.
 
 ## Receipt placement
 
-The receipt comment always goes on the **closed issue** that the PR fixes. If the PR closed multiple issues, post the receipt on each one. If the PR closed no issues (docs-only lane, governance lane), post the receipt as a **PR comment** instead — the PR is then the auditable artifact.
+The result is PR-specific and uses the prefix `post-merge owner-doc check: PR #<PR>;`. For an
+issue-backed merge, post the same result on every exact authenticated closing issue and also on a
+distinct open governing parent. Deduplicate the target when the governor is itself closed. For an
+issue-free lane, post it on the PR instead. A generic receipt, a receipt for another PR, a watchdog
+reminder, or a stale notification does not satisfy this gate.
 
-After posting, verify the receipt exists by reading back the issue or PR comments. A watchdog reminder, stale notification, or planned follow-up is not a `post-merge owner-doc check:` receipt. [owner-doc-receipt-gate]
+After posting, read back every required target and verify the exact PR-specific prefix. The trusted
+authority receipt remains on the PR and binds the target set even while the body is neutralized.
+[owner-doc-receipt-gate]
 
 ## Three outcomes
 
@@ -49,7 +58,7 @@ Classify the claim into one of three lanes: immediate action, queued follow-up, 
 
 **1. Yes, and the wording change is clear. Immediate action.**
 
-Open a docs-only PR via `docs-authoring` that updates the owner doc(s). Title: `docs: owner-doc promotion for #<closed-issue>`. Body links back to the closed issue and names the specific claim(s) being corrected. Add a comment on the closed issue: `post-merge owner-doc check: docs PR opened at #<docs-pr>`.
+Open a docs-only PR via `docs-authoring` that updates the owner doc(s). Title: `docs: owner-doc promotion for #<closed-issue>`. Body links back to the closed issue and names the specific claim(s) being corrected. On every required receipt target, add: `post-merge owner-doc check: PR #<PR>; docs PR opened at #<docs-pr>`.
 
 **2. Yes, but the right wording needs human judgment. Queue a follow-up.**
 
@@ -59,13 +68,15 @@ Open one bounded follow-up issue. Title: `docs: owner-doc promotion needed for #
 - the exact behavior change from the merge,
 - one or two candidate rewordings, framed as options not decisions.
 
-Add a comment on the closed issue: `post-merge owner-doc check: follow-up issue #<N> opened (wording needs judgment).`
+On every required receipt target, add: `post-merge owner-doc check: PR #<PR>; follow-up issue #<N> opened (wording needs judgment).`
 
 **3. No owner-doc change is implied.**
 
-Add one comment on the closed issue, verbatim: `post-merge owner-doc check: no owner-doc change implied.` Nothing else.
+On every required receipt target, add one comment verbatim:
+`post-merge owner-doc check: PR #<PR>; no owner-doc change implied.` Nothing else.
 
-That comment is the receipt. If it is missing on a closed implementation issue, this skill did not run.
+Those comments are the receipts. If one is missing on an exact closed issue or a distinct open
+governing parent, this skill did not run.
 
 If the merge implies no owner-doc change but reveals future adoption, workflow learning, docs
 freshness, roadmap execution, or promotion material, route that material to BuilderOps first:
@@ -86,7 +97,8 @@ work with `Verify:` targets.
 
 ## Inputs you can rely on
 
-- `gh pr view <n> --json title,body,files,closingIssuesReferences`
+- `gh pr view <n> --json title,body,files,headRefOid,closingIssuesReferences`
+- trusted PR comments carrying the unique same-head `verified_issue_set_merge_authority.v1` receipt
 - `gh issue view <n> --json title,body,labels,comments`
 - `git show <merge-sha>` for the diff
 - `docs/DOCS_INDEX.md` as the registry of owner docs
@@ -119,4 +131,4 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 
 One receipt line per invocation, printed to the orchestrator:
 
-- `POST-MERGE OWNER-DOC RECEIPT: PR #<n> merged closing #<m>. Outcome: docs-pr #<p> | follow-up #<f> | no-change. Evidence: <one-sentence justification>.`
+- `POST-MERGE OWNER-DOC RECEIPT: PR #<n> targets #<m>[, #<parent>]. Outcome: docs-pr #<p> | follow-up #<f> | no-change. Evidence: <one-sentence justification>.`

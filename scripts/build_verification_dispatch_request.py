@@ -9,10 +9,14 @@ import json
 from pathlib import Path
 from typing import Sequence, TypeGuard
 
-from app.dispatcher.verification_contract import resolve_issue_contract
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    resolve_issue_authority,
+    resolve_issue_contract as resolve_issue_contract,
+)
 
 
-CONTRACT_VERSION = "verification_dispatch_request.v1"
+CONTRACT_VERSION = "verification_dispatch_request.v2"
 STAGE = "verification"
 SOURCE_WORKFLOW = "CI"
 EVIDENCE_WORKFLOW = "PR Evidence Pack"
@@ -41,6 +45,31 @@ def _nested_str(data: dict[str, object], *keys: str) -> str:
 
 def _is_positive_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _resolve_live_closing_issues(
+    value: object, *, repository: str
+) -> tuple[int, ...] | None:
+    """Return the authenticated repo-local GitHub closing set, or fail closed."""
+    if not isinstance(value, list) or not value:
+        return None
+    issues: list[int] = []
+    for reference in value:
+        if not isinstance(reference, dict):
+            return None
+        number = reference.get("number")
+        if (
+            not _is_positive_int(number)
+            or reference.get("repository") != repository
+        ):
+            return None
+        issues.append(number)
+    if (
+        len(set(issues)) != len(issues)
+        or len(issues) > MAX_CLOSING_ISSUES
+    ):
+        return None
+    return tuple(sorted(issues))
 
 
 def _idempotency_key(
@@ -136,13 +165,17 @@ def build_request(
     ):
         return None
 
-    issue_contract = resolve_issue_contract(pr.get("body"))
-    if issue_contract is None:
+    issue_authority = resolve_issue_authority(pr.get("body"))
+    if issue_authority is None:
         return None
-    governing_issue, supporting_issues = issue_contract
+    live_closing_issues = _resolve_live_closing_issues(
+        pr.get("live_closing_issues"), repository=repository
+    )
+    if live_closing_issues != tuple(sorted(issue_authority.closing_issues)):
+        return None
     issue_data = issue or {}
     linked_issue = issue_data.get("number")
-    if linked_issue != governing_issue:
+    if linked_issue != issue_authority.governing_issue:
         return None
 
     return {
@@ -151,7 +184,8 @@ def build_request(
         "repository": repository,
         "pr_number": pr_number,
         "linked_issue": linked_issue,
-        "supporting_issues": list(supporting_issues),
+        "closing_issues": list(issue_authority.closing_issues),
+        "supporting_issues": list(issue_authority.supporting_issues),
         "current_head_sha": current_head_sha,
         "source_workflow": {
             "name": SOURCE_WORKFLOW,

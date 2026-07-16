@@ -5,6 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
 from scripts.build_pr_evidence_pack import build_pack, render_markdown
 
 
@@ -12,7 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _pr_body(owner_doc_line: str = "- [x] No owner-doc change implied.") -> str:
-    return f"""Closes #3214
+    return f"""Governing-Issue: #3214
+
+Closes #3214
 
 - [x] Governance lane
 
@@ -44,7 +49,7 @@ def _clean_pack():
                 {"name": "Unit tests (not pg)", "status": "completed", "conclusion": "success"},
             ]
         },
-        issue={"state": "open", "labels": [{"name": "agent:ready"}, {"name": "prio:high"}]},
+        issue={"number": 3214, "state": "open", "labels": [{"name": "agent:ready"}, {"name": "prio:high"}]},
     )
 
 
@@ -77,14 +82,15 @@ def test_pack_builder_emits_markdown_and_json(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     issue_json.write_text(
-        json.dumps({"state": "open", "labels": [{"name": "agent:ready"}]}),
+        json.dumps({"number": 3214, "state": "open", "labels": [{"name": "agent:ready"}]}),
         encoding="utf-8",
     )
 
     subprocess.run(
         [
             sys.executable,
-            "scripts/build_pr_evidence_pack.py",
+            "-m",
+            "scripts.build_pr_evidence_pack",
             "--pr-json",
             str(pr_json),
             "--files-json",
@@ -105,7 +111,9 @@ def test_pack_builder_emits_markdown_and_json(tmp_path: Path) -> None:
     payload = json.loads(out_json.read_text(encoding="utf-8"))
     markdown = out_md.read_text(encoding="utf-8")
     assert payload["pr_number"] == 99
-    assert payload["linked_issues"] == [3214]
+    assert payload["governing_issue"] == 3214
+    assert payload["closing_issues"] == [3214]
+    assert payload["issue_evidence"][0]["authority_roles"] == ["governing", "closing"]
     assert payload["lane_classification"] == "governance"
     assert payload["pr_contract_status"] == "success"
     assert payload["owner_doc_writeback_declaration"] == "no_owner_doc_change"
@@ -131,7 +139,7 @@ def test_evidence_pack_fixture_matrix(tmp_path: Path) -> None:
                 {"name": "pr-contract", "status": "completed", "conclusion": "failure"},
             ]
         },
-        issue={"state": "open", "labels": [{"name": "agent:ready"}]},
+        issue={"number": 3214, "state": "open", "labels": [{"name": "agent:ready"}]},
     )
     assert failing.failing_checks[0].name == "pr-contract"
     assert failing.pr_contract_status == "failure"
@@ -142,7 +150,7 @@ def test_evidence_pack_fixture_matrix(tmp_path: Path) -> None:
         checks_payload={},
         issue={},
     )
-    assert "linked issue not found in PR body" in missing_issue.unknowns_missing_evidence
+    assert "governing issue not found in PR body" in missing_issue.unknowns_missing_evidence
 
     owner_doc = build_pack(
         pr={
@@ -154,7 +162,7 @@ def test_evidence_pack_fixture_matrix(tmp_path: Path) -> None:
         },
         files_payload=[{"filename": "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"}],
         checks_payload={"check_runs": []},
-        issue={"state": "open", "labels": [{"name": "agent:ready"}]},
+        issue={"number": 3214, "state": "open", "labels": [{"name": "agent:ready"}]},
     )
     assert owner_doc.owner_doc_writeback_declaration == "owner_doc_updated"
 
@@ -170,11 +178,62 @@ def test_evidence_pack_fixture_matrix(tmp_path: Path) -> None:
         },
         files_payload=[{"filename": "docker-compose.prod.yml"}],
         checks_payload={"check_runs": []},
-        issue={"state": "open", "labels": [{"name": "agent:ready"}]},
+        issue={"number": 3214, "state": "open", "labels": [{"name": "agent:ready"}]},
         codeowners_path=codeowners,
     )
     assert authority_risk.human_exception_required is True
     assert authority_risk.risk_hints == ["codeowner_required:docker-compose.prod.yml:@RasmusTho"]
+
+
+def test_evidence_pack_uses_canonical_closing_keyword_variants() -> None:
+    pack = build_pack(
+        pr={
+            "number": 102,
+            "title": "variant",
+            "body": _pr_body().replace("Closes #3214", "Fixed: #3214"),
+            "head": {"sha": "abc123"},
+            "base": {"ref": "main"},
+        },
+        files_payload=[{"filename": "app/runtime.py"}],
+        checks_payload={"check_runs": []},
+        issue={"number": 3214, "state": "open", "labels": [{"name": "agent:ready"}]},
+    )
+
+    assert pack.governing_issue == 3214
+    assert pack.closing_issues == [3214]
+
+
+def test_multi_issue_evidence_keeps_parent_state_separate_from_closing_child() -> None:
+    body = _pr_body().replace(
+        "Governing-Issue: #3214\n\nCloses #3214",
+        "Governing-Issue: #3603\n\nRefs #3603\nFixed #3626",
+    )
+    pack = build_pack(
+        pr={"number": 103, "title": "multi", "body": body, "head": {}, "base": {}},
+        files_payload=[{"filename": "app/runtime.py"}],
+        checks_payload={"check_runs": []},
+        issue=[
+            {
+                "number": 3603,
+                "state": "open",
+                "labels": [{"name": "prio:high"}],
+            },
+            {
+                "number": 3626,
+                "state": "open",
+                "labels": [{"name": "agent:needs-human"}],
+            },
+        ],
+    )
+
+    assert pack.governing_issue == 3603
+    assert pack.closing_issues == [3626]
+    assert [item.issue_number for item in pack.issue_evidence] == [3603, 3626]
+    assert pack.issue_evidence[0].authority_roles == ["governing"]
+    assert pack.issue_evidence[0].readiness_state == "open_without_agent_label"
+    assert pack.issue_evidence[1].authority_roles == ["closing"]
+    assert pack.issue_evidence[1].readiness_state == "needs_human"
+    assert pack.human_exception_required is True
 
 
 def test_missing_data_is_reported_as_unknown_not_guessed() -> None:
@@ -185,10 +244,26 @@ def test_missing_data_is_reported_as_unknown_not_guessed() -> None:
         issue={},
     )
 
-    assert pack.linked_issues == []
-    assert pack.issue_readiness_state == "unknown"
+    assert pack.governing_issue is None
+    assert pack.closing_issues == []
+    assert pack.issue_evidence == []
     assert pack.pr_contract_status == "unknown"
     assert "check run evidence unavailable" in pack.unknowns_missing_evidence
+
+
+def test_evidence_pack_rejects_over_limit_issue_authority() -> None:
+    body = "\n".join(
+        ["Governing-Issue: #3214"]
+        + [f"Fixes #{4000 + index}" for index in range(MAX_CLOSING_ISSUES + 1)]
+    )
+
+    with pytest.raises(ValueError, match="exceeds the bounded limit"):
+        build_pack(
+            pr={"number": 99, "title": "fanout", "body": body},
+            files_payload=[],
+            checks_payload={},
+            issue=[],
+        )
 
 
 def test_human_exception_requires_observed_exception_evidence(tmp_path: Path) -> None:
@@ -207,7 +282,7 @@ def test_human_exception_requires_observed_exception_evidence(tmp_path: Path) ->
         },
         files_payload=[{"filename": ".github/workflows/deploy.yml"}],
         checks_payload={"check_runs": []},
-        issue={"state": "open", "labels": [{"name": "agent:ready"}]},
+        issue={"number": 3214, "state": "open", "labels": [{"name": "agent:ready"}]},
         codeowners_path=codeowners,
     )
 

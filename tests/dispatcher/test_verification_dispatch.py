@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+import hashlib
 import json
 import sqlite3
 from threading import Event, Lock, Thread
@@ -10,6 +11,7 @@ from threading import Event, Lock, Thread
 import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
+from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
 from app.dispatcher.verification_dispatch import VerificationRun
 from tests.dispatcher.verification_helpers import (
     b4e2310_pre_trust_request,
@@ -25,15 +27,97 @@ CLAIM_PRE_LOCK = "2030-01-01T00:00:00.000000+00:00"
 CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
 
 
+def _canonical_v1_request(*, supporting_issues: list[int]) -> dict[str, object]:
+    payload = request()
+    payload["contract_version"] = "verification_dispatch_request.v1"
+    payload["supporting_issues"] = supporting_issues
+    payload.pop("closing_issues")
+    identity = {
+        "contract_version": payload["contract_version"],
+        "head_sha": payload["current_head_sha"],
+        "pr_number": payload["pr_number"],
+        "repository": payload["repository"],
+        "stage": payload["stage"],
+    }
+    payload["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return payload
+
+
+def _write_deployed_v1_run(
+    state,
+    *,
+    supporting_issues: list[int],
+) -> tuple[str, dict[str, object]]:
+    original = state.ingest(request())
+    payload = _canonical_v1_request(supporting_issues=supporting_issues)
+    idempotency_key = payload["idempotency_key"]
+    assert isinstance(idempotency_key, str)
+    run_id = f"vrun-{idempotency_key[:16]}"
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE verification_runs
+            SET run_id=?, idempotency_key=?, contract_version=?, request_json=?,
+                supporting_authority_json=?, closing_authority_json='[3603]',
+                status='running', claimed_by='host', lease_id='legacy-lease',
+                lease_expires_at='2030-01-01T00:00:00+00:00',
+                last_heartbeat_at='2026-07-16T10:00:00+00:00',
+                coordinator_session_id='01900000-0000-7000-8000-000000000002',
+                context_pack_json='{"legacy":"context"}'
+            WHERE run_id=?
+            """,
+            (
+                run_id,
+                idempotency_key,
+                payload["contract_version"],
+                json.dumps(
+                    payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                json.dumps(supporting_issues, separators=(",", ":")),
+                original.run_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                finding_id, failure_domain, mechanism_id, receipt_json, created_at
+            ) VALUES (
+                'attempt-v1-closure', ?, 'standard_repair', 1,
+                '01900000-0000-7000-8000-000000000002', 'gpt-5.6-terra',
+                'high', 'legacy-context-hash', 'fixed', 'F-v1-ambiguous',
+                'review_code_correctness', 'legacy-closing-authority',
+                '{"legacy":true}', '2026-07-16T10:00:01+00:00'
+            )
+            """,
+            (run_id,),
+        )
+        conn.commit()
+    return run_id, payload
+
+
 def _migrated_legacy_ledger(tmp_path, legacy_request: dict | None = None):
     state = ledger(tmp_path)
     original = state.ingest(request())
     if legacy_request is None:
         legacy_request = pre_trust_request()
+    legacy_key = legacy_request["idempotency_key"]
+    assert isinstance(legacy_key, str)
+    legacy_run_id = f"vrun-{legacy_key[:16]}"
     with sqlite3.connect(state.store.db_path) as conn:
         conn.execute(
-            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            "UPDATE verification_runs SET run_id=?, idempotency_key=?, "
+            "contract_version=?, request_json=? WHERE run_id=?",
             (
+                legacy_run_id,
+                legacy_key,
+                legacy_request["contract_version"],
                 json.dumps(
                     legacy_request,
                     sort_keys=True,
@@ -49,10 +133,34 @@ def _migrated_legacy_ledger(tmp_path, legacy_request: dict | None = None):
     migrated = verification_dispatch.VerificationDispatchLedger(
         SqliteStore(state.store.db_path)
     )
-    legacy = migrated.get(original.run_id)
+    legacy = migrated.get(legacy_run_id)
     assert legacy is not None
     assert legacy.status == "legacy_untrusted"
     return migrated, legacy
+
+
+def _live_observed_request(state, payload: dict[str, object]):
+    authenticated = verification_dispatch._authenticated_verification_request(
+        payload
+    )
+    token = state.canonical_chain_token(authenticated)
+    supporting = payload["supporting_issues"]
+    closing = payload["closing_issues"]
+    assert isinstance(supporting, list)
+    assert isinstance(closing, list)
+    return verification_dispatch._live_observed_verification_request(
+        authenticated,
+        observed_repository=payload["repository"],
+        observed_pr_number=payload["pr_number"],
+        observed_head_sha=payload["current_head_sha"],
+        observed_state="open",
+        observed_merged_at=None,
+        observed_draft=False,
+        observed_linked_issue=payload["linked_issue"],
+        observed_closing_issues=tuple(closing),
+        observed_supporting_issues=tuple(supporting),
+        canonical_chain_token=token,
+    )
 
 
 def test_shared_request_fixture_carries_governing_issue() -> None:
@@ -261,15 +369,508 @@ def test_authenticated_artifact_starts_fresh_chain_beside_inert_legacy_audit(
     assert state.closure_ready(legacy.run_id) is False
 
 
-def test_authenticated_same_head_artifact_cannot_replace_inert_audit(tmp_path) -> None:
-    state, legacy = _migrated_legacy_ledger(tmp_path)
-    authenticated = verification_dispatch._authenticated_verification_request(request())
+def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) -> None:
+    initial = ledger(tmp_path)
+    run_id, legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[]
+    )
+    state = ledger(tmp_path)
+    legacy = state.get(run_id)
+    assert legacy is not None
+    assert legacy.status == "legacy_untrusted"
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+    observed = _live_observed_request(state, request())
 
-    with pytest.raises(ValueError, match="legacy verification audit is not executable"):
+    recovered = state.ingest(observed)
+
+    assert recovered.run_id == run_id
+    assert recovered.status == "queued"
+    assert recovered.authority_state == "canonical"
+    assert recovered.request == request()
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+    with state.store._connect() as conn:
+        rows = conn.execute("SELECT * FROM verification_runs").fetchall()
+    assert len(rows) == 1
+    audit = json.loads(rows[0]["legacy_recovery_audit_json"])
+    assert audit["contract"] == "verification_legacy_recovery_audit.v2"
+    quarantined = audit["quarantined_row"]
+    assert quarantined["status"] == "legacy_untrusted"
+    assert json.loads(quarantined["request_json"]) == legacy_request
+    assert quarantined["idempotency_key"] == legacy_request["idempotency_key"]
+    assert audit["quarantined_exceptions"] == []
+
+
+def test_migrated_repaired_head_v1_recovers_only_on_preserved_current_head(
+    tmp_path,
+) -> None:
+    requested_head = request()["current_head_sha"]
+    assert isinstance(requested_head, str)
+    repaired_head = "b" * 40
+    unrelated_head = "c" * 40
+    initial = ledger(tmp_path)
+    run_id, legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[]
+    )
+    with sqlite3.connect(initial.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, status='backoff', "
+            "terminal_receipt_json=?, retry_after=? WHERE run_id=?",
+            (
+                repaired_head,
+                json.dumps(
+                    {
+                        "outcome": "deferred",
+                        "reason": "checks_not_green",
+                        "head_sha": repaired_head,
+                    },
+                    sort_keys=True,
+                ),
+                "2030-01-01T00:00:00+00:00",
+                run_id,
+            ),
+        )
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    state = ledger(tmp_path)
+    migrated = state.get(run_id)
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.requested_head_sha == requested_head
+    assert migrated.current_head_sha == repaired_head
+    assert migrated.request == legacy_request
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+
+    def snapshot() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        with state.store._connect() as conn:
+            return (
+                [dict(row) for row in conn.execute("SELECT * FROM verification_runs")],
+                [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT * FROM verification_attempts ORDER BY attempt_id"
+                    )
+                ],
+            )
+
+    before_mismatches = snapshot()
+    for disallowed_head in (requested_head, unrelated_head):
+        with pytest.raises(
+            ValueError,
+            match="artifact head does not match legacy current run",
+        ):
+            state.ingest(
+                _live_observed_request(state, request(disallowed_head))
+            )
+        assert snapshot() == before_mismatches
+
+    recovered = state.ingest(
+        _live_observed_request(state, request(repaired_head))
+    )
+
+    assert recovered.run_id == run_id
+    assert recovered.status == "queued"
+    assert recovered.requested_head_sha == requested_head
+    assert recovered.current_head_sha == repaired_head
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+    with state.store._connect() as conn:
+        rows = conn.execute("SELECT * FROM verification_runs").fetchall()
+    assert len(rows) == 1
+    audit = json.loads(rows[0]["legacy_recovery_audit_json"])
+    assert audit["quarantined_row"]["current_head_sha"] == repaired_head
+
+    claimed = state.claim(run_id, "repair-host")
+    running = state.start(
+        run_id,
+        "repair-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000051",
+        {"head_sha": repaired_head},
+    )
+    rebound = state.rebind_head(
+        run_id,
+        unrelated_head,
+        expected_head_sha=repaired_head,
+        observed_repository=recovered.repository,
+        observed_pr_number=recovered.pr_number,
+        observed_head_sha=unrelated_head,
+        holder="repair-host",
+        lease_id=running.lease_id or "",
+    )
+
+    assert rebound.requested_head_sha == requested_head
+    assert rebound.request["current_head_sha"] == repaired_head
+    assert rebound.current_head_sha == unrelated_head
+    assert state.get(run_id) == rebound
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+
+    deferred = state.backoff(
+        run_id,
+        {"outcome": "deferred", "head_sha": unrelated_head},
+        "2030-01-01T00:00:00+00:00",
+        holder="repair-host",
+        lease_id=rebound.lease_id or "",
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", run_id),
+        )
+        conn.commit()
+    replayed = state.ingest(
+        _live_observed_request(state, request(unrelated_head))
+    )
+    reclaimed = state.claim(run_id, "recovery-host")
+
+    assert deferred.run_id == replayed.run_id == reclaimed.run_id == run_id
+    assert replayed.current_head_sha == reclaimed.current_head_sha == unrelated_head
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+    with state.store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_runs"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["malformed_archived_current_head", "archived_head_not_recovered_identity"],
+)
+def test_recovered_legacy_audit_rejects_invalid_archived_current_head(
+    tmp_path,
+    corruption: str,
+) -> None:
+    requested_head = request()["current_head_sha"]
+    assert isinstance(requested_head, str)
+    repaired_head = "b" * 40
+    initial = ledger(tmp_path / corruption)
+    run_id, _legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[]
+    )
+    with sqlite3.connect(initial.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, "
+            "terminal_receipt_json=? WHERE run_id=?",
+            (
+                repaired_head,
+                json.dumps({"outcome": "deferred", "head_sha": repaired_head}),
+                run_id,
+            ),
+        )
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    state = ledger(tmp_path / corruption)
+    recovered = state.ingest(
+        _live_observed_request(state, request(repaired_head))
+    )
+    assert recovered.requested_head_sha == requested_head
+    with state.store._connect() as conn:
+        audit = json.loads(
+            conn.execute(
+                "SELECT legacy_recovery_audit_json FROM verification_runs "
+                "WHERE run_id=?",
+                (run_id,),
+            ).fetchone()[0]
+        )
+        archived = audit["quarantined_row"]
+        corrupt_head = (
+            "not-a-sha"
+            if corruption == "malformed_archived_current_head"
+            else "c" * 40
+        )
+        archived["current_head_sha"] = corrupt_head
+        archived["terminal_receipt_json"] = json.dumps(
+            {"outcome": "deferred", "head_sha": corrupt_head}
+        )
+        conn.execute(
+            "UPDATE verification_runs SET legacy_recovery_audit_json=? "
+            "WHERE run_id=?",
+            (json.dumps(audit, sort_keys=True), run_id),
+        )
+        conn.commit()
+
+    before = _verification_state_snapshot(state)
+    with pytest.raises(ValueError, match="legacy verification"):
+        state.get(run_id)
+    with pytest.raises(ValueError, match="legacy verification"):
+        state.claim(run_id, "must-not-claim")
+    assert _verification_state_snapshot(state) == before
+
+
+def test_same_head_v2_recovery_preserves_compatible_legacy_issue_authority(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(
+        initial, supporting_issues=[3626]
+    )
+    state = ledger(tmp_path)
+    compatible = request()
+    compatible["supporting_issues"] = [3626]
+    compatible["closing_issues"] = [3603, 3626]
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+
+    recovered = state.ingest(_live_observed_request(state, compatible))
+
+    assert recovered.run_id == run_id
+    assert recovered.supporting_authority == (3626,)
+    assert recovered.closing_authority == (3603, 3626)
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+
+
+@pytest.mark.parametrize(
+    ("fresh_supporting", "fresh_closing"),
+    [
+        ([], [3603]),
+        ([3626, 3745], [3603, 3745]),
+        ([3745], [3745]),
+    ],
+)
+def test_same_head_v2_recovery_rejects_changed_legacy_supporting_authority(
+    tmp_path,
+    fresh_supporting: list[int],
+    fresh_closing: list[int],
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(
+        initial, supporting_issues=[3626]
+    )
+    state = ledger(tmp_path)
+    changed = request()
+    changed["supporting_issues"] = fresh_supporting
+    changed["closing_issues"] = fresh_closing
+    before = state.get(run_id)
+    attempts_before = state.attempts(run_id)
+
+    with pytest.raises(
+        ValueError,
+        match="does not match legacy recovery authority",
+    ):
+        state.ingest(_live_observed_request(state, changed))
+
+    assert state.get(run_id) == before
+    assert state.attempts(run_id) == attempts_before
+
+
+def test_same_head_v2_recovery_rejects_changed_live_closing_authority(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(
+        initial, supporting_issues=[3626]
+    )
+    state = ledger(tmp_path)
+    compatible = request()
+    compatible["supporting_issues"] = [3626]
+    authenticated = verification_dispatch._authenticated_verification_request(
+        compatible
+    )
+    observed = verification_dispatch._live_observed_verification_request(
+        authenticated,
+        observed_repository=compatible["repository"],
+        observed_pr_number=compatible["pr_number"],
+        observed_head_sha=compatible["current_head_sha"],
+        observed_state="open",
+        observed_merged_at=None,
+        observed_draft=False,
+        observed_linked_issue=compatible["linked_issue"],
+        observed_closing_issues=(3626,),
+        observed_supporting_issues=(3626,),
+        canonical_chain_token=state.canonical_chain_token(authenticated),
+    )
+    before = state.get(run_id)
+
+    with pytest.raises(
+        ValueError,
+        match="does not match legacy recovery authority",
+    ):
+        state.ingest(observed)
+
+    assert state.get(run_id) == before
+
+
+def test_same_head_v2_recovery_archives_legacy_exception_children(tmp_path) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    legacy_packet = {"legacy": "must remain immutable"}
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_exceptions (
+                exception_id, run_id, failure_class, head_sha, packet_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "vexception-legacy",
+                run_id,
+                "authority-critical",
+                request()["current_head_sha"],
+                json.dumps(legacy_packet, sort_keys=True),
+                "2026-07-16T10:00:02+00:00",
+                "2026-07-16T10:00:02+00:00",
+            ),
+        )
+        conn.commit()
+    observed = _live_observed_request(state, request())
+
+    recovered = state.ingest(observed)
+
+    with state.store._connect() as conn:
+        row = conn.execute(
+            "SELECT legacy_recovery_audit_json FROM verification_runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        assert row is not None
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?", (run_id,)
+        ).fetchone()[0] == 0
+    audit = json.loads(row["legacy_recovery_audit_json"])
+    assert audit["quarantined_exceptions"] == [
+        {
+            "created_at": "2026-07-16T10:00:02+00:00",
+            "exception_id": "vexception-legacy",
+            "failure_class": "authority-critical",
+            "head_sha": request()["current_head_sha"],
+            "packet_json": json.dumps(legacy_packet, sort_keys=True),
+            "run_id": run_id,
+            "updated_at": "2026-07-16T10:00:02+00:00",
+        }
+    ]
+
+    claimed = state.claim(recovered.run_id, "v2-host")
+    running = state.start(
+        recovered.run_id,
+        "v2-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000099",
+        {"head_sha": recovered.head_sha},
+    )
+    state.exception(
+        running.run_id,
+        "authority-critical",
+        {"v2": "new evidence"},
+        holder="v2-host",
+        lease_id=running.lease_id or "",
+    )
+    with state.store._connect() as conn:
+        current_packet = conn.execute(
+            "SELECT packet_json FROM verification_exceptions WHERE run_id=?",
+            (run_id,),
+        ).fetchone()[0]
+        persisted_audit = json.loads(
+            conn.execute(
+                "SELECT legacy_recovery_audit_json FROM verification_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()[0]
+        )
+    assert json.loads(current_packet) == {"v2": "new evidence"}
+    assert json.loads(
+        persisted_audit["quarantined_exceptions"][0]["packet_json"]
+    ) == legacy_packet
+
+
+def test_concurrent_same_head_v2_recovery_converges_on_one_canonical_run(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    first = _live_observed_request(state, request())
+    second = _live_observed_request(state, request())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(state.ingest, (first, second)))
+
+    assert {result.run_id for result in results} == {run_id}
+    assert {result.status for result in results} == {"queued"}
+    with state.store._connect() as conn:
+        row_count = conn.execute(
+            "SELECT COUNT(*) FROM verification_runs"
+        ).fetchone()[0]
+        audit_count = conn.execute(
+            "SELECT COUNT(*) FROM verification_runs "
+            "WHERE legacy_recovery_audit_json IS NOT NULL"
+        ).fetchone()[0]
+    assert row_count == audit_count == 1
+
+
+def test_same_head_v2_recovery_without_fresh_live_fence_is_non_mutating(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    before = state.get(run_id)
+    authenticated = verification_dispatch._authenticated_verification_request(
+        request()
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="canonical authority changed during live observation",
+    ):
         state.ingest(authenticated)
 
-    assert state.get(legacy.run_id) == legacy
-    assert [run.run_id for run in state.list()] == [legacy.run_id]
+    assert state.get(run_id) == before
+
+
+def test_same_head_v2_recovery_rejects_intervening_ledger_write(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    observed = _live_observed_request(state, request())
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                finding_id, failure_domain, mechanism_id,
+                receipt_json, created_at
+            ) VALUES (
+                'attempt-after-observation', ?, 'standard_repair', 2,
+                '01900000-0000-7000-8000-000000000003', 'gpt-5.6-terra',
+                'high', 'intervening-context', 'fixed', 'F-intervening',
+                'review_code_correctness', 'legacy-closing-authority', '{}',
+                '2026-07-16T10:00:02+00:00'
+            )
+            """,
+            (run_id,),
+        )
+        conn.commit()
+
+    with pytest.raises(
+        ValueError,
+        match="canonical authority changed during live observation",
+    ):
+        state.ingest(observed)
+
+    retained = state.get(run_id)
+    assert retained is not None
+    assert retained.status == "legacy_untrusted"
+    assert len(state.attempts(run_id)) == 2
 
 
 @pytest.mark.parametrize("corruption", ["legacy_as_queued", "canonical_as_legacy"])
@@ -841,7 +1442,7 @@ def test_claim_lock_wait_never_commits_already_expired_lease(
     assert claimed.lease_expires_at == expected_expiry
 
 
-def test_existing_schema_v2_upgrades_to_verification_schema_v4(tmp_path) -> None:
+def test_existing_schema_v2_upgrades_to_current_verification_schema(tmp_path) -> None:
     db = tmp_path / "dispatcher.sqlite3"
     initial = SqliteStore(db)
     initial.initialize()
@@ -864,7 +1465,7 @@ def test_existing_schema_v2_upgrades_to_verification_schema_v4(tmp_path) -> None
                 "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'verification_%'"
             )
         }
-    assert version == "4"
+    assert version == "6"
     assert tables == {"verification_runs", "verification_attempts", "verification_exceptions"}
 
 
@@ -888,11 +1489,169 @@ def test_existing_schema_v3_backfills_current_head_without_losing_request_audit(
     assert migrated.head_sha == original.requested_head_sha
     assert migrated.verified_head_sha is None
     with sqlite3.connect(db) as conn:
-        supporting_authority = conn.execute(
-            "SELECT supporting_authority_json FROM verification_runs WHERE run_id=?",
+        supporting_authority, closing_authority = conn.execute(
+            "SELECT supporting_authority_json, closing_authority_json "
+            "FROM verification_runs WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()
+    assert json.loads(supporting_authority) == original.request["supporting_issues"]
+    assert json.loads(closing_authority) == original.request["closing_issues"]
+
+
+def test_schema_v4_backfills_closing_authority_without_resetting_chain(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    claim = state.claim(original.run_id, "host")
+    assert claim.lease_id is not None
+    state.start(
+        original.run_id,
+        "host",
+        claim.lease_id,
+        "01900000-0000-7000-8000-000000000001",
+        {"head_sha": original.head_sha},
+    )
+    state.record_attempt(
+        original.run_id,
+        "standard_repair",
+        "01900000-0000-7000-8000-000000000001",
+        "gpt-5.6-terra",
+        "high",
+        {"head_sha": original.head_sha},
+        "fixed",
+        {
+            "finding_id": "F-v4",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "closing-authority",
+        },
+        holder="host",
+        lease_id=claim.lease_id,
+    )
+    before_attempts = state.attempts(original.run_id)
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
+        conn.execute("UPDATE dispatcher_meta SET value='4' WHERE key='schema_version'")
+        conn.commit()
+
+    migrated_state = ledger(tmp_path)
+    migrated = migrated_state.get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.closing_authority == (3603,)
+    assert migrated.status == "running"
+    assert migrated.repair_budget_policy == "v2"
+    assert migrated_state.attempts(original.run_id) == before_attempts
+
+
+def test_schema_v5_adds_legacy_recovery_audit_without_resetting_chain(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    migrated_state = ledger(tmp_path)
+    migrated = migrated_state.get(original.run_id)
+
+    assert migrated == original
+    with sqlite3.connect(state.store.db_path) as conn:
+        version = conn.execute(
+            "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        audit = conn.execute(
+            "SELECT legacy_recovery_audit_json FROM verification_runs "
+            "WHERE run_id=?",
             (original.run_id,),
         ).fetchone()[0]
-    assert json.loads(supporting_authority) == original.request["supporting_issues"]
+    assert version == "6"
+    assert audit is None
+
+
+@pytest.mark.parametrize("supporting_issues", [[], [3626]])
+@pytest.mark.parametrize("existing_schema", ["3", "4", "5"])
+def test_schema_reconciliation_quarantines_v1_without_authenticated_closure(
+    tmp_path, existing_schema: str, supporting_issues: list[int]
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(
+        state,
+        supporting_issues=supporting_issues,
+    )
+    if existing_schema == "3":
+        with sqlite3.connect(state.store.db_path) as conn:
+            conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+            downgrade_verification_schema_to_v3(conn)
+            conn.commit()
+    elif existing_schema == "4":
+        with sqlite3.connect(state.store.db_path) as conn:
+            conn.execute(
+                "ALTER TABLE verification_runs DROP COLUMN closing_authority_json"
+            )
+            conn.execute("UPDATE dispatcher_meta SET value='4' WHERE key='schema_version'")
+            conn.commit()
+
+    migrated_state = ledger(tmp_path)
+    migrated = migrated_state.get(run_id)
+
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.authority_state == "legacy_untrusted"
+    assert migrated.supporting_authority == ()
+    assert migrated.closing_authority == ()
+    assert migrated.claimed_by is None
+    assert migrated.lease_id is None
+    assert migrated.coordinator_session_id is None
+    assert migrated.context_pack is None
+    assert migrated.repair_budget_policy == ("v1" if existing_schema == "3" else "v2")
+    attempts = migrated_state.attempts(run_id)
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == "attempt-v1-closure"
+    assert attempts[0]["kind"] == "standard_repair"
+    budget = migrated_state.repair_budget_projection(run_id)
+    assert budget["policy_version"] == migrated.repair_budget_policy
+    mechanism = budget["mechanisms"][0]
+    assert mechanism["standard_used"] == 1
+    assert mechanism["standard_remaining"] == 1
+    assert mechanism["escalated_used"] == 0
+    assert mechanism["escalated_remaining"] == 2
+
+
+@pytest.mark.parametrize("supporting_issues", [[], [3626]])
+def test_ingest_rejects_v1_without_authenticated_closure_before_persistence(
+    tmp_path, supporting_issues: list[int]
+) -> None:
+    payload = _canonical_v1_request(supporting_issues=supporting_issues)
+    state = ledger(tmp_path)
+
+    with pytest.raises(ValueError, match="fresh v2 artifact"):
+        state.ingest(payload)
+
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 0
+
+
+def test_ingest_rejects_over_limit_closing_authority_before_persistence(
+    tmp_path,
+) -> None:
+    payload = request()
+    extra = [4000 + index for index in range(MAX_CLOSING_ISSUES)]
+    payload["closing_issues"] = [3603, *extra]
+    payload["supporting_issues"] = extra
+    state = ledger(tmp_path)
+
+    with pytest.raises(ValueError, match="closing issues are malformed"):
+        state.ingest(payload)
+
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 0
 
 
 def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:
@@ -911,6 +1670,41 @@ def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:
     assert state.ingest(request()).status == "failed"
     with pytest.raises(ValueError, match="canonical chain is terminal: failed"):
         state.ingest(request("b" * 40))
+
+
+def test_same_head_terminal_replay_rejects_conflicting_closing_set(tmp_path) -> None:
+    state = ledger(tmp_path)
+    original_request = request()
+    original_request["supporting_issues"] = [3626]
+    first = state.ingest(original_request)
+    claimed = state.claim(first.run_id, "coordinator")
+    assert claimed.lease_id is not None
+    state.start(
+        first.run_id,
+        "coordinator",
+        claimed.lease_id,
+        "thread-closing-authority",
+        {"head": first.head_sha},
+    )
+    state.terminal(
+        first.run_id,
+        "failed",
+        {"outcome": "blocked"},
+        holder="coordinator",
+        lease_id=claimed.lease_id,
+    )
+    conflicting_request = json.loads(json.dumps(original_request))
+    conflicting_request["closing_issues"] = [3626]
+
+    with pytest.raises(ValueError, match="idempotency authority conflict"):
+        state.ingest(conflicting_request)
+
+    stored = state.get(first.run_id)
+    assert stored is not None
+    assert stored.status == "failed"
+    assert stored.closing_authority == (3603,)
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
 
 
 def test_duplicate_and_concurrent_claims_start_one_run(tmp_path) -> None:

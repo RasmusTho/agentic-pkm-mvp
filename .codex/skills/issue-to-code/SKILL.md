@@ -273,7 +273,11 @@ Only move to Review when the PR is the **explicit review handoff artifact** (nor
 - For any PR that changes files under `app/`, `tests/`, or `companion-ui/companion-app/`, run the repo-standard lint gate, currently `ruff check app tests companion-ui/companion-app` (matches `.github/workflows/ci-smoke.yaml`), before merge and include the lint output or explicit tooling limitation in the PR body.
 - Keep docs-only validation lightweight: docs-only PRs should run appropriate docs/governance checks, not the full code/test smoke by default.
 - Do not collapse parent feature validation and owner-doc promotion into one slice PR by default.
-- Use `Fixes #<issue>` in the PR.
+- For an issue-backed PR, publish exactly one `Governing-Issue: #<issue>` line plus at least one
+  closing-keyword line for fully delivered work. In the normal single-Issue case use
+  `Fixes #<issue>` for the same identity; in an approved multi-Issue PR keep the governing parent
+  open with `Refs #<issue>` when required and close only fully delivered children. Follow
+  `publish-pr` and `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`.
 - Default to publishing a branch and PR in the same turn once implementation and validation are complete.
 - Use `.codex/skills/publish-pr/SKILL.md` as the publication boundary for branch creation, commit creation, push, and PR creation/update.
 - Only skip PR publication when there is a concrete reason not to, such as:

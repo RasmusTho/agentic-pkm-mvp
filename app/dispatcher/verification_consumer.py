@@ -48,7 +48,17 @@ from app.dispatcher.verification_agent_loop import (
     VerificationAgentLoop,
     valid_human_exception_packet,
 )
-from app.dispatcher.verification_contract import resolve_issue_contract
+from app.dispatcher.verification_contract import (
+    IssueAuthority,
+    has_closing_issue_attempt,
+    resolve_issue_authority,
+    resolve_neutralized_issue_authority,
+)
+from app.dispatcher.verified_merge import (
+    plan_post_merge_reconciliation,
+    resolve_verified_merge_authority_receipt,
+    resolve_verified_merge_phase,
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +73,26 @@ class LiveTruthSource(Protocol):
     def pull_request(self, repository: str, pr_number: int) -> Mapping[str, object]: ...
 
     def checks(self, repository: str, head_sha: str) -> Sequence[Mapping[str, object]]: ...
+
+    def pull_request_comments(
+        self, repository: str, pr_number: int
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def merge_commit(
+        self, repository: str, merge_commit_sha: str
+    ) -> Mapping[str, object]: ...
+
+    def issue_set_closure_evidence(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        issue_numbers: Sequence[int],
+        observed_issue_numbers: Sequence[int],
+        merged_at: str,
+        merge_commit_sha: str,
+        actor_login: str,
+    ) -> Mapping[str, object]: ...
 
 
 class ProcessResult(Protocol):
@@ -284,10 +314,47 @@ _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_REQUEST_BYTES = 1_000_000
+_MAX_CLOSURE_CANDIDATES = 20
+_MAX_REPOSITORY_CLOSURE_EVENTS = 500
+_MAX_REPOSITORY_ISSUE_EVENTS_RESPONSE_BYTES = 8_000_000
+_MAX_CLOSURE_GRAPHQL_RESPONSE_BYTES = 1_000_000
+_MAX_MERGE_COMMIT_RESPONSE_BYTES = 64_000
+_MAX_MERGE_COMMIT_MESSAGE_BYTES = 16_000
 _VERIFICATION_REQUEST_WORKFLOW_NAME = "Verification Dispatch Request"
 _VERIFICATION_REQUEST_WORKFLOW_PATH = (
     ".github/workflows/verification-dispatch-request.yml"
 )
+_CLOSURE_NODES_QUERY = """
+query($ids:[ID!]!){
+  nodes(ids:$ids){
+    __typename
+    ... on Issue{
+      id
+      number
+      repository{nameWithOwner}
+      state
+      closedAt
+      timelineItems(last:1,itemTypes:[CLOSED_EVENT]){
+        nodes{
+          ... on ClosedEvent{
+            __typename
+            createdAt
+            actor{login}
+            closer{
+              __typename
+              ... on PullRequest{
+                number
+                repository{nameWithOwner}
+                mergeCommit{oid}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+""".strip()
 
 
 def verification_attempt_idempotency_key(
@@ -529,13 +596,37 @@ class GhCliVerificationSource:
     def __init__(self, runner: ProcessRunner | None = None) -> None:
         self.runner = runner if runner is not None else cast(ProcessRunner, subprocess.run)
 
-    def _json(self, endpoint: str) -> object:
+    def _json(
+        self, endpoint: str, *, max_response_bytes: int | None = None
+    ) -> object:
         result = self.runner(
             ["gh", "api", endpoint], capture_output=True, text=True, check=False, timeout=60
         )
         if result.returncode != 0:
             raise RuntimeError(f"gh read failed for {endpoint}")
+        if max_response_bytes is not None:
+            size = (
+                len(result.stdout.encode("utf-8"))
+                if isinstance(result.stdout, str)
+                else len(result.stdout)
+            )
+            if size > max_response_bytes:
+                raise RuntimeError("GitHub response exceeds bounded read")
         return json.loads(result.stdout)
+
+    def _json_pages(self, endpoint: str, *, limit: int = 1_000) -> list[object]:
+        rows: list[object] = []
+        separator = "&" if "?" in endpoint else "?"
+        for page in range(1, (limit // 100) + 1):
+            payload = self._json(f"{endpoint}{separator}page={page}")
+            if not isinstance(payload, list):
+                raise RuntimeError("malformed GitHub paginated response")
+            rows.extend(payload)
+            if len(rows) > limit:
+                raise RuntimeError("GitHub paginated response exceeds bounded scan")
+            if len(payload) < 100:
+                return rows
+        raise RuntimeError("GitHub paginated response exceeds bounded scan")
 
     def _artifact_bytes(self, endpoint: str, artifact_id: int) -> bytes:
         if self.runner is not subprocess.run:
@@ -859,6 +950,469 @@ class GhCliVerificationSource:
         if not isinstance(payload, Mapping):
             raise RuntimeError("malformed GitHub pull request response")
         return payload
+
+    def pull_request_comments(
+        self, repository: str, pr_number: int
+    ) -> Sequence[Mapping[str, object]]:
+        rows = self._json_pages(
+            f"repos/{repository}/issues/{pr_number}/comments?per_page=100"
+        )
+        if any(not isinstance(row, Mapping) for row in rows):
+            raise RuntimeError("malformed GitHub pull request comments response")
+        return [row for row in rows if isinstance(row, Mapping)]
+
+    def merge_commit(
+        self, repository: str, merge_commit_sha: str
+    ) -> Mapping[str, object]:
+        """Fetch only the bounded, non-secret exact Git commit identity."""
+
+        if (
+            re.fullmatch(r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+", repository) is None
+            or re.fullmatch(r"[0-9a-fA-F]{40}", merge_commit_sha) is None
+        ):
+            raise RuntimeError("malformed merge commit query")
+        endpoint = f"repos/{repository}/git/commits/{merge_commit_sha}"
+        payload = self._json(
+            endpoint,
+            max_response_bytes=_MAX_MERGE_COMMIT_RESPONSE_BYTES,
+        )
+        expected_url = f"https://api.github.com/repos/{repository}/git/commits/{merge_commit_sha}"
+        message = payload.get("message") if isinstance(payload, Mapping) else None
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("sha") != merge_commit_sha
+            or payload.get("url") != expected_url
+            or not isinstance(message, str)
+            or len(message.encode("utf-8")) > _MAX_MERGE_COMMIT_MESSAGE_BYTES
+        ):
+            raise RuntimeError("merge commit identity mismatch")
+        return {
+            "repository": repository,
+            "sha": merge_commit_sha,
+            "message": message,
+        }
+
+    def _repository_merge_closed_issues(
+        self,
+        repository: str,
+        *,
+        merged_instant: datetime,
+    ) -> dict[int, datetime]:
+        """Enumerate every merge-window issue close from a bounded feed.
+
+        The endpoint does not document a sort guarantee, so every row must
+        prove the observed reverse-time ordering within and across pages.  A
+        complete merge-window read then either reaches an event older than
+        ``merged_instant`` or exhausts the feed.  Any ordering violation, or
+        hitting the fixed page cap first, is not evidence of absence and fails
+        closed.
+
+        Only issue numbers and their latest observed close timestamps survive
+        this boundary. GraphQL ``ClosedEvent.closer`` performs attribution;
+        REST ``commit_id`` is commonly null for GitHub auto-closure and is
+        never used as merge authority.
+        """
+
+        expected_repository_url = f"https://api.github.com/repos/{repository}"
+        endpoint = f"repos/{repository}/issues/events?per_page=100"
+        discovered: dict[int, datetime] = {}
+        seen_ids: set[int] = set()
+        newest_previous: datetime | None = None
+        pages = _MAX_REPOSITORY_CLOSURE_EVENTS // 100
+        for page in range(1, pages + 1):
+            payload = self._json(
+                f"{endpoint}&page={page}",
+                max_response_bytes=_MAX_REPOSITORY_ISSUE_EVENTS_RESPONSE_BYTES,
+            )
+            if not isinstance(payload, list) or len(payload) > 100:
+                raise RuntimeError("malformed repository issue-events response")
+            coverage_reached = False
+            for event in payload:
+                if not isinstance(event, Mapping):
+                    raise RuntimeError("malformed repository issue event")
+                event_id = event.get("id")
+                created_at = event.get("created_at")
+                issue = event.get("issue")
+                if (
+                    not isinstance(event_id, int)
+                    or isinstance(event_id, bool)
+                    or event_id <= 0
+                    or event_id in seen_ids
+                    or event.get("url")
+                    != f"{expected_repository_url}/issues/events/{event_id}"
+                    or not isinstance(created_at, str)
+                    or not isinstance(issue, Mapping)
+                ):
+                    raise RuntimeError("malformed repository issue event identity")
+                try:
+                    created_instant = datetime.fromisoformat(
+                        created_at.replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    raise RuntimeError(
+                        "malformed repository issue event timestamp"
+                    ) from exc
+                if created_instant.tzinfo is None:
+                    raise RuntimeError(
+                        "malformed repository issue event timestamp"
+                    )
+                if (
+                    newest_previous is not None
+                    and created_instant > newest_previous
+                ):
+                    raise RuntimeError(
+                        "repository issue-events ordering mismatch"
+                    )
+                newest_previous = created_instant
+                seen_ids.add(event_id)
+
+                number = issue.get("number")
+                expected_issue_url = f"{expected_repository_url}/issues/{number}"
+                pull_request = issue.get("pull_request")
+                if (
+                    not isinstance(number, int)
+                    or isinstance(number, bool)
+                    or number <= 0
+                    or issue.get("repository_url") != expected_repository_url
+                    or issue.get("url") != expected_issue_url
+                    or issue.get("events_url") != f"{expected_issue_url}/events"
+                    or (
+                        pull_request is not None
+                        and not isinstance(pull_request, Mapping)
+                    )
+                ):
+                    raise RuntimeError("repository issue event identity mismatch")
+
+                if created_instant < merged_instant:
+                    coverage_reached = True
+                    continue
+
+                commit_id = event.get("commit_id")
+                commit_url = event.get("commit_url")
+                if commit_id is not None:
+                    if (
+                        not isinstance(commit_id, str)
+                        or re.fullmatch(r"[0-9a-fA-F]{40}", commit_id) is None
+                        or commit_url
+                        != f"{expected_repository_url}/commits/{commit_id}"
+                    ):
+                        raise RuntimeError(
+                            "malformed repository issue event commit identity"
+                        )
+                elif commit_url is not None:
+                    raise RuntimeError(
+                        "malformed repository issue event commit identity"
+                    )
+
+                if event.get("event") == "closed" and pull_request is None:
+                    # The feed is newest-first once its observed ordering has
+                    # been proved, so retain the latest close for a candidate.
+                    discovered.setdefault(number, created_instant)
+                    if len(discovered) > _MAX_CLOSURE_CANDIDATES:
+                        raise RuntimeError(
+                            "issue-set closure candidates exceed bounded scan"
+                        )
+            if coverage_reached:
+                return discovered
+            if len(payload) < 100:
+                return discovered
+        raise RuntimeError(
+            "repository issue-events cap reached before merge coverage"
+        )
+
+    def _closure_nodes(
+        self,
+        repository: str,
+        candidates: Mapping[int, str],
+    ) -> dict[int, Mapping[str, object]]:
+        """Fetch one bounded GraphQL batch and authenticate every Issue node."""
+
+        command = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={_CLOSURE_NODES_QUERY}",
+        ]
+        for node_id in candidates.values():
+            # `gh api -F` treats values beginning with `@` as local-file
+            # inputs. Node IDs are untrusted REST data, so pass them as raw
+            # strings and never authorize field-magic or filesystem reads.
+            command.extend(("-f", f"ids[]={node_id}"))
+        result = self.runner(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("gh GraphQL closure read failed")
+        size = (
+            len(result.stdout.encode("utf-8"))
+            if isinstance(result.stdout, str)
+            else len(result.stdout)
+        )
+        if size > _MAX_CLOSURE_GRAPHQL_RESPONSE_BYTES:
+            raise RuntimeError("GraphQL closure response exceeds bounded read")
+        try:
+            payload = json.loads(result.stdout)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RuntimeError("malformed GraphQL closure response") from exc
+        data = payload.get("data") if isinstance(payload, Mapping) else None
+        nodes = data.get("nodes") if isinstance(data, Mapping) else None
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("errors") is not None
+            or not isinstance(nodes, list)
+            or len(nodes) != len(candidates)
+        ):
+            raise RuntimeError("malformed GraphQL closure response")
+
+        expected_by_id = {
+            candidate_node_id: number
+            for number, candidate_node_id in candidates.items()
+        }
+        resolved: dict[int, Mapping[str, object]] = {}
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                raise RuntimeError("malformed GraphQL closure issue node")
+            raw_node_id = node.get("id")
+            number = node.get("number")
+            expected_number = (
+                expected_by_id.get(raw_node_id)
+                if isinstance(raw_node_id, str)
+                else None
+            )
+            if (
+                node.get("__typename") != "Issue"
+                or expected_number is None
+                or number != expected_number
+                or not isinstance(number, int)
+                or isinstance(number, bool)
+                or _nested(node, "repository", "nameWithOwner") != repository
+                or number in resolved
+            ):
+                raise RuntimeError("GraphQL closure issue identity mismatch")
+            resolved[number] = node
+        if set(resolved) != set(candidates):
+            raise RuntimeError("GraphQL closure issue evidence incomplete")
+        return resolved
+
+    def issue_set_closure_evidence(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        issue_numbers: Sequence[int],
+        observed_issue_numbers: Sequence[int],
+        merged_at: str,
+        merge_commit_sha: str,
+        actor_login: str,
+    ) -> Mapping[str, object]:
+        """Read a complete bounded post-merge closure/attribution set."""
+
+        try:
+            merged_instant = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise RuntimeError("malformed merge timestamp") from exc
+        if (
+            merged_instant.tzinfo is None
+            or not actor_login
+            or re.fullmatch(r"[0-9a-fA-F]{40}", merge_commit_sha) is None
+            or not issue_numbers
+            or len(issue_numbers) > 10
+            or any(
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or number <= 0
+                for number in issue_numbers
+            )
+        ):
+            raise RuntimeError("malformed issue-set closure query")
+        if (
+            len(set(issue_numbers)) != len(issue_numbers)
+            or len(set(observed_issue_numbers)) != len(observed_issue_numbers)
+            or any(
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or number <= 0
+                for number in observed_issue_numbers
+            )
+        ):
+            raise RuntimeError("malformed issue-set closure query")
+        repository_closing_issues = self._repository_merge_closed_issues(
+            repository,
+            merged_instant=merged_instant,
+        )
+        candidate_numbers = sorted(
+            {
+                *issue_numbers,
+                *observed_issue_numbers,
+                *repository_closing_issues,
+            }
+        )
+        if len(candidate_numbers) > _MAX_CLOSURE_CANDIDATES:
+            raise RuntimeError("issue-set closure candidates exceed bounded scan")
+        candidate_node_ids: dict[int, str] = {}
+        for number in candidate_numbers:
+            issue = self._json(f"repos/{repository}/issues/{number}")
+            node_id = issue.get("node_id") if isinstance(issue, Mapping) else None
+            if (
+                not isinstance(issue, Mapping)
+                or issue.get("number") != number
+                or issue.get("pull_request") is not None
+                or not isinstance(node_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_=-]{1,256}", node_id) is None
+                or issue.get("repository_url")
+                != f"https://api.github.com/repos/{repository}"
+                or issue.get("url")
+                != f"https://api.github.com/repos/{repository}/issues/{number}"
+                or node_id in candidate_node_ids.values()
+            ):
+                raise RuntimeError("malformed GitHub issue response")
+            candidate_node_ids[number] = node_id
+
+        candidates = self._closure_nodes(repository, candidate_node_ids)
+
+        expected = set(issue_numbers)
+        evidence: list[dict[str, object]] = []
+        observed: list[int] = []
+        for number, issue in sorted(candidates.items()):
+            state = issue.get("state")
+            closed_at = issue.get("closedAt")
+            timeline = issue.get("timelineItems")
+            timeline_nodes = (
+                timeline.get("nodes") if isinstance(timeline, Mapping) else None
+            )
+            if (
+                state not in {"OPEN", "CLOSED"}
+                or not isinstance(timeline_nodes, list)
+                or len(timeline_nodes) > 1
+                or (state == "CLOSED" and len(timeline_nodes) != 1)
+                or (state == "CLOSED" and not isinstance(closed_at, str))
+                or (state == "OPEN" and closed_at is not None)
+            ):
+                raise RuntimeError("malformed GraphQL closure issue state")
+            latest = timeline_nodes[0] if timeline_nodes else None
+            if latest is not None and not isinstance(latest, Mapping):
+                raise RuntimeError("malformed GraphQL ClosedEvent")
+            latest_actor = _nested(latest, "actor", "login") if latest else None
+            latest_created_at = latest.get("createdAt") if latest else None
+            try:
+                latest_instant = (
+                    datetime.fromisoformat(
+                        latest_created_at.replace("Z", "+00:00")
+                    )
+                    if isinstance(latest_created_at, str)
+                    else None
+                )
+            except ValueError as exc:
+                raise RuntimeError("malformed GraphQL ClosedEvent timestamp") from exc
+            if latest is not None and (
+                latest.get("__typename") != "ClosedEvent"
+                or "closer" not in latest
+                or not isinstance(latest_actor, str)
+                or not latest_actor
+                or latest_instant is None
+                or latest_instant.tzinfo is None
+            ):
+                raise RuntimeError("malformed GraphQL ClosedEvent")
+
+            try:
+                closed_instant = (
+                    datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+                    if isinstance(closed_at, str)
+                    else None
+                )
+            except ValueError as exc:
+                raise RuntimeError("malformed GraphQL issue closedAt") from exc
+            if state == "CLOSED" and (
+                closed_instant is None
+                or closed_instant.tzinfo is None
+                or closed_instant != latest_instant
+            ):
+                raise RuntimeError("GraphQL issue closure timestamp mismatch")
+
+            repository_close = repository_closing_issues.get(number)
+            if repository_close is not None and latest_instant != repository_close:
+                raise RuntimeError("GraphQL ClosedEvent does not match REST closure")
+
+            closer = latest.get("closer") if latest else None
+            exact_pr_closer = False
+            if closer is not None:
+                if not isinstance(closer, Mapping) or not isinstance(
+                    closer.get("__typename"), str
+                ):
+                    raise RuntimeError("malformed GraphQL ClosedEvent closer")
+                if closer.get("__typename") == "PullRequest":
+                    closer_number = closer.get("number")
+                    closer_repository = _nested(
+                        closer, "repository", "nameWithOwner"
+                    )
+                    closer_oid = _nested(closer, "mergeCommit", "oid")
+                    if (
+                        not isinstance(closer_number, int)
+                        or isinstance(closer_number, bool)
+                        or closer_number <= 0
+                        or not isinstance(closer_repository, str)
+                        or re.fullmatch(
+                            r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+",
+                            closer_repository,
+                        )
+                        is None
+                        or not isinstance(closer_oid, str)
+                        or re.fullmatch(r"[0-9a-fA-F]{40}", closer_oid) is None
+                    ):
+                        raise RuntimeError("malformed GraphQL PullRequest closer")
+                    if closer_number == pr_number:
+                        if (
+                            closer_repository != repository
+                            or closer_oid != merge_commit_sha
+                        ):
+                            raise RuntimeError(
+                                "GraphQL PullRequest closer identity mismatch"
+                            )
+                        exact_pr_closer = True
+                        if latest_actor != actor_login:
+                            raise RuntimeError(
+                                "GraphQL PullRequest closer actor mismatch"
+                            )
+            actor_time_close = bool(
+                state == "CLOSED"
+                and latest is not None
+                and latest_actor == actor_login
+                and latest_instant is not None
+                and latest_instant >= merged_instant
+            )
+            # Explicit issue closes have a null GraphQL closer. They count only
+            # for an authenticated expected issue and only with the exact
+            # delivery actor/time fence. A non-null PR closer is delivery
+            # evidence only when its number, repository, and merge SHA all
+            # identify this target PR; a different valid PR remains unrelated.
+            manual_expected_close = number in expected and closer is None
+            closed_by_delivery = bool(
+                actor_time_close and (manual_expected_close or exact_pr_closer)
+            )
+            if closed_by_delivery:
+                observed.append(number)
+            if number not in expected and not closed_by_delivery:
+                continue
+            closed_by_pr = bool(closed_by_delivery and exact_pr_closer)
+            evidence.append(
+                {
+                    "closed_at": closed_at,
+                    "closed_by_delivery": closed_by_delivery,
+                    "closed_by_pull_requests": [pr_number] if closed_by_pr else [],
+                    "number": number,
+                    "state": cast(str, state).lower(),
+                }
+            )
+        return {
+            "closure_scan_complete": True,
+            "issue_evidence": evidence,
+            "observed_closing_issues": sorted(observed),
+        }
 
     def checks(self, repository: str, head_sha: str) -> Sequence[Mapping[str, object]]:
         payload = self._json(f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100")
@@ -2220,6 +2774,7 @@ def _trusted_evidence_urls(run: VerificationRun) -> frozenset[str]:
 
     issue_numbers = [positive_int(run.request.get("linked_issue"))]
     issue_numbers.extend(positive_int(value) for value in run.supporting_authority)
+    issue_numbers.extend(positive_int(value) for value in run.closing_authority)
     for issue_number in issue_numbers:
         if issue_number is not None:
             urls.add(f"{web_base}/issues/{issue_number}")
@@ -2242,11 +2797,14 @@ def _trusted_evidence_urls(run: VerificationRun) -> frozenset[str]:
 
 
 def _governing_contract_matches(run: VerificationRun, pr_body: object) -> bool:
-    issue_contract = resolve_issue_contract(pr_body)
+    issue_authority = resolve_issue_authority(pr_body)
     return bool(
-        issue_contract is not None
-        and issue_contract[0] == run.request.get("linked_issue")
-        and set(run.supporting_authority).issubset(issue_contract[1])
+        issue_authority is not None
+        and issue_authority.governing_issue == run.request.get("linked_issue")
+        and set(run.closing_authority) == set(issue_authority.closing_issues)
+        and set(run.supporting_authority).issubset(
+            issue_authority.supporting_issues
+        )
     )
 
 
@@ -2272,12 +2830,36 @@ def live_truth_rejection(
     )
 
 
+def _merge_commit_rejection(
+    repository: str,
+    merge_commit_sha: str,
+    commit: object,
+) -> str | None:
+    if not isinstance(commit, Mapping):
+        return "merge_commit_evidence_missing"
+    if commit.get("repository") != repository:
+        return "merge_commit_repository_mismatch"
+    if commit.get("sha") != merge_commit_sha:
+        return "merge_commit_sha_mismatch"
+    message = commit.get("message")
+    if (
+        not isinstance(message, str)
+        or len(message.encode("utf-8")) > _MAX_MERGE_COMMIT_MESSAGE_BYTES
+    ):
+        return "merge_commit_message_malformed"
+    if has_closing_issue_attempt(message):
+        return "merge_commit_closing_attempt"
+    return None
+
+
 def delivered_live_truth_rejection(
     run: VerificationRun,
     pr: Mapping[str, object],
     checks: Sequence[Mapping[str, object]],
+    delivery_evidence: Mapping[str, object],
     *,
     expected_head_sha: str,
+    expected_repair_budget: Mapping[str, object],
 ) -> str | None:
     """Validate exact post-merge truth for a coordinator-delivered receipt."""
 
@@ -2304,6 +2886,79 @@ def delivered_live_truth_rejection(
         r"[0-9a-fA-F]{40}", merge_commit_sha
     ):
         return "missing_merge_evidence"
+    commit_rejection = _merge_commit_rejection(
+        run.repository,
+        merge_commit_sha,
+        delivery_evidence.get("merge_commit"),
+    )
+    if commit_rejection:
+        return commit_rejection
+    comments = delivery_evidence.get("comments")
+    if not isinstance(comments, list) or any(
+        not isinstance(comment, Mapping) for comment in comments
+    ):
+        return "merge_authority_missing"
+    authority_receipt = resolve_verified_merge_authority_receipt(
+        [comment for comment in comments if isinstance(comment, Mapping)],
+        pr=pr,
+        repository=run.repository,
+        expected_run_id=run.run_id,
+        expected_repair_budget=expected_repair_budget,
+    )
+    if authority_receipt is None:
+        return "merge_authority_missing"
+    receipt_closing = cast(Sequence[int], authority_receipt["closing_issues"])
+    receipt_supporting = cast(
+        Sequence[int], authority_receipt["authenticated_supporting_issues"]
+    )
+    if (
+        tuple(receipt_closing) != run.closing_authority
+        or tuple(receipt_supporting) != run.supporting_authority
+    ):
+        return "merge_authority_mismatch"
+    phase = resolve_verified_merge_phase(
+        [comment for comment in comments if isinstance(comment, Mapping)],
+        authority_receipt=authority_receipt,
+        pr=pr,
+    )
+    if phase is None or phase.get("phase") != "restored":
+        return "merge_phase_incomplete"
+    if delivery_evidence.get("closure_scan_complete") is not True:
+        return "closure_evidence_incomplete"
+    observed = delivery_evidence.get("observed_closing_issues")
+    issue_evidence = delivery_evidence.get("issue_evidence")
+    if not isinstance(observed, list) or not isinstance(issue_evidence, list):
+        return "closure_evidence_incomplete"
+    try:
+        reconciliation = plan_post_merge_reconciliation(
+            pr_number=run.pr_number,
+            authenticated_closing_issues=run.closing_authority,
+            observed_closing_issues=observed,
+            issue_evidence=[
+                item for item in issue_evidence if isinstance(item, Mapping)
+            ],
+        )
+    except ValueError:
+        return "closure_evidence_incomplete"
+    if (
+        reconciliation["reopen_unauthorized"]
+        or reconciliation["unexpected_open_references"]
+        or reconciliation["unresolved_unauthorized_closures"]
+    ):
+        return "unauthorized_closure"
+    evidence_by_number = {
+        item.get("number"): item
+        for item in issue_evidence
+        if isinstance(item, Mapping)
+    }
+    if set(evidence_by_number) != set(run.closing_authority):
+        return "closure_evidence_incomplete"
+    for number in run.closing_authority:
+        issue = evidence_by_number[number]
+        if issue.get("state") != "closed" or issue.get("closed_by_delivery") is not True:
+            return "authenticated_issue_not_closed"
+    if set(observed) != set(run.closing_authority):
+        return "unauthorized_closure"
     return _checks_rejection(checks, expected_head_sha=expected_head_sha)
 
 
@@ -2355,6 +3010,49 @@ def _checks_rejection(
     return None
 
 
+def _context_pack_from_authority(
+    run: VerificationRun,
+    issue_authority: IssueAuthority,
+    *,
+    repair_budget: Mapping[str, object],
+) -> dict[str, object]:
+    """Build the minimum context from already-authenticated issue authority."""
+    linked_issue = run.request.get("linked_issue")
+    if (
+        issue_authority.governing_issue != linked_issue
+        or issue_authority.closing_issues != run.closing_authority
+        or not set(run.supporting_authority).issubset(
+            issue_authority.supporting_issues
+        )
+    ):
+        raise ValueError("verification context authority does not match live PR")
+    return {
+        "contract": "verification_closer_dispatch_context.v2",
+        "run_id": run.run_id,
+        "repository": run.repository,
+        "pr_number": run.pr_number,
+        "linked_issue": linked_issue if isinstance(linked_issue, int) else None,
+        "governing_issue": issue_authority.governing_issue,
+        "closing_issues": list(run.closing_authority),
+        # Live additions are not mutation authority. A same-head body edit can
+        # disappear while the coordinator runs, so dispatch only the cumulative
+        # supporting set already fenced in SQLite. Repair-head rebinding may
+        # extend this durable set atomically before a later launch.
+        "supporting_issues": list(run.supporting_authority),
+        "head_sha": run.head_sha,
+        "requested_head_sha": run.requested_head_sha,
+        "stage": run.stage,
+        "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
+        "agent_adapter": ".codex/agents/verification-closer.toml",
+        "verified_merge_phase_contract": "verified_issue_set_merge_phase.v1",
+        "verified_merge_phase_writer": (
+            "scripts/build_verified_issue_set_merge_phase.py"
+        ),
+        "idempotency_key": run.idempotency_key,
+        "repair_budget": dict(repair_budget),
+    }
+
+
 def context_pack(
     run: VerificationRun,
     pr: Mapping[str, object],
@@ -2362,27 +3060,25 @@ def context_pack(
     repair_budget: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Return the immutable minimum; no issue/diff/log/untrusted body text."""
-    linked_issue = run.request.get("linked_issue")
-    return {
-        "contract": "verification_closer_dispatch_context.v1",
-        "run_id": run.run_id,
-        "repository": run.repository,
-        "pr_number": run.pr_number,
-        "linked_issue": linked_issue if isinstance(linked_issue, int) else None,
-        "head_sha": run.head_sha,
-        "requested_head_sha": run.requested_head_sha,
-        "stage": run.stage,
-        "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
-        "agent_adapter": ".codex/agents/verification-closer.toml",
-        "idempotency_key": run.idempotency_key,
-        "repair_budget": dict(repair_budget) if repair_budget is not None else {
+    issue_authority = resolve_issue_authority(pr.get("body"))
+    if issue_authority is None:
+        raise ValueError("verification context authority does not match live PR")
+    budget = (
+        repair_budget
+        if repair_budget is not None
+        else {
             "policy_version": run.repair_budget_policy,
             "mechanism_count": 0,
             "truncated": False,
             "omitted_count": 0,
             "mechanisms": [],
-        },
-    }
+        }
+    )
+    return _context_pack_from_authority(
+        run,
+        issue_authority,
+        repair_budget=budget,
+    )
 
 
 def _retry_at(value: object = None) -> str:
@@ -2433,6 +3129,20 @@ class VerificationConsumer:
         )
 
     @staticmethod
+    def _backoff_is_pending(run: VerificationRun) -> bool:
+        if run.status != "backoff" or not run.retry_after:
+            return False
+        try:
+            retry_after = datetime.fromisoformat(
+                run.retry_after.replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError("verification run has malformed retry_after") from exc
+        if retry_after.tzinfo is None:
+            raise ValueError("verification run has malformed retry_after")
+        return retry_after.astimezone(timezone.utc) > datetime.now(timezone.utc)
+
+    @staticmethod
     def _rate_limited(receipt: Mapping[str, object]) -> bool:
         return receipt.get("failure_class") == "rate_limit" or (
             receipt.get("verdict") == "retry"
@@ -2452,6 +3162,327 @@ class VerificationConsumer:
             return receipt.get("retry_after")
         unit = match.group(2)[0]
         return f"{match.group(1)}{unit}"
+
+    def _read_delivery_evidence(
+        self,
+        run: VerificationRun,
+        pr: Mapping[str, object],
+        *,
+        expected_repair_budget: Mapping[str, object],
+    ) -> dict[str, object]:
+        merged_at = pr.get("merged_at")
+        merge_commit_sha = pr.get("merge_commit_sha")
+        actor_login = _nested(pr, "merged_by", "login")
+        if (
+            not isinstance(merged_at, str)
+            or not merged_at
+            or not isinstance(merge_commit_sha, str)
+            or re.fullmatch(r"[0-9a-fA-F]{40}", merge_commit_sha) is None
+            or not isinstance(actor_login, str)
+            or not actor_login
+        ):
+            raise RuntimeError("merged delivery identity is incomplete")
+        merge_commit = self.truth.merge_commit(
+            run.repository, merge_commit_sha
+        )
+        comments = self.truth.pull_request_comments(
+            run.repository, run.pr_number
+        )
+        evidence: dict[str, object] = {
+            "comments": list(comments),
+            "merge_commit": dict(merge_commit),
+        }
+        if _merge_commit_rejection(
+            run.repository, merge_commit_sha, merge_commit
+        ):
+            return evidence
+        authority = resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=run.repository,
+            expected_run_id=run.run_id,
+            expected_repair_budget=expected_repair_budget,
+        )
+        if authority is None:
+            return evidence
+        phase = resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority,
+            pr=pr,
+        )
+        if phase is None:
+            return evidence
+        observed_issue_numbers = phase.get("reopened_unauthorized_issues")
+        if not isinstance(observed_issue_numbers, list):
+            return evidence
+        closure = self.truth.issue_set_closure_evidence(
+            run.repository,
+            run.pr_number,
+            issue_numbers=run.closing_authority,
+            observed_issue_numbers=observed_issue_numbers,
+            merged_at=merged_at,
+            merge_commit_sha=merge_commit_sha,
+            actor_login=actor_login,
+        )
+        return {**evidence, **dict(closure)}
+
+    def _merged_recovery_pack(
+        self,
+        run: VerificationRun,
+        pr: Mapping[str, object],
+        checks: Sequence[Mapping[str, object]],
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        if (
+            pr.get("number") != run.pr_number
+            or _nested(pr, "base", "repo", "full_name") != run.repository
+            or _nested(pr, "head", "sha") != run.head_sha
+            or pr.get("state") != "closed"
+            or pr.get("merged") is not True
+            or not isinstance(pr.get("merged_at"), str)
+            or not pr.get("merged_at")
+            or not isinstance(pr.get("merge_commit_sha"), str)
+            or re.fullmatch(
+                r"[0-9a-fA-F]{40}", str(pr.get("merge_commit_sha"))
+            )
+            is None
+        ):
+            raise ValueError("verification run is no longer resumable: merged_pr_mismatch")
+        checks_rejection = _checks_rejection(checks, expected_head_sha=run.head_sha)
+        if checks_rejection:
+            raise ValueError(
+                f"verification run is no longer resumable: {checks_rejection}"
+            )
+        merge_commit_sha = cast(str, pr["merge_commit_sha"])
+        merge_commit = self.truth.merge_commit(
+            run.repository, merge_commit_sha
+        )
+        commit_rejection = _merge_commit_rejection(
+            run.repository, merge_commit_sha, merge_commit
+        )
+        if commit_rejection:
+            raise ValueError(
+                "verification run is no longer resumable: "
+                f"{commit_rejection}"
+            )
+        current_repair_budget = self.ledger.repair_budget_projection(run.run_id)
+        comments = list(
+            self.truth.pull_request_comments(run.repository, run.pr_number)
+        )
+        authority = resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=run.repository,
+            expected_run_id=run.run_id,
+        )
+        if authority is None:
+            raise ValueError(
+                "verification run is no longer resumable: merge_authority_missing"
+            )
+        try:
+            authority_repair_budget = authority["repair_budget"]
+            if (
+                not isinstance(authority_repair_budget, Mapping)
+                or authority_repair_budget.get("policy_version")
+                != run.repair_budget_policy
+            ):
+                raise ValueError("recovered repair-budget policy changed")
+            recovered_authority = IssueAuthority(
+                governing_issue=cast(int, authority["governing_issue"]),
+                closing_issues=tuple(
+                    cast(Sequence[int], authority["closing_issues"])
+                ),
+                supporting_issues=tuple(
+                    cast(
+                        Sequence[int],
+                        authority["authenticated_supporting_issues"],
+                    )
+                ),
+            )
+            if recovered_authority.supporting_issues != run.supporting_authority:
+                raise ValueError("recovered supporting authority changed")
+            recovered_pack = _context_pack_from_authority(
+                run,
+                recovered_authority,
+                repair_budget=current_repair_budget,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "verification run is no longer resumable: context_authority_mismatch"
+            ) from exc
+        phase = resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority,
+            pr=pr,
+            allow_merged_body_drift=True,
+        )
+        if phase is None:
+            raise ValueError(
+                "verification run is no longer resumable: merge_phase_missing"
+            )
+        live_body = pr.get("body")
+        if not isinstance(live_body, str):
+            raise ValueError(
+                "verification run is no longer resumable: merged_body_missing"
+            )
+        live_body_digest = hashlib.sha256(live_body.encode("utf-8")).hexdigest()
+        if live_body_digest == authority.get("body_sha256"):
+            body_state = "restored"
+        elif live_body_digest == authority.get("neutralized_body_sha256"):
+            body_state = "neutralized"
+        else:
+            body_state = "raced"
+        return {
+            **recovered_pack,
+            "merge_recovery": {
+                "body_state": body_state,
+                "merge_commit_sha": pr["merge_commit_sha"],
+                "merged_at": pr["merged_at"],
+                "phase": phase["phase"],
+            },
+        }, dict(authority_repair_budget)
+
+    def _open_neutralized_recovery_pack(
+        self,
+        run: VerificationRun,
+        pr: Mapping[str, object],
+        checks: Sequence[Mapping[str, object]],
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Authenticate an interrupted pre-merge neutralization window."""
+
+        body = pr.get("body")
+        neutralized_authority = resolve_neutralized_issue_authority(body)
+        if (
+            pr.get("number") != run.pr_number
+            or _nested(pr, "base", "repo", "full_name") != run.repository
+            or _nested(pr, "head", "sha") != run.head_sha
+            or pr.get("state") != "open"
+            or pr.get("draft") is not False
+            or pr.get("merged") is True
+            or pr.get("merged_at") is not None
+            or neutralized_authority is None
+        ):
+            raise ValueError(
+                "verification run is no longer resumable: neutralized_pr_mismatch"
+            )
+        checks_rejection = _checks_rejection(checks, expected_head_sha=run.head_sha)
+        if checks_rejection:
+            raise ValueError(
+                "verification run is no longer resumable: "
+                f"{checks_rejection}"
+            )
+
+        repair_budget = self.ledger.repair_budget_projection(run.run_id)
+        comments = list(
+            self.truth.pull_request_comments(run.repository, run.pr_number)
+        )
+        authority = resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=run.repository,
+            expected_run_id=run.run_id,
+            expected_repair_budget=repair_budget,
+        )
+        if authority is None:
+            raise ValueError(
+                "verification run is no longer resumable: merge_authority_missing"
+            )
+        try:
+            recovered_authority = IssueAuthority(
+                governing_issue=cast(int, authority["governing_issue"]),
+                closing_issues=tuple(
+                    cast(Sequence[int], authority["closing_issues"])
+                ),
+                supporting_issues=tuple(
+                    cast(
+                        Sequence[int],
+                        authority["authenticated_supporting_issues"],
+                    )
+                ),
+            )
+            recovered_pack = _context_pack_from_authority(
+                run,
+                recovered_authority,
+                repair_budget=repair_budget,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "verification run is no longer resumable: context_authority_mismatch"
+            ) from exc
+        phase = resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority,
+            pr=pr,
+        )
+        if phase is None or phase.get("phase") != "prepared":
+            raise ValueError(
+                "verification run is no longer resumable: merge_phase_missing"
+            )
+        return {
+            **recovered_pack,
+            "merge_recovery": {
+                "body_state": "neutralized",
+                "merge_commit_sha": None,
+                "merged_at": None,
+                "phase": "prepared",
+            },
+        }, dict(repair_budget)
+
+    def _recover_open_neutralized_run(
+        self, run: VerificationRun, pr: Mapping[str, object]
+    ) -> VerificationRun:
+        checks = self.truth.checks(run.repository, run.head_sha)
+        # Authenticate once before acquiring authority, then repeat after the
+        # claim so a body/comment/check race cannot launch stale recovery.
+        self._open_neutralized_recovery_pack(run, pr, checks)
+        if not self.auth.check().ok:
+            raise ValueError("verification auth preflight failed")
+        claimed = self.ledger.claim(run.run_id, self.holder)
+        return self._launch_after_open_neutralized_fence(claimed)
+
+    def _launch_after_open_neutralized_fence(
+        self, claimed: VerificationRun
+    ) -> VerificationRun:
+        try:
+            pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+            checks = self.truth.checks(claimed.repository, claimed.head_sha)
+            pack, authority_repair_budget = self._open_neutralized_recovery_pack(
+                claimed, pr, checks
+            )
+        except Exception as exc:
+            return self.ledger.backoff(
+                claimed.run_id,
+                {
+                    "outcome": "blocked",
+                    "reason": "prelaunch_neutralized_recovery_unavailable",
+                    "error_type": type(exc).__name__,
+                },
+                _retry_at(),
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
+        return self._launch(
+            claimed,
+            pr,
+            pack_override=pack,
+            merge_authority_repair_budget=authority_repair_budget,
+        )
+
+    def _recover_merged_run(
+        self, run: VerificationRun, pr: Mapping[str, object]
+    ) -> VerificationRun:
+        checks = self.truth.checks(run.repository, run.head_sha)
+        pack, authority_repair_budget = self._merged_recovery_pack(
+            run, pr, checks
+        )
+        if not self.auth.check().ok:
+            raise ValueError("verification auth preflight failed")
+        claimed = self.ledger.claim(run.run_id, self.holder)
+        return self._launch(
+            claimed,
+            pr,
+            pack_override=pack,
+            merge_authority_repair_budget=authority_repair_budget,
+        )
 
     def _terminal_event_application_failure(
         self,
@@ -2527,6 +3558,34 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=claimed.lease_id or "",
             )
+        terminal = run.terminal_receipt
+        persisted_merge_budget = (
+            terminal.get("merge_authority_repair_budget")
+            if isinstance(terminal, Mapping)
+            else None
+        )
+        if persisted_merge_budget is not None and not isinstance(
+            persisted_merge_budget, Mapping
+        ):
+            try:
+                claimed = self.ledger.claim(run.run_id, self.holder)
+            except (VerificationSubscriptionBusy, VerificationBackoffPending):
+                current = self.ledger.get(run.run_id)
+                assert current is not None
+                return current
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                {"outcome": "invalid_persisted_merge_authority_budget"},
+                reason="invalid_receipt_contract",
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
+        expected_merge_budget = (
+            dict(persisted_merge_budget)
+            if isinstance(persisted_merge_budget, Mapping)
+            else self.ledger.repair_budget_projection(run.run_id)
+        )
         auth = self.auth.check()
         if not auth.ok:
             try:
@@ -2537,6 +3596,7 @@ class VerificationConsumer:
                         "reason": auth.reason,
                         "auth_mode": auth.auth_mode,
                         "pending_terminal_receipt": dict(receipt),
+                        "merge_authority_repair_budget": expected_merge_budget,
                     },
                     _retry_at(),
                 )
@@ -2570,8 +3630,26 @@ class VerificationConsumer:
                 claimed,
                 live_pr,
                 live_checks,
+                {},
                 expected_head_sha=receipt_head,
+                expected_repair_budget=expected_merge_budget,
             )
+            if rejection in {
+                "merge_commit_evidence_missing",
+                "merge_authority_missing",
+            }:
+                rejection = delivered_live_truth_rejection(
+                    claimed,
+                    live_pr,
+                    live_checks,
+                    self._read_delivery_evidence(
+                        claimed,
+                        live_pr,
+                        expected_repair_budget=expected_merge_budget,
+                    ),
+                    expected_head_sha=receipt_head,
+                    expected_repair_budget=expected_merge_budget,
+                )
         except Exception as exc:
             return self.ledger.backoff(
                 claimed.run_id,
@@ -2580,6 +3658,7 @@ class VerificationConsumer:
                     "reason": "postlaunch_live_truth_unavailable",
                     "error_type": type(exc).__name__,
                     "pending_terminal_receipt": dict(receipt),
+                    "merge_authority_repair_budget": expected_merge_budget,
                 },
                 _retry_at(),
                 holder=self.holder,
@@ -2593,6 +3672,7 @@ class VerificationConsumer:
                         "outcome": "deferred",
                         "reason": rejection,
                         "pending_terminal_receipt": dict(receipt),
+                        "merge_authority_repair_budget": expected_merge_budget,
                     },
                     _retry_at(),
                     holder=self.holder,
@@ -2703,7 +3783,7 @@ class VerificationConsumer:
                 raise ValueError("malformed authenticated verification request")
             canonical_chain_token = self.ledger.canonical_chain_token(request)
             intake_pr = self.truth.pull_request(repository, pr_number)
-            issue_contract = resolve_issue_contract(intake_pr.get("body"))
+            issue_authority = resolve_issue_authority(intake_pr.get("body"))
             request = _live_observed_verification_request(
                 request,
                 observed_repository=_nested(
@@ -2715,10 +3795,19 @@ class VerificationConsumer:
                 observed_merged_at=intake_pr.get("merged_at"),
                 observed_draft=intake_pr.get("draft"),
                 observed_linked_issue=(
-                    issue_contract[0] if issue_contract is not None else None
+                    issue_authority.governing_issue
+                    if issue_authority is not None
+                    else None
+                ),
+                observed_closing_issues=(
+                    issue_authority.closing_issues
+                    if issue_authority is not None
+                    else None
                 ),
                 observed_supporting_issues=(
-                    issue_contract[1] if issue_contract is not None else None
+                    issue_authority.supporting_issues
+                    if issue_authority is not None
+                    else None
                 ),
                 canonical_chain_token=canonical_chain_token,
             )
@@ -2729,10 +3818,55 @@ class VerificationConsumer:
             # An active delivery is already owned. Restart recovery is an
             # explicit operation so replayed artifacts cannot duplicate it.
             return run
+        if self._backoff_is_pending(run):
+            # The durable retry fence outranks retained merge-recovery
+            # artifacts. Do not perform recovery reads that can fail and
+            # rewrite the exact retry/receipt before the run is claimable.
+            return run
         pending_delivered = self._pending_delivered_receipt(run)
         if pending_delivered is not None:
             return self._replay_pending_delivered(run, pending_delivered)
-        pr = self.truth.pull_request(run.repository, run.pr_number)
+        preloaded_pr: Mapping[str, object] | None = None
+        if (
+            run.status in {"claimed", "running", "backoff"}
+            and not self._lease_is_live(run)
+            and run.coordinator_session_id
+            and run.context_pack
+        ):
+            try:
+                preloaded_pr = self.truth.pull_request(
+                    run.repository, run.pr_number
+                )
+                if preloaded_pr.get("merged") is True:
+                    return self._recover_merged_run(run, preloaded_pr)
+                if resolve_neutralized_issue_authority(
+                    preloaded_pr.get("body")
+                ) is not None:
+                    return self._recover_open_neutralized_run(run, preloaded_pr)
+            except VerificationBackoffPending:
+                current = self.ledger.get(run.run_id)
+                assert current is not None
+                return current
+            except (RuntimeError, ValueError) as exc:
+                try:
+                    return self.ledger.defer_unclaimed(
+                        run.run_id,
+                        {
+                            "outcome": "blocked",
+                            "reason": "merged_recovery_unavailable",
+                            "error_type": type(exc).__name__,
+                        },
+                        _retry_at(),
+                    )
+                except ValueError:
+                    current = self.ledger.get(run.run_id)
+                    assert current is not None
+                    return current
+        pr = (
+            preloaded_pr
+            if preloaded_pr is not None
+            else self.truth.pull_request(run.repository, run.pr_number)
+        )
         checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(run, pr, checks)
         if rejection:
@@ -2807,15 +3941,26 @@ class VerificationConsumer:
         return self._launch(claimed, pr)
 
     def _launch(
-        self, claimed: VerificationRun, pr: Mapping[str, object]
+        self,
+        claimed: VerificationRun,
+        pr: Mapping[str, object],
+        *,
+        pack_override: Mapping[str, object] | None = None,
+        merge_authority_repair_budget: Mapping[str, object] | None = None,
     ) -> VerificationRun:
         lease_id = claimed.lease_id
         if not lease_id:
             raise RuntimeError("claimed verification run has no lease token")
-        pack = context_pack(
-            claimed,
-            pr,
-            repair_budget=self.ledger.repair_budget_projection(claimed.run_id),
+        pack = (
+            dict(pack_override)
+            if pack_override is not None
+            else context_pack(
+                claimed,
+                pr,
+                repair_budget=self.ledger.repair_budget_projection(
+                    claimed.run_id
+                ),
+            )
         )
 
         def started(session_id: str) -> None:
@@ -3059,33 +4204,63 @@ class VerificationConsumer:
         # Receipt acceptance is tied to a fresh authenticated GitHub read. A
         # repair may advance only to the exact current PR head; arbitrary or
         # stale receipt heads never reach the review ledger.
+        expected_merge_repair_budget = None
+        if verdict == "delivered":
+            expected_merge_repair_budget = (
+                merge_authority_repair_budget
+                if merge_authority_repair_budget is not None
+                else self.ledger.repair_budget_projection(claimed.run_id)
+            )
         try:
             live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
             live_checks = self.truth.checks(claimed.repository, receipt_head)
-            rejection = (
-                delivered_live_truth_rejection(
+            if verdict == "delivered":
+                assert expected_merge_repair_budget is not None
+                rejection = delivered_live_truth_rejection(
+                    claimed,
+                    live_pr,
+                    live_checks,
+                    {},
+                    expected_head_sha=receipt_head,
+                    expected_repair_budget=expected_merge_repair_budget,
+                )
+                if rejection in {
+                    "merge_commit_evidence_missing",
+                    "merge_authority_missing",
+                }:
+                    rejection = delivered_live_truth_rejection(
+                        claimed,
+                        live_pr,
+                        live_checks,
+                        self._read_delivery_evidence(
+                            claimed,
+                            live_pr,
+                            expected_repair_budget=expected_merge_repair_budget,
+                        ),
+                        expected_head_sha=receipt_head,
+                        expected_repair_budget=expected_merge_repair_budget,
+                    )
+            else:
+                rejection = live_truth_rejection(
                     claimed,
                     live_pr,
                     live_checks,
                     expected_head_sha=receipt_head,
                 )
-                if verdict == "delivered"
-                else live_truth_rejection(
-                    claimed,
-                    live_pr,
-                    live_checks,
-                    expected_head_sha=receipt_head,
-                )
-            )
         except Exception as exc:
+            pending_receipt = {
+                "outcome": "blocked",
+                "reason": "postlaunch_live_truth_unavailable",
+                "error_type": type(exc).__name__,
+                "pending_terminal_receipt": dict(receipt),
+            }
+            if expected_merge_repair_budget is not None:
+                pending_receipt["merge_authority_repair_budget"] = dict(
+                    expected_merge_repair_budget
+                )
             return self.ledger.backoff(
                 claimed.run_id,
-                {
-                    "outcome": "blocked",
-                    "reason": "postlaunch_live_truth_unavailable",
-                    "error_type": type(exc).__name__,
-                    "pending_terminal_receipt": dict(receipt),
-                },
+                pending_receipt,
                 _retry_at(),
                 holder=self.holder,
                 lease_id=lease_id,
@@ -3240,9 +4415,16 @@ class VerificationConsumer:
 
     def recover(self, run_id: str) -> VerificationRun:
         run = self.ledger.get(run_id)
-        if run is None or run.status != "running" or not run.coordinator_session_id or not run.context_pack:
+        if (
+            run is None
+            or run.status not in {"claimed", "running", "backoff"}
+            or not run.coordinator_session_id
+            or not run.context_pack
+        ):
             raise ValueError("verification run is not resumable")
         if self._lease_is_live(run):
+            return run
+        if self._backoff_is_pending(run):
             return run
         pr = self.truth.pull_request(run.repository, run.pr_number)
         observed_head = _nested(pr, "head", "sha")
@@ -3252,6 +4434,10 @@ class VerificationConsumer:
             raise ValueError("verification run is no longer resumable: malformed_pr")
         if observed_head != run.head_sha:
             raise ValueError("verification run is no longer resumable: stale_head")
+        if pr.get("merged") is True:
+            return self._recover_merged_run(run, pr)
+        if resolve_neutralized_issue_authority(pr.get("body")) is not None:
+            return self._recover_open_neutralized_run(run, pr)
         checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(
             run,

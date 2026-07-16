@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
+from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
 from scripts.build_verification_dispatch_request import (
     build_request,
     resolve_issue_contract,
@@ -13,6 +15,7 @@ from scripts.build_verification_dispatch_request import (
 
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 HEAD_SHA = "a" * 40
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _event(
@@ -44,6 +47,9 @@ def _pr(*, head_sha: str = HEAD_SHA, state: str = "open") -> dict[str, object]:
         "body": "Governing-Issue: #3602\n\nFixes #3602",
         "base": {"ref": "main"},
         "head": {"ref": "codex/issue-3602", "sha": head_sha},
+        "live_closing_issues": [
+            {"number": 3602, "repository": REPOSITORY},
+        ],
     }
 
 
@@ -58,7 +64,8 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
     assert first == second
     assert first is not None
     assert first == json.loads(json.dumps(first, sort_keys=True))
-    assert first["contract_version"] == "verification_dispatch_request.v1"
+    assert first["contract_version"] == "verification_dispatch_request.v2"
+    assert first["closing_issues"] == [3602]
     assert first["stage"] == "verification"
     assert first["repository"] == REPOSITORY
     assert first["pr_number"] == 3602
@@ -100,12 +107,111 @@ def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
         "Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\n"
         "Fixes #3698\nFixes #3699\nFixes #3700\nFixes #3705"
     )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY}
+        for number in (3626, 3698, 3699, 3700, 3705)
+    ]
 
     request = build_request(event=_event(), pr=pr, issue={"number": 3603})
 
     assert request is not None
     assert request["linked_issue"] == 3603
+    assert request["closing_issues"] == [3626, 3698, 3699, 3700, 3705]
     assert request["supporting_issues"] == [3626, 3698, 3699, 3700, 3705]
+
+
+def test_over_limit_closing_set_emits_no_dispatch_request() -> None:
+    pr = _pr()
+    closing = [4000 + index for index in range(MAX_CLOSING_ISSUES + 1)]
+    pr["body"] = "\n".join(
+        ["Governing-Issue: #3602"]
+        + [f"Fixes #{number}" for number in closing]
+    )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY} for number in closing
+    ]
+
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
+@pytest.mark.parametrize(
+    "live_closing_issues",
+    [
+        None,
+        [],
+        [{"number": 3603, "repository": REPOSITORY}],
+        [
+            {"number": 3602, "repository": REPOSITORY},
+            {"number": 3603, "repository": REPOSITORY},
+        ],
+        [
+            {"number": 3602, "repository": REPOSITORY},
+            {"number": 3602, "repository": REPOSITORY},
+        ],
+        [{"number": 3602, "repository": "other/repository"}],
+        [{"number": "3602", "repository": REPOSITORY}],
+    ],
+)
+def test_live_github_closing_links_must_equal_body_authority(
+    live_closing_issues: object,
+) -> None:
+    pr = _pr()
+    pr["live_closing_issues"] = live_closing_issues
+
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
+def test_workflow_bounds_live_closing_link_query_before_pagination() -> None:
+    workflow = (
+        REPO_ROOT / ".github/workflows/verification-dispatch-request.yml"
+    ).read_text(encoding="utf-8")
+    fetch_step = workflow.split("- name: Fetch current PR and linked issue", 1)[1].split(
+        "- name: Fetch linked issue", 1
+    )[0]
+
+    for fragment in (
+        "gh api graphql",
+        "closingIssuesReferences(first: 11)",
+        "nodes { number repository { nameWithOwner } }",
+        "length <= 10",
+        "closing issue references exceed the ten-issue contract or are malformed",
+        "exit 1",
+        "live_closing_issues",
+    ):
+        assert fragment in fetch_step
+    assert fetch_step.count("gh api graphql") == 1
+    assert "--paginate" not in fetch_step
+    assert "after:" not in fetch_step
+    assert "endCursor" not in fetch_step
+
+
+def test_ten_live_closing_links_emit_request_without_extra_graphql_page() -> None:
+    pr = _pr()
+    closing = list(range(4000, 4000 + MAX_CLOSING_ISSUES))
+    pr["body"] = "\n".join(
+        ["Governing-Issue: #3602"]
+        + [f"Fixes #{number}" for number in closing]
+    )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY} for number in closing
+    ]
+
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert request is not None
+    assert request["closing_issues"] == closing
+
+
+def test_crlf_authority_is_canonicalized_before_request_emission() -> None:
+    pr = _pr()
+    pr["body"] = "Governing-Issue: #3602\r\nRefs #3603\r\nFixes #3602\r\n"
+
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert resolve_issue_contract(pr["body"]) == (3602, (3603,))
+    assert request is not None
+    assert request["linked_issue"] == 3602
+    assert request["supporting_issues"] == [3603]
 
 
 def test_ambiguous_governing_issue_emits_no_request() -> None:
@@ -115,12 +221,87 @@ def test_ambiguous_governing_issue_emits_no_request() -> None:
     conflicting["body"] = "Governing-Issue: #3603\nGoverning-Issue: #3626"
     mismatched = _pr()
     mismatched["body"] = "Governing-Issue: #3603\nFixes #3626"
+    folded = _pr()
+    folded["body"] = "Governing-Issue:\n#3603\nFixes #3603"
 
     assert resolve_issue_contract(missing["body"]) is None
     assert resolve_issue_contract(conflicting["body"]) is None
+    assert resolve_issue_contract(folded["body"]) is None
     assert build_request(event=_event(), pr=missing, issue={"number": 3603}) is None
     assert build_request(event=_event(), pr=conflicting, issue={"number": 3603}) is None
+    assert build_request(event=_event(), pr=folded, issue={"number": 3603}) is None
     assert build_request(event=_event(), pr=mismatched, issue={"number": 3626}) is None
+
+
+def test_repository_qualified_closer_emits_no_request() -> None:
+    qualified = _pr()
+    qualified["body"] = (
+        "Governing-Issue: #3602\nFixes #3602\n"
+        "Fixes RasmusTho/agentic-pkm-mvp#9999"
+    )
+
+    assert resolve_issue_contract(qualified["body"]) is None
+    assert build_request(event=_event(), pr=qualified, issue=_issue()) is None
+
+
+def test_github_url_closer_emits_no_request() -> None:
+    qualified = _pr()
+    qualified["body"] = (
+        "Governing-Issue: #3602\nFixes #3602\n"
+        "Fixes https://github.com/RasmusTho/agentic-pkm-mvp/issues/9999"
+    )
+
+    assert resolve_issue_contract(qualified["body"]) is None
+    assert build_request(event=_event(), pr=qualified, issue=_issue()) is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Governing-Issue: #3602",
+        "Governing-Issue: #3602\nFixes #0",
+        "Governing-Issue: #3602\nFixes #-1",
+        "Governing-Issue: #3602\nFixes #abc",
+        "Governing-Issue: #3602\nFixes\n#3602",
+        "Governing-Issue: #3602\nGoverning-Issue : #456\nFixes #3602",
+        "Governing-Issue: #3602\nGoverning-Issue:\n#456\nFixes #3602",
+        "Governing-Issue: #3602\nGoverning-Issue: #0\nFixes #3602",
+        "Governing-Issue: #3602\nFixes #3602é",
+        "Governing-Issue: #3602\nFixeſ #3602",
+        "Governıng-Issue: #3602\nFixes #3602",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #",
+        "Governing-Issue: #3602\nFixes #3602\nCloses # 456",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #\u00a0",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #\u0085",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #\ufeff",
+        "Governing-Issue: #3602\rFixes #3602",
+        "Governing-Issue: #3602\u2028Fixes #3602",
+        "Governing-Issue: #3602\u2029Fixes #3602",
+    ],
+)
+def test_invalid_closing_authority_emits_no_request(body: str) -> None:
+    pr = _pr()
+    pr["body"] = body
+
+    assert resolve_issue_contract(body) is None
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
+def test_github_closing_keyword_variants_bind_exact_closure_authority() -> None:
+    pr = _pr()
+    pr["body"] = (
+        "Governing-Issue: #3602\nFix #3602\nFixed: #3603\n"
+        "Closed #3604\nResolve: #3605\nResolved #3606"
+    )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY}
+        for number in (3602, 3603, 3604, 3605, 3606)
+    ]
+
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert request is not None
+    assert request["closing_issues"] == [3602, 3603, 3604, 3605, 3606]
 
 
 def test_associated_pr_must_still_be_open() -> None:
