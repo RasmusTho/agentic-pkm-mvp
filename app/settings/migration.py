@@ -62,13 +62,20 @@ def _target_text(source: Path, transform: str | None) -> str:
 
 
 def _legacy_health_paths(root: Path) -> tuple[Path, ...]:
-    paths = {root / LEGACY_HEALTH_SETTINGS}
+    resolved_root = root.resolve()
+    paths = {resolved_root / LEGACY_HEALTH_SETTINGS}
     try:
-        configured_system_dir = Path(get_vault_system_dir_rel(root))
+        configured_system_dir = Path(get_vault_system_dir_rel(resolved_root))
     except (OSError, ValueError):
         pass
     else:
-        paths.add(root / configured_system_dir / "Settings" / "health.md")
+        configured_health = (resolved_root / configured_system_dir / "Settings" / "health.md").resolve()
+        if not configured_health.is_relative_to(resolved_root):
+            raise ValueError(
+                "configured legacy health settings path escapes vault root: "
+                f"{configured_health}"
+            )
+        paths.add(configured_health)
     return tuple(sorted(paths, key=str))
 
 

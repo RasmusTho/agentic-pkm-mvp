@@ -238,3 +238,28 @@ def test_migration_moves_health_from_configured_system_directory(
 
     assert (vault / "settings" / "health.md").read_text(encoding="utf-8") == "# configured health\n"
     assert not configured_health.exists()
+
+
+def test_migration_rejects_configured_health_path_outside_vault_before_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+    vault = tmp_path / "vault"
+    legacy_system = vault / "_system" / "settings" / "system-settings.yaml"
+    legacy_system.parent.mkdir(parents=True)
+    legacy_system.write_text("paths:\n  system_dir_rel: ../outside\n", encoding="utf-8")
+    outside_health = tmp_path / "outside" / "Settings" / "health.md"
+    outside_health.parent.mkdir(parents=True)
+    outside_health.write_text("# must remain\n", encoding="utf-8")
+    guard_calls: list[str] = []
+
+    class Guard:
+        def assert_writes_allowed(self, action: str) -> None:
+            guard_calls.append(action)
+
+    with pytest.raises(ValueError, match="escapes vault root"):
+        migrate_settings_location(vault, write_guard=Guard())  # type: ignore[arg-type]
+
+    assert guard_calls == []
+    assert outside_health.read_text(encoding="utf-8") == "# must remain\n"
+    assert not (vault / "settings").exists()
