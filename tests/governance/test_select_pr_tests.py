@@ -51,6 +51,10 @@ def test_trace_middleware_is_owned_by_companion_ui() -> None:
     # lives in tests/api (a companion_ui target).
     selection = select_tests(["app/middleware/trace.py"])
 
+    assert selection.unowned_paths == ()
+    assert "companion_ui" in selection.subsystems
+    assert "tests/api" in selection.targets
+
 
 def test_fastapi_deps_module_is_owned_by_companion_ui() -> None:
     # app/deps.py holds the FastAPI dependency providers consumed by the API
