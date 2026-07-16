@@ -1,6 +1,6 @@
-State: Pre-filing draft — becomes a mirror of the live GitHub parent feature issue once filed (update this header with the issue number and lifecycle state in the same pass that files it).
+State: Filed — mirrors live parent feature issue #3915 (open validation hub, `agent:blocked` while children #3916–#3926 are outstanding; filed 2026-07-17).
 Doc role: Parent feature issue mirror
-Authority: None of its own — the filed GitHub issue is the live validation hub; this file mirrors it for repo-local readers.
+Authority: None of its own — GitHub issue #3915 is the live validation hub; this file mirrors it for repo-local readers.
 
 # Parent Feature Issue — YouTube Source Sync
 

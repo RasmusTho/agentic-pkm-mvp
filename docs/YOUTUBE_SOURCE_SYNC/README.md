@@ -1,4 +1,4 @@
-State: Specification directory (feature-breakdown lane; target-state framing). Instantiates Knowledge Acquisition Platform Phase 4 (continuous discovery) for YouTube. No slice below is shipped until its child issue is delivered and this line says so.
+State: Specification directory (feature-breakdown lane; target-state framing). Instantiates Knowledge Acquisition Platform Phase 4 (continuous discovery) for YouTube. **Issue set filed 2026-07-17**: parent feature issue #3915, children #3916–#3926 (YSS-01..YSS-11). No slice below is shipped until its child issue is delivered and this line says so.
 Doc role: Capability specification directory
 Authority: Owns the YouTube source-sync capability design — account binding, source registry, continuous discovery, durable acquisition requests, scheduling, and the setup/status surfaces. Subordinate to `docs/KNOWLEDGE_ACQUISITION/README.md` (platform boundary), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` (stages), `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` (triage), `docs/EVENTS.md` (event envelope/outbox), and `docs/SECURITY.md` (secret baseline). It revises `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md` §Discovery by owner directive (see §Decision record).
 Owner: Architecture / knowledge acquisition
@@ -214,6 +214,7 @@ checklist entries on the parent issue — never claimed shipped in owner docs un
 
 ## Relationship to GitHub issues
 
-Filed via `feature-breakdown`: one parent feature issue (validation hub, `agent:blocked`) plus one
-child issue per task above (`agent:ready` in dependency order). `PARENT_FEATURE_ISSUE.md` mirrors
-the filed parent. The spec directory is the source of truth; issues are execution artifacts.
+Filed via `feature-breakdown` 2026-07-17: parent feature issue #3915 (validation hub, `agent:blocked`)
+plus children #3916 (YSS-01, `agent:ready`) and #3917–#3926 (YSS-02..YSS-11, `agent:blocked` until
+their prerequisites merge). `PARENT_FEATURE_ISSUE.md` mirrors the filed parent. The spec directory
+is the source of truth; issues are execution artifacts.
