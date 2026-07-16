@@ -36,6 +36,11 @@ from app.dispatcher.verification_agent_loop import (
     VerificationAgentLoop,
     valid_human_exception_packet,
 )
+from app.dispatcher.verification_dispatch import _authenticated_verification_request
+from app.dispatcher.verified_merge import (
+    build_verified_merge_phase,
+    prepare_verified_merge,
+)
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 
 
@@ -43,12 +48,37 @@ from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 class Truth:
     pr: dict[str, object]
     check_rows: list[dict[str, object]]
+    authenticated_supporting: tuple[int, ...] = ()
+    merge_repair_budget: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        self._last_pr = self.pr
 
     def pull_request(self, repository, pr_number):
+        self._last_pr = self.pr
         return self.pr
 
     def checks(self, repository, head_sha):
         return self.check_rows
+
+    def pull_request_comments(self, repository, pr_number):
+        return _merge_comments(
+            self._last_pr,
+            authenticated_supporting=self.authenticated_supporting,
+            repair_budget=self.merge_repair_budget,
+        )
+
+    def issue_set_closure_evidence(
+        self,
+        repository,
+        pr_number,
+        *,
+        issue_numbers,
+        merged_at,
+        merge_commit_sha,
+        actor_login,
+    ):
+        return _closure_evidence(issue_numbers)
 
 
 class Auth:
@@ -113,10 +143,12 @@ class PostMergeTerminalReadOutageTruth(Truth):
     def pull_request(self, repository, pr_number):
         self.pull_calls += 1
         if self.pull_calls <= 2:
-            return eligible_pr()
+            self._last_pr = eligible_pr()
+            return self._last_pr
         if self.pull_calls == 3:
             raise RuntimeError("simulated post-merge terminal read outage")
-        return merged_pr()
+        self._last_pr = merged_pr()
+        return self._last_pr
 
 
 class Launcher:
@@ -243,16 +275,42 @@ class DeliveredLauncher(Launcher):
 
 
 class TransitionTruth:
-    def __init__(self, terminal_pr: dict[str, object]) -> None:
+    def __init__(
+        self,
+        terminal_pr: dict[str, object],
+        *,
+        authenticated_supporting: tuple[int, ...] = (),
+    ) -> None:
         # Intake and the post-auth launch fence must both observe stable open
         # authority before the coordinator's delivered receipt changes truth.
         self.prs = iter([eligible_pr(), eligible_pr(), terminal_pr])
+        self._last_pr = eligible_pr()
+        self.authenticated_supporting = authenticated_supporting
 
     def pull_request(self, repository, pr_number):
-        return next(self.prs)
+        self._last_pr = next(self.prs)
+        return self._last_pr
 
     def checks(self, repository, head_sha):
         return GREEN
+
+    def pull_request_comments(self, repository, pr_number):
+        return _merge_comments(
+            self._last_pr,
+            authenticated_supporting=self.authenticated_supporting,
+        )
+
+    def issue_set_closure_evidence(
+        self,
+        repository,
+        pr_number,
+        *,
+        issue_numbers,
+        merged_at,
+        merge_commit_sha,
+        actor_login,
+    ):
+        return _closure_evidence(issue_numbers)
 
 
 class TerminalChecksTruth(TransitionTruth):
@@ -271,6 +329,8 @@ class TerminalChecksTruth(TransitionTruth):
 def eligible_pr(**updates):
     value = {
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
+        "merge_commit_sha": None,
+        "title": "dispatcher: verify and close issue set",
         "body": "Governing-Issue: #3603\n\nFixes #3603",
         "base": {"ref": "main", "repo": {"full_name": REPO}},
         "head": {"ref": "branch", "sha": HEAD},
@@ -488,6 +548,168 @@ def test_pending_delivered_receipt_replay_is_idempotent(tmp_path) -> None:
     ]
 
 
+def test_delivered_receipt_rejects_unattributed_unauthorized_issue_closure(
+    tmp_path,
+) -> None:
+    class UnauthorizedClosureTruth(TransitionTruth):
+        def issue_set_closure_evidence(self, *args, issue_numbers, **kwargs):
+            return _closure_evidence(issue_numbers, unauthorized=(4999,))
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        UnauthorizedClosureTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_unauthorized_closure"
+    assert result.verified_head_sha is None
+
+
+def test_delivered_receipt_requires_trusted_exact_head_merge_authority(
+    tmp_path,
+) -> None:
+    class ForgedAuthorityTruth(TransitionTruth):
+        def pull_request_comments(self, repository, pr_number):
+            comments = _merge_comments(self._last_pr)
+            for comment in comments:
+                comment["author_association"] = "NONE"
+            return comments
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        ForgedAuthorityTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_authority_missing"
+    assert result.verified_head_sha is None
+
+
+def test_delivered_receipt_rejects_merge_authority_with_stale_repair_budget(
+    tmp_path,
+) -> None:
+    class StaleBudgetTruth(TransitionTruth):
+        def pull_request_comments(self, repository, pr_number):
+            comments = _merge_comments(self._last_pr)
+            comments[0]["body"] = str(comments[0]["body"]).replace(
+                '"policy_version":"v2"', '"policy_version":"v1"'
+            )
+            return comments
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        StaleBudgetTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_authority_missing"
+    assert result.verified_head_sha is None
+
+
+@pytest.mark.parametrize("entrypoint", ["consume", "recover"])
+@pytest.mark.parametrize(
+    ("crash_phase", "crash_body_state"),
+    [("prepared", "neutralized"), ("reconciled", "restored")],
+)
+def test_merged_incomplete_run_recovers_idempotently_after_coordinator_crash(
+    tmp_path,
+    entrypoint: str,
+    crash_phase: str,
+    crash_body_state: str,
+) -> None:
+    plan = _merge_plan(HEAD)
+    crashed_pr = merged_pr(
+        body=(
+            plan["neutralized_body"]
+            if crash_body_state == "neutralized"
+            else plan["original_body"]
+        )
+    )
+
+    class RecoveryTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(crashed_pr, GREEN)
+            self.phase = crash_phase
+
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(self._last_pr, phase=self.phase)
+
+    truth = RecoveryTruth()
+
+    class RecoveryLauncher(DeliveredLauncher):
+        def launch(
+            self,
+            context_pack,
+            *,
+            resume_session_id=None,
+            on_thread_started=None,
+            on_heartbeat=None,
+        ):
+            self.calls.append((context_pack, resume_session_id))
+            truth.pr = merged_pr()
+            truth._last_pr = truth.pr
+            truth.phase = "restored"
+            session = resume_session_id or "01900000-0000-7000-8000-000000000004"
+            if on_thread_started:
+                on_thread_started(session)
+            if on_heartbeat:
+                on_heartbeat()
+            receipt = DeliveredLauncher().launch({})[1]
+            return session, receipt
+
+    state = ledger(tmp_path / entrypoint)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    persisted_pack = verification_consumer.context_pack(
+        claimed,
+        eligible_pr(),
+        repair_budget=state.repair_budget_projection(run.run_id),
+    )
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000004",
+        persisted_pack,
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", running.run_id),
+        )
+        conn.commit()
+    budget_before = state.repair_budget_projection(run.run_id)
+    launcher = RecoveryLauncher()
+    consumer = VerificationConsumer(
+        state, truth, Auth(), launcher, "recovery-host"
+    )
+
+    completed = (
+        consumer.consume(_authenticated_verification_request(request()))
+        if entrypoint == "consume"
+        else consumer.recover(run.run_id)
+    )
+
+    assert completed.status == "completed"
+    assert completed.run_id == run.run_id
+    assert completed.verified_head_sha == HEAD
+    assert state.repair_budget_projection(run.run_id) == budget_before
+    assert len(launcher.calls) == 1
+    recovered_pack, resumed_session = launcher.calls[0]
+    assert resumed_session == "01900000-0000-7000-8000-000000000004"
+    assert recovered_pack["merge_recovery"]["phase"] == crash_phase
+    assert recovered_pack["merge_recovery"]["body_state"] == crash_body_state
+
+
 def _corrupt_pending_delivered_receipt(state, run_id, mutate) -> None:
     current = state.get(run_id)
     assert current is not None
@@ -603,6 +825,7 @@ def merged_pr(**updates: object) -> dict[str, object]:
         merged=True,
         merged_at="2026-07-15T00:00:00Z",
         merge_commit_sha="b" * 40,
+        merged_by={"login": "verification-closer"},
         base={
             "ref": "main",
             "repo": {"full_name": "RasmusTho/agentic-pkm-mvp"},
@@ -610,6 +833,140 @@ def merged_pr(**updates: object) -> dict[str, object]:
     )
     value.update(updates)
     return value
+
+
+def _verification_run_id() -> str:
+    idempotency_key = request()["idempotency_key"]
+    assert isinstance(idempotency_key, str)
+    return f"vrun-{idempotency_key[:16]}"
+
+
+def _merge_plan(
+    head_sha: str,
+    *,
+    body: str = "Governing-Issue: #3603\n\nFixes #3603",
+    authenticated_supporting: tuple[int, ...] = (),
+    repair_budget: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    context = {
+        "contract": "verification_closer_dispatch_context.v2",
+        "run_id": _verification_run_id(),
+        "repository": REPO,
+        "pr_number": 3603,
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "supporting_issues": list(authenticated_supporting),
+        "head_sha": head_sha,
+        "repair_budget": (
+            dict(repair_budget)
+            if repair_budget is not None
+            else {
+                "policy_version": "v2",
+                "mechanism_count": 0,
+                "truncated": False,
+                "omitted_count": 0,
+                "mechanisms": [],
+            }
+        ),
+    }
+    return prepare_verified_merge(
+        context=context,
+        pr=eligible_pr(body=body, head={"ref": "branch", "sha": head_sha}),
+        live_closing_issues=[3603],
+    )
+
+
+def _merge_comments(
+    pr: Mapping[str, object],
+    *,
+    phase: str = "restored",
+    authenticated_supporting: tuple[int, ...] = (),
+    repair_budget: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    head_sha = pr.get("head", {}).get("sha") if isinstance(pr.get("head"), Mapping) else None
+    assert isinstance(head_sha, str)
+    body = pr.get("body")
+    assert isinstance(body, str)
+    plan = _merge_plan(
+        head_sha,
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603"
+            if "Verified-Closing-Issues:" in body
+            else body
+        ),
+        authenticated_supporting=authenticated_supporting,
+        repair_budget=repair_budget,
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral = eligible_pr(
+        body=plan["neutralized_body"],
+        head={"ref": "branch", "sha": head_sha},
+    )
+    merged_neutral = {
+        **dict(pr),
+        "body": plan["neutralized_body"],
+        "head": {"ref": "branch", "sha": head_sha},
+    }
+    restored = {
+        **merged_neutral,
+        "body": plan["original_body"],
+    }
+    phases = [
+        build_verified_merge_phase(
+            authority_receipt=authority, phase="prepared", pr=neutral
+        ),
+        build_verified_merge_phase(
+            authority_receipt=authority, phase="merged", pr=merged_neutral
+        ),
+        build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="reconciled",
+            pr=merged_neutral,
+            closed_issues=[3603],
+        ),
+        build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="restored",
+            pr=restored,
+            closed_issues=[3603],
+        ),
+    ]
+    phase_index = {"prepared": 1, "merged": 2, "reconciled": 3, "restored": 4}[phase]
+    return [
+        {
+            "author_association": "COLLABORATOR",
+            "body": plan["authority_receipt_comment"],
+        },
+        *[
+            {
+                "author_association": "COLLABORATOR",
+                "body": item["phase_receipt_comment"],
+            }
+            for item in phases[:phase_index]
+        ],
+    ]
+
+
+def _closure_evidence(
+    issue_numbers: list[int] | tuple[int, ...],
+    *,
+    unauthorized: tuple[int, ...] = (),
+) -> dict[str, object]:
+    observed = sorted({*issue_numbers, *unauthorized})
+    return {
+        "closure_scan_complete": True,
+        "observed_closing_issues": observed,
+        "issue_evidence": [
+            {
+                "number": number,
+                "state": "closed",
+                "closed_by_delivery": True,
+                "closed_by_pull_requests": [] if number in issue_numbers else [3603],
+            }
+            for number in observed
+        ],
+    }
 
 
 def _required_check_authority(
@@ -825,6 +1182,83 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
         verification_consumer._checks_rejection(checks, expected_head_sha=HEAD)
         is None
     )
+
+
+def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        if "/issues?state=closed" in endpoint:
+            return Result(
+                [
+                    {
+                        "number": 3603,
+                        "state": "closed",
+                        "closed_at": "2026-07-15T00:00:02Z",
+                    },
+                    {
+                        "number": 4999,
+                        "state": "closed",
+                        "closed_at": "2026-07-15T00:00:03Z",
+                    },
+                ]
+            )
+        if "/issues/3603/events?per_page=100" in endpoint:
+            return Result(
+                [
+                    {
+                        "event": "closed",
+                        "actor": {"login": "verification-closer"},
+                        "created_at": "2026-07-15T00:00:02Z",
+                        "commit_id": None,
+                    }
+                ]
+            )
+        if "/issues/4999/events?per_page=100" in endpoint:
+            return Result(
+                [
+                    {
+                        "event": "closed",
+                        "actor": {"login": "verification-closer"},
+                        "created_at": "2026-07-15T00:00:03Z",
+                        "commit_id": "b" * 40,
+                    }
+                ]
+            )
+        raise AssertionError(endpoint)
+
+    evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+        REPO,
+        3603,
+        issue_numbers=[3603],
+        merged_at="2026-07-15T00:00:00Z",
+        merge_commit_sha="b" * 40,
+        actor_login="verification-closer",
+    )
+
+    assert evidence["closure_scan_complete"] is True
+    assert evidence["observed_closing_issues"] == [3603, 4999]
+    assert evidence["issue_evidence"] == [
+        {
+            "closed_at": "2026-07-15T00:00:02Z",
+            "closed_by_delivery": True,
+            "closed_by_pull_requests": [],
+            "number": 3603,
+            "state": "closed",
+        },
+        {
+            "closed_at": "2026-07-15T00:00:03Z",
+            "closed_by_delivery": True,
+            "closed_by_pull_requests": [3603],
+            "number": 4999,
+            "state": "closed",
+        },
+    ]
 
 
 def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id: int = 123):
@@ -1148,6 +1582,12 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     assert resumed is None
     assert pack["agent_adapter"] == ".codex/agents/verification-closer.toml"
     assert pack["verification_skill"] == ".codex/skills/verification-and-closure/SKILL.md"
+    assert pack["verified_merge_phase_contract"] == (
+        "verified_issue_set_merge_phase.v1"
+    )
+    assert pack["verified_merge_phase_writer"] == (
+        "scripts/build_verified_issue_set_merge_phase.py"
+    )
     assert pack["governing_issue"] == 3603
     assert pack["closing_issues"] == [3603]
     assert pack["supporting_issues"] == []
@@ -1622,6 +2062,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
     class ReviewOnlyDeliveryLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
             self.calls.append((context_pack, kwargs.get("resume_session_id")))
+            truth.merge_repair_budget = context_pack["repair_budget"]
             truth.pr = merged_pr(head={"ref": "branch", "sha": new_head})
             return "01900000-0000-7000-8000-000000000020", {
                 "verdict": "delivered",
@@ -1886,7 +2327,9 @@ def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None
             "Fixes #3603\nRefs #3626\nRefs #3745"
         )
     )
-    truth = TransitionTruth(terminal_pr)
+    truth = TransitionTruth(
+        terminal_pr, authenticated_supporting=(3626,)
+    )
     truth.prs = iter([original_pr, original_pr, terminal_pr])
     result = VerificationConsumer(
         ledger(tmp_path),
@@ -1914,7 +2357,9 @@ def test_same_head_live_supporting_add_remove_is_never_dispatched(
     terminal = merged_pr(
         body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
     )
-    truth = TransitionTruth(terminal)
+    truth = TransitionTruth(
+        terminal, authenticated_supporting=(3626,)
+    )
     truth.prs = iter([added, added, terminal])
     launcher = DeliveredLauncher()
 

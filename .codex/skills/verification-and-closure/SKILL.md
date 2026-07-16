@@ -284,35 +284,49 @@ When all prerequisites are met:
    governance again, wait for the latest `pr-contract` run triggered by that `edited` event to finish
    green on the same exact head, then re-read the head, body, title, and empty closing references once
    more. Never reuse the pre-edit green `pr-contract` result as merge authority
-4. merge through the exact-head REST endpoint using the verified SHA and only the plan's fixed
+4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
+   `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
+   exact neutralized PR snapshot. Require a single continuous prepared/merged/reconciled/restored
+   phase ledger; duplicate identical receipts are idempotent, while missing, stale, forged, or
+   conflicting receipts fail closed
+5. merge through the exact-head REST endpoint using the verified SHA and only the plan's fixed
    non-closing commit title/message. Never use GitHub-synthesized or caller-supplied free-form merge
    text. A body/head/closing-link change before this request is a hard stop; never restore closers and
    retry around a failed gate
-5. verify merge success and re-fetch the merge commit to prove its title/message contains no
-   canonical or malformed closing attempt
-6. re-read post-merge closing references and issue state before explicit closure. Use
+6. verify merge success and re-fetch the merge commit to prove its title/message contains no
+   canonical or malformed closing attempt, then post the authority-bound `merged` phase receipt
+7. on resume, if the live PR is already merged but the sequence is incomplete, authenticate the
+   exact authority receipt and latest continuous phase, prove the live merge identity, and resume the
+   same run idempotently at the first missing phase without resetting attempts or the 2+2 repair
+   budget. Never reject or restart an authenticated merged-but-incomplete delivery merely because
+   the PR can no longer satisfy the pre-merge intake predicate
+8. re-read post-merge closing references and issue state before explicit closure. Use
    `plan_post_merge_reconciliation` with complete issue evidence; reopen only an unauthorized closure
    GitHub attributes to this PR, and block the final receipt on any unresolved unauthorized closure.
    This is the defensive race reconciliation, not a substitute for pre-effect neutralization
-7. explicitly close every and only the authenticated `closing_issues`, verify their state, then
+9. explicitly close every and only the authenticated `closing_issues`, verify their state, post the
+   `reconciled` phase receipt, then
    restore the authenticated original PR body and prove its governing/closing identities equal the
-   durable receipt; bounded monotonic supporting additions may be retained only as evidence and may
-   not expand closure authority
-8. if issue-backed, complete or release each applicable closing-issue dispatcher task
-9. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
+   durable receipt, and post the `restored` phase receipt; bounded monotonic supporting additions may be retained only as evidence and may not expand closure authority
+10. authenticate the durable authority receipt and complete phase ledger again, then live-read issue
+   state and closure attribution. A terminal delivery receipt is forbidden unless every and only
+   authenticated closing issue is closed by this delivery and no unrelated issue closure remains
+   attributable to it
+11. if issue-backed, complete or release each applicable closing-issue dispatcher task
+12. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
    labels from a distinct governing parent unless its own lifecycle contract is complete
-10. if issue-backed, set every closing Issue and the PR Project Status to `Done` when automation has
+13. if issue-backed, set every closing Issue and the PR Project Status to `Done` when automation has
    not already projected it; never project an unclosed governing parent `Done`
-11. if issue-backed, update spec files named by each closing issue's `Source Anchors` from stale
+14. if issue-backed, update spec files named by each closing issue's `Source Anchors` from stale
    `State: Not yet implemented` to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
    Record child-delivery validation evidence on any distinct open governing parent
-12. verify final state, including restored body authority and the absence of unauthorized closures
-13. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, write the same PR-specific
+15. verify final state, including restored body authority and the absence of unauthorized closures
+16. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, write the same PR-specific
     result on every exact closed issue and also on a distinct open governing parent; for issue-free
     lanes, use the PR thread
-14. assert each required `post-merge owner-doc check: PR #<PR>;` receipt exists before emitting a delivery
+17. assert each required `post-merge owner-doc check: PR #<PR>;` receipt exists before emitting a delivery
     receipt; watchdog or pending reminders are not closure receipts. [owner-doc-receipt-gate]
-15. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
+18. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
 
 ## When Not to Merge
 

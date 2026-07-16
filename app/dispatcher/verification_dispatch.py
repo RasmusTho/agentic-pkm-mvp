@@ -78,7 +78,8 @@ _NESTED_REQUEST_FIELDS = {
         "source_run_id",
     ),
 }
-_LEGACY_RECOVERY_AUDIT_CONTRACT = "verification_legacy_recovery_audit.v1"
+_LEGACY_RECOVERY_AUDIT_CONTRACT_V1 = "verification_legacy_recovery_audit.v1"
+_LEGACY_RECOVERY_AUDIT_CONTRACT = "verification_legacy_recovery_audit.v2"
 _LEGACY_RECOVERY_ROW_FIELDS = (
     "run_id",
     "idempotency_key",
@@ -104,6 +105,15 @@ _LEGACY_RECOVERY_ROW_FIELDS = (
     "terminal_receipt_json",
     "stop_reason",
     "retry_after",
+    "created_at",
+    "updated_at",
+)
+_LEGACY_RECOVERY_EXCEPTION_FIELDS = (
+    "exception_id",
+    "run_id",
+    "failure_class",
+    "head_sha",
+    "packet_json",
     "created_at",
     "updated_at",
 )
@@ -605,14 +615,23 @@ def _validated_legacy_recovery_audit(
     if raw is None:
         return None
     loaded = _load(raw if isinstance(raw, str) else None)
-    if not isinstance(loaded, Mapping) or set(loaded) != {
-        "contract",
-        "quarantined_row",
-    }:
+    if not isinstance(loaded, Mapping):
+        raise ValueError("legacy verification recovery audit is malformed")
+    contract = loaded.get("contract")
+    expected_fields = (
+        {"contract", "quarantined_row"}
+        if contract == _LEGACY_RECOVERY_AUDIT_CONTRACT_V1
+        else {"contract", "quarantined_row", "quarantined_exceptions"}
+    )
+    if set(loaded) != expected_fields:
         raise ValueError("legacy verification recovery audit is malformed")
     archived = loaded.get("quarantined_row")
     if (
-        loaded.get("contract") != _LEGACY_RECOVERY_AUDIT_CONTRACT
+        contract
+        not in {
+            _LEGACY_RECOVERY_AUDIT_CONTRACT_V1,
+            _LEGACY_RECOVERY_AUDIT_CONTRACT,
+        }
         or not isinstance(archived, Mapping)
         or set(archived) != set(_LEGACY_RECOVERY_ROW_FIELDS)
     ):
@@ -633,17 +652,63 @@ def _validated_legacy_recovery_audit(
         ).get("linked_issue")
     ):
         raise ValueError("legacy verification recovery audit is malformed")
+    if contract == _LEGACY_RECOVERY_AUDIT_CONTRACT:
+        exceptions = loaded.get("quarantined_exceptions")
+        if not isinstance(exceptions, list):
+            raise ValueError("legacy verification recovery audit is malformed")
+        seen_exception_ids: set[str] = set()
+        seen_exception_keys: set[tuple[str, str]] = set()
+        for exception in exceptions:
+            if not isinstance(exception, Mapping) or set(exception) != set(
+                _LEGACY_RECOVERY_EXCEPTION_FIELDS
+            ):
+                raise ValueError("legacy verification recovery audit is malformed")
+            exception_id = exception.get("exception_id")
+            failure_class = exception.get("failure_class")
+            head_sha = exception.get("head_sha")
+            packet_json = exception.get("packet_json")
+            if (
+                not isinstance(exception_id, str)
+                or not exception_id
+                or exception_id in seen_exception_ids
+                or exception.get("run_id") != row["run_id"]
+                or not isinstance(failure_class, str)
+                or not failure_class
+                or not isinstance(head_sha, str)
+                or re.fullmatch(r"[0-9a-fA-F]{40}", head_sha) is None
+                or (failure_class, head_sha) in seen_exception_keys
+                or not isinstance(packet_json, str)
+                or not isinstance(_load(packet_json), Mapping)
+                or not isinstance(exception.get("created_at"), str)
+                or not isinstance(exception.get("updated_at"), str)
+            ):
+                raise ValueError("legacy verification recovery audit is malformed")
+            seen_exception_ids.add(exception_id)
+            seen_exception_keys.add((failure_class, head_sha))
     return dict(archived)
 
 
-def _legacy_recovery_audit_snapshot(row: sqlite3.Row) -> str:
-    """Serialize the exact inert row before it becomes the canonical v2 chain."""
+def _legacy_recovery_audit_snapshot(
+    conn: sqlite3.Connection, row: sqlite3.Row
+) -> str:
+    """Serialize the inert row and exception children before v2 activation."""
     _validated_legacy_row_request(row)
     archived = {field: row[field] for field in _LEGACY_RECOVERY_ROW_FIELDS}
+    exceptions = [
+        {field: exception[field] for field in _LEGACY_RECOVERY_EXCEPTION_FIELDS}
+        for exception in conn.execute(
+            """
+            SELECT * FROM verification_exceptions
+            WHERE run_id=? ORDER BY exception_id ASC
+            """,
+            (row["run_id"],),
+        )
+    ]
     return _json(
         {
             "contract": _LEGACY_RECOVERY_AUDIT_CONTRACT,
             "quarantined_row": archived,
+            "quarantined_exceptions": exceptions,
         }
     )
 
@@ -866,6 +931,7 @@ def _recover_same_head_legacy_run(
         )
     incoming_supporting = request.get("supporting_issues")
     assert isinstance(incoming_supporting, list)
+    legacy_recovery_audit = _legacy_recovery_audit_snapshot(conn, row)
     conn.execute(
         """
         UPDATE verification_runs
@@ -886,7 +952,7 @@ def _recover_same_head_legacy_run(
             _json(request),
             _json(incoming_supporting),
             _json(_request_closing_authority(request)),
-            _legacy_recovery_audit_snapshot(row),
+            legacy_recovery_audit,
             now,
             row["run_id"],
             row["idempotency_key"],
@@ -897,6 +963,9 @@ def _recover_same_head_legacy_run(
         raise ValueError(
             "verification canonical run authority changed during legacy recovery"
         )
+    conn.execute(
+        "DELETE FROM verification_exceptions WHERE run_id=?", (row["run_id"],)
+    )
     recovered = conn.execute(
         "SELECT * FROM verification_runs WHERE run_id=?", (row["run_id"],)
     ).fetchone()

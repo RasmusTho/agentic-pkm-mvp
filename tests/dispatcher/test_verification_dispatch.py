@@ -394,11 +394,94 @@ def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) ->
         rows = conn.execute("SELECT * FROM verification_runs").fetchall()
     assert len(rows) == 1
     audit = json.loads(rows[0]["legacy_recovery_audit_json"])
-    assert audit["contract"] == "verification_legacy_recovery_audit.v1"
+    assert audit["contract"] == "verification_legacy_recovery_audit.v2"
     quarantined = audit["quarantined_row"]
     assert quarantined["status"] == "legacy_untrusted"
     assert json.loads(quarantined["request_json"]) == legacy_request
     assert quarantined["idempotency_key"] == legacy_request["idempotency_key"]
+    assert audit["quarantined_exceptions"] == []
+
+
+def test_same_head_v2_recovery_archives_legacy_exception_children(tmp_path) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    legacy_packet = {"legacy": "must remain immutable"}
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_exceptions (
+                exception_id, run_id, failure_class, head_sha, packet_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "vexception-legacy",
+                run_id,
+                "authority-critical",
+                request()["current_head_sha"],
+                json.dumps(legacy_packet, sort_keys=True),
+                "2026-07-16T10:00:02+00:00",
+                "2026-07-16T10:00:02+00:00",
+            ),
+        )
+        conn.commit()
+    observed = _live_observed_request(state, request())
+
+    recovered = state.ingest(observed)
+
+    with state.store._connect() as conn:
+        row = conn.execute(
+            "SELECT legacy_recovery_audit_json FROM verification_runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        assert row is not None
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?", (run_id,)
+        ).fetchone()[0] == 0
+    audit = json.loads(row["legacy_recovery_audit_json"])
+    assert audit["quarantined_exceptions"] == [
+        {
+            "created_at": "2026-07-16T10:00:02+00:00",
+            "exception_id": "vexception-legacy",
+            "failure_class": "authority-critical",
+            "head_sha": request()["current_head_sha"],
+            "packet_json": json.dumps(legacy_packet, sort_keys=True),
+            "run_id": run_id,
+            "updated_at": "2026-07-16T10:00:02+00:00",
+        }
+    ]
+
+    claimed = state.claim(recovered.run_id, "v2-host")
+    running = state.start(
+        recovered.run_id,
+        "v2-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000099",
+        {"head_sha": recovered.head_sha},
+    )
+    state.exception(
+        running.run_id,
+        "authority-critical",
+        {"v2": "new evidence"},
+        holder="v2-host",
+        lease_id=running.lease_id or "",
+    )
+    with state.store._connect() as conn:
+        current_packet = conn.execute(
+            "SELECT packet_json FROM verification_exceptions WHERE run_id=?",
+            (run_id,),
+        ).fetchone()[0]
+        persisted_audit = json.loads(
+            conn.execute(
+                "SELECT legacy_recovery_audit_json FROM verification_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()[0]
+        )
+    assert json.loads(current_packet) == {"v2": "new evidence"}
+    assert json.loads(
+        persisted_audit["quarantined_exceptions"][0]["packet_json"]
+    ) == legacy_packet
 
 
 def test_concurrent_same_head_v2_recovery_converges_on_one_canonical_run(

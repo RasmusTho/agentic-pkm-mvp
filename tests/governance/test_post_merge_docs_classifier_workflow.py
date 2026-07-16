@@ -29,9 +29,11 @@ def test_workflow_does_not_create_docs_pr_issue_label_project_or_close() -> None
     assert "issues.createcomment" not in lowered
 
 
-def test_workflow_uses_canonical_governing_issue_parser() -> None:
+def test_workflow_uses_trusted_receipt_during_neutralized_body_window() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "resolve_issue_authority" in text
-    assert "authority.governing_issue" in text
+    assert "resolve_post_merge_governing_issue" in text
+    assert "comments?per_page=100" in text
+    assert "--paginate" in text
+    assert 'print(issue_numberor"")' in text.replace(" ", "")
     assert "re.search" not in text

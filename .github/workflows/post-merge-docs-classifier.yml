@@ -33,15 +33,25 @@ jobs:
             --jq '.[]' \
             | jq -s '.' \
             > post-merge-docs-classifier/files.json
+          gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[]' \
+            | jq -s '.' \
+            > post-merge-docs-classifier/comments.json
           ISSUE_NUMBER="$(python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
-          from app.dispatcher.verification_contract import resolve_issue_authority
+          from app.dispatcher.verified_merge import resolve_post_merge_governing_issue
 
-          body = json.loads(Path("post-merge-docs-classifier/pr.json").read_text()).get("body") or ""
-          authority = resolve_issue_authority(body)
-          print(authority.governing_issue if authority else "")
+          pr = json.loads(Path("post-merge-docs-classifier/pr.json").read_text())
+          comments = json.loads(Path("post-merge-docs-classifier/comments.json").read_text())
+          issue_number = resolve_post_merge_governing_issue(
+              comments,
+              pr=pr,
+              repository=os.environ["REPOSITORY"],
+          )
+          print(issue_number or "")
           PY
           )"
           if [ -n "${ISSUE_NUMBER}" ]; then

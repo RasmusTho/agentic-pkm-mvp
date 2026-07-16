@@ -70,3 +70,16 @@ def test_pr_wide_attempt_and_human_exception_contracts_are_durable() -> None:
     assert "verification_exceptions" in schema
     assert "standard_repair" in loop and "escalated_repair" in loop
     assert "independent re-review requires a fresh session" in loop
+
+
+def test_terminal_delivery_requires_trusted_merge_and_closure_proof() -> None:
+    text = CONSUMER.read_text(encoding="utf-8")
+    for token in (
+        "resolve_verified_merge_authority_receipt",
+        "resolve_verified_merge_phase",
+        "issue_set_closure_evidence",
+        "closure_evidence_incomplete",
+        "unauthorized_closure",
+        "_recover_merged_run",
+    ):
+        assert token in text

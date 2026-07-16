@@ -239,8 +239,11 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 - current SHA truth before merge
 - issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
   revalidates the neutralized live body/head/closing links, uses a fixed non-closing merge message,
-  explicitly closes only the authenticated issue set, reconciles any body-race closure attributable
-  to that PR, restores the authenticated body, and preserves the exact authority in durable receipts
+  persists trusted authority plus continuous prepared/merged/reconciled/restored phases, explicitly
+  closes only the authenticated issue set, reconciles any body-race closure attributable to that PR,
+  proves every and only authenticated issue is closed with delivery attribution, restores the
+  authenticated body, and resumes a crashed post-merge sequence idempotently from live merge truth
+  plus the durable phase ledger without resetting attempts or the 2+2 repair budget
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

@@ -337,8 +337,13 @@ Builder-agent rules:
 - Before an issue-backed merge, neutralize authenticated body closers to evidence-only `Refs`,
   revalidate the live exact head/body/empty closing-link set, merge with a fixed non-closing message,
   and explicitly close only the authenticated issue set. Preserve the exact v2 authority and repair
-  budget in a durable receipt; detect race-added closing references and reopen only closures GitHub
-  attributes to that PR before restoring the authenticated body.
+  budget in a trusted durable receipt and advance a continuous prepared -> merged -> reconciled ->
+  restored `verified_issue_set_merge_phase.v1` ledger with
+  `scripts/build_verified_issue_set_merge_phase.py`. A crashed exact-head merge resumes idempotently
+  from that ledger and live merge truth; terminal delivery additionally proves that every and only
+  authenticated issue is closed with closure attribution to this delivery. Detect race-added closing
+  references and reopen only closures GitHub attributes to that PR before restoring the authenticated
+  body.
 - The post-merge owner-doc result is PR-specific. Record it on every exact closed issue and also on a
   distinct open governing parent; issue-free lanes record it on the PR. A generic receipt or one for
   another PR does not satisfy the closure gate.

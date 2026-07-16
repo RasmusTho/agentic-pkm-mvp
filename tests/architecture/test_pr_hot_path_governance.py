@@ -217,14 +217,38 @@ def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
         )
     for fragment in (
         "scripts/prepare_verified_issue_set_merge.py",
+        "scripts/build_verified_issue_set_merge_phase.py",
         "closingIssuesReferences` is empty",
         "latest `pr-contract` run triggered by that `edited` event",
         "Never reuse the pre-edit green `pr-contract` result",
         "explicitly close every and only",
         "plan_post_merge_reconciliation",
         "restore the authenticated original PR body",
+        "prepared/merged/reconciled/restored",
+        "merged-but-incomplete",
+        "without resetting attempts or the 2+2 repair budget",
+        "every and only authenticated closing issue",
     ):
         assert fragment in closure_skill
+
+    for fragment in (
+        "prepared/merged/reconciled/restored phases",
+        "every and only authenticated issue is closed",
+        "resumes a crashed post-merge sequence idempotently",
+        "without resetting attempts or the 2+2 repair budget",
+    ):
+        assert fragment in hot_path
+
+    verification_closer = " ".join(
+        _read(".codex/agents/verification-closer.toml").split()
+    )
+    for fragment in (
+        "prepared -> merged -> reconciled -> restored",
+        "merged but incomplete",
+        "without resetting attempts or the 2+2 budget",
+        "every and only the authenticated closing issues",
+    ):
+        assert fragment in verification_closer
 
 
 def test_owner_doc_policy_requires_pr_specific_child_and_open_parent_receipts() -> None:
