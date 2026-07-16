@@ -402,6 +402,93 @@ def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) ->
     assert audit["quarantined_exceptions"] == []
 
 
+def test_migrated_repaired_head_v1_recovers_only_on_preserved_current_head(
+    tmp_path,
+) -> None:
+    requested_head = request()["current_head_sha"]
+    assert isinstance(requested_head, str)
+    repaired_head = "b" * 40
+    unrelated_head = "c" * 40
+    initial = ledger(tmp_path)
+    run_id, legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[]
+    )
+    with sqlite3.connect(initial.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, status='backoff', "
+            "terminal_receipt_json=?, retry_after=? WHERE run_id=?",
+            (
+                repaired_head,
+                json.dumps(
+                    {
+                        "outcome": "deferred",
+                        "reason": "checks_not_green",
+                        "head_sha": repaired_head,
+                    },
+                    sort_keys=True,
+                ),
+                "2030-01-01T00:00:00+00:00",
+                run_id,
+            ),
+        )
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    state = ledger(tmp_path)
+    migrated = state.get(run_id)
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.requested_head_sha == requested_head
+    assert migrated.current_head_sha == repaired_head
+    assert migrated.request == legacy_request
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+
+    def snapshot() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        with state.store._connect() as conn:
+            return (
+                [dict(row) for row in conn.execute("SELECT * FROM verification_runs")],
+                [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT * FROM verification_attempts ORDER BY attempt_id"
+                    )
+                ],
+            )
+
+    before_mismatches = snapshot()
+    for disallowed_head in (requested_head, unrelated_head):
+        with pytest.raises(
+            ValueError,
+            match="artifact head does not match legacy current run",
+        ):
+            state.ingest(
+                _live_observed_request(state, request(disallowed_head))
+            )
+        assert snapshot() == before_mismatches
+
+    recovered = state.ingest(
+        _live_observed_request(state, request(repaired_head))
+    )
+
+    assert recovered.run_id == run_id
+    assert recovered.status == "queued"
+    assert recovered.requested_head_sha == requested_head
+    assert recovered.current_head_sha == repaired_head
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+    with state.store._connect() as conn:
+        rows = conn.execute("SELECT * FROM verification_runs").fetchall()
+    assert len(rows) == 1
+    audit = json.loads(rows[0]["legacy_recovery_audit_json"])
+    assert audit["quarantined_row"]["current_head_sha"] == repaired_head
+
+
 def test_same_head_v2_recovery_preserves_compatible_legacy_issue_authority(
     tmp_path,
 ) -> None:

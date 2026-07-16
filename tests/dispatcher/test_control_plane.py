@@ -637,14 +637,20 @@ def test_noncanonical_current_request_rolls_back_additive_migration(
     assert "supporting_authority_json" not in columns
 
 
-def test_pre_trust_advanced_head_is_normalized_to_inert_request_head(
+def test_pre_trust_advanced_head_is_preserved_when_terminal_chain_matches(
     tmp_path: Path,
 ) -> None:
     paths, original, legacy_request = _write_pre_trust_v3_state(tmp_path)
+    repaired_head = "b" * 40
     with sqlite3.connect(paths.db_path) as conn:
         conn.execute(
-            "UPDATE verification_runs SET current_head_sha=? WHERE run_id=?",
-            ("b" * 40, original.run_id),
+            "UPDATE verification_runs SET current_head_sha=?, terminal_receipt_json=? "
+            "WHERE run_id=?",
+            (
+                repaired_head,
+                json.dumps({"outcome": "deferred", "head_sha": repaired_head}),
+                original.run_id,
+            ),
         )
         conn.commit()
 
@@ -654,8 +660,41 @@ def test_pre_trust_advanced_head_is_normalized_to_inert_request_head(
 
     assert migrated is not None
     assert migrated.status == "legacy_untrusted"
-    assert migrated.current_head_sha == original.requested_head_sha
+    assert migrated.requested_head_sha == original.requested_head_sha
+    assert migrated.current_head_sha == repaired_head
     assert migrated.request == legacy_request
+
+
+@pytest.mark.parametrize(
+    ("current_head", "terminal_receipt"),
+    [
+        pytest.param("not-a-sha", {"head_sha": "not-a-sha"}, id="malformed-sha"),
+        pytest.param(
+            "b" * 40,
+            {"outcome": "deferred", "head_sha": "c" * 40},
+            id="inconsistent-terminal-chain",
+        ),
+    ],
+)
+def test_malformed_legacy_current_head_rolls_back_migration(
+    tmp_path: Path,
+    current_head: str,
+    terminal_receipt: dict[str, object],
+) -> None:
+    paths, original, _legacy_request = _write_pre_trust_v3_state(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, terminal_receipt_json=? "
+            "WHERE run_id=?",
+            (current_head, json.dumps(terminal_receipt), original.run_id),
+        )
+        conn.commit()
+    before = paths.db_path.read_bytes()
+
+    with pytest.raises(ValueError, match="legacy verification current head"):
+        SqliteStore(paths.db_path).get_meta("schema_version")
+
+    assert paths.db_path.read_bytes() == before
 
 
 @pytest.mark.parametrize(

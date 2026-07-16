@@ -85,7 +85,7 @@ def test_terminal_delivery_requires_trusted_merge_and_closure_proof() -> None:
         "repository issue-events cap reached before merge coverage",
         "nodes(ids:$ids)",
         "GraphQL PullRequest closer identity mismatch",
-        're.fullmatch(r"[A-Za-z0-9_-]{1,256}", node_id)',
+        're.fullmatch(r"[A-Za-z0-9_=-]{1,256}", node_id)',
         "observed_issue_numbers",
         "closure_evidence_incomplete",
         "unauthorized_closure",

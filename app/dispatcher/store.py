@@ -334,21 +334,70 @@ def _verification_closing_authority_migration(row: sqlite3.Row) -> str:
     return json.dumps(closing, separators=(",", ":"), ensure_ascii=False)
 
 
+def validated_legacy_current_head(
+    row: Mapping[str, Any] | sqlite3.Row,
+) -> str:
+    """Validate the preserved current head of one historical run chain.
+
+    ``head_sha`` remains the immutable requested-head identity.  A different
+    ``current_head_sha`` is accepted only when the retained terminal receipt
+    proves that the deployed ledger had already rebound to that exact head.
+    This prevents migration from laundering an arbitrary parallel head while
+    still preserving authenticated repair accounting for an already-rebound
+    run.
+    """
+
+    requested_head = row["head_sha"]
+    current_head = row["current_head_sha"]
+    if (
+        not isinstance(requested_head, str)
+        or re.fullmatch(r"[0-9a-fA-F]{40}", requested_head) is None
+        or not isinstance(current_head, str)
+        or re.fullmatch(r"[0-9a-fA-F]{40}", current_head) is None
+    ):
+        raise ValueError("legacy verification current head is malformed")
+    if current_head == requested_head:
+        return current_head
+
+    try:
+        terminal = _loads(row["terminal_receipt_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("legacy verification current head is malformed") from exc
+    pending = (
+        terminal.get("pending_terminal_receipt")
+        if isinstance(terminal, Mapping)
+        else None
+    )
+    if not (
+        isinstance(terminal, Mapping)
+        and (
+            terminal.get("head_sha") == current_head
+            or (
+                isinstance(pending, Mapping)
+                and pending.get("head_sha") == current_head
+            )
+        )
+    ):
+        raise ValueError(
+            "legacy verification current head is inconsistent with retained chain"
+        )
+    return current_head
+
+
 def _legacy_verification_row_is_quarantined(row: sqlite3.Row) -> bool:
     try:
         supporting_authority = json.loads(row["supporting_authority_json"])
         closing_authority = json.loads(row["closing_authority_json"])
     except (TypeError, json.JSONDecodeError):
         return False
-    return bool(
-        row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS
-        and row["legacy_recovery_audit_json"] is None
-        and supporting_authority == []
-        and closing_authority == []
-        and row["current_head_sha"] == row["head_sha"]
-        and row["verified_head_sha"] is None
-        and all(
-            row[field] is None
+    if (
+        row["status"] != LEGACY_UNTRUSTED_VERIFICATION_STATUS
+        or row["legacy_recovery_audit_json"] is not None
+        or supporting_authority != []
+        or closing_authority != []
+        or row["verified_head_sha"] is not None
+        or any(
+            row[field] is not None
             for field in (
                 "claimed_by",
                 "lease_id",
@@ -359,7 +408,13 @@ def _legacy_verification_row_is_quarantined(row: sqlite3.Row) -> bool:
                 "retry_after",
             )
         )
-    )
+    ):
+        return False
+    try:
+        validated_legacy_current_head(row)
+    except ValueError:
+        return False
+    return True
 
 
 def _validate_canonical_verification_row(row: sqlite3.Row) -> None:
@@ -613,12 +668,15 @@ class SqliteStore:
                         _verification_authority_migration(verification_row)
                     )
                     if is_inert:
+                        preserved_current_head = validated_legacy_current_head(
+                            verification_row
+                        )
                         conn.execute(
                             """
                             UPDATE verification_runs
                             SET supporting_authority_json=?,
                                 closing_authority_json='[]', status=?,
-                                current_head_sha=head_sha,
+                                current_head_sha=?,
                                 verified_head_sha=NULL, claimed_by=NULL,
                                 lease_id=NULL, lease_expires_at=NULL,
                                 last_heartbeat_at=NULL,
@@ -629,6 +687,7 @@ class SqliteStore:
                             (
                                 supporting_authority,
                                 LEGACY_UNTRUSTED_VERIFICATION_STATUS,
+                                preserved_current_head,
                                 verification_row["run_id"],
                             ),
                         )

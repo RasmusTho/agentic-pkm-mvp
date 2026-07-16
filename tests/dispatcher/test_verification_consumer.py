@@ -935,6 +935,89 @@ def test_merged_incomplete_run_recovers_idempotently_after_coordinator_crash(
     assert recovered_pack["merge_recovery"]["body_state"] == crash_body_state
 
 
+@pytest.mark.parametrize("recovery_shape", ["merged", "open-neutralized"])
+def test_retained_recovery_artifact_does_not_extend_pending_backoff(
+    tmp_path,
+    recovery_shape: str,
+) -> None:
+    plan = _merge_plan(HEAD)
+    if recovery_shape == "merged":
+        retained_pr = merged_pr(body=plan["neutralized_body"])
+        comments = _merge_comments(retained_pr, phase="prepared")
+    else:
+        _plan, retained_pr, comments = _open_neutralized_recovery_evidence()
+
+    class RecoveryTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return comments
+
+    state = ledger(tmp_path / recovery_shape)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000040",
+        verification_consumer.context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=state.repair_budget_projection(run.run_id),
+        ),
+    )
+    retry_after = "2030-01-01T00:00:00+00:00"
+    deferred = state.backoff(
+        run.run_id,
+        {
+            "outcome": "deferred",
+            "reason": "checks_not_green",
+            "head_sha": HEAD,
+        },
+        retry_after,
+        holder="crashed-host",
+        lease_id=running.lease_id or "",
+    )
+
+    def durable_snapshot() -> dict[str, list[dict[str, object]]]:
+        with state.store._connect() as conn:
+            return {
+                table: [
+                    dict(row)
+                    for row in conn.execute(
+                        f"SELECT * FROM {table} ORDER BY {key}"
+                    )
+                ]
+                for table, key in (
+                    ("verification_runs", "run_id"),
+                    ("verification_attempts", "attempt_id"),
+                    ("verification_exceptions", "exception_id"),
+                )
+            }
+
+    before = durable_snapshot()
+    launcher = Launcher()
+    consumer = VerificationConsumer(
+        state,
+        RecoveryTruth(retained_pr, GREEN),
+        Auth(),
+        launcher,
+        "recovery-host",
+    )
+
+    first = consumer.consume(_authenticated_verification_request(request()))
+    second = consumer.consume(_authenticated_verification_request(request()))
+
+    assert first == second == deferred
+    assert first.retry_after == retry_after
+    assert first.terminal_receipt == {
+        "outcome": "deferred",
+        "reason": "checks_not_green",
+        "head_sha": HEAD,
+    }
+    assert durable_snapshot() == before
+    assert launcher.calls == []
+
+
 def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
     tmp_path,
 ) -> None:
@@ -1708,6 +1791,8 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
 
 
 def test_gh_source_attributes_null_rest_commit_with_exact_graphql_closer() -> None:
+    padded_node_id = "MDU6SXNzdWUxMzI="
+
     class Result:
         returncode = 0
 
@@ -1724,6 +1809,7 @@ def test_gh_source_attributes_null_rest_commit_with_exact_graphql_closer() -> No
                     _graphql_issue(
                         3603,
                         created_at="2026-07-15T00:00:02Z",
+                        node_id=padded_node_id,
                     ),
                     _graphql_issue(
                         4999,
@@ -1753,7 +1839,7 @@ def test_gh_source_attributes_null_rest_commit_with_exact_graphql_closer() -> No
                 ]
             )
         if endpoint == f"repos/{REPO}/issues/3603":
-            return Result(_rest_issue(3603))
+            return Result(_rest_issue(3603, node_id=padded_node_id))
         if endpoint == f"repos/{REPO}/issues/4999":
             return Result(_rest_issue(4999))
         raise AssertionError(endpoint)
@@ -1790,6 +1876,7 @@ def test_gh_source_attributes_null_rest_commit_with_exact_graphql_closer() -> No
     assert len(graphql_calls) == 1
     assert "-F" not in graphql_calls[0]
     assert graphql_calls[0].count("-f") == 3
+    assert f"ids[]={padded_node_id}" in graphql_calls[0]
     assert all(
         argument.startswith("ids[]=")
         for argument in graphql_calls[0]
@@ -1874,7 +1961,19 @@ def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
     ) == 5
 
 
-def test_gh_source_rejects_malicious_rest_node_id_before_graphql() -> None:
+@pytest.mark.parametrize(
+    "node_id",
+    [
+        pytest.param("@/private/secret", id="at-file-expansion"),
+        pytest.param("I node", id="space"),
+        pytest.param("I\tnode", id="tab"),
+        pytest.param("I\nnode", id="newline"),
+        pytest.param("I\x00node", id="nul"),
+    ],
+)
+def test_gh_source_rejects_malicious_rest_node_id_before_graphql(
+    node_id: str,
+) -> None:
     class Result:
         returncode = 0
 
@@ -1898,7 +1997,7 @@ def test_gh_source_rejects_malicious_rest_node_id_before_graphql() -> None:
                 ]
             )
         if endpoint == f"repos/{REPO}/issues/3603":
-            return Result(_rest_issue(3603, node_id="@/private/secret"))
+            return Result(_rest_issue(3603, node_id=node_id))
         raise AssertionError(endpoint)
 
     with pytest.raises(RuntimeError, match="malformed GitHub issue response"):

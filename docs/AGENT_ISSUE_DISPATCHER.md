@@ -170,10 +170,13 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   that carry `supporting_issues`. Migration therefore makes every recognized v1 row inert as
   `legacy_untrusted`, empties its executable supporting and closing projections, clears lease,
   session, context, retry, and active projections, and retains the immutable request, attempts,
-  terminal evidence, and exception audit. The two exact pre-trust shapes that predate
+  terminal evidence, and exception audit. Migration preserves a previously rebound
+  `current_head_sha` separately from the immutable requested head only when it is a valid 40-character
+  hexadecimal SHA and the retained terminal chain names that exact current head; malformed or
+  inconsistent current-head state rolls the whole migration back. The two exact pre-trust shapes that predate
   `supporting_issues` remain permanently inert because compatible legacy supporting authority cannot
   be proved; any unrecognized historical shape rolls the whole migration back.
-  A same-head v1-to-v2 promotion is allowed only for one unambiguous inert chain, a freshly
+  A same-current-head v1-to-v2 promotion is allowed only for one unambiguous inert chain, a freshly
   authenticated canonical v2 artifact, and a bounded live observation proving the exact open,
   unmerged, non-draft repository, PR, stage, head, governing issue, and closing set. The legacy
   request's exact supporting list must equal the incoming durable supporting authority and remain
@@ -183,9 +186,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   children in `verification_legacy_recovery_audit.v2`, installs the authenticated v2 request and
   exact authorities, deletes only the now-archived live exception children, and clears stale
   head-bound execution state. The run id, attempts, repair-policy version, and consumed 2+2 budget
-  remain unchanged. Existing v1 recovery-audit receipts remain readable; ambiguity, drift, missing
-  authentication, incompatible supporting authority, or any token mismatch is non-mutating and
-  fail-closed.
+  remain unchanged. An authenticated artifact for the immutable requested head or any unrelated
+  head cannot create a parallel canonical run around a recoverable inert repaired-head chain.
+  Existing v1 recovery-audit receipts remain readable; ambiguity, drift, missing authentication,
+  incompatible supporting authority, or any token mismatch is non-mutating and fail-closed.
   If normal stale-head handling supersedes a chain before the repaired-head artifact arrives, only
   a later artifact with the same repository, PR, stage, and governing issue may reopen that exact
   chain on the new head. Reopening preserves immutable requested-head audit plus all attempts and
@@ -203,7 +207,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   the first authoritative artifact for the newer live head requeues the existing canonical run,
   preserves its immutable requested head, attempts, exceptions, and cumulative 2+2 budget, and
   clears only head-bound coordinator, context, receipt, retry, and verified-head state. An
-  unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed.
+  unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed. Retained
+  merged or open-neutralized recovery artifacts polled before that exact `retry_after` return the
+  current durable run without extending the retry or rewriting its receipt.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff

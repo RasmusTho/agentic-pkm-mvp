@@ -1263,7 +1263,7 @@ class GhCliVerificationSource:
                 or issue.get("number") != number
                 or issue.get("pull_request") is not None
                 or not isinstance(node_id, str)
-                or re.fullmatch(r"[A-Za-z0-9_-]{1,256}", node_id) is None
+                or re.fullmatch(r"[A-Za-z0-9_=-]{1,256}", node_id) is None
                 or issue.get("repository_url")
                 != f"https://api.github.com/repos/{repository}"
                 or issue.get("url")
@@ -3824,6 +3824,10 @@ class VerificationConsumer:
                     preloaded_pr.get("body")
                 ) is not None:
                     return self._recover_open_neutralized_run(run, preloaded_pr)
+            except VerificationBackoffPending:
+                current = self.ledger.get(run.run_id)
+                assert current is not None
+                return current
             except (RuntimeError, ValueError) as exc:
                 try:
                     return self.ledger.defer_unclaimed(

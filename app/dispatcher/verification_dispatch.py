@@ -18,6 +18,7 @@ from app.dispatcher.store import (
     SqliteStore,
     recognized_ambiguous_v1_closure_request,
     recognized_pre_trust_verification_request,
+    validated_legacy_current_head,
 )
 
 LEGACY_CONTRACT_VERSION = "verification_dispatch_request.v1"
@@ -541,7 +542,10 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
         or row["contract_version"] != request["contract_version"]
         or row["repository"] != request["repository"]
         or row["pr_number"] != request["pr_number"]
-        or row["head_sha"] != request["current_head_sha"]
+        or (
+            row["head_sha"] != request["current_head_sha"]
+            and legacy_recovery_audit is None
+        )
         or row["stage"] != request["stage"]
     ):
         raise ValueError("verification canonical run authority is malformed")
@@ -588,7 +592,6 @@ def _validated_legacy_row_request(
         )
         != []
         or row["legacy_recovery_audit_json"] is not None
-        or row["current_head_sha"] != row["head_sha"]
         or row["verified_head_sha"] is not None
         or any(
             row[field] is not None
@@ -604,6 +607,7 @@ def _validated_legacy_row_request(
         )
     ):
         raise ValueError("legacy verification audit is malformed")
+    validated_legacy_current_head(row)
     return dict(loaded)
 
 
@@ -642,6 +646,7 @@ def _validated_legacy_recovery_audit(
         or archived["repository"] != row["repository"]
         or archived["pr_number"] != row["pr_number"]
         or archived["head_sha"] != row["head_sha"]
+        or archived["current_head_sha"] != row["current_head_sha"]
         or archived["stage"] != row["stage"]
         or archived["repair_budget_policy"] != row["repair_budget_policy"]
         or archived["created_at"] != row["created_at"]
@@ -883,6 +888,7 @@ def _same_head_legacy_recovery_authority_matches(
     observation: _LiveVerificationObservation | None,
     request: Mapping[str, object],
     legacy_request: Mapping[str, object],
+    legacy_current_head: str,
 ) -> bool:
     """Require fresh exact live authority before promoting one inert v1 row."""
     incoming_supporting = request.get("supporting_issues")
@@ -899,8 +905,7 @@ def _same_head_legacy_recovery_authority_matches(
         and observation.linked_issue == request.get("linked_issue")
         and legacy_request.get("repository") == request.get("repository")
         and legacy_request.get("pr_number") == request.get("pr_number")
-        and legacy_request.get("current_head_sha")
-        == request.get("current_head_sha")
+        and legacy_current_head == request.get("current_head_sha")
         and legacy_request.get("stage") == request.get("stage")
         and legacy_request.get("linked_issue") == request.get("linked_issue")
         and isinstance(incoming_supporting, list)
@@ -930,12 +935,13 @@ def _recover_same_head_legacy_run(
 ) -> sqlite3.Row:
     """Atomically archive inert v1 authority and activate authenticated v2."""
     legacy_request = _validated_legacy_row_request(row)
+    legacy_current_head = validated_legacy_current_head(row)
     if not _canonical_chain_token_matches(conn, token, request):
         raise ValueError(
             "verification canonical authority changed during live observation"
         )
     if not _same_head_legacy_recovery_authority_matches(
-        observation, request, legacy_request
+        observation, request, legacy_request, legacy_current_head
     ):
         raise ValueError(
             "authenticated v2 artifact does not match legacy recovery authority"
@@ -949,7 +955,7 @@ def _recover_same_head_legacy_run(
         SET idempotency_key=?, contract_version=?, request_json=?,
             supporting_authority_json=?, closing_authority_json=?,
             legacy_recovery_audit_json=?, status='queued',
-            current_head_sha=head_sha, verified_head_sha=NULL,
+            current_head_sha=?, verified_head_sha=NULL,
             claimed_by=NULL, lease_id=NULL, lease_expires_at=NULL,
             last_heartbeat_at=NULL, coordinator_session_id=NULL,
             context_pack_json=NULL, terminal_receipt_json=NULL,
@@ -964,6 +970,7 @@ def _recover_same_head_legacy_run(
             _json(incoming_supporting),
             _json(_request_closing_authority(request)),
             legacy_recovery_audit,
+            request["current_head_sha"],
             now,
             row["run_id"],
             row["idempotency_key"],
@@ -1281,8 +1288,19 @@ class VerificationDispatchLedger:
             inert_same_head = [
                 row
                 for row in inert_audits
-                if row["head_sha"] == request["current_head_sha"]
+                if row["current_head_sha"] == request["current_head_sha"]
             ]
+            recoverable_inert = [
+                row
+                for row in inert_audits
+                if recognized_ambiguous_v1_closure_request(
+                    row, _validated_legacy_row_request(row)
+                )
+            ]
+            if recoverable_inert and not inert_same_head:
+                raise ValueError(
+                    "verification artifact head does not match legacy current run"
+                )
             if inert_same_head:
                 if len(inert_audits) != 1 or len(inert_same_head) != 1:
                     raise ValueError(
