@@ -43,19 +43,38 @@ except Exception:
   # Offline, pre-mutation proof that the actual post-deploy smoke command
   # (`python -m pytest tests/companion_ui/test_companion_ui_live_smoke.py -q`)
   # can import and start. Collection only — never runs the live smoke itself
-  # and never requires a running gateway. Without COMPANION_UI_SMOKE_URL set,
-  # the module intentionally self-skips at module level (pytest exit 5, "no
-  # tests collected"), which is the expected offline/pre-mutation outcome and
-  # must not be treated as a preflight failure; any other nonzero exit means
-  # pytest is missing or the module failed to import.
-  local pytest_status=0
-  "${PYTHON}" -m pytest \
+  # and never requires a running gateway.
+  #
+  # Expected offline outcomes, and only these, pass:
+  #   - exit 0: tests collected (COMPANION_UI_SMOKE_URL happens to be set);
+  #   - exit 5 WITH a `SKIPPED` summary marker (`-ra`): the module imported
+  #     and hit its intentional module-level self-skip because
+  #     COMPANION_UI_SMOKE_URL is unset.
+  # A bare exit 5 without the skip marker means the module was never proved
+  # importable — an emptied/broken-but-importable smoke module, or inherited
+  # pytest selection options (e.g. PYTEST_ADDOPTS --ignore/-k) deselecting it
+  # — and must fail loud pre-mutation, exactly like a missing pytest or an
+  # import error (any other nonzero exit).
+  local pytest_status=0 collect_output
+  collect_output="$("${PYTHON}" -m pytest \
     "${ROOT}/tests/companion_ui/test_companion_ui_live_smoke.py" \
-    --collect-only -q || pytest_status=$?
-  if [ "${pytest_status}" -ne 0 ] && [ "${pytest_status}" -ne 5 ]; then
-    echo "companion UI pytest smoke preflight: pytest could not collect tests/companion_ui/test_companion_ui_live_smoke.py (pytest missing or the live-smoke module failed to import; pytest exit ${pytest_status})" >&2
-    return 86
-  fi
+    --collect-only -q -ra 2>&1)" || pytest_status=$?
+  case "${pytest_status}" in
+    0)
+      ;;
+    5)
+      if ! printf '%s\n' "${collect_output}" | grep -q 'SKIPPED'; then
+        printf '%s\n' "${collect_output}" >&2
+        echo "companion UI pytest smoke preflight: tests/companion_ui/test_companion_ui_live_smoke.py collected nothing without its intentional COMPANION_UI_SMOKE_URL self-skip (emptied smoke module or inherited pytest selection options; pytest exit 5)" >&2
+        return 86
+      fi
+      ;;
+    *)
+      printf '%s\n' "${collect_output}" >&2
+      echo "companion UI pytest smoke preflight: pytest could not collect tests/companion_ui/test_companion_ui_live_smoke.py (pytest missing or the live-smoke module failed to import; pytest exit ${pytest_status})" >&2
+      return 86
+      ;;
+  esac
 }
 
 run_channel() {

@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -89,9 +91,22 @@ if [ "${{1:-}}" = "-c" ] && [[ "${{2:-}}" == *sync_playwright* ]]; then
   exit 0
 fi
 if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "pytest" ]; then
-  if [[ "$*" == *"--collect-only"* ]] && [ "${{FAKE_PYTEST_SMOKE_PREFLIGHT:-pass}}" = "fail" ]; then
-    echo 'fake pytest: live-smoke module collection failed' >&2
-    exit 1
+  if [[ "$*" == *"--collect-only"* ]]; then
+    case "${{FAKE_PYTEST_SMOKE_PREFLIGHT:-pass}}" in
+      fail)
+        echo 'fake pytest: live-smoke module collection failed' >&2
+        exit 1
+        ;;
+      empty)
+        echo 'no tests collected in 0.01s'
+        exit 5
+        ;;
+      *)
+        echo 'SKIPPED [1] tests/companion_ui/test_companion_ui_live_smoke.py: Set COMPANION_UI_SMOKE_URL'
+        echo 'no tests collected in 0.01s'
+        exit 5
+        ;;
+    esac
   fi
   exit 0
 fi
@@ -136,16 +151,25 @@ def test_deploy_preflights_companion_browser_before_pin_or_compose_mutation(
     result = _run_deploy(root, env, sha)
 
     assert result.returncode != 0
-    assert "browser preflight failed before channel mutation" in result.stderr
+    assert "companion UI preflight failed before channel mutation" in result.stderr
     assert not (root / "config/deploy/dev.env").exists()
     assert not (tmp_path / "docker-called").exists()
 
 
+@pytest.mark.parametrize(
+    "fake_mode",
+    [
+        # pytest missing / live-smoke module import failure (nonzero, not 5)
+        "fail",
+        # emptied-but-importable smoke module: exit 5 with no SKIPPED marker
+        "empty",
+    ],
+)
 def test_deploy_preflights_companion_pytest_smoke_before_pin_or_compose_mutation(
-    tmp_path: Path,
+    tmp_path: Path, fake_mode: str
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
-    env["FAKE_PYTEST_SMOKE_PREFLIGHT"] = "fail"
+    env["FAKE_PYTEST_SMOKE_PREFLIGHT"] = fake_mode
 
     result = _run_deploy(root, env, sha)
 
