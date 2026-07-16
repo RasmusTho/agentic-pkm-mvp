@@ -12,7 +12,10 @@ def _write_legacy(path, frontmatter) -> None:
 
 
 def test_legacy_app_local_state_migrates_losslessly(tmp_path) -> None:
-    path = tmp_path / "app-local.md"
+    legacy_directory = tmp_path / "legacy-app-data"
+    legacy_directory.mkdir(mode=0o755)
+    legacy_directory.chmod(0o755)
+    path = legacy_directory / "app-local.md"
     _write_legacy(
         path,
         {
@@ -33,6 +36,7 @@ def test_legacy_app_local_state_migrates_losslessly(tmp_path) -> None:
             },
         },
     )
+    path.chmod(0o644)
 
     migrated = VaultRegistryStore(path).load_or_migrate()
     registration = next(iter(migrated.registrations.values()))
@@ -44,6 +48,8 @@ def test_legacy_app_local_state_migrates_losslessly(tmp_path) -> None:
     assert registration.local_instance_id == "clone-a"
     assert registration.last_opened_at == "2026-07-01T00:00:00Z"
     assert registration.extensions["futureRegistration"] == "keep-me"
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_settings_rebind_provisional_ids_are_adopted_atomically(tmp_path) -> None:
@@ -77,14 +83,23 @@ def test_settings_rebind_provisional_ids_are_adopted_atomically(tmp_path) -> Non
         {
             "schema": "design-handoff.app-local.v1",
             "appInstallId": "app-alias",
-            "knownVaults": {"path:/vault/a": {"path": "/vault/a"}},
+            "knownVaults": {
+                "path:/vault/a": {"path": "/vault/a", "vaultId": "vault-a"},
+                "alias:/vault/a": {"path": "/vault/../vault/a", "vaultId": "vault-a"},
+            },
             "settingsRebind": {
                 "schema": "settings_rebind.v1",
-                "candidate": {"path": "/vault/../vault/a", "vaultBindingId": "provisional-alias"},
+                "candidate": {
+                    "ref": "alias:/vault/a",
+                    "path": "/vault/../vault/a",
+                    "vaultBindingId": "provisional-alias",
+                },
             },
         },
     )
-    assert set(VaultRegistryStore(alias_path).load_or_migrate().registrations) == {"provisional-alias"}
+    alias_migration = VaultRegistryStore(alias_path).load_or_migrate()
+    assert set(alias_migration.registrations) == {"provisional-alias"}
+    assert alias_migration.settings_rebind["candidate"]["ref"] == "alias:/vault/a"
 
 
 def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, monkeypatch) -> None:
@@ -95,8 +110,8 @@ def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, 
             "schema": "design-handoff.app-local.v1",
             "appInstallId": "app-stable",
             "knownVaults": {
-                "path:/vault/a": {"path": "/vault/a"},
-                "alias:/vault/a": {"path": "/vault/a"},
+                "path:/vault/a": {"path": "/vault/a", "vaultId": "vault-a"},
+                "alias:/vault/a": {"path": "/vault/a", "vaultId": "conflicting-vault"},
             },
             "settingsRebind": {
                 "schema": "settings_rebind.v1",
@@ -106,7 +121,7 @@ def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, 
     )
     original = path.read_bytes()
 
-    with pytest.raises(RegistryMigrationError, match="ambiguous"):
+    with pytest.raises(RegistryMigrationError, match="conflicting alias metadata"):
         VaultRegistryStore(path).load_or_migrate()
 
     assert path.read_bytes() == original
@@ -134,6 +149,30 @@ def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, 
         VaultRegistryStore(write_failure_path).load_or_migrate()
     assert write_failure_path.read_bytes() == write_failure_original
     assert not write_failure_path.with_suffix(write_failure_path.suffix + ".last-good").exists()
+
+    late_failure_path = tmp_path / "late-write-failure.md"
+    _write_legacy(
+        late_failure_path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-late-write-failure",
+            "knownVaults": {"path:/vault/c": {"path": "/vault/c"}},
+        },
+    )
+    late_failure_original = late_failure_path.read_bytes()
+    late_failure_store = VaultRegistryStore(late_failure_path)
+
+    def fail_snapshot_replace(candidate, payload):
+        if candidate == late_failure_store.snapshot_path:
+            raise OSError("injected snapshot replace failure")
+        real_atomic_write(candidate, payload)
+
+    monkeypatch.setattr(registry_module, "_atomic_private_write", fail_snapshot_replace)
+    with pytest.raises(OSError, match="injected snapshot replace failure"):
+        late_failure_store.load_or_migrate()
+    assert late_failure_path.read_bytes() == late_failure_original
+    assert not late_failure_store.snapshot_path.exists()
+    assert not late_failure_store.snapshot_checksum_path.exists()
 
     collision_path = tmp_path / "collision.md"
     collision_store = VaultRegistryStore(collision_path)

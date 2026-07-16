@@ -55,6 +55,19 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
         )
     assert store.load().revision == 3
 
+    with pytest.raises(RegistryError, match="registration ref and path are required"):
+        store.update_registration(
+            VaultRegistration(
+                vault_binding_id="binding-a",
+                ref="",
+                path="",
+                vault_id="logical-shared",
+                local_instance_id="clone-a",
+            ),
+            expected_revision=3,
+        )
+    assert store.load().revision == 3
+
     store.register(VaultRegistration("binding-temporary", "path:/temporary", "/temporary"))
     store.remove_registration("binding-temporary", expected_revision=4)
 

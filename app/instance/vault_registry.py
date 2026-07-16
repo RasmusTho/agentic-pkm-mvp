@@ -134,7 +134,8 @@ class VaultRegistryStore:
             return self._read_current_locked(recover=True)
 
     def load_or_migrate(self) -> RegistrySnapshot:
-        with self._locked():
+        legacy_upgrade = self._is_owned_legacy_source()
+        with self._locked(allow_legacy_directory_upgrade=legacy_upgrade):
             if not self.path.exists():
                 snapshot = self._empty_snapshot()
                 self._write_locked(snapshot)
@@ -145,6 +146,7 @@ class VaultRegistryStore:
                 return self._read_current_locked(recover=True)
             schema = _optional_str(document.frontmatter.get("schema"))
             if schema == CURRENT_REGISTRY_SCHEMA:
+                _assert_private(self.path, directory=False)
                 return self._snapshot_from_frontmatter(document.frontmatter)
             if schema != APP_LOCAL_SCHEMA:
                 raise RegistryMigrationError(f"unsupported registry migration schema: {schema or '<missing>'}")
@@ -158,10 +160,7 @@ class VaultRegistryStore:
         *,
         expected_revision: int | None = None,
     ) -> RegistrySnapshot:
-        if not registration.vault_binding_id.strip():
-            raise RegistryError("vault_binding_id is required")
-        if not registration.ref.strip() or not registration.path.strip():
-            raise RegistryError("registration ref and path are required")
+        self._validate_registration(registration)
         with self._locked():
             current = self._read_current_locked(recover=True) if self.path.exists() else self._empty_snapshot()
             self._assert_revision(current, expected_revision)
@@ -192,6 +191,7 @@ class VaultRegistryStore:
     ) -> RegistrySnapshot:
         """Update mutable binding metadata without changing stable identities."""
 
+        self._validate_registration(registration)
         with self._locked():
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
@@ -267,6 +267,12 @@ class VaultRegistryStore:
             if _canonical_path(item.path) == candidate_path:
                 raise RegistryError(f"registry path identity collision: {candidate.path}")
 
+    def _validate_registration(self, registration: VaultRegistration) -> None:
+        if not registration.vault_binding_id.strip():
+            raise RegistryError("vault_binding_id is required")
+        if not registration.ref.strip() or not registration.path.strip():
+            raise RegistryError("registration ref and path are required")
+
     def _with_registrations(
         self,
         current: RegistrySnapshot,
@@ -284,8 +290,11 @@ class VaultRegistryStore:
         )
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
-        _ensure_private_directory(self.path.parent)
+    def _locked(self, *, allow_legacy_directory_upgrade: bool = False) -> Iterator[None]:
+        if allow_legacy_directory_upgrade:
+            _upgrade_owned_legacy_directory(self.path.parent)
+        else:
+            _ensure_private_directory(self.path.parent)
         existed = self.lock_path.exists()
         descriptor = os.open(
             self.lock_path,
@@ -305,6 +314,18 @@ class VaultRegistryStore:
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _is_owned_legacy_source(self) -> bool:
+        if not os.path.lexists(self.path):
+            return False
+        metadata = self.path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise RegistrySecurityError(f"unsafe legacy registry source for {self.path.name}")
+        try:
+            document = _read_document(self.path)
+        except (OSError, RegistryParseError):
+            return False
+        return _optional_str(document.frontmatter.get("schema")) == APP_LOCAL_SCHEMA
 
     def _read_current_locked(self, *, recover: bool) -> RegistrySnapshot:
         try:
@@ -347,10 +368,37 @@ class VaultRegistryStore:
             self._frontmatter_from_snapshot(snapshot),
             "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
         ).encode("utf-8")
-        _atomic_private_write(self.path, payload)
-        _atomic_private_write(self.snapshot_path, payload)
         checksum = (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii")
-        _atomic_private_write(self.snapshot_checksum_path, checksum)
+        writes = (
+            (self.path, payload),
+            (self.snapshot_path, payload),
+            (self.snapshot_checksum_path, checksum),
+        )
+        previous = {
+            self.path: _read_previous_transaction_file(self.path, allow_legacy_mode=True),
+            self.snapshot_path: _read_previous_transaction_file(self.snapshot_path),
+            self.snapshot_checksum_path: _read_previous_transaction_file(self.snapshot_checksum_path),
+        }
+        attempted: list[Path] = []
+        try:
+            for path, contents in writes:
+                attempted.append(path)
+                _atomic_private_write(path, contents)
+        except BaseException:
+            rollback_errors: list[OSError] = []
+            for path in reversed(attempted):
+                try:
+                    old_payload = previous[path]
+                    if old_payload is None:
+                        path.unlink(missing_ok=True)
+                        _fsync_directory(path.parent)
+                    else:
+                        _atomic_private_write_raw(path, old_payload)
+                except OSError as rollback_error:
+                    rollback_errors.append(rollback_error)
+            if rollback_errors:
+                raise RegistryError("registry transaction failed and rollback could not restore prior state")
+            raise
 
     def _frontmatter_from_snapshot(self, snapshot: RegistrySnapshot) -> dict[str, Any]:
         frontmatter = copy.deepcopy(snapshot.extensions)
@@ -418,14 +466,18 @@ class VaultRegistryStore:
         raw_known = frontmatter.get("knownVaults") or {}
         if not isinstance(raw_known, dict):
             raise RegistryMigrationError("legacy knownVaults must be a mapping")
-        candidates: dict[str, dict[str, Any]] = {}
+        raw_candidates: dict[str, dict[str, Any]] = {}
         for ref, raw in raw_known.items():
             if not isinstance(raw, dict):
                 raise RegistryMigrationError(f"legacy registration {ref} must be a mapping")
             path = _optional_str(raw.get("path"))
             if path is None:
                 raise RegistryMigrationError(f"legacy registration {ref} has no path")
-            candidates[str(ref)] = dict(raw)
+            raw_candidates[str(ref)] = dict(raw)
+        candidates, aliases = _coalesce_legacy_candidates(
+            raw_candidates,
+            last_active_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
+        )
         rebind_key = next(
             (key for key in ("settingsRebind", "settingsRebindV1", "settings_rebind.v1") if key in frontmatter),
             None,
@@ -445,7 +497,7 @@ class VaultRegistryStore:
                 binding_id = _optional_str(value.get("vaultBindingId"))
                 if binding_id is None:
                     raise RegistryMigrationError(f"settings rebind {key} has no provisional vaultBindingId")
-                matched_ref = _resolve_legacy_reference(value, candidates)
+                matched_ref = _resolve_legacy_reference(value, candidates, aliases)
                 previous = binding_by_ref.get(matched_ref)
                 if previous is not None and previous != binding_id:
                     raise RegistryMigrationError("conflicting provisional binding identities")
@@ -500,16 +552,21 @@ def preflight_registry_payload(path: Path) -> RegistrySnapshot:
     return snapshot
 
 
-def _resolve_legacy_reference(value: Mapping[str, Any], candidates: Mapping[str, Mapping[str, Any]]) -> str:
+def _resolve_legacy_reference(
+    value: Mapping[str, Any],
+    candidates: Mapping[str, Mapping[str, Any]],
+    aliases: Mapping[str, str],
+) -> str:
     ref = _optional_str(value.get("ref"))
     if ref is not None:
-        candidate = candidates.get(ref)
+        canonical_ref = aliases.get(ref, ref)
+        candidate = candidates.get(canonical_ref)
         if candidate is None:
             raise RegistryMigrationError(f"settings rebind reference is missing from legacy registry: {ref}")
         path = _optional_str(value.get("path"))
         if path is not None and _canonical_path(path) != _canonical_path(str(candidate["path"])):
             raise RegistryMigrationError(f"settings rebind reference/path conflict: {ref}")
-        return ref
+        return canonical_ref
     path = _optional_str(value.get("path"))
     if path is None:
         raise RegistryMigrationError("settings rebind reference has neither ref nor path")
@@ -517,6 +574,37 @@ def _resolve_legacy_reference(value: Mapping[str, Any], candidates: Mapping[str,
     if len(matches) != 1:
         raise RegistryMigrationError("ambiguous settings rebind path migration")
     return matches[0]
+
+
+def _coalesce_legacy_candidates(
+    candidates: Mapping[str, Mapping[str, Any]],
+    *,
+    last_active_ref: str | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    groups: dict[str, list[str]] = {}
+    for ref, raw in candidates.items():
+        groups.setdefault(_canonical_path(str(raw["path"])), []).append(ref)
+
+    coalesced: dict[str, dict[str, Any]] = {}
+    aliases: dict[str, str] = {}
+    for refs in groups.values():
+        primary = last_active_ref if last_active_ref in refs else sorted(refs)[0]
+        merged = copy.deepcopy(dict(candidates[primary]))
+        for ref in refs:
+            aliases[ref] = primary
+            if ref == primary:
+                continue
+            for key, value in candidates[ref].items():
+                if key == "path":
+                    continue
+                if key not in merged or merged[key] is None:
+                    merged[key] = copy.deepcopy(value)
+                elif value is not None and merged[key] != value:
+                    raise RegistryMigrationError(
+                        f"conflicting alias metadata for legacy registrations: {primary}, {ref}"
+                    )
+        coalesced[primary] = merged
+    return coalesced, aliases
 
 
 def _canonical_path(value: str) -> str:
@@ -604,7 +692,22 @@ def _ensure_private_directory(path: Path) -> None:
     _assert_private(path, directory=True)
 
 
+def _upgrade_owned_legacy_directory(path: Path) -> None:
+    if not path.exists():
+        _ensure_private_directory(path)
+        return
+    metadata = path.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        raise RegistrySecurityError(f"unsafe legacy registry directory for {path.name}")
+    os.chmod(path, 0o700)
+    _assert_private(path, directory=True)
+
+
 def _atomic_private_write(path: Path, payload: bytes) -> None:
+    _atomic_private_write_raw(path, payload)
+
+
+def _atomic_private_write_raw(path: Path, payload: bytes) -> None:
     _ensure_private_directory(path.parent)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
@@ -616,12 +719,7 @@ def _atomic_private_write(path: Path, payload: bytes) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         os.chmod(path, 0o600)
-        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        directory_descriptor = os.open(path.parent, directory_flags)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        _fsync_directory(path.parent)
     except BaseException:
         try:
             os.close(descriptor)
@@ -631,10 +729,30 @@ def _atomic_private_write(path: Path, payload: bytes) -> None:
         raise
 
 
+def _fsync_directory(path: Path) -> None:
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_descriptor = os.open(path, directory_flags)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
+def _read_previous_transaction_file(path: Path, *, allow_legacy_mode: bool = False) -> bytes | None:
+    if not os.path.lexists(path):
+        return None
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        raise RegistrySecurityError(f"unsafe registry transaction path for {path.name}")
+    if not allow_legacy_mode:
+        _assert_private_stat(metadata, path, directory=False)
+    return path.read_bytes()
+
+
 def _assert_private(path: Path, *, directory: bool) -> None:
     if not path.exists():
         raise RegistryError(f"required registry path is missing: {path}")
-    _assert_private_stat(path.stat(), path, directory=directory)
+    _assert_private_stat(path.lstat(), path, directory=directory)
 
 
 def _assert_private_stat(metadata: os.stat_result, path: Path, *, directory: bool) -> None:
