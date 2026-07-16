@@ -58,6 +58,21 @@ producer and consumer has a replacement and proves reversibility to the single-v
   drains/removals complete. The standing channel's compatibility/explicit mode, members, default,
   revisions, projections, and operator state remain byte-for-byte unchanged; if isolation cannot be
   established, fail before the first governed mutation.
+- Introduce a durable `minimum_runtime_topology_reduction` floor before the first reduction drain
+  reservation can be written. A production-derived channel/native inventory first fences new
+  reduction and queue ingress, drains/stops every pre-MVR-07 API, worker, watcher, outbox dispatcher,
+  queue recovery process, CLI daemon, and auxiliary producer that can claim or mutate participant
+  rows, proves their sessions/claims gone, and installs a restart fence. Only then may migration
+  record the floor and enable the reservation schema. Missing inventory coverage, drain failure, or
+  a live incompatible process blocks before floor/reservation mutation.
+- Apply invariant→producers to that floor: existing-install migration, channel bootstrap, native init,
+  rollback/roll-forward tools, and in-process/integration fixtures all install and preflight the same
+  schema and process inventory before enforcement. Once recorded, every earlier MVR-06D-or-older
+  runtime refuses API/worker/queue startup; rollback uses an MVR-07-compatible image that understands
+  reservation recovery and reduction lineage. Roll-forward reloads the durable reservation/journal
+  and resumes the same drain/abort/commit state without reopening ordinary claims. The floor may be
+  lowered only by a later explicit reversible migration after reduction state is proven absent or
+  transformed, never merely because one reservation completed.
 - Provide the governed topology-reduction path required by topology rule 6. The operator chooses one
   explicit target binding; the reducer fences new effects, drains every source binding, and creates a
   deterministic collision-safe reduction manifest before any source is deactivated. Every source is
@@ -142,16 +157,19 @@ can break startup or strand durable state. Both failures are latent outages rath
 - Write class: governed HKA content-copy/reduction writes plus mechanical migration metadata
 - Authority impact: GOV independently authorizes every source export, target write, and source
   retirement; reduction cannot confer access or bypass MVR-06 removal authority
-- Persistence impact: validates migrated registry/settings producers and rollback-read compatibility
+- Persistence impact: validates migrated registry/settings producers and rollback-read compatibility;
+  adds the durable reduction reservation/journal and minimum-runtime floor
 - Derived/rebuildable impact: validates caches/indexes rebuild per binding
 - Human knowledge impact: deterministic reduction may copy material into a human-openable target
   namespace but never semantically merges it; attribution and source identity remain lossless
 - Memory impact: validates single-vault retrieval/memory parity
 - Retrieval/context impact: removes unapproved scalar resolution after consumer migrations
-- Sync/deployment impact: validates dev/test/prod bootstrap and promotion assumptions
+- Sync/deployment impact: validates dev/test/prod bootstrap and promotion assumptions; fences every
+  incompatible queue/API process before the MVR-07 floor or first reservation write
 - External boundary impact: keeps env/mount adapters explicit and narrow
 - New or changed contract: migration completion/compatibility fitness contract
-- Owner-doc impact: will-update-in-PR only for factual adapter/debt state
+- Owner-doc impact: will-update-in-PR at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`,
+  `docs/RELEASE_CHANNELS/README.md`, and factual adapter/debt state
 - Transition debt impact: closes or explicitly re-baselines D1/D13/D14 residues
 - Fitness rule impact: adds full consumer inventory and no/one-vault compatibility guards
 
@@ -169,6 +187,8 @@ can break startup or strand durable state. Both failures are latent outages rath
 - Every target artifact write uses a binding/revision/purpose-bound governed token. Every source
   deactivation composes MVR-06B removal/tombstone/reference repair through one all-source batch commit;
   direct registry deletion and partial per-source retirement are forbidden.
+- No reduction reservation may exist until every incompatible queue producer is stopped and the
+  durable MVR-07 floor/restart fence is active; pre-MVR-07 rollback remains fail-closed thereafter.
 
 ## Acceptance Criteria
 
@@ -180,6 +200,21 @@ can break startup or strand durable state. Both failures are latent outages rath
 - [ ] The test-channel smoke harness exercises two bindings/sessions, one dimension read, one
   governed write, and background health through production entrypoints while emitting a redacted receipt.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
+- [ ] Before the first durable reduction reservation write, deployment/native cutover fences new
+  claims, drains and stops every enabled incompatible API/worker/watcher/outbox/queue recovery/CLI
+  producer from production truth, proves claims and sessions gone, records the MVR-07 minimum-runtime
+  floor, and prevents old-process restart. Fault injection exposes no old worker claim after the floor.
+  - Verify: `tests/ops/test_mvr07_reduction_mixed_version_fence.py::test_incompatible_workers_stop_before_reduction_floor_and_reservation`
+- [ ] Existing-install migration, channel/native bootstrap, rollback/roll-forward tools, and fixtures
+  produce/preflight the floor and reservation schema before enforcement. The floor blocks every
+  MVR-06D-or-older API/worker startup, while a compatible image resumes the exact durable
+  reservation/journal without duplicate claims or fallback.
+  - Verify: `tests/migrations/test_mvr07_reduction_floor.py::test_all_producers_install_reduction_floor_schema_before_enforcement`
+  - Verify: `tests/ops/test_mvr07_reduction_mixed_version_fence.py::test_reduction_floor_blocks_old_rollback_and_resumes_compatible_rollforward`
+- [ ] Deployment and release-channel owner docs record the shipped MVR-07 floor, compatible
+  rollback/roll-forward image rule, process inventory, and operator preflight in the floor-advancing PR.
+  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
+    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 - [ ] The smoke harness rejects either manifest binding when its canonical root is outside the
   declared test sandbox, overlaps a known prod/dev/native root, aliases the other fixture, or escapes
   through a symlink. It also rejects every pre-existing/raced root or missing/mismatched ownership
@@ -274,6 +309,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
+- `pytest -q tests/ops/test_mvr07_reduction_mixed_version_fence.py tests/migrations/test_mvr07_reduction_floor.py`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py::test_real_vault_manager_context_accessor_cannot_escape_inventory`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_two_distinct_vaults_reduce_to_one_without_losing_content_provenance_or_receipts tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
@@ -295,7 +331,9 @@ can break startup or strand durable state. Both failures are latent outages rath
 Migrated registry/default/dimension state survives restart and remains readable by the documented
 compatible rollback path. No-vault remains idle; one-vault restarts against the same explicit
 identity. The durable MVR-05 floor prevents a scalar image from touching binding-keyed shared
-database/outbox state. Any
+database/outbox state. After first reduction enablement, the MVR-07 floor additionally prevents any
+pre-reservation-aware API/worker from starting; a compatible runtime resumes the journal before
+ordinary claims. Any
 retained adapter is durable transition debt with a removal condition, not hidden behavior.
 
 ## Related Docs
