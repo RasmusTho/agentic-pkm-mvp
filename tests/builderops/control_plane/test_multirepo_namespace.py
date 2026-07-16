@@ -59,6 +59,51 @@ def test_authority_envelope_is_required_and_repo_namespaces_are_isolated(
     assert lease_a.fencing_token == lease_b.fencing_token == 1
 
 
+def test_cross_repo_lease_heartbeat_and_release_have_no_authority_side_effects(
+    control_plane_store, envelope
+) -> None:
+    repo_b = replace(envelope, repository="example/second-repo")
+    _, lease_a = control_plane_store.claim_lease(
+        envelope=envelope,
+        resource_id="repo-a-only-lease",
+        holder="worker-a",
+        idempotency_key="repo-a-claim",
+        request={"command": "claim-lease"},
+        ttl_seconds=30,
+    )
+    counts_a = control_plane_store.authority_counts(envelope.repository)
+    counts_b = control_plane_store.authority_counts(repo_b.repository)
+
+    with pytest.raises(EnvelopeValidationError, match="lease repository"):
+        control_plane_store.heartbeat_lease(
+            envelope=repo_b,
+            lease=lease_a,
+            idempotency_key="wrong-repo-heartbeat",
+            request={"command": "heartbeat-lease"},
+            ttl_seconds=300,
+        )
+    with pytest.raises(EnvelopeValidationError, match="lease repository"):
+        control_plane_store.release_lease(
+            envelope=repo_b,
+            lease=lease_a,
+            idempotency_key="wrong-repo-release",
+            request={"command": "release-lease"},
+        )
+
+    assert control_plane_store.authority_counts(envelope.repository) == counts_a
+    assert control_plane_store.authority_counts(repo_b.repository) == counts_b
+    with control_plane_store._connect() as conn:
+        persisted = conn.execute(
+            "SELECT holder, fencing_token, expires_at FROM builderops_leases "
+            "WHERE repository = %s AND resource_id = %s",
+            (envelope.repository, lease_a.resource_id),
+        ).fetchone()
+    assert persisted is not None
+    assert persisted["holder"] == lease_a.holder
+    assert int(persisted["fencing_token"]) == lease_a.fencing_token
+    assert persisted["expires_at"] == lease_a.expires_at
+
+
 @pytest.mark.parametrize(
     "statement",
     [

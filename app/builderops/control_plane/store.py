@@ -17,6 +17,7 @@ from app.builderops.control_plane.models import (
     AuthorityEnvelope,
     AuthorityObjectResult,
     DurabilityPending,
+    EnvelopeValidationError,
     IdempotencyConflict,
     Lease,
     LeaseRequired,
@@ -291,7 +292,7 @@ class PostgresBuilderOpsStore:
                 )
                 if release_on_commit:
                     assert lease is not None
-                    self._release_lease_in_tx(conn, lease)
+                    self._release_lease_in_tx(conn, repository=envelope.repository, lease=lease)
                 self._fault(fault_at, "after_outbox")
         self._fault(fault_at, "after_commit")
         recovery_lsn = self._flushed_lsn()
@@ -1057,6 +1058,10 @@ class PostgresBuilderOpsStore:
             raise ValueError("claim cannot supply an existing lease")
         if operation != "claimed" and lease is None:
             raise ValueError("heartbeat/release require an existing lease")
+        if lease is not None and lease.repository != envelope.repository:
+            raise EnvelopeValidationError(
+                "lease repository must match the authority envelope repository"
+            )
         request_hash = _hash(
             {
                 "authority_envelope": envelope.as_json(),
@@ -1106,11 +1111,14 @@ class PostgresBuilderOpsStore:
                 elif operation == "heartbeat":
                     assert lease is not None and ttl_seconds is not None
                     operation_lease = self._heartbeat_lease_in_tx(
-                        conn, lease=lease, ttl_seconds=ttl_seconds
+                        conn,
+                        repository=envelope.repository,
+                        lease=lease,
+                        ttl_seconds=ttl_seconds,
                     )
                 else:
                     assert lease is not None
-                    self._release_lease_in_tx(conn, lease)
+                    self._release_lease_in_tx(conn, repository=envelope.repository, lease=lease)
                     operation_lease = lease
                 self._fault(fault_at, "after_lease_mutation")
                 receipt = conn.execute(
@@ -1215,14 +1223,22 @@ class PostgresBuilderOpsStore:
 
     @staticmethod
     def _heartbeat_lease_in_tx(
-        conn: psycopg.Connection[dict[str, Any]], *, lease: Lease, ttl_seconds: int
+        conn: psycopg.Connection[dict[str, Any]],
+        *,
+        repository: str,
+        lease: Lease,
+        ttl_seconds: int,
     ) -> Lease:
         if ttl_seconds <= 0:
             raise ValueError("positive ttl_seconds is mandatory")
+        if lease.repository != repository:
+            raise EnvelopeValidationError(
+                "lease repository must match the authority envelope repository"
+            )
         current = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
             "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-            (lease.repository, lease.resource_id),
+            (repository, lease.resource_id),
         ).fetchone()
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         expires_at = effective_now + timedelta(seconds=ttl_seconds)
@@ -1239,7 +1255,7 @@ class PostgresBuilderOpsStore:
             "AND expires_at > %s RETURNING resource_id",
             (
                 expires_at,
-                lease.repository,
+                repository,
                 lease.resource_id,
                 lease.holder,
                 lease.fencing_token,
@@ -1248,16 +1264,20 @@ class PostgresBuilderOpsStore:
         ).fetchone()
         if updated is None:
             raise StaleFencingToken("lease expired or was reassigned")
-        return Lease(
-            lease.repository, lease.resource_id, lease.holder, lease.fencing_token, expires_at
-        )
+        return Lease(repository, lease.resource_id, lease.holder, lease.fencing_token, expires_at)
 
     @staticmethod
-    def _release_lease_in_tx(conn: psycopg.Connection[dict[str, Any]], lease: Lease) -> None:
+    def _release_lease_in_tx(
+        conn: psycopg.Connection[dict[str, Any]], *, repository: str, lease: Lease
+    ) -> None:
+        if lease.repository != repository:
+            raise EnvelopeValidationError(
+                "lease repository must match the authority envelope repository"
+            )
         current = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
             "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-            (lease.repository, lease.resource_id),
+            (repository, lease.resource_id),
         ).fetchone()
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         if (
@@ -1273,7 +1293,7 @@ class PostgresBuilderOpsStore:
             "AND expires_at > %s RETURNING resource_id",
             (
                 effective_now,
-                lease.repository,
+                repository,
                 lease.resource_id,
                 lease.holder,
                 lease.fencing_token,
