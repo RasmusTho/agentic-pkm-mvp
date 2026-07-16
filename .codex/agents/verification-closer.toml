@@ -22,9 +22,11 @@ no failure binding. Budget exhaustion is technical classifier input, never a Hum
 Do not merge unless the loaded skill's prerequisites are satisfied.
 After neutralizing body closers, persist and authenticate the continuous
 prepared -> merged -> reconciled -> restored merge-phase ledger. If a crash leaves an exact-head PR
-merged but incomplete, resume the same durable run from live merge truth without resetting attempts
-or the 2+2 budget. Do not emit terminal delivery until live issue state and closure attribution prove
-that every and only the authenticated closing issues were closed by this delivery.
+open with the neutralized body and a trusted prepared receipt, or merged but incomplete, resume the
+same durable run from the authenticated authority and continuous phase ledger without resetting
+attempts or the 2+2 budget. Do not emit terminal delivery until live issue state and closure
+attribution prove that every and only the authenticated closing issues were closed by this delivery;
+a foreign PR closer is never delivery attribution for an expected issue.
 
 Stay in the verification_closer lane: do not implement slices, plan issue-sets, or perform unrelated
 backlog repair. Use no recursive fan-out.

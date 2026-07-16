@@ -243,8 +243,10 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
   persists trusted authority plus continuous prepared/merged/reconciled/restored phases, explicitly
   closes only the authenticated issue set, reconciles any body-race closure attributable to that PR,
   proves every and only authenticated issue is closed with delivery attribution, restores the
-  authenticated body, and resumes a crashed post-merge sequence idempotently from live merge truth
-  plus the durable phase ledger without resetting attempts or the 2+2 repair budget
+  authenticated body, resumes an open neutralized `prepared` window from exact receipt/body/phase
+  truth, and resumes a crashed post-merge sequence idempotently without resetting attempts or the
+  2+2 repair budget. Explicit expected-issue closes require a null closer plus the delivery actor/time
+  fence; automatic closes require the exact target PR/repository/merge SHA
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

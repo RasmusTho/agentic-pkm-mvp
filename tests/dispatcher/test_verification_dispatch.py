@@ -402,6 +402,100 @@ def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) ->
     assert audit["quarantined_exceptions"] == []
 
 
+def test_same_head_v2_recovery_preserves_compatible_legacy_issue_authority(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(
+        initial, supporting_issues=[3626]
+    )
+    state = ledger(tmp_path)
+    compatible = request()
+    compatible["supporting_issues"] = [3626]
+    compatible["closing_issues"] = [3603, 3626]
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+
+    recovered = state.ingest(_live_observed_request(state, compatible))
+
+    assert recovered.run_id == run_id
+    assert recovered.supporting_authority == (3626,)
+    assert recovered.closing_authority == (3603, 3626)
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+
+
+@pytest.mark.parametrize(
+    ("fresh_supporting", "fresh_closing"),
+    [
+        ([], [3603]),
+        ([3626, 3745], [3603, 3745]),
+        ([3745], [3745]),
+    ],
+)
+def test_same_head_v2_recovery_rejects_changed_legacy_supporting_authority(
+    tmp_path,
+    fresh_supporting: list[int],
+    fresh_closing: list[int],
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(
+        initial, supporting_issues=[3626]
+    )
+    state = ledger(tmp_path)
+    changed = request()
+    changed["supporting_issues"] = fresh_supporting
+    changed["closing_issues"] = fresh_closing
+    before = state.get(run_id)
+    attempts_before = state.attempts(run_id)
+
+    with pytest.raises(
+        ValueError,
+        match="does not match legacy recovery authority",
+    ):
+        state.ingest(_live_observed_request(state, changed))
+
+    assert state.get(run_id) == before
+    assert state.attempts(run_id) == attempts_before
+
+
+def test_same_head_v2_recovery_rejects_changed_live_closing_authority(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(
+        initial, supporting_issues=[3626]
+    )
+    state = ledger(tmp_path)
+    compatible = request()
+    compatible["supporting_issues"] = [3626]
+    authenticated = verification_dispatch._authenticated_verification_request(
+        compatible
+    )
+    observed = verification_dispatch._live_observed_verification_request(
+        authenticated,
+        observed_repository=compatible["repository"],
+        observed_pr_number=compatible["pr_number"],
+        observed_head_sha=compatible["current_head_sha"],
+        observed_state="open",
+        observed_merged_at=None,
+        observed_draft=False,
+        observed_linked_issue=compatible["linked_issue"],
+        observed_closing_issues=(3626,),
+        observed_supporting_issues=(3626,),
+        canonical_chain_token=state.canonical_chain_token(authenticated),
+    )
+    before = state.get(run_id)
+
+    with pytest.raises(
+        ValueError,
+        match="does not match legacy recovery authority",
+    ):
+        state.ingest(observed)
+
+    assert state.get(run_id) == before
+
+
 def test_same_head_v2_recovery_archives_legacy_exception_children(tmp_path) -> None:
     initial = ledger(tmp_path)
     run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])

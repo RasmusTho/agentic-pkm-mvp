@@ -886,6 +886,7 @@ def _same_head_legacy_recovery_authority_matches(
 ) -> bool:
     """Require fresh exact live authority before promoting one inert v1 row."""
     incoming_supporting = request.get("supporting_issues")
+    legacy_supporting = legacy_request.get("supporting_issues")
     incoming_closing = _request_closing_authority(request)
     return bool(
         observation is not None
@@ -903,7 +904,17 @@ def _same_head_legacy_recovery_authority_matches(
         and legacy_request.get("stage") == request.get("stage")
         and legacy_request.get("linked_issue") == request.get("linked_issue")
         and isinstance(incoming_supporting, list)
+        # Deployed v1 did not authenticate an exact closing set, but it did
+        # persist its supporting issue contract. Reusing its attempts and
+        # repair budget is safe only when that authority is unchanged. Older
+        # v1 shapes without a supporting set remain inert because compatibility
+        # cannot be proved.
+        and isinstance(legacy_supporting, list)
+        and set(incoming_supporting) == set(legacy_supporting)
         and set(incoming_supporting).issubset(observation.supporting_issues)
+        and set(incoming_closing).issubset(
+            {request.get("linked_issue"), *legacy_supporting}
+        )
         and set(incoming_closing) == set(observation.closing_issues)
     )
 

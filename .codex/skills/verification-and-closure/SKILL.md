@@ -298,11 +298,15 @@ When all prerequisites are met:
    retry around a failed gate
 6. verify merge success and re-fetch the merge commit to prove its title/message contains no
    canonical or malformed closing attempt, then post the authority-bound `merged` phase receipt
-7. on resume, if the live PR is already merged but the sequence is incomplete, authenticate the
-   exact authority receipt and latest continuous phase, prove the live merge identity, and resume the
-   same run idempotently at the first missing phase without resetting attempts or the 2+2 repair
-   budget. Never reject or restart an authenticated merged-but-incomplete delivery merely because
-   the PR can no longer satisfy the pre-merge intake predicate
+7. on resume, recover either authenticated interruption window without restarting accounting. If the
+   exact-head PR is still open with the neutralized body, require the unique trusted exact-run
+   authority receipt, its exact body digest/issue sets/repair budget, and a continuous `prepared`
+   phase before resuming the pre-merge sequence. If the live PR is merged-but-incomplete,
+   authenticate the same exact authority receipt and latest continuous phase, prove the live merge
+   identity, and resume at the first missing phase. Missing, forged, stale, conflicting,
+   body-mismatched, or unphased recovery evidence fails closed. Resume either path without resetting
+   attempts or the 2+2 repair budget, and never reject an authenticated interrupted delivery merely
+   because its neutralized or merged PR no longer satisfies canonical pre-merge intake
 8. re-read post-merge closing references and issue state before explicit closure. Independently
    enumerate every non-PR `closed` candidate at or after `merged_at` through the repository
    issue-events feed, including live-shaped events whose REST `commit_id` is null: validate observed
@@ -314,11 +318,12 @@ When all prerequisites are met:
    repository/issue/state, latest `ClosedEvent` timestamp/actor, mandatory `closer` field, and `closer`
    identity. Every `PullRequest` closer must carry a valid merge SHA, regardless of whether it is the
    target PR. Only an exact
-   target PR number, repository, and merge SHA may promote a repository-discovered candidate to this
-   delivery; a same-number foreign repository or SHA fails closed, while a valid null or different
-   closer remains unrelated. A null non-PR closer remains unrelated. Authenticated expected and
-   phase-known candidates retain their existing
-   authority. Then use `plan_post_merge_reconciliation` with complete per-issue evidence; reopen only
+   target PR number, repository, and merge SHA may attribute an automatic closure to this delivery;
+   a same-number foreign repository or SHA fails closed, while a different valid PR remains
+   unrelated even for an authenticated expected issue. A null closer counts only as the explicit
+   manual close of an authenticated expected issue when its actor and timestamp satisfy the delivery
+   fence; it never promotes a repository-discovered unauthorized candidate. Then use
+   `plan_post_merge_reconciliation` with complete per-issue evidence; reopen only
    an unauthorized closure GitHub attributes to this PR, and block the final receipt on any unresolved
    unauthorized closure. This is the defensive race reconciliation, not a substitute for pre-effect
    neutralization

@@ -659,6 +659,173 @@ def test_delivered_receipt_rejects_merge_authority_with_stale_repair_budget(
     assert result.verified_head_sha is None
 
 
+def _expired_running_verification(state):
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000004",
+        verification_consumer.context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=state.repair_budget_projection(run.run_id),
+        ),
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", running.run_id),
+        )
+        conn.commit()
+    return running
+
+
+def _open_neutralized_recovery_evidence():
+    plan = _merge_plan(HEAD)
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    comments = [
+        {
+            "author_association": "COLLABORATOR",
+            "body": plan["authority_receipt_comment"],
+        },
+        {
+            "author_association": "COLLABORATOR",
+            "body": prepared["phase_receipt_comment"],
+        },
+    ]
+    return plan, neutral_pr, comments
+
+
+@pytest.mark.parametrize("entrypoint", ["consume", "recover"])
+def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
+    tmp_path,
+    entrypoint: str,
+) -> None:
+    plan, neutral_pr, comments = _open_neutralized_recovery_evidence()
+
+    class RecoveryTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return comments
+
+    truth = RecoveryTruth(neutral_pr, GREEN)
+
+    class RecoveryLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            assert context_pack["merge_recovery"] == {
+                "body_state": "neutralized",
+                "merge_commit_sha": None,
+                "merged_at": None,
+                "phase": "prepared",
+            }
+            assert context_pack["repair_budget"]["policy_version"] == "v2"
+            truth.pr = eligible_pr(body=plan["original_body"])
+            return super().launch(context_pack, **kwargs)
+
+    state = ledger(tmp_path / entrypoint)
+    running = _expired_running_verification(state)
+    budget_before = state.repair_budget_projection(running.run_id)
+    launcher = RecoveryLauncher()
+    consumer = VerificationConsumer(
+        state, truth, Auth(), launcher, "recovery-host"
+    )
+
+    resumed = (
+        consumer.consume(request())
+        if entrypoint == "consume"
+        else consumer.recover(running.run_id)
+    )
+
+    assert resumed.status == "needs_human"
+    assert len(launcher.calls) == 1
+    assert launcher.calls[0][1] == running.coordinator_session_id
+    assert state.repair_budget_projection(running.run_id) == budget_before
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "forged_authority",
+        "stale_authority",
+        "conflicting_authority",
+        "missing_phase",
+        "stale_phase",
+        "conflicting_phase",
+        "body_digest",
+        "repair_budget",
+    ],
+)
+def test_open_neutralized_recovery_fails_closed_on_untrusted_evidence(
+    tmp_path,
+    corruption: str,
+) -> None:
+    _plan, neutral_pr, comments = _open_neutralized_recovery_evidence()
+    comments = [dict(comment) for comment in comments]
+    if corruption == "forged_authority":
+        comments[0]["author_association"] = "NONE"
+    elif corruption == "stale_authority":
+        comments[0]["body"] = str(comments[0]["body"]).replace(
+            f'"head_sha":"{HEAD}"', f'"head_sha":"{"c" * 40}"'
+        )
+    elif corruption == "conflicting_authority":
+        conflicting = str(comments[0]["body"]).replace(
+            '"mechanism_count":0', '"mechanism_count":1'
+        )
+        comments.append(
+            {"author_association": "MEMBER", "body": conflicting}
+        )
+    elif corruption == "missing_phase":
+        comments = comments[:1]
+    elif corruption == "stale_phase":
+        comments[1]["body"] = str(comments[1]["body"]).replace(
+            f'"head_sha":"{HEAD}"', f'"head_sha":"{"c" * 40}"'
+        )
+    elif corruption == "conflicting_phase":
+        conflicting_phase = str(comments[1]["body"]).replace(
+            '"phase":"prepared"', '"phase":"merged"'
+        )
+        comments.append(
+            {"author_association": "OWNER", "body": conflicting_phase}
+        )
+    elif corruption == "body_digest":
+        neutral_pr = {**neutral_pr, "body": f"{neutral_pr['body']}\n"}
+    elif corruption == "repair_budget":
+        comments[0]["body"] = str(comments[0]["body"]).replace(
+            '"policy_version":"v2"', '"policy_version":"v1"'
+        )
+
+    class RecoveryTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return comments
+
+    state = ledger(tmp_path / corruption)
+    running = _expired_running_verification(state)
+    launcher = Launcher()
+    consumer = VerificationConsumer(
+        state,
+        RecoveryTruth(neutral_pr, GREEN),
+        Auth(),
+        launcher,
+        "recovery-host",
+    )
+
+    with pytest.raises(ValueError, match="no longer resumable"):
+        consumer.recover(running.run_id)
+
+    retained = state.get(running.run_id)
+    assert retained is not None
+    assert retained.status == "running"
+    assert launcher.calls == []
+
+
 @pytest.mark.parametrize("entrypoint", ["consume", "recover"])
 @pytest.mark.parametrize(
     ("crash_phase", "crash_body_state"),
@@ -1240,6 +1407,75 @@ def _closure_evidence_with_graphql_event(
             actor_login="verification-closer",
         )
     )
+
+
+@pytest.mark.parametrize(
+    ("closer_number", "closed_by_pull_requests"),
+    [(None, []), (3603, [3603])],
+)
+def test_gh_source_accepts_only_explicit_or_exact_target_expected_closure(
+    closer_number: int | None,
+    closed_by_pull_requests: list[int],
+) -> None:
+    evidence = _closure_evidence_with_graphql_event(
+        _graphql_closed_event(
+            "2026-07-15T00:00:02Z",
+            closer_number=closer_number,
+        )
+    )
+
+    assert evidence["observed_closing_issues"] == [3603]
+    assert evidence["issue_evidence"] == [
+        {
+            "closed_at": "2026-07-15T00:00:02Z",
+            "closed_by_delivery": True,
+            "closed_by_pull_requests": closed_by_pull_requests,
+            "number": 3603,
+            "state": "closed",
+        }
+    ]
+
+
+def test_foreign_pr_closer_cannot_complete_authenticated_expected_issue(
+    tmp_path,
+) -> None:
+    production_evidence = _closure_evidence_with_graphql_event(
+        _graphql_closed_event(
+            "2026-07-15T00:00:02Z",
+            closer_number=4998,
+            closer_repository=REPO,
+            closer_sha="c" * 40,
+        )
+    )
+    assert production_evidence["observed_closing_issues"] == []
+    assert production_evidence["issue_evidence"] == [
+        {
+            "closed_at": "2026-07-15T00:00:02Z",
+            "closed_by_delivery": False,
+            "closed_by_pull_requests": [],
+            "number": 3603,
+            "state": "closed",
+        }
+    ]
+
+    class ForeignCloserTruth(TransitionTruth):
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return production_evidence
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        ForeignCloserTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert (
+        result.stop_reason
+        == "receipt_live_truth_authenticated_issue_not_closed"
+    )
+    assert result.verified_head_sha is None
 
 
 def _required_check_authority(

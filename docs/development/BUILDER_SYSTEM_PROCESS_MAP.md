@@ -502,13 +502,17 @@ Review repair loop: re-run after substantive fixes; stop after a clean round or 
 
 Frontier rescue loop: triggered by repeated failure, feature-level issue, hidden invariants, or route ambiguity; actor is agent; state moves to issue maintenance, feature-breakdown, or `agent:needs-human`; evidence is blocker receipt or follow-up issue [`.codex/skills/issue-to-code/SKILL.md`:121-124], [AGENTS.md:142-149].
 
-Closure loop: triggered after merge/verification; actor is verification-and-closure; state is issue/PR/Project/dispatcher; a crash after merge resumes from trusted authority plus a continuous durable phase ledger. It returns to done only after the restored phase, exact live authorized closure attribution with no unauthorized closure, labels removed, Project Done, owner-doc receipt, and dispatcher complete/release when applicable [`.codex/skills/verification-and-closure/SKILL.md`].
+Closure loop: triggered after merge/verification; actor is verification-and-closure; state is issue/PR/Project/dispatcher. A crash in the open neutralized window resumes only from exact receipt/body/budget truth plus a continuous `prepared` phase; a crash after merge resumes from the same trusted authority plus the continuous durable phase ledger. It returns to done only after the restored phase, exact live authorized closure attribution with no unauthorized closure, labels removed, Project Done, owner-doc receipt, and dispatcher complete/release when applicable. Explicit authenticated issue closes require a null closer plus the delivery actor/time fence, while automatic attribution requires the exact target PR/repository/merge SHA; a foreign PR closer is unrelated even when the expected issue is closed [`.codex/skills/verification-and-closure/SKILL.md`].
 
 The neutralized-body `pr-contract` window is receipt-authenticated: `Refs` plus
 `Verified-Closing-Issues` pass only when one trusted, non-conflicting exact-head authority receipt
 matches the live body digest and its exact governing, closing, and cumulative supporting sets. The
 verification-dispatch producer reads at most `closingIssuesReferences(first: 11)` in one GraphQL call
 and fails before pagination when the ten-closing-issue contract is exceeded.
+
+Same-head deployed-v1 recovery preserves historical attempts and repair budget only when the fresh
+v2 artifact retains the exact legacy supporting set and its authenticated closing set stays within
+the governing issue plus that set. A changed or unknowable legacy issue authority remains inert.
 
 Post-merge docs/spec loop: triggered after merged PR; actor is post-merge skill plus watchdog nudge;
 outputs a docs PR, follow-up issue, or no-change result, then records the same PR-specific result on

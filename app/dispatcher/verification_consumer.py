@@ -52,6 +52,7 @@ from app.dispatcher.verification_contract import (
     IssueAuthority,
     has_closing_issue_attempt,
     resolve_issue_authority,
+    resolve_neutralized_issue_authority,
 )
 from app.dispatcher.verified_merge import (
     plan_post_merge_reconciliation,
@@ -1275,7 +1276,6 @@ class GhCliVerificationSource:
         candidates = self._closure_nodes(repository, candidate_node_ids)
 
         expected = set(issue_numbers)
-        observed_candidates = set(observed_issue_numbers)
         evidence: list[dict[str, object]] = []
         observed: list[int] = []
         for number, issue in sorted(candidates.items()):
@@ -1385,22 +1385,20 @@ class GhCliVerificationSource:
                 and latest_instant is not None
                 and latest_instant >= merged_instant
             )
+            # Explicit issue closes have a null GraphQL closer. They count only
+            # for an authenticated expected issue and only with the exact
+            # delivery actor/time fence. A non-null PR closer is delivery
+            # evidence only when its number, repository, and merge SHA all
+            # identify this target PR; a different valid PR remains unrelated.
+            manual_expected_close = number in expected and closer is None
             closed_by_delivery = bool(
-                actor_time_close
-                and (
-                    number in expected
-                    or number in observed_candidates
-                    or exact_pr_closer
-                )
+                actor_time_close and (manual_expected_close or exact_pr_closer)
             )
             if closed_by_delivery:
                 observed.append(number)
             if number not in expected and not closed_by_delivery:
                 continue
-            closed_by_pr = bool(
-                closed_by_delivery
-                and (number in observed_candidates or exact_pr_closer)
-            )
+            closed_by_pr = bool(closed_by_delivery and exact_pr_closer)
             evidence.append(
                 {
                     "closed_at": closed_at,
@@ -2946,7 +2944,6 @@ def delivered_live_truth_rejection(
         reconciliation["reopen_unauthorized"]
         or reconciliation["unexpected_open_references"]
         or reconciliation["unresolved_unauthorized_closures"]
-        or set(observed) != set(run.closing_authority)
     ):
         return "unauthorized_closure"
     evidence_by_number = {
@@ -2960,6 +2957,8 @@ def delivered_live_truth_rejection(
         issue = evidence_by_number[number]
         if issue.get("state") != "closed" or issue.get("closed_by_delivery") is not True:
             return "authenticated_issue_not_closed"
+    if set(observed) != set(run.closing_authority):
+        return "unauthorized_closure"
     return _checks_rejection(checks, expected_head_sha=expected_head_sha)
 
 
@@ -3328,6 +3327,133 @@ class VerificationConsumer:
             },
         }, dict(authority_repair_budget)
 
+    def _open_neutralized_recovery_pack(
+        self,
+        run: VerificationRun,
+        pr: Mapping[str, object],
+        checks: Sequence[Mapping[str, object]],
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Authenticate an interrupted pre-merge neutralization window."""
+
+        body = pr.get("body")
+        neutralized_authority = resolve_neutralized_issue_authority(body)
+        if (
+            pr.get("number") != run.pr_number
+            or _nested(pr, "base", "repo", "full_name") != run.repository
+            or _nested(pr, "head", "sha") != run.head_sha
+            or pr.get("state") != "open"
+            or pr.get("draft") is not False
+            or pr.get("merged") is True
+            or pr.get("merged_at") is not None
+            or pr.get("merge_commit_sha") is not None
+            or neutralized_authority is None
+        ):
+            raise ValueError(
+                "verification run is no longer resumable: neutralized_pr_mismatch"
+            )
+        checks_rejection = _checks_rejection(checks, expected_head_sha=run.head_sha)
+        if checks_rejection:
+            raise ValueError(
+                "verification run is no longer resumable: "
+                f"{checks_rejection}"
+            )
+
+        repair_budget = self.ledger.repair_budget_projection(run.run_id)
+        comments = list(
+            self.truth.pull_request_comments(run.repository, run.pr_number)
+        )
+        authority = resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=run.repository,
+            expected_run_id=run.run_id,
+            expected_repair_budget=repair_budget,
+        )
+        if authority is None:
+            raise ValueError(
+                "verification run is no longer resumable: merge_authority_missing"
+            )
+        try:
+            recovered_authority = IssueAuthority(
+                governing_issue=cast(int, authority["governing_issue"]),
+                closing_issues=tuple(
+                    cast(Sequence[int], authority["closing_issues"])
+                ),
+                supporting_issues=tuple(
+                    cast(
+                        Sequence[int],
+                        authority["authenticated_supporting_issues"],
+                    )
+                ),
+            )
+            recovered_pack = _context_pack_from_authority(
+                run,
+                recovered_authority,
+                repair_budget=repair_budget,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "verification run is no longer resumable: context_authority_mismatch"
+            ) from exc
+        phase = resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority,
+            pr=pr,
+        )
+        if phase is None or phase.get("phase") != "prepared":
+            raise ValueError(
+                "verification run is no longer resumable: merge_phase_missing"
+            )
+        return {
+            **recovered_pack,
+            "merge_recovery": {
+                "body_state": "neutralized",
+                "merge_commit_sha": None,
+                "merged_at": None,
+                "phase": "prepared",
+            },
+        }, dict(repair_budget)
+
+    def _recover_open_neutralized_run(
+        self, run: VerificationRun, pr: Mapping[str, object]
+    ) -> VerificationRun:
+        checks = self.truth.checks(run.repository, run.head_sha)
+        # Authenticate once before acquiring authority, then repeat after the
+        # claim so a body/comment/check race cannot launch stale recovery.
+        self._open_neutralized_recovery_pack(run, pr, checks)
+        if not self.auth.check().ok:
+            raise ValueError("verification auth preflight failed")
+        claimed = self.ledger.claim(run.run_id, self.holder)
+        return self._launch_after_open_neutralized_fence(claimed)
+
+    def _launch_after_open_neutralized_fence(
+        self, claimed: VerificationRun
+    ) -> VerificationRun:
+        try:
+            pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+            checks = self.truth.checks(claimed.repository, claimed.head_sha)
+            pack, authority_repair_budget = self._open_neutralized_recovery_pack(
+                claimed, pr, checks
+            )
+        except Exception as exc:
+            return self.ledger.backoff(
+                claimed.run_id,
+                {
+                    "outcome": "blocked",
+                    "reason": "prelaunch_neutralized_recovery_unavailable",
+                    "error_type": type(exc).__name__,
+                },
+                _retry_at(),
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
+        return self._launch(
+            claimed,
+            pr,
+            pack_override=pack,
+            merge_authority_repair_budget=authority_repair_budget,
+        )
+
     def _recover_merged_run(
         self, run: VerificationRun, pr: Mapping[str, object]
     ) -> VerificationRun:
@@ -3695,6 +3821,10 @@ class VerificationConsumer:
                 )
                 if preloaded_pr.get("merged") is True:
                     return self._recover_merged_run(run, preloaded_pr)
+                if resolve_neutralized_issue_authority(
+                    preloaded_pr.get("body")
+                ) is not None:
+                    return self._recover_open_neutralized_run(run, preloaded_pr)
             except (RuntimeError, ValueError) as exc:
                 try:
                     return self.ledger.defer_unclaimed(
@@ -4282,6 +4412,8 @@ class VerificationConsumer:
             raise ValueError("verification run is no longer resumable: stale_head")
         if pr.get("merged") is True:
             return self._recover_merged_run(run, pr)
+        if resolve_neutralized_issue_authority(pr.get("body")) is not None:
+            return self._recover_open_neutralized_run(run, pr)
         checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(
             run,
