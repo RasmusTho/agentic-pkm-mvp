@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+# Python minor version must match CI (ci-smoke.yaml python-version). The digest
+# pins the multi-arch index for reproducibility; to refresh it after a base bump:
+# token from auth.docker.io (scope repository:library/python:pull), then HEAD
+# registry-1.docker.io/v2/library/python/manifests/<tag> (Accept: oci.image.index.v1+json).
+FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28
 
 # Build-time arguments for version observability.
 # Pass via: docker build --build-arg VCS_REF=$(git rev-parse HEAD) \
