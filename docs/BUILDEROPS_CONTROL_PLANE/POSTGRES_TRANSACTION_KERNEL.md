@@ -82,7 +82,8 @@ by BuilderOps governance and remains outside Product persistence authority.
   inconsistent lineage/epoch metadata. Ledger-free bootstrap requires a genuinely empty schema:
   no BuilderOps-named table, index, sequence, other relation, or function may already exist.
 - Missing/ambiguous repo scope fails closed; an identity, lease, idempotency key, or promotion in one
-  repo namespace cannot collide with or authorize another.
+  repo namespace cannot collide with or authorize another. GitHub owner/repository identity is
+  canonicalized to lowercase before persistence so case aliases cannot split one authority namespace.
 - Do not yet switch production clients or remove Product routes.
 
 ## Acceptance Criteria

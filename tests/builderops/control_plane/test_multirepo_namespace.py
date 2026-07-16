@@ -6,9 +6,76 @@ import pytest
 import psycopg
 from psycopg.types.json import Jsonb
 
-from app.builderops.control_plane import AuthorityEnvelope, EnvelopeValidationError
+from app.builderops.control_plane import AuthorityEnvelope, EnvelopeValidationError, LeaseUnavailable
 
 pytestmark = pytest.mark.pg
+
+
+def test_repository_case_aliases_share_one_authority_namespace(
+    control_plane_store, envelope
+) -> None:
+    mixed_case = replace(envelope, repository="RASMUSTHO/AGENTIC-PKM-MVP")
+    assert mixed_case.repository == envelope.repository == "rasmustho/agentic-pkm-mvp"
+
+    control_plane_store.commit_transition(
+        envelope=mixed_case,
+        task_id="case-stable-task",
+        to_state="ready",
+        idempotency_key="case-stable-create",
+        request={"command": "create"},
+    )
+    _, task_lease = control_plane_store.claim_task(
+        envelope=mixed_case,
+        task_id="case-stable-task",
+        holder="executor",
+        idempotency_key="case-stable-task-claim",
+        request={"command": "claim"},
+    )
+    first = control_plane_store.commit_transition(
+        envelope=mixed_case,
+        task_id="case-stable-task",
+        to_state="effect_pending",
+        idempotency_key="case-stable-effect",
+        request={"command": "schedule-effect"},
+        outbox={"effect_type": "github.comment", "payload": {"issue": 3792}},
+        lease=task_lease,
+    )
+    replayed = control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id="case-stable-task",
+        to_state="effect_pending",
+        idempotency_key="case-stable-effect",
+        request={"command": "schedule-effect"},
+        outbox={"effect_type": "github.comment", "payload": {"issue": 3792}},
+        lease=task_lease,
+    )
+    assert replayed.replayed is True
+    assert replayed.operation_key == first.operation_key
+
+    _, lease = control_plane_store.claim_lease(
+        envelope=mixed_case,
+        resource_id="case-stable-resource",
+        holder="worker-a",
+        idempotency_key="case-stable-claim",
+        request={"command": "claim-lease"},
+    )
+    assert lease.repository == envelope.repository
+    with pytest.raises(LeaseUnavailable):
+        control_plane_store.claim_lease(
+            envelope=envelope,
+            resource_id="case-stable-resource",
+            holder="worker-b",
+            idempotency_key="case-alias-second-claim",
+            request={"command": "claim-lease"},
+        )
+
+    with control_plane_store._connect() as conn:
+        repositories = conn.execute(
+            "SELECT repository FROM builderops_leases WHERE resource_id = 'case-stable-resource' "
+            "UNION SELECT repository FROM builderops_outbox WHERE operation_key = %s",
+            (first.operation_key,),
+        ).fetchall()
+    assert [row["repository"] for row in repositories] == [envelope.repository]
 
 
 def test_authority_envelope_is_required_and_repo_namespaces_are_isolated(
@@ -163,6 +230,19 @@ def test_database_rejects_cross_repo_envelope_on_every_authority_table(
     with pytest.raises(psycopg.errors.CheckViolation):
         with control_plane_store._connect() as conn:
             conn.execute(statement, (envelope.repository, Jsonb(invalid)))
+
+
+def test_database_rejects_noncanonical_repository_case(control_plane_store, envelope) -> None:
+    noncanonical = envelope.as_json()
+    noncanonical["repository"] = "RasmusTho/agentic-pkm-mvp"
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with control_plane_store._connect() as conn:
+            conn.execute(
+                "INSERT INTO builderops_records(repository, record_id, record_type, state, payload, "
+                "authority_envelope) VALUES (%s, 'case-alias', 'LearningSignal', "
+                "'active', '{}'::jsonb, %s)",
+                (noncanonical["repository"], Jsonb(noncanonical)),
+            )
 
 
 @pytest.mark.parametrize("statement", _AUTHORITY_INSERTS)

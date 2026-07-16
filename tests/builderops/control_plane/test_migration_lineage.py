@@ -77,6 +77,26 @@ def test_initialize_is_idempotent_for_exact_current_lineage(control_plane_store,
     assert control_plane_store.readiness() == {"authority_epoch": 1, "schema_version": 1}
 
 
+@pytest.mark.parametrize(
+    "schema_drift",
+    (
+        "DROP TABLE builderops_outbox",
+        "ALTER TABLE builderops_tasks DROP COLUMN payload",
+        "DROP INDEX builderops_outbox_pending_idx",
+    ),
+)
+def test_initialize_and_readiness_refuse_live_schema_drift(
+    control_plane_store, envelope, schema_drift: str
+) -> None:
+    with control_plane_store._connect() as conn:
+        conn.execute(schema_drift)
+
+    with pytest.raises(RuntimeError, match="live schema does not match"):
+        control_plane_store.initialize()
+    with pytest.raises(RuntimeError, match="live schema does not match"):
+        control_plane_store.readiness()
+
+
 def test_initialize_refuses_to_recreate_a_missing_applied_migration_receipt(
     control_plane_store, envelope
 ) -> None:

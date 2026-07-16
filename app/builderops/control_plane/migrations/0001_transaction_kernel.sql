@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS builderops_authority_metadata (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
     authority_epoch bigint NOT NULL CHECK (authority_epoch > 0),
     schema_version integer NOT NULL CHECK (schema_version > 0),
+    schema_fingerprint text NOT NULL CHECK (schema_fingerprint <> ''),
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
@@ -22,6 +23,7 @@ AS $$
     SELECT COALESCE((
         jsonb_typeof(envelope) = 'object'
         AND expected_repository ~ '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+        AND expected_repository = lower(expected_repository)
         AND split_part(expected_repository, '/', 1) NOT IN ('.', '..')
         AND split_part(expected_repository, '/', 2) NOT IN ('.', '..')
         AND jsonb_typeof(envelope->'repository') = 'string'

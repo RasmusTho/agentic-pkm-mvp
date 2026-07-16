@@ -62,6 +62,78 @@ class PostgresBuilderOpsStore:
         assert row is not None
         return row["database_now"]
 
+    @staticmethod
+    def _schema_fingerprint(conn: psycopg.Connection[dict[str, Any]]) -> str:
+        """Hash the live BuilderOps catalog shape, excluding mutable row data."""
+        rows = conn.execute(
+            "SELECT kind, identity, definition FROM ("
+            "SELECT 'relation' AS kind, class.relname AS identity, class.relkind::text AS definition "
+            "FROM pg_class AS class "
+            "JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace "
+            "WHERE namespace.nspname = current_schema() "
+            "AND (class.relname LIKE 'builderops_%' OR class.relname LIKE 'idx_builderops_%') "
+            "UNION ALL "
+            "SELECT 'column', class.relname || '.' || attribute.attnum::text, "
+            "concat_ws('|', attribute.attname, format_type(attribute.atttypid, attribute.atttypmod), "
+            "attribute.attnotnull::text, attribute.attidentity::text, attribute.attgenerated::text, "
+            "COALESCE(pg_get_expr(default_value.adbin, default_value.adrelid), '')) "
+            "FROM pg_class AS class "
+            "JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace "
+            "JOIN pg_attribute AS attribute ON attribute.attrelid = class.oid "
+            "LEFT JOIN pg_attrdef AS default_value ON default_value.adrelid = class.oid "
+            "AND default_value.adnum = attribute.attnum "
+            "WHERE namespace.nspname = current_schema() "
+            "AND class.relname LIKE 'builderops_%' AND class.relkind IN ('r', 'p') "
+            "AND attribute.attnum > 0 AND NOT attribute.attisdropped "
+            "UNION ALL "
+            "SELECT 'constraint', class.relname || '.' || constraint_row.conname, "
+            "constraint_row.contype::text || '|' || pg_get_constraintdef(constraint_row.oid, true) "
+            "FROM pg_constraint AS constraint_row "
+            "JOIN pg_class AS class ON class.oid = constraint_row.conrelid "
+            "JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace "
+            "WHERE namespace.nspname = current_schema() AND class.relname LIKE 'builderops_%' "
+            "UNION ALL "
+            "SELECT 'index', index_class.relname, pg_get_indexdef(index_class.oid) "
+            "FROM pg_index AS index_row "
+            "JOIN pg_class AS index_class ON index_class.oid = index_row.indexrelid "
+            "JOIN pg_class AS table_class ON table_class.oid = index_row.indrelid "
+            "JOIN pg_namespace AS namespace ON namespace.oid = table_class.relnamespace "
+            "WHERE namespace.nspname = current_schema() "
+            "AND table_class.relname LIKE 'builderops_%' "
+            "UNION ALL "
+            "SELECT 'sequence', class.relname, concat_ws('|', sequence.seqstart::text, "
+            "sequence.seqincrement::text, sequence.seqmax::text, sequence.seqmin::text, "
+            "sequence.seqcache::text, sequence.seqcycle::text) "
+            "FROM pg_sequence AS sequence "
+            "JOIN pg_class AS class ON class.oid = sequence.seqrelid "
+            "JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace "
+            "WHERE namespace.nspname = current_schema() AND class.relname LIKE 'builderops_%' "
+            "UNION ALL "
+            "SELECT 'function', procedure.proname || '(' || "
+            "pg_get_function_identity_arguments(procedure.oid) || ')', "
+            "pg_get_functiondef(procedure.oid) "
+            "FROM pg_proc AS procedure "
+            "JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace "
+            "WHERE namespace.nspname = current_schema() "
+            "AND procedure.proname LIKE 'builderops_%'"
+            ") AS catalog ORDER BY kind, identity, definition"
+        ).fetchall()
+        document = [
+            (str(row["kind"]), str(row["identity"]), str(row["definition"])) for row in rows
+        ]
+        return hashlib.sha256(
+            json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()
+
+    @classmethod
+    def _assert_schema_fingerprint(
+        cls,
+        conn: psycopg.Connection[dict[str, Any]],
+        expected: str,
+    ) -> None:
+        if cls._schema_fingerprint(conn) != expected:
+            raise RuntimeError("BuilderOps live schema does not match its recorded fingerprint")
+
     def initialize(self) -> None:
         with self._connect() as conn:
             migration_rows: dict[int, Mapping[str, Any]] = {}
@@ -130,8 +202,20 @@ class PostgresBuilderOpsStore:
                             f"BuilderOps migration {version} does not match this release lineage"
                         )
             if has_authority_metadata:
+                metadata_columns = {
+                    str(row["column_name"])
+                    for row in conn.execute(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name = 'builderops_authority_metadata'"
+                    ).fetchall()
+                }
+                if "schema_fingerprint" not in metadata_columns:
+                    raise RuntimeError(
+                        "BuilderOps authority metadata predates schema fingerprint enforcement"
+                    )
                 metadata = conn.execute(
-                    "SELECT authority_epoch, schema_version "
+                    "SELECT authority_epoch, schema_version, schema_fingerprint "
                     "FROM builderops_authority_metadata WHERE singleton FOR UPDATE"
                 ).fetchone()
                 if metadata is None:
@@ -144,6 +228,7 @@ class PostgresBuilderOpsStore:
                     raise RuntimeError(
                         "BuilderOps schema metadata does not match the migration ledger"
                     )
+                self._assert_schema_fingerprint(conn, str(metadata["schema_fingerprint"]))
 
             for version, path in enumerate(MIGRATIONS, start=1):
                 if version not in migration_rows:
@@ -155,15 +240,18 @@ class PostgresBuilderOpsStore:
                         "ON CONFLICT (version) DO NOTHING",
                         (version, path.name, checksum),
                     )
+            schema_fingerprint = self._schema_fingerprint(conn)
             metadata = conn.execute(
-                "INSERT INTO builderops_authority_metadata(singleton, authority_epoch, schema_version) "
-                "VALUES (true, %s, %s) ON CONFLICT (singleton) DO UPDATE SET "
+                "INSERT INTO builderops_authority_metadata("
+                "singleton, authority_epoch, schema_version, schema_fingerprint) "
+                "VALUES (true, %s, %s, %s) ON CONFLICT (singleton) DO UPDATE SET "
                 "authority_epoch = EXCLUDED.authority_epoch, schema_version = EXCLUDED.schema_version, "
+                "schema_fingerprint = EXCLUDED.schema_fingerprint, "
                 "updated_at = clock_timestamp() "
                 "WHERE builderops_authority_metadata.authority_epoch <= EXCLUDED.authority_epoch "
                 "AND builderops_authority_metadata.schema_version <= EXCLUDED.schema_version "
                 "RETURNING authority_epoch, schema_version",
-                (AUTHORITY_EPOCH, SCHEMA_VERSION),
+                (AUTHORITY_EPOCH, SCHEMA_VERSION, schema_fingerprint),
             ).fetchone()
             if metadata is None:
                 raise RuntimeError("BuilderOps authority metadata refused a downgrade")
@@ -171,14 +259,16 @@ class PostgresBuilderOpsStore:
     def readiness(self) -> dict[str, int]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT authority_epoch, schema_version FROM builderops_authority_metadata WHERE singleton"
+                "SELECT authority_epoch, schema_version, schema_fingerprint "
+                "FROM builderops_authority_metadata WHERE singleton"
             ).fetchone()
-        if row is None:
-            raise RuntimeError("BuilderOps schema is not initialized")
-        return {
-            "authority_epoch": int(row["authority_epoch"]),
-            "schema_version": int(row["schema_version"]),
-        }
+            if row is None:
+                raise RuntimeError("BuilderOps schema is not initialized")
+            self._assert_schema_fingerprint(conn, str(row["schema_fingerprint"]))
+            return {
+                "authority_epoch": int(row["authority_epoch"]),
+                "schema_version": int(row["schema_version"]),
+            }
 
     def commit_transition(
         self,

@@ -70,6 +70,7 @@ class AuthorityEnvelope:
             raise EnvelopeValidationError("at least one non-empty source reference is mandatory")
         if self.schema_version <= 0:
             raise EnvelopeValidationError("schema_version must be positive")
+        object.__setattr__(self, "repository", self.repository.lower())
 
     def as_json(self) -> dict[str, Any]:
         return {
