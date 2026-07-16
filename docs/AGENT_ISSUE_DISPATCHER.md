@@ -165,12 +165,15 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   request head while retaining all prior audit rows. Missing older audit tables, columns, or unique
   keys still fail closed before migration. Both normal self-migration and explicit initialization
   validate the complete resulting verification schema inside the migration transaction before the
-  v3 marker can be written or committed. The one recognized pre-trust v3 request shape, deployed
-  before `supporting_issues` and authenticated artifact provenance became request authority, is never
-  upgraded by invention. Its immutable request, terminal receipt, attempts, and exceptions remain
-  audit evidence, while migration marks the run `legacy_untrusted`, clears every lease, session,
-  context, retry, and active projection, and stores no supporting authority. Status may list that
-  inert row, but every mutation and reopen path rejects it. A later authenticated canonical artifact
+  v3 marker can be written or committed. Exactly two pre-trust v3 request shapes, both deployed
+  before `supporting_issues` became request authority, are recognized and never upgraded by
+  invention: the original thirteen-field shape without artifact provenance, and the b4e2310
+  fourteen-field shape that adds exactly one descriptive `artifact_provenance` object (positive
+  workflow-run and repository ids plus the head-bound dispatch artifact name) carrying no execution
+  authority. Each recognized row's immutable request, terminal receipt, attempts, and exceptions
+  remain audit evidence, while migration marks the run `legacy_untrusted`, clears every lease,
+  session, context, retry, and active projection, and stores no supporting authority. Status may
+  list that inert row, but every mutation and reopen path rejects it. A later authenticated canonical artifact
   on a new head may start a fresh executable chain beside the retained audit row; any other malformed
   historical request still rolls the whole additive migration back.
   If normal stale-head handling supersedes a chain before the repaired-head artifact arrives, only

@@ -195,11 +195,13 @@ _INERT_MUTATION_ENTRYPOINTS = [
 ]
 
 
-@pytest.mark.parametrize("mutation", _INERT_MUTATION_ENTRYPOINTS)
-def test_inert_legacy_run_rejects_every_mutation_entrypoint(
-    tmp_path, mutation
+def _assert_inert_legacy_run_rejects_mutation(
+    tmp_path, legacy_request: dict | None, mutation
 ) -> None:
-    state, legacy = _migrated_legacy_ledger(tmp_path)
+    """Shared mutation-fencing contract for every recognized historical shape."""
+    state, legacy = _migrated_legacy_ledger(tmp_path, legacy_request)
+    if legacy_request is not None:
+        assert legacy.request == legacy_request
     with state.store._connect() as conn:
         before = dict(
             conn.execute(
@@ -217,6 +219,13 @@ def test_inert_legacy_run_rejects_every_mutation_entrypoint(
             ).fetchone()
         )
     assert after == before
+
+
+@pytest.mark.parametrize("mutation", _INERT_MUTATION_ENTRYPOINTS)
+def test_inert_legacy_run_rejects_every_mutation_entrypoint(
+    tmp_path, mutation
+) -> None:
+    _assert_inert_legacy_run_rejects_mutation(tmp_path, None, mutation)
 
 
 @pytest.mark.parametrize("mutation", _INERT_MUTATION_ENTRYPOINTS)
@@ -225,26 +234,7 @@ def test_inert_artifact_provenance_legacy_run_rejects_mutations(
 ) -> None:
     legacy_request = b4e2310_pre_trust_request()
     assert "artifact_provenance" in legacy_request
-    state, legacy = _migrated_legacy_ledger(tmp_path, legacy_request)
-    assert legacy.status == "legacy_untrusted"
-    assert legacy.request == legacy_request
-    with state.store._connect() as conn:
-        before = dict(
-            conn.execute(
-                "SELECT * FROM verification_runs WHERE run_id=?", (legacy.run_id,)
-            ).fetchone()
-        )
-
-    with pytest.raises(ValueError, match="legacy verification audit is not executable"):
-        mutation(state, legacy)
-
-    with state.store._connect() as conn:
-        after = dict(
-            conn.execute(
-                "SELECT * FROM verification_runs WHERE run_id=?", (legacy.run_id,)
-            ).fetchone()
-        )
-    assert after == before
+    _assert_inert_legacy_run_rejects_mutation(tmp_path, legacy_request, mutation)
 
 
 def test_authenticated_artifact_starts_fresh_chain_beside_inert_legacy_audit(
