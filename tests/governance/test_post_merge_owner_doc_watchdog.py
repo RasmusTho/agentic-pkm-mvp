@@ -83,6 +83,62 @@ def _pr(body: str | None = None) -> dict[str, object]:
     }
 
 
+def _receipt_payload(comment: dict[str, object]) -> dict[str, object]:
+    body = comment["body"]
+    assert isinstance(body, str)
+    return json.loads(body.split("```json\n", 1)[1].split("\n```", 1)[0])
+
+
+def _phase_comment(
+    authority_comment: dict[str, object],
+    *,
+    phase: str,
+    merge_commit_sha: str | None,
+) -> dict[str, object]:
+    authority = _receipt_payload(authority_comment)
+    reconciled = phase in {"reconciled", "restored"}
+    receipt = {
+        "authority_sha256": hashlib.sha256(
+            json.dumps(authority, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest(),
+        "body_sha256": (
+            authority["body_sha256"]
+            if phase == "restored"
+            else authority["neutralized_body_sha256"]
+        ),
+        "closed_issues": authority["closing_issues"] if reconciled else [],
+        "contract": "verified_issue_set_merge_phase.v1",
+        "head_sha": authority["head_sha"],
+        "merge_commit_sha": merge_commit_sha,
+        "phase": phase,
+        "pr_number": authority["pr_number"],
+        "reopened_unauthorized_issues": [],
+        "repository": authority["repository"],
+        "run_id": authority["run_id"],
+    }
+    return {
+        "author_association": "OWNER",
+        "body": (
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, separators=(",", ":"), sort_keys=True)
+            + "\n```"
+        ),
+    }
+
+
+def _merged_pr(body: str) -> dict[str, object]:
+    pr = _pr(body)
+    pr.update(
+        {
+            "merge_commit_sha": "c" * 40,
+            "merged": True,
+            "merged_at": "2026-07-16T00:00:00Z",
+            "state": "closed",
+        }
+    )
+    return pr
+
+
 def test_watchdog_targets_closed_children_and_distinct_open_governing_parent() -> None:
     targets = _node(
         "receiptTargets(inputs[0])",
@@ -230,6 +286,173 @@ def test_watchdog_rejects_receipt_that_omits_live_supporting_authority() -> None
     )
 
 
+def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_chain() -> None:
+    authority = _authority_comment()
+    merge_sha = "c" * 40
+    comments = [
+        authority,
+        _phase_comment(authority, phase="prepared", merge_commit_sha=None),
+        _phase_comment(authority, phase="merged", merge_commit_sha=merge_sha),
+    ]
+    raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
+
+    selected = _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": comments,
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr(raced_body),
+        },
+    )
+
+    assert selected == {
+        "closing_issues": [3820, 3823],
+        "governing_issue": 3821,
+        "mode": "durable_receipt",
+    }
+
+
+def test_watchdog_target_selection_fails_closed_on_raced_body_without_phase_chain() -> None:
+    raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
+    selected = _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": [_authority_comment()],
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr(raced_body),
+        },
+    )
+    assert selected == {
+        "closing_issues": [],
+        "governing_issue": None,
+        "mode": "trusted_receipt_invalid",
+    }
+
+
+def test_watchdog_target_selection_rejects_forged_stale_or_conflicting_phase_chain() -> None:
+    authority = _authority_comment()
+    prepared = _phase_comment(authority, phase="prepared", merge_commit_sha=None)
+    merged = _phase_comment(
+        authority, phase="merged", merge_commit_sha="c" * 40
+    )
+
+    forged = _phase_comment(
+        authority, phase="merged", merge_commit_sha="c" * 40
+    )
+    forged_body = forged["body"]
+    assert isinstance(forged_body, str)
+    forged["body"] = forged_body.replace(
+        '"authority_sha256":"', '"authority_sha256":"0'
+    )
+
+    stale = _phase_comment(
+        authority, phase="merged", merge_commit_sha="d" * 40
+    )
+
+    reconciled = _phase_comment(
+        authority, phase="reconciled", merge_commit_sha="c" * 40
+    )
+    conflicting = _phase_comment(
+        authority, phase="reconciled", merge_commit_sha="c" * 40
+    )
+    conflicting_payload = _receipt_payload(conflicting)
+    conflicting_payload["reopened_unauthorized_issues"] = [4999]
+    conflicting["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(conflicting_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+
+    raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
+    cases = (
+        [authority, prepared, forged],
+        [authority, prepared, stale],
+        [authority, prepared, merged, reconciled, conflicting],
+    )
+    for comments in cases:
+        selected = _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": comments,
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr(raced_body),
+            },
+        )
+        assert selected == {
+            "closing_issues": [],
+            "governing_issue": None,
+            "mode": "trusted_receipt_invalid",
+        }
+
+
+def test_watchdog_target_selection_never_falls_back_for_forged_stale_or_conflicting_receipt() -> None:
+    forged = _authority_comment()
+    forged_body = forged["body"]
+    assert isinstance(forged_body, str)
+    forged["body"] = forged_body.replace(REPOSITORY, "attacker/example")
+
+    stale = _authority_comment()
+    stale_body = stale["body"]
+    assert isinstance(stale_body, str)
+    stale["body"] = stale_body.replace(HEAD, "b" * 40)
+
+    conflicting = _authority_comment()
+    conflicting_body = conflicting["body"]
+    assert isinstance(conflicting_body, str)
+    conflicting["body"] = conflicting_body.replace(
+        '"run_id":"vrun-authority"',
+        '"run_id":"vrun-conflict"',
+    )
+
+    authority = _authority_comment()
+    raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
+    cases = (
+        [forged],
+        [stale],
+        [
+            authority,
+            _phase_comment(authority, phase="prepared", merge_commit_sha=None),
+            _phase_comment(authority, phase="merged", merge_commit_sha="c" * 40),
+            conflicting,
+        ],
+    )
+    for comments in cases:
+        selected = _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": comments,
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr(raced_body),
+            },
+        )
+        assert selected == {
+            "closing_issues": [],
+            "governing_issue": None,
+            "mode": "trusted_receipt_invalid",
+        }
+
+
+def test_watchdog_target_selection_keeps_legacy_fallback_without_trusted_receipt() -> None:
+    selected = _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": [],
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+        },
+    )
+    assert selected == {
+        "closing_issues": [4999],
+        "governing_issue": 4999,
+        "mode": "canonical_body",
+    }
+
+
 def test_watchdog_governing_parser_matches_canonical_line_constraints() -> None:
     accepted = _node("resolveGoverningIssue(inputs[0])", "Governing-Issue: #3821\r\n")
     assert accepted == 3821
@@ -247,6 +470,8 @@ def test_watchdog_production_path_uses_authority_receipt_and_pr_specific_targets
     text = WORKFLOW.read_text(encoding="utf-8")
     for fragment in (
         "const authorityReceipt = resolveAuthorityReceipt",
+        "const selectedAuthority = selectWatchdogAuthority",
+        'selectedAuthority.mode === "trusted_receipt_invalid"',
         'liveAuthority?.mode === "canonical"',
         "authorityReceipt.closing_issues",
         "governingState = governing.state",

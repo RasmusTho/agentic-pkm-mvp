@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-07-15
+Last reviewed: 2026-07-16
 
 # Builder System Process Map
 
@@ -508,10 +508,13 @@ Post-merge docs/spec loop: triggered after merged PR; actor is post-merge skill 
 outputs a docs PR, follow-up issue, or no-change result, then records the same PR-specific result on
 every closed child and any distinct open governing parent. Issue-free lanes use the PR thread. The
 classifier and watchdog trust the same unique collaborator-authored same-head authority receipt during
-the temporary neutralized-body window. The watchdog additionally requires the receipt's governing,
-closing, and live supporting sets to exactly match the canonically parsed live original or neutralized
-body. Forged, stale, conflicting, generic, different-PR, or body-mismatched receipts cannot select a
-watchdog target
+the temporary neutralized-body window. The watchdog requires the receipt's governing, closing, and
+live supporting sets to exactly match the canonically parsed live original or neutralized body. After
+an authenticated merge, mutable-body drift may instead recover the same durable authority only when
+the exact merged identity and a non-conflicting continuous prepared-through-merged phase chain bind
+that receipt. A present but invalid trusted receipt fails target selection closed; it never falls back
+to the mutable body or `closingIssuesReferences`. Forged, stale, conflicting, generic, different-PR,
+or unphased body-mismatched receipts cannot select a watchdog target
 [`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-docs-classifier.yml`],
 [`.github/workflows/post-merge-owner-doc-watchdog.yml`].
 
