@@ -5,6 +5,9 @@ from dataclasses import replace
 import pytest
 
 from app.builderops.control_plane import (
+    DurabilityPending,
+    IdempotencyConflict,
+    LeaseUnavailable,
     RecoveryWatermark,
     StaleFencingToken,
     UnknownEffectNeedsReconciliation,
@@ -55,6 +58,34 @@ def _observed_claim(intent: RecoveryWatermark, claim) -> RecoveryWatermark:
     )
 
 
+def _observed_reconciliation(prior: RecoveryWatermark, reconciliation) -> RecoveryWatermark:
+    return RecoveryWatermark(
+        recovered_through=reconciliation.recovery_lsn,
+        observed_receipts=prior.observed_receipts
+        | {
+            (
+                reconciliation.repository,
+                reconciliation.receipt_sequence,
+                reconciliation.recovery_lsn,
+            )
+        },
+        observed_intents=prior.observed_intents,
+        observed_claims=prior.observed_claims,
+        observed_reconciliations=frozenset(
+            {
+                (
+                    reconciliation.repository,
+                    reconciliation.operation_key,
+                    reconciliation.fencing_token,
+                    reconciliation.receipt_sequence,
+                    reconciliation.recovery_lsn,
+                    reconciliation.status,
+                )
+            }
+        ),
+    )
+
+
 def test_unknown_external_effect_requires_readback_before_retry(
     control_plane_store, envelope
 ) -> None:
@@ -91,14 +122,44 @@ def test_unknown_external_effect_requires_readback_before_retry(
             observed_applied=False,
             evidence={"readback": "forged"},
         )
-    restarted_store.reconcile_outbox(
+    with pytest.raises(RuntimeError, match="after_reconciliation_commit"):
+        restarted_store.reconcile_outbox(
+            orphaned_claim,
+            observed_applied=False,
+            evidence={"readback": "not-found"},
+            fault_at="after_reconciliation_commit",
+        )
+    with pytest.raises(DurabilityPending):
+        restarted_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="executor-2",
+            watermark=intent_watermark,
+        )
+    retryable = restarted_store.reconcile_outbox(
         orphaned_claim, observed_applied=False, evidence={"readback": "not-found"}
     )
+    assert retryable.replayed is True
+    retry_receipt = restarted_store.receipt(envelope.repository, retryable.receipt_sequence)
+    assert retry_receipt["event_type"] == "outbox.reconciled.pending"
+    assert retry_receipt["lease_holder"] == orphaned_claim.worker_id
+    assert retry_receipt["lease_fencing_token"] == orphaned_claim.fencing_token
+    assert retry_receipt["recovery_lsn"] == retryable.recovery_lsn
+    assert (
+        RecoveryWatermark(recovered_through=retryable.recovery_lsn).covers_reconciliation(retryable)
+        is False
+    )
+    with pytest.raises(IdempotencyConflict):
+        restarted_store.reconcile_outbox(
+            orphaned_claim,
+            observed_applied=False,
+            evidence={"readback": "different"},
+        )
     claim = restarted_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-2",
-        watermark=intent_watermark,
+        watermark=_observed_reconciliation(intent_watermark, retryable),
     )
     assert claim.fencing_token > first_claim.fencing_token
     assert (
@@ -120,8 +181,87 @@ def test_unknown_external_effect_requires_readback_before_retry(
             watermark=intent_watermark,
         )
 
-    restarted_store.reconcile_outbox(claim, observed_applied=True, evidence={"merge_sha": "a" * 40})
-    assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "succeeded"
+    terminal = restarted_store.reconcile_outbox(
+        claim, observed_applied=True, evidence={"merge_sha": "a" * 40}
+    )
+    terminal_receipt = restarted_store.receipt(envelope.repository, terminal.receipt_sequence)
+    assert terminal_receipt["event_type"] == "outbox.reconciled.succeeded"
+    assert terminal_receipt["lease_holder"] == claim.worker_id
+    assert terminal_receipt["lease_fencing_token"] == claim.fencing_token
+    assert terminal_receipt["recovery_lsn"] == terminal.recovery_lsn
+    with pytest.raises(DurabilityPending):
+        restarted_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="executor-3",
+            watermark=intent_watermark,
+        )
+    terminal_watermark = _observed_reconciliation(intent_watermark, terminal)
+    with pytest.raises(LeaseUnavailable, match="terminal"):
+        restarted_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="executor-3",
+            watermark=terminal_watermark,
+        )
+    with pytest.raises(DurabilityPending):
+        restarted_store.outbox_status(envelope.repository, result.operation_key)
+    assert (
+        restarted_store.outbox_status(
+            envelope.repository,
+            result.operation_key,
+            watermark=terminal_watermark,
+        )
+        == "succeeded"
+    )
+
+
+@pytest.mark.parametrize(
+    "fault_at",
+    [
+        "after_reconciliation_receipt",
+        "after_reconciliation_state",
+        "after_reconciliation_record",
+    ],
+)
+def test_reconciliation_receipt_state_and_evidence_commit_atomically(
+    control_plane_store, envelope, fault_at: str
+) -> None:
+    result = control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id=f"reconciliation-atomic-{fault_at}",
+        to_state="merge_pending",
+        idempotency_key=f"reconciliation-atomic-{fault_at}",
+        request={"command": "claim"},
+        outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="executor",
+        watermark=_observed_transition(result),
+    )
+    control_plane_store.mark_effect_unknown(claim, detail="response lost")
+    receipt_count = control_plane_store.authority_counts(envelope.repository)["receipts"]
+
+    with pytest.raises(RuntimeError, match=fault_at):
+        control_plane_store.reconcile_outbox(
+            claim,
+            observed_applied=True,
+            evidence={"readback": "found"},
+            fault_at=fault_at,
+        )
+
+    assert control_plane_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
+    assert control_plane_store.authority_counts(envelope.repository)["receipts"] == receipt_count
+    with control_plane_store._connect() as conn:
+        row = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert row is not None
+    assert row["count"] == 0
 
 
 def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, envelope) -> None:
@@ -149,7 +289,7 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
     assert orphaned_claim.claim_lsn == "0/0"
     assert recovered.outbox_status(envelope.repository, result.operation_key) == "unknown"
     assert recovered.effect_eligible(orphaned_claim, watermark=RecoveryWatermark.stalled()) is False
-    recovered.reconcile_outbox(
+    retryable = recovered.reconcile_outbox(
         orphaned_claim,
         observed_applied=False,
         evidence={"readback": "not-found"},
@@ -158,7 +298,7 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="replacement-executor",
-        watermark=intent_watermark,
+        watermark=_observed_reconciliation(intent_watermark, retryable),
     )
     assert retried.fencing_token > orphaned_claim.fencing_token
 

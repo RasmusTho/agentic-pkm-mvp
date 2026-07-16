@@ -40,6 +40,28 @@ def _observed_claim(intent: RecoveryWatermark, claim) -> RecoveryWatermark:
     )
 
 
+def _observed_reconciliation(prior: RecoveryWatermark, result) -> RecoveryWatermark:
+    return RecoveryWatermark(
+        recovered_through=result.recovery_lsn,
+        observed_receipts=prior.observed_receipts
+        | {(result.repository, result.receipt_sequence, result.recovery_lsn)},
+        observed_intents=prior.observed_intents,
+        observed_claims=prior.observed_claims,
+        observed_reconciliations=frozenset(
+            {
+                (
+                    result.repository,
+                    result.operation_key,
+                    result.fencing_token,
+                    result.receipt_sequence,
+                    result.recovery_lsn,
+                    result.status,
+                )
+            }
+        ),
+    )
+
+
 def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
     control_plane_store, envelope
 ) -> None:
@@ -92,5 +114,16 @@ def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
     assert store.effect_eligible(claim, watermark=claim_watermark) is True
     calls.append(claim.operation_key)
     store.mark_effect_unknown(claim, detail="response lost")
-    store.reconcile_outbox(claim, observed_applied=True, evidence={"readback": "found"})
+    reconciliation = store.reconcile_outbox(
+        claim, observed_applied=True, evidence={"readback": "found"}
+    )
+    assert (
+        RecoveryWatermark(recovered_through=reconciliation.recovery_lsn).covers_reconciliation(
+            reconciliation
+        )
+        is False
+    )
+    assert _observed_reconciliation(claim_watermark, reconciliation).covers_reconciliation(
+        reconciliation
+    )
     assert calls == [result.operation_key]

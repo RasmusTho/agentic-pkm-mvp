@@ -114,6 +114,22 @@ class OutboxClaim:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class OutboxReconciliation:
+    """Receipt-bound readback outcome for one exact fenced external attempt."""
+
+    repository: str
+    operation_key: str
+    task_id: str
+    status: str
+    worker_id: str
+    fencing_token: int
+    claim_receipt_sequence: int
+    receipt_sequence: int
+    recovery_lsn: str
+    replayed: bool = field(default=False, compare=False)
+
+
 def _lsn_value(lsn: str) -> int:
     try:
         high, low = lsn.split("/", 1)
@@ -135,6 +151,7 @@ class RecoveryWatermark:
     observed_receipts: frozenset[tuple[str, int, str]] = frozenset()
     observed_intents: frozenset[tuple[str, str, str]] = frozenset()
     observed_claims: frozenset[tuple[str, str, int, int, str]] = frozenset()
+    observed_reconciliations: frozenset[tuple[str, str, int, int, str, str]] = frozenset()
 
     @classmethod
     def stalled(cls) -> RecoveryWatermark:
@@ -167,6 +184,22 @@ class RecoveryWatermark:
             _lsn_value(self.recovered_through) >= _lsn_value(claim.claim_lsn)
             and identity in self.observed_claims
             and (claim.repository, claim.receipt_sequence, claim.claim_lsn)
+            in self.observed_receipts
+        )
+
+    def covers_reconciliation(self, result: OutboxReconciliation) -> bool:
+        identity = (
+            result.repository,
+            result.operation_key,
+            result.fencing_token,
+            result.receipt_sequence,
+            result.recovery_lsn,
+            result.status,
+        )
+        return bool(
+            _lsn_value(self.recovered_through) >= _lsn_value(result.recovery_lsn)
+            and identity in self.observed_reconciliations
+            and (result.repository, result.receipt_sequence, result.recovery_lsn)
             in self.observed_receipts
         )
 
@@ -244,5 +277,10 @@ class StorePort(Protocol):
     ) -> bool: ...
 
     def reconcile_outbox(
-        self, claim: OutboxClaim, *, observed_applied: bool, evidence: Mapping[str, Any]
-    ) -> None: ...
+        self,
+        claim: OutboxClaim,
+        *,
+        observed_applied: bool,
+        evidence: Mapping[str, Any],
+        fault_at: str | None = None,
+    ) -> OutboxReconciliation: ...

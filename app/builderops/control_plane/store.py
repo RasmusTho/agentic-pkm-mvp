@@ -21,6 +21,7 @@ from app.builderops.control_plane.models import (
     LeaseRequired,
     LeaseUnavailable,
     OutboxClaim,
+    OutboxReconciliation,
     RecoveryWatermark,
     StateConflict,
     StaleFencingToken,
@@ -694,7 +695,8 @@ class PostgresBuilderOpsStore:
             conn.execute("SET LOCAL synchronous_commit = on")
             row = conn.execute(
                 "SELECT task_id, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
-                "claim_fencing_token, claim_expires_at "
+                "claim_fencing_token, claim_expires_at, reconciliation_receipt_sequence, "
+                "reconciliation_lsn::text AS reconciliation_lsn "
                 "FROM builderops_outbox WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (envelope.repository, operation_key),
             ).fetchone()
@@ -704,8 +706,31 @@ class PostgresBuilderOpsStore:
                 raise UnknownEffectNeedsReconciliation(
                     "external effect outcome is unknown; readback required"
                 )
-            if row["status"] in {"succeeded", "dead_letter"}:
-                raise LeaseUnavailable(f"outbox operation is terminal: {row['status']}")
+            if row["status"] == "succeeded":
+                reconciliation = self._load_reconciliation(
+                    conn,
+                    envelope.repository,
+                    operation_key,
+                    int(row["claim_fencing_token"]),
+                )
+                if not watermark.covers_reconciliation(reconciliation):
+                    raise DurabilityPending(
+                        "terminal outbox reconciliation has not reached the recovery watermark"
+                    )
+                raise LeaseUnavailable("outbox operation is terminal: succeeded")
+            if row["status"] == "dead_letter":
+                raise LeaseUnavailable("outbox operation is terminal: dead_letter")
+            if row["status"] == "pending" and row["reconciliation_receipt_sequence"] is not None:
+                reconciliation = self._load_reconciliation(
+                    conn,
+                    envelope.repository,
+                    operation_key,
+                    int(row["claim_fencing_token"]),
+                )
+                if not watermark.covers_reconciliation(reconciliation):
+                    raise DurabilityPending(
+                        "outbox reconciliation has not reached the recovery watermark"
+                    )
             intent = TransactionResult(
                 repository=envelope.repository,
                 task_id=str(row["task_id"]),
@@ -868,38 +893,253 @@ class PostgresBuilderOpsStore:
                 raise StaleFencingToken("outbox claim is stale")
 
     def reconcile_outbox(
-        self, claim: OutboxClaim, *, observed_applied: bool, evidence: Mapping[str, Any]
-    ) -> None:
+        self,
+        claim: OutboxClaim,
+        *,
+        observed_applied: bool,
+        evidence: Mapping[str, Any],
+        fault_at: str | None = None,
+    ) -> OutboxReconciliation:
         status = "succeeded" if observed_applied else "pending"
+        request_hash = _hash(
+            {
+                "repository": claim.repository,
+                "operation_key": claim.operation_key,
+                "worker_id": claim.worker_id,
+                "fencing_token": claim.fencing_token,
+                "claim_receipt_sequence": claim.receipt_sequence,
+                "claim_lsn": claim.claim_lsn,
+                "observed_applied": observed_applied,
+                "evidence": dict(evidence),
+            }
+        )
+        replayed = False
         with self._connect() as conn:
-            row = conn.execute(
-                "UPDATE builderops_outbox SET status = %s, reconciliation_evidence = %s, "
-                "worker_id = NULL, claim_expires_at = NULL, updated_at = clock_timestamp() "
-                "WHERE repository = %s AND operation_key = %s AND status = 'unknown' "
-                "AND worker_id = %s AND claim_fencing_token = %s AND claim_receipt_sequence = %s "
-                "AND COALESCE(claim_lsn::text, '0/0') = %s RETURNING operation_key",
+            conn.execute("SET LOCAL synchronous_commit = on")
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (
-                    status,
-                    Jsonb(dict(evidence)),
-                    claim.repository,
-                    claim.operation_key,
-                    claim.worker_id,
-                    claim.fencing_token,
-                    claim.receipt_sequence,
-                    claim.claim_lsn,
+                    f"outbox-reconcile:{claim.repository}:{claim.operation_key}:"
+                    f"{claim.fencing_token}",
                 ),
+            )
+            existing = conn.execute(
+                "SELECT request_hash, receipt_sequence FROM builderops_outbox_reconciliations "
+                "WHERE repository = %s AND operation_key = %s AND claim_fencing_token = %s "
+                "FOR UPDATE",
+                (claim.repository, claim.operation_key, claim.fencing_token),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_hash"] != request_hash:
+                    raise IdempotencyConflict(
+                        "outbox reconciliation claim was reused with different readback evidence"
+                    )
+                receipt_sequence = int(existing["receipt_sequence"])
+                replayed = True
+            else:
+                outbox = conn.execute(
+                    "SELECT task_id, authority_envelope FROM builderops_outbox "
+                    "WHERE repository = %s AND operation_key = %s AND status = 'unknown' "
+                    "AND worker_id = %s AND claim_fencing_token = %s "
+                    "AND claim_receipt_sequence = %s "
+                    "AND COALESCE(claim_lsn::text, '0/0') = %s FOR UPDATE",
+                    (
+                        claim.repository,
+                        claim.operation_key,
+                        claim.worker_id,
+                        claim.fencing_token,
+                        claim.receipt_sequence,
+                        claim.claim_lsn,
+                    ),
+                ).fetchone()
+                if outbox is None:
+                    raise StaleFencingToken("unknown effect was already reconciled or superseded")
+                receipt = conn.execute(
+                    "INSERT INTO builderops_receipts(repository, task_id, event_type, idempotency_key, "
+                    "lease_holder, lease_fencing_token, authority_envelope) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING receipt_sequence",
+                    (
+                        claim.repository,
+                        outbox["task_id"],
+                        f"outbox.reconciled.{status}",
+                        f"outbox:{claim.operation_key}:reconcile:{claim.fencing_token}",
+                        claim.worker_id,
+                        claim.fencing_token,
+                        Jsonb(dict(outbox["authority_envelope"])),
+                    ),
+                ).fetchone()
+                assert receipt is not None
+                receipt_sequence = int(receipt["receipt_sequence"])
+                self._fault(fault_at, "after_reconciliation_receipt")
+                updated = conn.execute(
+                    "UPDATE builderops_outbox SET status = %s, reconciliation_evidence = %s, "
+                    "reconciliation_receipt_sequence = %s, reconciliation_lsn = NULL, "
+                    "worker_id = NULL, claim_expires_at = NULL, updated_at = clock_timestamp() "
+                    "WHERE repository = %s AND operation_key = %s AND status = 'unknown' "
+                    "AND worker_id = %s AND claim_fencing_token = %s "
+                    "AND claim_receipt_sequence = %s "
+                    "AND COALESCE(claim_lsn::text, '0/0') = %s RETURNING operation_key",
+                    (
+                        status,
+                        Jsonb(dict(evidence)),
+                        receipt_sequence,
+                        claim.repository,
+                        claim.operation_key,
+                        claim.worker_id,
+                        claim.fencing_token,
+                        claim.receipt_sequence,
+                        claim.claim_lsn,
+                    ),
+                ).fetchone()
+                if updated is None:
+                    raise StaleFencingToken("unknown effect was already reconciled or superseded")
+                self._fault(fault_at, "after_reconciliation_state")
+                conn.execute(
+                    "INSERT INTO builderops_outbox_reconciliations("
+                    "repository, operation_key, claim_fencing_token, task_id, worker_id, "
+                    "claim_receipt_sequence, claim_lsn, observed_applied, evidence, request_hash, "
+                    "status, receipt_sequence, authority_envelope) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        claim.repository,
+                        claim.operation_key,
+                        claim.fencing_token,
+                        outbox["task_id"],
+                        claim.worker_id,
+                        claim.receipt_sequence,
+                        claim.claim_lsn,
+                        observed_applied,
+                        Jsonb(dict(evidence)),
+                        request_hash,
+                        status,
+                        receipt_sequence,
+                        Jsonb(dict(outbox["authority_envelope"])),
+                    ),
+                )
+                self._fault(fault_at, "after_reconciliation_record")
+        self._fault(fault_at, "after_reconciliation_commit")
+        recovery_lsn = self._flushed_lsn()
+        return self._finalize_reconciliation(
+            claim.repository,
+            claim.operation_key,
+            claim.fencing_token,
+            receipt_sequence,
+            recovery_lsn,
+            replayed=replayed,
+        )
+
+    def _finalize_reconciliation(
+        self,
+        repository: str,
+        operation_key: str,
+        fencing_token: int,
+        receipt_sequence: int,
+        recovery_lsn: str,
+        *,
+        replayed: bool,
+    ) -> OutboxReconciliation:
+        with self._connect() as conn:
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"outbox-reconcile:{repository}:{operation_key}:{fencing_token}",),
+            )
+            row = conn.execute(
+                "SELECT task_id, worker_id, claim_receipt_sequence, status, receipt_sequence, "
+                "recovery_lsn::text AS recovery_lsn "
+                "FROM builderops_outbox_reconciliations WHERE repository = %s "
+                "AND operation_key = %s AND claim_fencing_token = %s FOR UPDATE",
+                (repository, operation_key, fencing_token),
             ).fetchone()
             if row is None:
-                raise StaleFencingToken("unknown effect was already reconciled or superseded")
+                raise RuntimeError("committed outbox reconciliation disappeared")
+            if row["recovery_lsn"] is not None:
+                return self._reconciliation(row, repository, operation_key, fencing_token, replayed)
+            conn.execute(
+                "UPDATE builderops_receipts SET recovery_lsn = %s WHERE receipt_sequence = %s",
+                (recovery_lsn, receipt_sequence),
+            )
+            conn.execute(
+                "UPDATE builderops_outbox_reconciliations SET recovery_lsn = %s "
+                "WHERE repository = %s AND operation_key = %s AND claim_fencing_token = %s",
+                (recovery_lsn, repository, operation_key, fencing_token),
+            )
+            bound = conn.execute(
+                "UPDATE builderops_outbox SET reconciliation_lsn = %s "
+                "WHERE repository = %s AND operation_key = %s "
+                "AND reconciliation_receipt_sequence = %s AND claim_fencing_token = %s "
+                "RETURNING operation_key",
+                (recovery_lsn, repository, operation_key, receipt_sequence, fencing_token),
+            ).fetchone()
+            if bound is None:
+                raise RuntimeError("outbox reconciliation was superseded before durability binding")
+            row = dict(row)
+            row["recovery_lsn"] = recovery_lsn
+        return self._reconciliation(row, repository, operation_key, fencing_token, replayed)
 
-    def outbox_status(self, repository: str, operation_key: str | None) -> str:
+    @staticmethod
+    def _reconciliation(
+        row: Mapping[str, Any],
+        repository: str,
+        operation_key: str,
+        fencing_token: int,
+        replayed: bool,
+    ) -> OutboxReconciliation:
+        return OutboxReconciliation(
+            repository=repository,
+            operation_key=operation_key,
+            task_id=str(row["task_id"]),
+            status=str(row["status"]),
+            worker_id=str(row["worker_id"]),
+            fencing_token=fencing_token,
+            claim_receipt_sequence=int(row["claim_receipt_sequence"]),
+            receipt_sequence=int(row["receipt_sequence"]),
+            recovery_lsn=str(row["recovery_lsn"] or "0/0"),
+            replayed=replayed,
+        )
+
+    def _load_reconciliation(
+        self,
+        conn: Any,
+        repository: str,
+        operation_key: str,
+        fencing_token: int,
+    ) -> OutboxReconciliation:
+        row = conn.execute(
+            "SELECT task_id, worker_id, claim_receipt_sequence, status, receipt_sequence, "
+            "recovery_lsn::text AS recovery_lsn FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s AND claim_fencing_token = %s",
+            (repository, operation_key, fencing_token),
+        ).fetchone()
+        if row is None or row["recovery_lsn"] is None:
+            raise DurabilityPending("outbox reconciliation durability binding is incomplete")
+        return self._reconciliation(row, repository, operation_key, fencing_token, False)
+
+    def outbox_status(
+        self,
+        repository: str,
+        operation_key: str | None,
+        *,
+        watermark: RecoveryWatermark | None = None,
+    ) -> str:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT status FROM builderops_outbox WHERE repository = %s AND operation_key = %s",
+                "SELECT status, claim_fencing_token FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s",
                 (repository, operation_key),
             ).fetchone()
-        if row is None:
-            raise KeyError(operation_key)
+            if row is None:
+                raise KeyError(operation_key)
+            if row["status"] == "succeeded":
+                reconciliation = self._load_reconciliation(
+                    conn,
+                    repository,
+                    str(operation_key),
+                    int(row["claim_fencing_token"]),
+                )
+                if watermark is None or not watermark.covers_reconciliation(reconciliation):
+                    raise DurabilityPending(
+                        "terminal outbox reconciliation has not reached the recovery watermark"
+                    )
         return str(row["status"])
 
     def authority_counts(self, repository: str) -> dict[str, int]:
@@ -923,7 +1163,7 @@ class PostgresBuilderOpsStore:
     def receipt(self, repository: str, sequence: int) -> dict[str, Any]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT task_id, idempotency_key, lease_holder, lease_fencing_token, "
+                "SELECT task_id, event_type, idempotency_key, lease_holder, lease_fencing_token, "
                 "recovery_lsn::text AS recovery_lsn "
                 "FROM builderops_receipts WHERE repository = %s AND receipt_sequence = %s",
                 (repository, sequence),

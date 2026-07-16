@@ -119,6 +119,8 @@ CREATE TABLE IF NOT EXISTS builderops_outbox (
     claim_receipt_sequence bigint,
     unknown_detail text,
     reconciliation_evidence jsonb,
+    reconciliation_receipt_sequence bigint,
+    reconciliation_lsn pg_lsn,
     authority_envelope jsonb NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, operation_key),
@@ -129,6 +131,28 @@ CREATE TABLE IF NOT EXISTS builderops_outbox (
 CREATE INDEX IF NOT EXISTS builderops_outbox_pending_idx
     ON builderops_outbox (status, updated_at)
     WHERE status IN ('pending', 'claimed');
+
+CREATE TABLE IF NOT EXISTS builderops_outbox_reconciliations (
+    repository text NOT NULL,
+    operation_key text NOT NULL,
+    claim_fencing_token bigint NOT NULL CHECK (claim_fencing_token > 0),
+    task_id text NOT NULL,
+    worker_id text NOT NULL,
+    claim_receipt_sequence bigint NOT NULL,
+    claim_lsn pg_lsn NOT NULL,
+    observed_applied boolean NOT NULL,
+    evidence jsonb NOT NULL,
+    request_hash text NOT NULL,
+    status text NOT NULL CHECK (status IN ('pending','succeeded')),
+    receipt_sequence bigint NOT NULL,
+    recovery_lsn pg_lsn,
+    authority_envelope jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (repository, operation_key, claim_fencing_token),
+    CHECK (repository <> '' AND operation_key <> '' AND task_id <> '' AND worker_id <> ''),
+    CHECK (request_hash <> ''),
+    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+);
 
 CREATE TABLE IF NOT EXISTS builderops_dead_letters (
     repository text NOT NULL, operation_key text NOT NULL, outcome jsonb NOT NULL,
