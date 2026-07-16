@@ -78,6 +78,47 @@ def test_deploy_pin_cannot_mask_an_unowned_runtime_path() -> None:
     assert selection.unowned_paths == ("app/new_surface/example.py",)
 
 
+def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
+    selection = select_tests(
+        [
+            "app/cli/__init__.py",
+            "app/cli/settings_explain.py",
+            "app/config/paths.py",
+            "app/services/companion_eligibility.py",
+            "app/services/settings.py",
+        ]
+    )
+
+    assert selection.full_suite is True
+    assert selection.unowned_paths == ()
+    assert selection.reason == "shared CI/test/runtime configuration changed"
+    assert "tests --ignore=tests/e2e" in selection.pytest_args
+
+    for adapter_path in (
+        "app/cli/settings_explain.py",
+        "app/services/companion_eligibility.py",
+        "app/services/settings.py",
+    ):
+        focused_selection = select_tests([adapter_path])
+        assert focused_selection.subsystems == ("settings",)
+        assert focused_selection.unowned_paths == ()
+        assert "tests/cli/test_settings_explain_cli.py" in focused_selection.targets
+        assert "tests/services/test_companion_eligibility.py" in focused_selection.targets
+
+
+def test_settings_adapter_cannot_mask_unknown_runtime_path() -> None:
+    selection = select_tests(
+        [
+            "app/services/settings.py",
+            "app/new_surface/example.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("unowned",)
+    assert selection.unowned_paths == ("app/new_surface/example.py",)
+
+
 def test_docs_authoring_and_skill_paths_are_owned() -> None:
     # Reproduces the #3476 / PR #3475 failure: a docs-authoring PR touching
     # docs/contracts/**, docs/HEIMDAL/**, api/openapi.yaml, and .codex/skills/**
