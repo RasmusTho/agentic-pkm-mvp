@@ -1099,6 +1099,38 @@ def _closure_evidence(
     }
 
 
+def _repository_issue_event(
+    event_id: int,
+    *,
+    number: int,
+    created_at: str,
+    event: str = "closed",
+    commit_id: str | None = None,
+    commit_repository: str = REPO,
+    issue_repository: str = REPO,
+) -> dict[str, object]:
+    repository_url = f"https://api.github.com/repos/{issue_repository}"
+    issue_url = f"{repository_url}/issues/{number}"
+    return {
+        "id": event_id,
+        "url": f"{repository_url}/issues/events/{event_id}",
+        "event": event,
+        "commit_id": commit_id,
+        "commit_url": (
+            f"https://api.github.com/repos/{commit_repository}/commits/{commit_id}"
+            if commit_id is not None
+            else None
+        ),
+        "created_at": created_at,
+        "issue": {
+            "number": number,
+            "url": issue_url,
+            "repository_url": repository_url,
+            "events_url": f"{issue_url}/events",
+        },
+    }
+
+
 def _required_check_authority(
     head_sha: str = HEAD, *, suite_id: int = 1
 ) -> dict[str, object]:
@@ -1314,7 +1346,7 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
     )
 
 
-def test_gh_source_scans_only_bounded_pr_related_closure_candidates() -> None:
+def test_gh_source_detects_removed_body_ref_from_exact_merge_event() -> None:
     class Result:
         returncode = 0
 
@@ -1326,6 +1358,23 @@ def test_gh_source_scans_only_bounded_pr_related_closure_candidates() -> None:
     def runner(command, **_kwargs):
         endpoint = command[-1]
         calls.append(endpoint)
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        commit_id="b" * 40,
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
         if endpoint == f"repos/{REPO}/issues/3603":
             return Result(
                 {
@@ -1370,7 +1419,7 @@ def test_gh_source_scans_only_bounded_pr_related_closure_candidates() -> None:
         REPO,
         3603,
         issue_numbers=[3603],
-        observed_issue_numbers=[4999],
+        observed_issue_numbers=[],
         merged_at="2026-07-15T00:00:00Z",
         merge_commit_sha="b" * 40,
         actor_login="verification-closer",
@@ -1394,7 +1443,7 @@ def test_gh_source_scans_only_bounded_pr_related_closure_candidates() -> None:
             "state": "closed",
         },
     ]
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert not any("issues?state=closed" in endpoint for endpoint in calls)
     assert not any("/issues/5000" in endpoint for endpoint in calls)
 
@@ -1411,6 +1460,32 @@ def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
     def runner(command, **_kwargs):
         endpoint = command[-1]
         calls.append(endpoint)
+        if endpoint.startswith(
+            f"repos/{REPO}/issues/events?per_page=100&page="
+        ):
+            page = int(endpoint.rsplit("=", 1)[1])
+            if page < 5:
+                return Result(
+                    [
+                        _repository_issue_event(
+                            page * 1000 + offset,
+                            number=6000 + offset,
+                            created_at=f"2026-07-15T00:00:{9 - page:02d}Z",
+                            event="labeled",
+                        )
+                        for offset in range(100)
+                    ]
+                )
+            return Result(
+                [
+                    _repository_issue_event(
+                        5001,
+                        number=6001,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    )
+                ]
+            )
         if endpoint == f"repos/{REPO}/issues/3603":
             return Result(
                 {
@@ -1443,7 +1518,8 @@ def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
     )
 
     assert evidence["observed_closing_issues"] == [3603]
-    assert len(calls) == 2
+    assert len(calls) == 7
+    assert sum("/issues/events?" in endpoint for endpoint in calls) == 5
 
 
 def test_gh_source_issue_event_pagination_cap_fails_closed() -> None:
@@ -1458,6 +1534,17 @@ def test_gh_source_issue_event_pagination_cap_fails_closed() -> None:
     def runner(command, **_kwargs):
         endpoint = command[-1]
         calls.append(endpoint)
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        1,
+                        number=3603,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    )
+                ]
+            )
         if endpoint == f"repos/{REPO}/issues/3603":
             return Result(
                 {
@@ -1490,7 +1577,365 @@ def test_gh_source_issue_event_pagination_cap_fails_closed() -> None:
             merge_commit_sha="b" * 40,
             actor_login="verification-closer",
         )
-    assert len(calls) == 3
+    assert len(calls) == 4
+
+
+def test_gh_source_repository_event_pagination_cap_fails_closed() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[str] = []
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        calls.append(endpoint)
+        assert endpoint.startswith(
+            f"repos/{REPO}/issues/events?per_page=100&page="
+        )
+        page = int(endpoint.rsplit("=", 1)[1])
+        return Result(
+            [
+                _repository_issue_event(
+                    page * 1000 + offset,
+                    number=6000 + offset,
+                    created_at=f"2026-07-15T00:00:{10 - page:02d}Z",
+                    event="labeled",
+                )
+                for offset in range(100)
+            ]
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="cap reached before merge coverage",
+    ):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+    assert len(calls) == 5
+
+
+def test_gh_source_exact_merge_event_candidates_keep_existing_cap() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    events = [
+        _repository_issue_event(
+            100 - offset,
+            number=5000 + offset,
+            created_at="2026-07-15T00:00:03Z",
+            commit_id="b" * 40,
+        )
+        for offset in range(21)
+    ]
+
+    with pytest.raises(RuntimeError, match="candidates exceed bounded scan"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result(events)
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+@pytest.mark.parametrize(
+    ("event_updates", "reason"),
+    [
+        (
+            {"commit_repository": "attacker/redirect"},
+            "merge commit identity mismatch",
+        ),
+        (
+            {"issue_repository": "attacker/redirect"},
+            "event identity",
+        ),
+    ],
+)
+def test_gh_source_rejects_foreign_repository_event_identity(
+    event_updates, reason
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    event = _repository_issue_event(
+        20,
+        number=4999,
+        created_at="2026-07-15T00:00:03Z",
+        commit_id="b" * 40,
+        **event_updates,
+    )
+
+    with pytest.raises(RuntimeError, match=reason):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result([event])
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_ignores_valid_foreign_commit_event() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[str] = []
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        calls.append(endpoint)
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        commit_id="c" * 40,
+                        commit_repository="attacker/redirect",
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(
+                {
+                    "number": 3603,
+                    "state": "closed",
+                    "closed_at": "2026-07-15T00:00:02Z",
+                }
+            )
+        if "/issues/3603/events?per_page=100" in endpoint:
+            return Result(
+                [
+                    {
+                        "event": "closed",
+                        "actor": {"login": "verification-closer"},
+                        "created_at": "2026-07-15T00:00:02Z",
+                        "commit_id": None,
+                    }
+                ]
+            )
+        raise AssertionError(endpoint)
+
+    evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+        REPO,
+        3603,
+        issue_numbers=[3603],
+        observed_issue_numbers=[],
+        merged_at="2026-07-15T00:00:00Z",
+        merge_commit_sha="b" * 40,
+        actor_login="verification-closer",
+    )
+
+    assert evidence["observed_closing_issues"] == [3603]
+    assert not any("/issues/4999" in endpoint for endpoint in calls)
+
+
+def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
+    tmp_path,
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    budget = state.repair_budget_projection(run.run_id)
+    terminal_pr = merged_pr()
+    comments = _merge_comments(terminal_pr, repair_budget=budget)
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/git/commits/{'b' * 40}":
+            return Result(
+                {
+                    "sha": "b" * 40,
+                    "url": (
+                        f"https://api.github.com/repos/{REPO}/git/commits/"
+                        + "b" * 40
+                    ),
+                    "message": "Merge verified issue set",
+                }
+            )
+        if endpoint == f"repos/{REPO}/issues/3603/comments?per_page=100&page=1":
+            return Result(comments)
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        commit_id="b" * 40,
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint in {
+            f"repos/{REPO}/issues/3603",
+            f"repos/{REPO}/issues/4999",
+        }:
+            number = int(endpoint.rsplit("/", 1)[1])
+            return Result(
+                {
+                    "number": number,
+                    "state": "closed",
+                    "closed_at": "2026-07-15T00:00:03Z",
+                }
+            )
+        if endpoint == f"repos/{REPO}/issues/3603/events?per_page=100&page=1":
+            return Result(
+                [
+                    {
+                        "event": "closed",
+                        "actor": {"login": "verification-closer"},
+                        "created_at": "2026-07-15T00:00:02Z",
+                        "commit_id": None,
+                    }
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/4999/events?per_page=100&page=1":
+            return Result(
+                [
+                    {
+                        "event": "closed",
+                        "actor": {"login": "verification-closer"},
+                        "created_at": "2026-07-15T00:00:03Z",
+                        "commit_id": "b" * 40,
+                    }
+                ]
+            )
+        raise AssertionError(endpoint)
+
+    consumer = VerificationConsumer(
+        state,
+        GhCliVerificationSource(runner=runner),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    )
+    evidence = consumer._read_delivery_evidence(
+        run,
+        terminal_pr,
+        expected_repair_budget=budget,
+    )
+
+    assert evidence["observed_closing_issues"] == [3603, 4999]
+    assert (
+        verification_consumer.delivered_live_truth_rejection(
+            run,
+            terminal_pr,
+            GREEN,
+            evidence,
+            expected_head_sha=HEAD,
+            expected_repair_budget=budget,
+        )
+        == "unauthorized_closure"
+    )
+
+
+def test_gh_source_rejects_malformed_repository_event_commit() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    event = _repository_issue_event(
+        20,
+        number=4999,
+        created_at="2026-07-15T00:00:03Z",
+        commit_id="not-a-sha",
+    )
+
+    with pytest.raises(RuntimeError, match="malformed.*commit identity"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result([event])
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_out_of_order_repository_events() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    events = [
+        _repository_issue_event(
+            20,
+            number=4999,
+            created_at="2026-07-14T23:59:59Z",
+            event="labeled",
+        ),
+        _repository_issue_event(
+            21,
+            number=5000,
+            created_at="2026-07-15T00:00:03Z",
+            event="labeled",
+        ),
+    ]
+
+    with pytest.raises(RuntimeError, match="ordering mismatch"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result(events)
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
 
 
 def test_gh_source_fetches_exact_bounded_merge_commit_identity() -> None:

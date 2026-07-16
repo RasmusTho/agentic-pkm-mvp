@@ -300,18 +300,25 @@ When all prerequisites are met:
    same run idempotently at the first missing phase without resetting attempts or the 2+2 repair
    budget. Never reject or restart an authenticated merged-but-incomplete delivery merely because
    the PR can no longer satisfy the pre-merge intake predicate
-8. re-read post-merge closing references and issue state before explicit closure. Use
-   `plan_post_merge_reconciliation` with complete issue evidence; reopen only an unauthorized closure
-   GitHub attributes to this PR, and block the final receipt on any unresolved unauthorized closure.
-   This is the defensive race reconciliation, not a substitute for pre-effect neutralization
+8. re-read post-merge closing references and issue state before explicit closure. Independently
+   enumerate exact-merge issue closures through the repository issue-events feed: validate observed
+   reverse-time ordering within and across bounded pages until the feed covers `merged_at`, fail
+   closed on any ordering violation or when the cap is reached first, authenticate embedded
+   repository/issue plus commit identity, and retain only issue numbers whose
+   `closed` event names the exact merge commit. Union those numbers with authenticated and phase-known
+   candidates under the existing candidate cap, then use `plan_post_merge_reconciliation` with
+   complete per-issue evidence; reopen only an unauthorized closure GitHub attributes to this PR, and
+   block the final receipt on any unresolved unauthorized closure. This is the defensive race
+   reconciliation, not a substitute for pre-effect neutralization
 9. explicitly close every and only the authenticated `closing_issues`, verify their state, post the
    `reconciled` phase receipt, then
    restore the authenticated original PR body and prove its governing/closing identities equal the
    durable receipt, and post the `restored` phase receipt; bounded monotonic supporting additions may be retained only as evidence and may not expand closure authority
-10. authenticate the durable authority receipt and complete phase ledger again, then live-read issue
-   state and closure attribution. A terminal delivery receipt is forbidden unless every and only
-   authenticated closing issue is closed by this delivery and no unrelated issue closure remains
-   attributable to it
+10. authenticate the durable authority receipt and complete phase ledger again, then repeat the
+    bounded repository-event enumeration and live-read each bounded candidate's state and closure
+    attribution. A terminal delivery receipt is forbidden unless every and only authenticated
+    closing issue is closed by this delivery and no unrelated issue closure remains attributable to
+    the exact merge commit
 11. if issue-backed, complete or release each applicable closing-issue dispatcher task
 12. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
    labels from a distinct governing parent unless its own lifecycle contract is complete

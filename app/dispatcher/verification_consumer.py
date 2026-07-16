@@ -315,6 +315,8 @@ _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_REQUEST_BYTES = 1_000_000
 _MAX_CLOSURE_CANDIDATES = 20
 _MAX_CLOSURE_EVENTS_PER_ISSUE = 200
+_MAX_REPOSITORY_CLOSURE_EVENTS = 500
+_MAX_REPOSITORY_ISSUE_EVENTS_RESPONSE_BYTES = 8_000_000
 _MAX_MERGE_COMMIT_RESPONSE_BYTES = 64_000
 _MAX_MERGE_COMMIT_MESSAGE_BYTES = 16_000
 _VERIFICATION_REQUEST_WORKFLOW_NAME = "Verification Dispatch Request"
@@ -958,6 +960,150 @@ class GhCliVerificationSource:
             "message": message,
         }
 
+    def _repository_merge_closed_issues(
+        self,
+        repository: str,
+        *,
+        merged_instant: datetime,
+        merge_commit_sha: str,
+    ) -> set[int]:
+        """Enumerate exact-merge issue closures from a bounded repository feed.
+
+        The endpoint does not document a sort guarantee, so every row must
+        prove the observed reverse-time ordering within and across pages.  A
+        complete merge-window read then either reaches an event older than
+        ``merged_instant`` or exhausts the feed.  Any ordering violation, or
+        hitting the fixed page cap first, is not evidence of absence and fails
+        closed.
+
+        Only issue numbers survive this boundary.  Unrelated event payloads
+        are validated for ordering and repository/issue identity, then
+        discarded instead of being persisted in a delivery receipt.
+        """
+
+        expected_repository_url = f"https://api.github.com/repos/{repository}"
+        expected_commit_url = (
+            f"{expected_repository_url}/commits/{merge_commit_sha}"
+        )
+        endpoint = f"repos/{repository}/issues/events?per_page=100"
+        discovered: set[int] = set()
+        seen_ids: set[int] = set()
+        newest_previous: datetime | None = None
+        pages = _MAX_REPOSITORY_CLOSURE_EVENTS // 100
+        for page in range(1, pages + 1):
+            payload = self._json(
+                f"{endpoint}&page={page}",
+                max_response_bytes=_MAX_REPOSITORY_ISSUE_EVENTS_RESPONSE_BYTES,
+            )
+            if not isinstance(payload, list) or len(payload) > 100:
+                raise RuntimeError("malformed repository issue-events response")
+            coverage_reached = False
+            for event in payload:
+                if not isinstance(event, Mapping):
+                    raise RuntimeError("malformed repository issue event")
+                event_id = event.get("id")
+                created_at = event.get("created_at")
+                issue = event.get("issue")
+                if (
+                    not isinstance(event_id, int)
+                    or isinstance(event_id, bool)
+                    or event_id <= 0
+                    or event_id in seen_ids
+                    or event.get("url")
+                    != f"{expected_repository_url}/issues/events/{event_id}"
+                    or not isinstance(created_at, str)
+                    or not isinstance(issue, Mapping)
+                ):
+                    raise RuntimeError("malformed repository issue event identity")
+                try:
+                    created_instant = datetime.fromisoformat(
+                        created_at.replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    raise RuntimeError(
+                        "malformed repository issue event timestamp"
+                    ) from exc
+                if created_instant.tzinfo is None:
+                    raise RuntimeError(
+                        "malformed repository issue event timestamp"
+                    )
+                if (
+                    newest_previous is not None
+                    and created_instant > newest_previous
+                ):
+                    raise RuntimeError(
+                        "repository issue-events ordering mismatch"
+                    )
+                newest_previous = created_instant
+                seen_ids.add(event_id)
+
+                number = issue.get("number")
+                expected_issue_url = f"{expected_repository_url}/issues/{number}"
+                pull_request = issue.get("pull_request")
+                if (
+                    not isinstance(number, int)
+                    or isinstance(number, bool)
+                    or number <= 0
+                    or issue.get("repository_url") != expected_repository_url
+                    or issue.get("url") != expected_issue_url
+                    or issue.get("events_url") != f"{expected_issue_url}/events"
+                    or (
+                        pull_request is not None
+                        and not isinstance(pull_request, Mapping)
+                    )
+                ):
+                    raise RuntimeError("repository issue event identity mismatch")
+
+                if created_instant < merged_instant:
+                    coverage_reached = True
+                    continue
+
+                commit_id = event.get("commit_id")
+                commit_url = event.get("commit_url")
+                if commit_id is not None:
+                    if (
+                        not isinstance(commit_id, str)
+                        or re.fullmatch(r"[0-9a-fA-F]{40}", commit_id) is None
+                        or not isinstance(commit_url, str)
+                        or re.fullmatch(
+                            r"https://api\.github\.com/repos/"
+                            r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+/commits/"
+                            r"[0-9a-fA-F]{40}",
+                            commit_url,
+                        )
+                        is None
+                        or not commit_url.endswith(f"/commits/{commit_id}")
+                    ):
+                        raise RuntimeError(
+                            "malformed repository issue event commit identity"
+                        )
+                elif commit_url is not None:
+                    raise RuntimeError(
+                        "malformed repository issue event commit identity"
+                    )
+
+                if (
+                    event.get("event") == "closed"
+                    and pull_request is None
+                    and commit_id == merge_commit_sha
+                ):
+                    if commit_url != expected_commit_url:
+                        raise RuntimeError(
+                            "repository issue event merge commit identity mismatch"
+                        )
+                    discovered.add(number)
+                    if len(discovered) > _MAX_CLOSURE_CANDIDATES:
+                        raise RuntimeError(
+                            "issue-set closure candidates exceed bounded scan"
+                        )
+            if coverage_reached:
+                return discovered
+            if len(payload) < 100:
+                return discovered
+        raise RuntimeError(
+            "repository issue-events cap reached before merge coverage"
+        )
+
     def issue_set_closure_evidence(
         self,
         repository: str,
@@ -1000,7 +1146,18 @@ class GhCliVerificationSource:
             )
         ):
             raise RuntimeError("malformed issue-set closure query")
-        candidate_numbers = sorted({*issue_numbers, *observed_issue_numbers})
+        repository_closing_issues = self._repository_merge_closed_issues(
+            repository,
+            merged_instant=merged_instant,
+            merge_commit_sha=merge_commit_sha,
+        )
+        candidate_numbers = sorted(
+            {
+                *issue_numbers,
+                *observed_issue_numbers,
+                *repository_closing_issues,
+            }
+        )
         if len(candidate_numbers) > _MAX_CLOSURE_CANDIDATES:
             raise RuntimeError("issue-set closure candidates exceed bounded scan")
         candidates: dict[int, Mapping[str, object]] = {}
