@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.instance.vault_registry import RegistryError, VaultRegistryStore
+from app.instance.vault_registry import RegistryError, VaultRegistration, VaultRegistryStore
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsStore
 
@@ -56,6 +56,24 @@ def test_populated_registry_corruption_never_reseeds_empty(tmp_path) -> None:
     assert recovered.extensions["defaultVaultBindingId"] == "future-default"
     assert recovered.extensions["dimensions"] == {"focus": ["future-default"]}
     assert recovered.extensions["backgroundIntent"] == {"mode": "explicit"}
+
+    path.unlink()
+    restored_missing_main = VaultRegistryStore(path).load()
+    assert restored_missing_main.revision == recovered.revision
+    assert set(restored_missing_main.registrations) == set(recovered.registrations)
+
+    path.unlink()
+    migrated_missing_main = VaultRegistryStore(path).load_or_migrate()
+    assert migrated_missing_main.revision == recovered.revision
+    assert set(migrated_missing_main.registrations) == set(recovered.registrations)
+
+    path.unlink()
+    mutated_missing_main = VaultRegistryStore(path).register(
+        VaultRegistration("binding-c", "path:/c", "/c"),
+        expected_revision=recovered.revision,
+    )
+    assert mutated_missing_main.revision == recovered.revision + 1
+    assert len(mutated_missing_main.registrations) == 3
 
     no_snapshot_path = tmp_path / "no-snapshot.md"
     no_snapshot_store = VaultRegistryStore(no_snapshot_path)

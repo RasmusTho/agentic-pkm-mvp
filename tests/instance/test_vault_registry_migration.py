@@ -163,6 +163,21 @@ def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, 
     assert path.read_bytes() == original
     assert not path.with_suffix(path.suffix + ".last-good").exists()
 
+    blank_ref_path = tmp_path / "blank-ref.md"
+    _write_legacy(
+        blank_ref_path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-blank-ref",
+            "knownVaults": {" ": {"path": "/vault/blank"}},
+        },
+    )
+    blank_ref_original = blank_ref_path.read_bytes()
+    with pytest.raises(RegistryMigrationError, match="registration ref is blank"):
+        VaultRegistryStore(blank_ref_path).load_or_migrate()
+    assert blank_ref_path.read_bytes() == blank_ref_original
+    assert not blank_ref_path.with_suffix(blank_ref_path.suffix + ".last-good").exists()
+
     write_failure_path = tmp_path / "write-failure.md"
     _write_legacy(
         write_failure_path,

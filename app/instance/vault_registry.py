@@ -140,18 +140,14 @@ class VaultRegistryStore:
     def load(self) -> RegistrySnapshot:
         with self._locked():
             if not self.path.exists():
-                snapshot = self._empty_snapshot()
-                self._write_locked(snapshot)
-                return snapshot
+                return self._restore_or_initialize_missing_locked()
             return self._read_current_locked(recover=True)
 
     def load_or_migrate(self) -> RegistrySnapshot:
         legacy_upgrade = self._is_owned_legacy_source()
         with self._locked(allow_legacy_directory_upgrade=legacy_upgrade):
             if not self.path.exists():
-                snapshot = self._empty_snapshot()
-                self._write_locked(snapshot)
-                return snapshot
+                return self._restore_or_initialize_missing_locked()
             try:
                 document = _read_document(self.path)
             except (OSError, RegistryParseError):
@@ -174,7 +170,11 @@ class VaultRegistryStore:
     ) -> RegistrySnapshot:
         self._validate_registration(registration)
         with self._locked():
-            current = self._read_current_locked(recover=True) if self.path.exists() else self._empty_snapshot()
+            current = (
+                self._read_current_locked(recover=True)
+                if self.path.exists()
+                else self._restore_or_initialize_missing_locked()
+            )
             self._assert_revision(current, expected_revision)
             registrations = dict(current.registrations)
             existing = registrations.get(registration.vault_binding_id)
@@ -357,6 +357,20 @@ class VaultRegistryStore:
             _atomic_private_write(self.path, payload)
             return snapshot
 
+    def _restore_or_initialize_missing_locked(self) -> RegistrySnapshot:
+        recovered = self._load_verified_snapshot_locked()
+        if recovered is not None:
+            snapshot, payload = recovered
+            _atomic_private_write(self.path, payload)
+            return snapshot
+        if os.path.lexists(self.snapshot_path) or os.path.lexists(self.snapshot_checksum_path):
+            raise RegistryError(
+                "registry main is missing and no unambiguous last-good snapshot exists"
+            )
+        snapshot = self._empty_snapshot()
+        self._write_locked(snapshot)
+        return snapshot
+
     def _load_verified_snapshot_locked(self) -> tuple[RegistrySnapshot, bytes] | None:
         if not self.snapshot_path.exists() or not self.snapshot_checksum_path.exists():
             return None
@@ -377,8 +391,10 @@ class VaultRegistryStore:
     def _write_locked(self, snapshot: RegistrySnapshot) -> None:
         if snapshot.schema != CURRENT_REGISTRY_SCHEMA or snapshot.authority != REGISTRY_AUTHORITY_DORMANT:
             raise RegistryError("MVR-01A may persist only the dormant current registry schema")
+        frontmatter = self._frontmatter_from_snapshot(snapshot)
+        self._snapshot_from_frontmatter(frontmatter)
         payload = _render_markdown_settings(
-            self._frontmatter_from_snapshot(snapshot),
+            frontmatter,
             "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
         ).encode("utf-8")
         checksum = (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii")
@@ -613,12 +629,17 @@ class VaultRegistryStore:
             raise RegistryMigrationError("legacy knownVaults must be a mapping")
         raw_candidates: dict[str, dict[str, Any]] = {}
         for ref, raw in raw_known.items():
+            normalized_ref = _optional_str(ref)
+            if normalized_ref is None:
+                raise RegistryMigrationError("legacy registration ref is blank")
             if not isinstance(raw, dict):
                 raise RegistryMigrationError(f"legacy registration {ref} must be a mapping")
             path = _optional_str(raw.get("path"))
             if path is None:
                 raise RegistryMigrationError(f"legacy registration {ref} has no path")
-            raw_candidates[str(ref)] = dict(raw)
+            if normalized_ref in raw_candidates:
+                raise RegistryMigrationError(f"duplicate normalized legacy registration ref: {normalized_ref}")
+            raw_candidates[normalized_ref] = dict(raw)
         candidates, aliases = _coalesce_legacy_candidates(
             raw_candidates,
             last_active_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
