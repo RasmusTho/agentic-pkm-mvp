@@ -34,8 +34,6 @@ write_pin() {
     printf 'BUILDEROPS_SOURCE_SHA=%s\n' "${source_sha}"
     printf 'BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=%s\n' "${postgres_repository}"
     printf 'BUILDEROPS_POSTGRES_IMAGE_DIGEST=%s\n' "${postgres_digest}"
-    printf 'BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=%s\n' "$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_REPOSITORY)"
-    printf 'BUILDEROPS_POSTGRES_IMAGE_DIGEST=%s\n' "$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGEST)"
     printf 'BUILDEROPS_DOCKER_CONTEXT=%s\n' "${BUILDEROPS_DOCKER_CONTEXT}"
     printf 'PRODUCT_DOCKER_CONTEXT=%s\n' "${PRODUCT_DOCKER_CONTEXT}"
   } >"${tmp}"

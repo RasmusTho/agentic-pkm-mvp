@@ -28,6 +28,19 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str]:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, destination)
 
+    # Rollback is meaningful only after a real release has been installed.
+    # The committed pin deliberately uses all-zero bootstrap placeholders,
+    # which deploy_builderops.sh correctly refuses to preserve as a rollback
+    # target. Seed the harness with a valid current release so the test proves
+    # deploy -> rollback behavior rather than rollback-to-bootstrap behavior.
+    pin_path = root / "config/deploy/builderops.env"
+    pin_path.write_text(
+        pin_path.read_text(encoding="utf-8")
+        .replace("sha256:" + "0" * 64, "sha256:" + "d" * 64)
+        .replace("0" * 40, "c" * 40),
+        encoding="utf-8",
+    )
+
     source_sha = "a" * 40
     digest = "sha256:" + "b" * 64
     token_file = tmp_path / "probe-token"
@@ -124,8 +137,8 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     migration_event = "up --abort-on-container-exit --exit-code-from migrate migrate"
     assert events.index(migration_event) < events.index("up -d --force-recreate api worker")
     pin = (root / "config/deploy/builderops.env").read_text(encoding="utf-8")
-    assert "BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=" in pin
-    assert "BUILDEROPS_POSTGRES_IMAGE_DIGEST=sha256:" in pin
+    assert pin.count("BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=") == 1
+    assert pin.count("BUILDEROPS_POSTGRES_IMAGE_DIGEST=sha256:") == 1
     assert "pg_restore" not in events
 
     rollback = subprocess.run(

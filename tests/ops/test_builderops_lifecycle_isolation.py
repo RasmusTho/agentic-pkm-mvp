@@ -25,7 +25,7 @@ if [ "${1:-}" = "info" ]; then
   exit 0
 fi
 if [ "${1:-}" = compose ] && [ "${2:-}" = ls ]; then
-  [ "$context" = builderops ] && printf '%s\n' "${FAKE_BUILDER_PROJECTS:-[]}" || printf '%s\n' "${FAKE_PRODUCT_PROJECTS:-[]}" 
+  [ "$context" = builderops ] && printf '%s\n' "${FAKE_BUILDER_PROJECTS:-[]}" || printf '%s\n' "${FAKE_PRODUCT_PROJECTS:-[]}"
   exit 0
 fi
 exit 0
