@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import tempfile
@@ -12,6 +13,7 @@ from app.settings.locations import (
     LEGACY_HEALTH_SETTINGS,
     LEGACY_SYSTEM_SETTINGS,
     canonical_settings_root,
+    contained_settings_path,
 )
 from app.vault.paths import get_vault_system_dir_rel
 from app.receipts.settings_write import SettingsWriteReceipt, emit_settings_write_receipt
@@ -19,6 +21,7 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 
 MIGRATION_ACTION = "settings.location.migrate"
+logger = logging.getLogger(__name__)
 
 
 def _markdown_from_yaml(raw: str) -> str:
@@ -27,7 +30,7 @@ def _markdown_from_yaml(raw: str) -> str:
 
 def _migration_files(vault_root: Path) -> list[tuple[Path, Path, str | None]]:
     mappings: list[tuple[Path, Path, str | None]] = []
-    compiled = vault_root / LEGACY_COMPILED_DIR
+    compiled = contained_settings_path(vault_root, vault_root / LEGACY_COMPILED_DIR)
     if compiled.exists():
         for source in sorted(compiled.rglob("*")):
             if source.is_file():
@@ -37,7 +40,9 @@ def _migration_files(vault_root: Path) -> list[tuple[Path, Path, str | None]]:
                 else:
                     mappings.append((source, relative, None))
 
-    legacy_system_root = (vault_root / LEGACY_SYSTEM_SETTINGS).parent
+    legacy_system_root = contained_settings_path(
+        vault_root, (vault_root / LEGACY_SYSTEM_SETTINGS).parent
+    )
     if legacy_system_root.exists():
         for source in sorted(legacy_system_root.rglob("*")):
             if not source.is_file():
@@ -109,11 +114,13 @@ def _prepared_mappings(
 
 
 def _remove_legacy_sources(root: Path) -> None:
-    compiled = root / LEGACY_COMPILED_DIR
+    compiled = contained_settings_path(root, root / LEGACY_COMPILED_DIR)
     if compiled.exists():
         shutil.rmtree(compiled)
 
-    legacy_system_root = (root / LEGACY_SYSTEM_SETTINGS).parent
+    legacy_system_root = contained_settings_path(
+        root, (root / LEGACY_SYSTEM_SETTINGS).parent
+    )
     if legacy_system_root.exists():
         shutil.rmtree(legacy_system_root)
 
@@ -152,6 +159,16 @@ def migrate_settings_location(
     backup = Path(tempfile.mkdtemp(prefix=".settings-before-migration-", dir=canonical.parent))
     backup.rmdir()
     published = False
+    committed = False
+    receipt = SettingsWriteReceipt(
+        key="settings.location",
+        value={"canonical": "settings", "migrated_files": len(prepared)},
+        old_value={"canonical": None, "legacy_files": len(prepared)},
+        file=str(canonical),
+        surface="migration",
+        actor="operator",
+        is_runtime_gating=False,
+    )
     try:
         if canonical.exists():
             shutil.copytree(canonical, staged, dirs_exist_ok=True)
@@ -165,27 +182,35 @@ def migrate_settings_location(
         os.replace(staged, canonical)
         published = True
 
-        _remove_legacy_sources(root)
-        if backup.exists():
-            shutil.rmtree(backup)
+        # The durable receipt is the commit boundary. Before it succeeds, any
+        # failure restores the previous canonical tree. After it succeeds,
+        # compatibility cleanup is best-effort: canonical-wins reads remain
+        # unambiguous and the committed write is always receipted.
+        emit_settings_write_receipt(receipt)
+        committed = True
     except Exception:
-        if not published and backup.exists() and not canonical.exists():
-            os.replace(backup, canonical)
+        if not committed:
+            if published and canonical.exists():
+                shutil.rmtree(canonical)
+            if backup.exists() and not canonical.exists():
+                os.replace(backup, canonical)
         raise
     finally:
         if staged.exists():
             shutil.rmtree(staged, ignore_errors=True)
 
-    receipt = SettingsWriteReceipt(
-        key="settings.location",
-        value={"canonical": "settings", "migrated_files": len(prepared)},
-        old_value={"canonical": None, "legacy_files": len(prepared)},
-        file=str(canonical),
-        surface="migration",
-        actor="operator",
-        is_runtime_gating=False,
-    )
-    emit_settings_write_receipt(receipt)
+    try:
+        _remove_legacy_sources(root)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "settings migration committed but legacy cleanup was incomplete: %s",
+            exc,
+        )
+    if backup.exists():
+        try:
+            shutil.rmtree(backup)
+        except (OSError, ValueError) as exc:
+            logger.warning("settings migration committed but backup cleanup failed: %s", exc)
     return receipt
 
 

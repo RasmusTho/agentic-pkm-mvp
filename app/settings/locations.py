@@ -22,7 +22,18 @@ LEGACY_HEALTH_SETTINGS = Path("_system") / "Settings" / "health.md"
 
 
 def canonical_settings_root(vault_root: Path) -> Path:
-    return Path(vault_root).expanduser() / CANONICAL_SETTINGS_DIR_NAME
+    root = Path(vault_root).expanduser().resolve()
+    return contained_settings_path(root, root / CANONICAL_SETTINGS_DIR_NAME)
+
+
+def contained_settings_path(root: Path, candidate: Path) -> Path:
+    """Resolve one settings path and reject authority outside the vault."""
+
+    resolved_root = root.expanduser().resolve()
+    resolved_candidate = candidate.expanduser().resolve()
+    if not resolved_candidate.is_relative_to(resolved_root):
+        raise ValueError(f"settings path escapes vault root: {resolved_candidate}")
+    return resolved_candidate
 
 
 def resolve_settings_file(
@@ -39,10 +50,11 @@ def resolve_settings_file(
     bounded one-release migration signal.
     """
 
-    root = Path(vault_root).expanduser()
+    root = Path(vault_root).expanduser().resolve()
     relative = Path(relative_path)
-    canonical = canonical_settings_root(root) / relative
-    existing_legacy = [root / path for path in legacy_paths if (root / path).exists()]
+    canonical = contained_settings_path(root, canonical_settings_root(root) / relative)
+    resolved_legacy = [contained_settings_path(root, root / path) for path in legacy_paths]
+    existing_legacy = [path for path in resolved_legacy if path.exists()]
 
     if canonical.exists():
         for legacy in existing_legacy:
@@ -79,9 +91,9 @@ def resolve_compiled_sources(vault_root: Path) -> dict[Path, Path]:
     legacy-only key without merging a shadowed file's payload.
     """
 
-    root = Path(vault_root).expanduser()
+    root = Path(vault_root).expanduser().resolve()
     canonical_root = canonical_settings_root(root)
-    legacy_root = root / LEGACY_COMPILED_DIR
+    legacy_root = contained_settings_path(root, root / LEGACY_COMPILED_DIR)
     relative_paths: set[Path] = set()
     for source_root in (canonical_root, legacy_root):
         if source_root.exists():
@@ -121,6 +133,7 @@ __all__ = [
     "LEGACY_SYSTEM_SETTINGS",
     "LEGACY_SYSTEM_SETTINGS_DIR",
     "canonical_settings_root",
+    "contained_settings_path",
     "resolve_compiled_sources",
     "resolve_settings_file",
     "read_settings_mapping",

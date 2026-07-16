@@ -66,6 +66,29 @@ def _symlinked_selected_root(tmp_path: Path) -> tuple[Path, Path]:
     return real_root, selected_root
 
 
+def test_index_walk_always_excludes_canonical_settings(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    _write_note(
+        vault_root / "notes" / "Visible.md",
+        title="Visible",
+        body="knowledge",
+        note_uuid="visible-note",
+    )
+    _write_note(
+        vault_root / "settings" / "providers.md",
+        title="Providers",
+        body="control plane secret",
+        note_uuid="settings-provider",
+    )
+
+    walked = {
+        path.relative_to(vault_root).as_posix()
+        for path in walk_markdown_files(vault_root, [])
+    }
+
+    assert walked == {"notes/Visible.md"}
+
+
 def test_index_build_excludes_child_vault_notes(
     tmp_path: Path, monkeypatch
 ) -> None:
