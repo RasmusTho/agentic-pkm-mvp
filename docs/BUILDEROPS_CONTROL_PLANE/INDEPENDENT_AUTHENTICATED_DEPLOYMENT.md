@@ -11,6 +11,21 @@ can_parallelize_with: [BCP-03]
 
 # Independent Authenticated Deployment
 
+## Implementation Status
+
+Implemented by #3790 at the repo/deployment-contract level: the independent FastAPI factory,
+scoped/revocable credential verifier, durable-payload secret guard, PostgreSQL migration gate,
+API/worker/DB Compose project, separate Docker-engine preflight, immutable image pins,
+authenticated probes, secret-safe live status/metrics, deploy/rollback receipts, WAL-G backup/WAL
+archive wrappers, structural recovery-target validation, and independently credentialed restore
+drill are present. Restore activation increments the database-owned authority epoch, invalidates
+leases, marks claimed effects unknown, and keeps the executor fenced until reconciliation.
+
+No production authority or client cutover is claimed here. The committed zero digests are deliberate
+non-runnable placeholders; an operator-provided release pin, second Demerzel engine, off-host target,
+independent recovery custody, successful live restore receipt, and BCP-03/04/05/06 gates are still
+required before activation.
+
 ## Purpose
 
 BuilderOps currently rides inside Product FastAPI/startup and has no service-specific authentication,

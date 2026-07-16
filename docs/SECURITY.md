@@ -59,6 +59,23 @@ Operational stance:
   intentional trusted proxy boundary
 - rate limiting should protect public API surfaces without blocking internal trusted automation
 
+BuilderOps independent control-plane contract (#3790):
+- BuilderOps does not inherit Product `API_KEY`, loopback bypass, or Companion proxy trust. Its
+  independent service requires a bearer credential on health, status, metrics, record, and lease
+  routes even when the caller is on the tailnet or loopback.
+- The server-side credential manifest carries scope, revocation/rotation metadata, a non-secret
+  SHA-256 verifier, and references only. Raw bearer values may be supplied through host secret files
+  for compatibility bootstrap but are never returned or stored in BuilderOps PostgreSQL.
+- Durable request payloads fail closed on registered bearer values, credential-shaped keys,
+  credential-bearing database URLs, and known provider-token shapes. Secret references,
+  fingerprints, scopes, credential IDs, and rotation generations remain valid durable metadata.
+- Normal client, executor, probe, and operator scopes are separate. Authentication failure is
+  `401`, insufficient scope is `403`, and a per-principal service limiter returns `429` without
+  logging the bearer.
+- Tailnet TLS is the transport boundary, not authentication. Live activation still requires an
+  operator-provided second Demerzel engine, real immutable pins, scoped host secrets, and the later
+  BCP cutover gates; the repo configuration alone does not claim a running production service.
+
 Remaining gaps:
 - ensure all externally exposed routers apply auth consistently
 - ensure routes that require rate limits actually carry explicit limiter wiring
