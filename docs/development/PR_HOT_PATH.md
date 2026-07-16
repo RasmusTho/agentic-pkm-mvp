@@ -238,7 +238,8 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 
 - current SHA truth before merge
 - issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
-  revalidates the neutralized live body/head/closing links, uses a fixed non-closing merge message,
+  revalidates the neutralized live body/head/closing links and requires `pr-contract` to authenticate
+  its trusted exact-head authority receipt, uses a fixed non-closing merge message,
   persists trusted authority plus continuous prepared/merged/reconciled/restored phases, explicitly
   closes only the authenticated issue set, reconciles any body-race closure attributable to that PR,
   proves every and only authenticated issue is closed with delivery attribution, restores the

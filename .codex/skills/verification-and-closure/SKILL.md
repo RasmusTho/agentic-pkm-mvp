@@ -281,9 +281,12 @@ When all prerequisites are met:
    closer to evidence-only `Refs`; immediately re-read the PR and fail closed unless the head and
    neutralized body are byte-identical to the plan, the title and body contain no canonical or
    malformed closing attempt, and `closingIssuesReferences` is empty. Because the body edit triggers
-   governance again, wait for the latest `pr-contract` run triggered by that `edited` event to finish
-   green on the same exact head, then re-read the head, body, title, and empty closing references once
-   more. Never reuse the pre-edit green `pr-contract` result as merge authority
+   governance again, the triggered `pr-contract` must authenticate the trusted, non-conflicting
+   exact-head authority receipt against the complete neutralized body issue set; fabricated
+   `Refs`/`Verified-Closing-Issues` text is never sufficient. Wait for the latest `pr-contract` run
+   triggered by that `edited` event to finish green on the same exact head, then re-read the head,
+   body, title, and empty closing references once more. Never reuse the pre-edit green `pr-contract`
+   result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
    `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
    exact neutralized PR snapshot. Require a single continuous prepared/merged/reconciled/restored
@@ -308,10 +311,13 @@ When all prerequisites are met:
    numbers with authenticated and phase-known candidates under the existing candidate cap. Validate
    each candidate's REST node identity, then resolve exactly one bounded static GraphQL `nodes(ids:)`
    batch using raw string fields (never typed `gh api -F` fields) and prove cardinality, unique node,
-   repository/issue/state, latest `ClosedEvent` timestamp/actor, and `closer` identity. Only an exact
+   repository/issue/state, latest `ClosedEvent` timestamp/actor, mandatory `closer` field, and `closer`
+   identity. Every `PullRequest` closer must carry a valid merge SHA, regardless of whether it is the
+   target PR. Only an exact
    target PR number, repository, and merge SHA may promote a repository-discovered candidate to this
    delivery; a same-number foreign repository or SHA fails closed, while a valid null or different
-   closer remains unrelated. Authenticated expected and phase-known candidates retain their existing
+   closer remains unrelated. A null non-PR closer remains unrelated. Authenticated expected and
+   phase-known candidates retain their existing
    authority. Then use `plan_post_merge_reconciliation` with complete per-issue evidence; reopen only
    an unauthorized closure GitHub attributes to this PR, and block the final receipt on any unresolved
    unauthorized closure. This is the defensive race reconciliation, not a substitute for pre-effect

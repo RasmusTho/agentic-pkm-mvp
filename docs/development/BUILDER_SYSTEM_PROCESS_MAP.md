@@ -504,9 +504,16 @@ Frontier rescue loop: triggered by repeated failure, feature-level issue, hidden
 
 Closure loop: triggered after merge/verification; actor is verification-and-closure; state is issue/PR/Project/dispatcher; a crash after merge resumes from trusted authority plus a continuous durable phase ledger. It returns to done only after the restored phase, exact live authorized closure attribution with no unauthorized closure, labels removed, Project Done, owner-doc receipt, and dispatcher complete/release when applicable [`.codex/skills/verification-and-closure/SKILL.md`].
 
+The neutralized-body `pr-contract` window is receipt-authenticated: `Refs` plus
+`Verified-Closing-Issues` pass only when one trusted, non-conflicting exact-head authority receipt
+matches the live body digest and its exact governing, closing, and cumulative supporting sets. The
+verification-dispatch producer reads at most `closingIssuesReferences(first: 11)` in one GraphQL call
+and fails before pagination when the ten-closing-issue contract is exceeded.
+
 Post-merge docs/spec loop: triggered after merged PR; actor is post-merge skill plus watchdog nudge;
 outputs a docs PR, follow-up issue, or no-change result, then records the same PR-specific result on
-every closed child and any distinct open governing parent. Issue-free lanes use the PR thread. The
+every closed child and any distinct open governing parent. Only an OWNER, MEMBER, or COLLABORATOR
+receipt suppresses the watchdog nudge; issue-free lanes use the PR thread. The
 classifier and watchdog trust the same unique collaborator-authored same-head authority receipt during
 the temporary neutralized-body window. The watchdog requires the receipt's governing, closing, and
 live supporting sets to exactly match the canonically parsed live original or neutralized body. After

@@ -342,6 +342,7 @@ jobs:
             const hasReceiptForPr = (comments, number) => {
               const prefix = `post-merge owner-doc check: PR #${number};`;
               return comments.some(comment =>
+                TRUSTED_ASSOCIATIONS.has(comment.author_association) &&
                 typeof comment.body === "string" &&
                 comment.body.split(/\r?\n/).some(line => line.startsWith(prefix))
               );

@@ -1092,15 +1092,8 @@ class GhCliVerificationSource:
                     if (
                         not isinstance(commit_id, str)
                         or re.fullmatch(r"[0-9a-fA-F]{40}", commit_id) is None
-                        or not isinstance(commit_url, str)
-                        or re.fullmatch(
-                            r"https://api\.github\.com/repos/"
-                            r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+/commits/"
-                            r"[0-9a-fA-F]{40}",
-                            commit_url,
-                        )
-                        is None
-                        or not commit_url.endswith(f"/commits/{commit_id}")
+                        or commit_url
+                        != f"{expected_repository_url}/commits/{commit_id}"
                     ):
                         raise RuntimeError(
                             "malformed repository issue event commit identity"
@@ -1318,6 +1311,7 @@ class GhCliVerificationSource:
                 raise RuntimeError("malformed GraphQL ClosedEvent timestamp") from exc
             if latest is not None and (
                 latest.get("__typename") != "ClosedEvent"
+                or "closer" not in latest
                 or not isinstance(latest_actor, str)
                 or not latest_actor
                 or latest_instant is None
@@ -1367,14 +1361,8 @@ class GhCliVerificationSource:
                             closer_repository,
                         )
                         is None
-                        or (
-                            closer_oid is not None
-                            and (
-                                not isinstance(closer_oid, str)
-                                or re.fullmatch(r"[0-9a-fA-F]{40}", closer_oid)
-                                is None
-                            )
-                        )
+                        or not isinstance(closer_oid, str)
+                        or re.fullmatch(r"[0-9a-fA-F]{40}", closer_oid) is None
                     ):
                         raise RuntimeError("malformed GraphQL PullRequest closer")
                     if closer_number == pr_number:

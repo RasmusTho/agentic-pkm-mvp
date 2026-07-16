@@ -161,18 +161,45 @@ def test_live_github_closing_links_must_equal_body_authority(
     assert build_request(event=_event(), pr=pr, issue=_issue()) is None
 
 
-def test_workflow_fetches_all_live_github_closing_links() -> None:
+def test_workflow_bounds_live_closing_link_query_before_pagination() -> None:
     workflow = (
         REPO_ROOT / ".github/workflows/verification-dispatch-request.yml"
     ).read_text(encoding="utf-8")
+    fetch_step = workflow.split("- name: Fetch current PR and linked issue", 1)[1].split(
+        "- name: Fetch linked issue", 1
+    )[0]
 
     for fragment in (
-        "gh api graphql --paginate",
-        "closingIssuesReferences(first: 100, after: $endCursor)",
+        "gh api graphql",
+        "closingIssuesReferences(first: 11)",
         "nodes { number repository { nameWithOwner } }",
+        "length <= 10",
+        "closing issue references exceed the ten-issue contract or are malformed",
+        "exit 1",
         "live_closing_issues",
     ):
-        assert fragment in workflow
+        assert fragment in fetch_step
+    assert fetch_step.count("gh api graphql") == 1
+    assert "--paginate" not in fetch_step
+    assert "after:" not in fetch_step
+    assert "endCursor" not in fetch_step
+
+
+def test_ten_live_closing_links_emit_request_without_extra_graphql_page() -> None:
+    pr = _pr()
+    closing = list(range(4000, 4000 + MAX_CLOSING_ISSUES))
+    pr["body"] = "\n".join(
+        ["Governing-Issue: #3602"]
+        + [f"Fixes #{number}" for number in closing]
+    )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY} for number in closing
+    ]
+
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert request is not None
+    assert request["closing_issues"] == closing
 
 
 def test_crlf_authority_is_canonicalized_before_request_emission() -> None:

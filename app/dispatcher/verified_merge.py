@@ -228,7 +228,11 @@ def _valid_authority_receipt(
         _positive_int(governing_issue)
         and (
             not require_live_body
-            or (authority is not None and closing == authority.closing_issues)
+            or (
+                authority is not None
+                and closing == authority.closing_issues
+                and live_supporting == authority.supporting_issues
+            )
         )
         and set(authenticated_supporting).issubset(live_supporting)
         and (

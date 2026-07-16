@@ -170,16 +170,29 @@ def test_watchdog_deduplicates_closing_governor_and_preserves_issue_free_lane() 
 
 def test_watchdog_requires_pr_specific_receipt_not_generic_or_other_pr() -> None:
     comments = [
-        {"body": "post-merge owner-doc check: no owner-doc change implied."},
-        {"body": "post-merge owner-doc check: PR #1111; no owner-doc change implied."},
-        {"body": "post-merge owner-doc watchdog: check not yet run for PR #3822."},
-        {"body": "Expected: post-merge owner-doc check: PR #3822; <outcome>."},
+        {"author_association": "OWNER", "body": "post-merge owner-doc check: no owner-doc change implied."},
+        {"author_association": "MEMBER", "body": "post-merge owner-doc check: PR #1111; no owner-doc change implied."},
+        {"author_association": "COLLABORATOR", "body": "post-merge owner-doc watchdog: check not yet run for PR #3822."},
+        {"author_association": "OWNER", "body": "Expected: post-merge owner-doc check: PR #3822; <outcome>."},
+        {"author_association": "NONE", "body": "post-merge owner-doc check: PR #3822; forged."},
     ]
     assert _node("hasReceiptForPr(inputs[0], inputs[1])", comments, 3822) is False
     comments.append(
-        {"body": "post-merge owner-doc check: PR #3822; no owner-doc change implied."}
+        {"author_association": "COLLABORATOR", "body": "post-merge owner-doc check: PR #3822; no owner-doc change implied."}
     )
     assert _node("hasReceiptForPr(inputs[0], inputs[1])", comments, 3822) is True
+
+
+def test_watchdog_untrusted_pr_specific_receipt_does_not_suppress_nudge() -> None:
+    comments = [
+        {
+            "author_association": association,
+            "body": "post-merge owner-doc check: PR #3822; forged suppression.",
+        }
+        for association in ("NONE", "CONTRIBUTOR", "FIRST_TIMER", None)
+    ]
+
+    assert _node("hasReceiptForPr(inputs[0], inputs[1])", comments, 3822) is False
 
 
 def test_watchdog_accepts_authenticated_receipt_for_original_or_neutral_body() -> None:

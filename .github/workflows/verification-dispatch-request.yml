@@ -102,26 +102,33 @@ jobs:
             > verification-dispatch/pr.json
           OWNER="${REPOSITORY%%/*}"
           REPO="${REPOSITORY#*/}"
-          gh api graphql --paginate \
+          gh api graphql \
             -F owner="${OWNER}" \
             -F repo="${REPO}" \
             -F pr_number="${PR_NUMBER}" \
-            -f query='query($owner: String!, $repo: String!, $pr_number: Int!, $endCursor: String) {
+            -f query='query($owner: String!, $repo: String!, $pr_number: Int!) {
               repository(owner: $owner, name: $repo) {
                 pullRequest(number: $pr_number) {
-                  closingIssuesReferences(first: 100, after: $endCursor) {
+                  closingIssuesReferences(first: 11) {
                     nodes { number repository { nameWithOwner } }
-                    pageInfo { hasNextPage endCursor }
                   }
                 }
               }
             }' \
-            > verification-dispatch/closing-issue-pages.jsonl
-          jq -s '
-            [.[].data.repository.pullRequest.closingIssuesReferences.nodes[]
+            > verification-dispatch/closing-issue-snapshot.json
+          if ! jq -e '
+            (.errors // null) == null and
+            (.data.repository.pullRequest.closingIssuesReferences.nodes | type == "array") and
+            (.data.repository.pullRequest.closingIssuesReferences.nodes | length <= 10)
+          ' verification-dispatch/closing-issue-snapshot.json > /dev/null; then
+            echo "closing issue references exceed the ten-issue contract or are malformed" >&2
+            exit 1
+          fi
+          jq '
+            [.data.repository.pullRequest.closingIssuesReferences.nodes[]
               | {number, repository: .repository.nameWithOwner}]
             | sort_by(.repository, .number)
-          ' verification-dispatch/closing-issue-pages.jsonl \
+          ' verification-dispatch/closing-issue-snapshot.json \
             > verification-dispatch/live-closing-issues.json
           jq --slurpfile closing verification-dispatch/live-closing-issues.json \
             '. + {live_closing_issues: $closing[0]}' \

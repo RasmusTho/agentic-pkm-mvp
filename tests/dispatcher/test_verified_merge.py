@@ -331,6 +331,34 @@ def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comment
         )
 
 
+@pytest.mark.parametrize("live_supporting", [[3820, 3823], [3820, 3823, 3900, 4999]])
+def test_authority_receipt_requires_exact_live_supporting_body_authority(
+    live_supporting: list[int],
+) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+    )
+    receipt = copy.deepcopy(plan["authority_receipt"])
+    assert isinstance(receipt, dict)
+    receipt["live_supporting_issues"] = live_supporting
+    comment = _trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [comment],
+            pr=_pr(str(plan["neutralized_body"])),
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+
 def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> None:
     plan = prepare_verified_merge(
         context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]

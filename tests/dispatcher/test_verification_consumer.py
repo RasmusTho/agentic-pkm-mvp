@@ -1193,6 +1193,55 @@ def _graphql_result(*nodes: object) -> dict[str, object]:
     return {"data": {"nodes": list(nodes)}}
 
 
+def _closure_evidence_with_graphql_event(
+    event: dict[str, object],
+) -> dict[str, object]:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                        event=event,
+                    )
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    )
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        raise AssertionError(endpoint)
+
+    return dict(
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+    )
+
+
 def _required_check_authority(
     head_sha: str = HEAD, *, suite_id: int = 1
 ) -> dict[str, object]:
@@ -1786,6 +1835,28 @@ def test_gh_source_ignores_unrelated_graphql_closer(
     assert [item["number"] for item in evidence["issue_evidence"]] == [3603]
 
 
+def test_gh_source_rejects_closed_event_with_omitted_closer_field() -> None:
+    event = _graphql_closed_event("2026-07-15T00:00:02Z")
+    event.pop("closer")
+
+    with pytest.raises(RuntimeError, match="malformed GraphQL ClosedEvent"):
+        _closure_evidence_with_graphql_event(event)
+
+
+@pytest.mark.parametrize("closer_sha", [None, "not-a-sha", "c" * 39])
+def test_gh_source_rejects_any_pull_request_closer_without_valid_merge_sha(
+    closer_sha: str | None,
+) -> None:
+    event = _graphql_closed_event(
+        "2026-07-15T00:00:02Z",
+        closer_number=4998,
+        closer_sha=closer_sha,
+    )
+
+    with pytest.raises(RuntimeError, match="malformed GraphQL PullRequest closer"):
+        _closure_evidence_with_graphql_event(event)
+
+
 @pytest.mark.parametrize(
     ("closer_repository", "closer_sha"),
     [("attacker/redirect", "b" * 40), (REPO, "c" * 40)],
@@ -2128,6 +2199,35 @@ def test_gh_source_rejects_malformed_repository_event_commit() -> None:
         number=4999,
         created_at="2026-07-15T00:00:03Z",
         commit_id="not-a-sha",
+    )
+
+    with pytest.raises(RuntimeError, match="malformed.*commit identity"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result([event])
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_foreign_repository_commit_url() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    event = _repository_issue_event(
+        20,
+        number=4999,
+        created_at="2026-07-15T00:00:03Z",
+        commit_id="b" * 40,
+        commit_repository="attacker/redirect",
     )
 
     with pytest.raises(RuntimeError, match="malformed.*commit identity"):

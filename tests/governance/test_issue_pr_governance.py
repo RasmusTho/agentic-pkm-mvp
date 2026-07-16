@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import re
 import subprocess
@@ -58,6 +60,99 @@ def _js_issue_authority(body: str) -> dict[str, object]:
     )
     assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
+
+
+def _js_neutralized_merge_authority(
+    comments: list[dict[str, object]],
+    pull_request: dict[str, object],
+    repository: str,
+) -> dict[str, object] | None:
+    workflow = _read_workflow()
+    classifier = workflow.split("// authority-classifier:start", 1)[1].split(
+        "// authority-classifier:end", 1
+    )[0]
+    validator = workflow.split(
+        "// neutralized-authority-validator:start", 1
+    )[1].split("// neutralized-authority-validator:end", 1)[0]
+    script = (
+        'const crypto = require("crypto");\n'
+        + classifier
+        + validator
+        + "\nconst inputs = JSON.parse(process.argv[1]);"
+        + "\nconst issueAuthority = classifyIssueAuthority(inputs.pullRequest.body);"
+        + "\nconst result = resolveNeutralizedMergeAuthority({"
+        + "comments: inputs.comments, issueAuthority, "
+        + "pullRequest: inputs.pullRequest, repository: inputs.repository});"
+        + "\nprocess.stdout.write(JSON.stringify(result));"
+    )
+    completed = subprocess.run(
+        [
+            "node",
+            "-e",
+            script,
+            json.dumps(
+                {
+                    "comments": comments,
+                    "pullRequest": pull_request,
+                    "repository": repository,
+                }
+            ),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def _neutralized_authority_fixture() -> tuple[
+    dict[str, object], dict[str, object], dict[str, object]
+]:
+    repository = "RasmusTho/agentic-pkm-mvp"
+    head = "a" * 40
+    original = (
+        "Governing-Issue: #3821\n"
+        "Refs #3821\n"
+        "Fixes #3820\n"
+        "Refs #3900\n"
+    )
+    neutralized = (
+        "Governing-Issue: #3821\n"
+        "Refs #3821\n"
+        "Refs #3820\n"
+        "Refs #3900\n"
+        "Verified-Closing-Issues: #3820\n"
+    )
+    receipt = {
+        "authenticated_supporting_issues": [3820],
+        "body_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        "closing_issues": [3820],
+        "contract": "verified_issue_set_merge_authority.v1",
+        "governing_issue": 3821,
+        "head_sha": head,
+        "live_supporting_issues": [3820, 3900],
+        "neutralized_body_sha256": hashlib.sha256(neutralized.encode()).hexdigest(),
+        "pr_number": 3822,
+        "repair_budget": {"policy_version": "v2", "mechanisms": []},
+        "repository": repository,
+        "run_id": "vrun-authority",
+    }
+    comment = {
+        "author_association": "COLLABORATOR",
+        "body": (
+            "verified issue-set merge authority:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        ),
+    }
+    pull_request = {
+        "body": neutralized,
+        "head": {"sha": head},
+        "number": 3822,
+    }
+    return pull_request, comment, receipt
 
 
 def _read_development_workflow() -> str:
@@ -213,6 +308,62 @@ def test_verified_merge_neutralized_authority_matches_javascript_and_python() ->
     assert javascript["neutralizedValid"] is True
     assert javascript["closingIssueCount"] == 2
     assert javascript["issueLinkMentions"] == []
+
+
+def test_neutralized_pr_contract_requires_trusted_exact_head_authority_receipt() -> None:
+    pull_request, comment, receipt = _neutralized_authority_fixture()
+    repository = str(receipt["repository"])
+
+    resolved = _js_neutralized_merge_authority(
+        [comment], pull_request, repository
+    )
+
+    assert resolved == receipt
+
+
+def test_neutralized_pr_contract_rejects_forged_stale_missing_and_conflicting_authority() -> None:
+    pull_request, comment, receipt = _neutralized_authority_fixture()
+    repository = str(receipt["repository"])
+    forged = copy.deepcopy(comment)
+    forged["author_association"] = "NONE"
+    stale_pr = copy.deepcopy(pull_request)
+    stale_pr["head"] = {"sha": "b" * 40}
+    conflicting_receipt = copy.deepcopy(receipt)
+    conflicting_receipt["run_id"] = "vrun-conflict"
+    conflicting = copy.deepcopy(comment)
+    conflicting["body"] = (
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(conflicting_receipt, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+
+    cases = (
+        ([forged], pull_request),
+        ([comment], stale_pr),
+        ([], pull_request),
+        ([comment, conflicting], pull_request),
+    )
+    for comments, candidate_pr in cases:
+        assert (
+            _js_neutralized_merge_authority(
+                comments, candidate_pr, repository
+            )
+            is None
+        )
+
+
+def test_production_pr_contract_authenticates_neutralized_merge_authority() -> None:
+    workflow = _read_workflow()
+    for fragment in (
+        "github.rest.issues.listComments",
+        "resolveNeutralizedMergeAuthority",
+        "TRUSTED_ASSOCIATIONS",
+        "receipt.head_sha === pullRequest.head?.sha",
+        "receipt.neutralized_body_sha256 === liveDigest",
+        "new Set(valid.map(canonicalJson)).size !== 1",
+        "one trusted, non-conflicting exact-head verified-merge authority receipt",
+    ):
+        assert fragment in workflow
 
 
 @pytest.mark.parametrize("separator", [",", ", ", ",\t", ", \t\t"])

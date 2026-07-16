@@ -87,6 +87,18 @@ def b4e2310_pre_trust_request(head: str = HEAD) -> dict[str, object]:
     (``artifact_provenance`` present) but still predates ``supporting_issues``.
     """
     result = request(head)
+    result["contract_version"] = "verification_dispatch_request.v1"
+    identity = {
+        "contract_version": result["contract_version"],
+        "head_sha": result["current_head_sha"],
+        "pr_number": result["pr_number"],
+        "repository": result["repository"],
+        "stage": result["stage"],
+    }
+    result["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result.pop("closing_issues")
     result.pop("supporting_issues")
     result["base_ref"] = "main"
     result["head_ref"] = "codex/issue-3603"
