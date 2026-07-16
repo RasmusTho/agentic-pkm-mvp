@@ -1,6 +1,6 @@
 ---
 name: resume-work
-description: "Resume interrupted dev/build work after a session breaks (quota, network, hung command, tool failure, context loss): reconstruct state from git first, keep a lightweight handoff, continue when the state is clear, and escalate only on destructive or contract/SoT ambiguity. Dev-time only, not a runtime/product feature."
+description: "Resume interrupted dev/build work after a session breaks (quota, network, hung command, tool failure, context loss): resume a recorded orchestration run when one exists, otherwise reconstruct state from git; keep a lightweight handoff, continue when the state is clear, and escalate only on destructive or contract/SoT ambiguity. Dev-time only, not a runtime/product feature."
 ---
 
 # Resume Work
@@ -13,7 +13,9 @@ chat context.
 This is a Builder System workflow about the *development flow*. It is not a product
 capability: no app code, no AgentState, no runtime events, no vault/DB/store, no new
 feature. The recovery substrate is the repository itself (git working tree, branch,
-commits, stashes) plus one small scratch note — nothing that has to be running.
+commits, stashes), one small scratch note, and — when the work was driven by an
+orchestration engine — that engine's own resumable journal. Nothing that has to be
+running.
 
 Bias: **continue, don't ceremony.** Re-entry is a fast read of repo state, not a recovery
 ritual. Pull the owner in only when continuing could go the wrong way.
@@ -31,7 +33,8 @@ ritual. Pull the owner in only when continuing could go the wrong way.
 1. **Normal continuation** — context and repo state are clear. Just keep working; no
    recovery steps, no handoff ceremony.
 2. **Interrupted-work recovery** — context is thin but the repo shows in-progress work.
-   Reconstruct from git (plus the handoff note), then continue.
+   Resume the recorded orchestration run when one exists, otherwise reconstruct from git
+   (plus the handoff note), then continue.
 3. **Unsafe / destructive ambiguity** — recovery would need a delete, overwrite, force
    action, reset, history rewrite, or anything hard to reverse, and the intent is
    unclear. Escalate.
@@ -71,6 +74,25 @@ Then read the two context hints, if they exist:
 
 From that, classify into one of the four situations and act.
 
+## Orchestrated runs: resume the engine before rebuilding from git
+
+Git only sees what reached the working tree. When the interrupted work was driven by an
+orchestration engine — a Claude Code Workflow run, a background task, a subagent fleet —
+the engine's journal can hold finished-but-uncommitted results that no git reconstruction
+can recover. Check for a resumable run before rebuilding from the diff:
+
+- The handoff note's `Run:` field (or the session's workflow/task listings) names the run.
+- Claude Code Workflow runs resume losslessly with the recorded run id
+  (`Workflow({scriptPath, resumeFromRunId})`): completed agents replay from the journal
+  cache and only interrupted calls re-run. `journal.jsonl` in the run's transcript dir
+  records each agent's actual return value.
+- Background tasks keep writing to their recorded output file; read it before assuming
+  the work is lost.
+
+An interrupted fleet may have committed nothing and still be one resume away from done —
+a lossless engine resume beats redoing the work from the diff. Fall back to git when no
+resumable run exists or its journal is gone.
+
 ## Decide: continue or escalate
 
 - **Continue on your own** when the state is clear (situation 1), or thin but safe to
@@ -95,12 +117,15 @@ while work is unfinished. Progressive and opportunistic — not a report after e
 - Update opportunistically: before a long or risky command, after a real decision, after a
   test run, when a step closes, or when you sense interruption risk. Skip it for trivial
   steps.
+- When you launch a long orchestrated run, record its run id in `Run:` the moment you get
+  it — the cheapest field in the note and the one that turns a redo into a resume.
 - Keep it tiny — blank fields are fine:
 
   ```
   # Handoff — <branch>
   Goal:       <what we're trying to achieve, one line>
   Issue/PR:   <#id or none>
+  Run:        <orchestration run/task id + engine, or none>
   Now:        <step in progress>
   Next:       <next concrete step>
   Decisions:  <choices already made, so they aren't relitigated>
