@@ -18,7 +18,7 @@ LANGUAGE sql
 IMMUTABLE
 STRICT
 AS $$
-    SELECT
+    SELECT COALESCE((
         jsonb_typeof(envelope) = 'object'
         AND expected_repository ~ '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
         AND split_part(expected_repository, '/', 1) NOT IN ('.', '..')
@@ -44,6 +44,7 @@ AS $$
         END
         AND jsonb_typeof(envelope->'schema_version') = 'number'
         AND COALESCE((envelope->>'schema_version') ~ '^[1-9][0-9]*$', false)
+    ), false)
 $$;
 
 CREATE TABLE IF NOT EXISTS builderops_tasks (
