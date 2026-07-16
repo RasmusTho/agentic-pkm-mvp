@@ -75,6 +75,30 @@ def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_m
     assert "'app/**'" in import_linter
 
 
+def test_legacy_smoke_workflow_is_retired_without_stale_references() -> None:
+    workflows_dir = REPO_ROOT / ".github" / "workflows"
+    retired = workflows_dir / "smoke.yml"
+
+    # ci-smoke.yaml is the single PR-triggered smoke gate (#3891).
+    assert not retired.exists(), "legacy smoke.yml must stay deleted"
+
+    for workflow_path in sorted(workflows_dir.iterdir()):
+        if not workflow_path.is_file():
+            continue
+        text = workflow_path.read_text(encoding="utf-8")
+        assert "smoke.yml" not in text, (
+            f"{workflow_path.name} references the retired smoke.yml workflow"
+        )
+
+    audit_script = (REPO_ROOT / "tools" / "audit_smoke.sh").read_text(encoding="utf-8")
+    assert ".github/workflows/smoke.yml" not in audit_script, (
+        "tools/audit_smoke.sh must not require the retired smoke.yml workflow"
+    )
+    assert ".github/workflows/ci-smoke.yaml" in audit_script, (
+        "tools/audit_smoke.sh must require the consolidated ci-smoke.yaml gate"
+    )
+
+
 def test_ci_smoke_keeps_legacy_skills_lint_when_consolidating_smoke() -> None:
     workflow = CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
 

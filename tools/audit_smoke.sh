@@ -21,7 +21,7 @@ must_exist=(
   app/api/routes/status.py
   app/api/routes/search.py
   app/search/__init__.py
-  .github/workflows/smoke.yml
+  .github/workflows/ci-smoke.yaml
   requirements-smoke.txt
   Makefile
   docs/ARCHITECTURE.md
