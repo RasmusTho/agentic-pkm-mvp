@@ -94,7 +94,8 @@ unchanged.
   receipt flow against one PostgreSQL epoch after restart, and the flow proceeds normally while the
   `pkm-*` stacks are stopped/restarted and while backup archiving is stalled (which raises a loud
   alert; ADR-0062 A1/A2).
-  Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch` plus Demerzel runtime receipt.
+  Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch` plus
+  `tests/ops/test_builderops_failure_domain.py::test_builder_plane_survives_product_stack_lifecycle_and_alerts_on_stalled_archiving` and the Demerzel runtime receipt.
 - [ ] Cutover consumes the BCP-05 proof that a protected-base or delivery-manifest change after final
   validation invalidates the GitHub conditional/merge-group fence and performs no merge.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_rejects_base_or_manifest_change_after_final_validation` plus the BCP-05 runtime receipt.

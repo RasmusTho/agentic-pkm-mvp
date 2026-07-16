@@ -61,8 +61,8 @@ not by rewriting that merge.
    PostgreSQL commit is the acknowledgement gate for API success/replay, dependent authority
    transitions, and outbox claim eligibility (ADR-0062 A1). Recovery durability is asynchronous:
    encrypted backups plus archived WAL to a target outside Demerzel's primary host/storage failure
-   domains; a co-resident target or stalled archiving raises a loud alert, not an acknowledgement
-   block.
+   domains. A co-resident recovery target fails readiness (structural misconfiguration is
+   fail-closed); stalled archiving raises a loud alert, not an acknowledgement block.
 4. **Durable, reconciled external effects.** After an eligible intent is claimed, the executor
    commits a fenced pre-effect attempt/receipt locally before calling GitHub; an uncommitted attempt
    leaves GitHub untouched (ADR-0062 A1). A timeout is `unknown`, not `failed`; retry reads GitHub

@@ -104,6 +104,10 @@ weaken them and does not enter Product Runtime.
 - [ ] Restart after reviewer/repair success does not repeat a committed attempt and resumes unknown
   external effects through reconciliation.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_restart_resumes_from_api_receipts_without_duplicate_attempt`.
+- [ ] External-effect eligibility is the locally committed fenced pre-effect attempt (ADR-0062 A1):
+  an uncommitted attempt performs no GitHub/model call, and a crash between claim and attempt-commit
+  leaves the external system untouched.
+  Verify: `tests/dispatcher/test_verification_recovery.py::test_fenced_attempt_commit_gates_external_effect`.
 - [ ] Merge is rejected for stale SHA, missing required CI/review/protection gate, expired fencing,
   repo scope mismatch, client-vs-protected manifest mismatch, stale base/manifest hash, or host
   credential mapping outside the target `RepoRef` policy.

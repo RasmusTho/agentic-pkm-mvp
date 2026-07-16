@@ -93,6 +93,10 @@ transaction:
 3. the append-only BuilderOps receipt; and
 4. an outbox intent.
 
+> **Amended by A1 (2026-07-16):** the watermark/acknowledged-LSN gating in the two paragraphs below
+> is superseded — the local PostgreSQL commit is the acknowledgement and eligibility gate, and
+> recovery durability is asynchronous. See `## Amendments`.
+
 The transaction records its commit/recovery LSN. No authority-bearing success response, idempotent
 replay, dependent authority transition, or outbox claim may pass until the independent recovery
 watermark covers that LSN in an encrypted target outside Demerzel's primary host and storage failure
@@ -127,7 +131,9 @@ and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns dist
 - versioned migration lineage and migration gate;
 - immutable release pin and deployment/rollback receipt;
 - `/healthz`, `/readyz`, structured status/metrics, and alert/probe path;
-- scheduled full backup plus continuous encrypted WAL/recovery durability in a target that survives
+- *(amended by A1, 2026-07-16: asynchronous backup/WAL-archive regime and a restore-from-backup
+  drill replace the synchronous/acknowledged-LSN items in this bullet)* scheduled full backup plus
+  continuous encrypted WAL/recovery durability in a target that survives
   loss of Demerzel's primary host/storage failure domain, independently recoverable key/KMS custody,
   retention, restore tooling, and a proved restore-through-acknowledged-LSN drill with Demerzel's
   host secret store unavailable; and
@@ -182,7 +188,9 @@ The cutover gate proves authenticated API clients and the Demerzel executor agai
 before disabling every legacy writer. It then removes Product Runtime BuilderOps routes/startup,
 archives the legacy sources read-only under an explicit retention policy, and verifies that no
 production command can recreate SQLite authority. Before authority activation, rollback may restore
-the pre-import PostgreSQL backup. After activation, rollback is forward-only: a compatible prior
+the pre-import PostgreSQL backup. After activation, rollback is forward-only *(amended by A1,
+2026-07-16: recovery restores the latest archived point, reconciles against GitHub, and starts a new
+fencing epoch — see `## Amendments`)*: a compatible prior
 service image may run against the current database, or a proved point-in-time recovery must restore
 the full backup and continuous WAL through the recorded highest acknowledged LSN/receipt sequence.
 Writes reopen only after independently recovering the decryption capability, restoring through the
@@ -262,7 +270,9 @@ requires an owner decision before specification and backlog preparation.
   identity/provenance, limits plain quarantine to evidence-only material, and emits a reviewable
   duplicate-preventing tombstone/conflict receipt for unresolved authority-bearing inputs.
 - Independent full-backup + continuous-WAL restore-through-watermark with independently recoverable
-  key/KMS custody is a launch gate. A persistent volume or snapshot alone is not recoverability.
+  key/KMS custody is a launch gate *(superseded by A1, 2026-07-16: the launch gate is a
+  restore-from-backup drill + GitHub reconciliation + new-epoch activation)*. A persistent volume or
+  snapshot alone is not recoverability.
 - Product availability and BuilderOps availability are independent: either may be down without the
   other process owning or restarting it.
 
@@ -285,6 +295,9 @@ machinery arrived with the revision, not with the owner's ask, and is removed as
   operator-chosen cadence to a target outside Demerzel's primary host and storage failure domains.
   Cadence and destination are implementation choices. A co-resident volume or snapshot alone still
   does not count as recovery durability, and independently recoverable key/KMS custody is unchanged.
+  A structurally misconfigured recovery target (co-resident with the primary host/storage failure
+  domain) fails readiness — misconfiguration stays fail-closed; a correctly configured but stalled or
+  lagging archiving pipeline alerts loudly without gating acknowledgement.
 - Accepted consequence (explicit): destructive loss of Demerzel's storage may lose the operational
   tail written since the last archived point. Recovery restores the latest backup/WAL point, starts a
   new lease/fencing authority epoch (D6 semantics), and **mandatorily reconciles external effects

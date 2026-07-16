@@ -79,10 +79,11 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   logs/metrics, WAL, or BuilderOps backups/restores. Durable records carry non-secret references and
   scope metadata only. Recovery key/KMS custody must remain usable after total loss of Demerzel's host
   secret store and primary storage.
-- `/healthz` is process liveness; `/readyz` fails on unavailable DB, wrong schema/epoch, or an
-  authority-threatening outbox condition. A misconfigured recovery target (co-resident with
-  Demerzel's primary storage failure domain) or stalled backup/WAL archiving surfaces as a loud
-  status/alert condition, not an acknowledgement gate (ADR-0062 A1).
+- `/healthz` is process liveness; `/readyz` fails on unavailable DB, wrong schema/epoch, an
+  authority-threatening outbox condition, or a recovery target co-resident with Demerzel's primary
+  host/storage failure domain (structural misconfiguration stays fail-closed; ADR-0062 A1). Stalled
+  or lagging backup/WAL archiving surfaces as a loud status/alert condition, not an acknowledgement
+  gate.
 - Acknowledgement, replay, dependent transitions, outbox claims, and external effects require the
   local PostgreSQL commit only (ADR-0062 A1).
 - A persistent volume or snapshot alone is not accepted as recoverability. Full backup + archived
@@ -112,8 +113,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
 - [ ] The BuilderOps service and database run outside the `pkm-*` container-VM failure domain, and
   stopping, restarting, or load-cycling the Product stacks leaves BuilderOps ready and mutating
-  normally; a stalled backup/WAL-archiving pipeline raises a loud alert/status condition without
-  blocking acknowledgement.
+  normally; a co-resident recovery target fails `/readyz`, while a stalled backup/WAL-archiving
+  pipeline raises a loud alert/status condition without blocking acknowledgement.
   Verify: `tests/ops/test_builderops_failure_domain.py::test_builder_plane_survives_product_stack_lifecycle_and_alerts_on_stalled_archiving`.
 - [ ] With Demerzel's host secret store unavailable, independently recoverable key/KMS custody can
   decrypt an encrypted full backup plus archived WAL and restore a disposable database to the latest
