@@ -6,10 +6,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWED_COMPAT_MODULES = {
+    Path("app/settings/health_settings.py"),
     Path("app/settings/locations.py"),
     Path("app/settings/migration.py"),
+    Path("app/vault/manager.py"),
+    Path("app/watcher/settings_delta.py"),
 }
 LEGACY_SEGMENTS = ("@Settings", "_system/settings", "_system/Settings")
+SETTINGS_ARTIFACT_NAMES = {
+    "agents.md",
+    "global.md",
+    "health.md",
+    "models.md",
+    "providers.md",
+    "routing.md",
+    "standards.md",
+    "system-settings.md",
+    "watchers.md",
+}
 
 
 def _literal_path(node: ast.AST) -> str | None:
@@ -45,6 +59,22 @@ def test_no_new_settings_paths() -> None:
             normalized = value.replace("\\", "/")
             if any(segment in normalized for segment in LEGACY_SEGMENTS):
                 violations.add(f"{relative}:{node.lineno}: {value!r}")
+            path_value = Path(normalized.removeprefix("vault://"))
+            canonical_shape = (
+                path_value.parts[-2:] == ("settings", path_value.name)
+                and (
+                    len(path_value.parts) == 2
+                    or path_value.parts[-3:] == ("vault", "settings", path_value.name)
+                )
+            )
+            if (
+                path_value.name in SETTINGS_ARTIFACT_NAMES
+                and len(path_value.parts) > 1
+                and not canonical_shape
+            ):
+                violations.add(
+                    f"{relative}:{node.lineno}: settings artifact outside canonical root {value!r}"
+                )
     for path in sorted((ROOT / "scripts").rglob("*.sh")):
         relative = path.relative_to(ROOT)
         normalized = path.read_text(encoding="utf-8").replace("\\", "/")

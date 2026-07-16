@@ -71,6 +71,7 @@ from app.observability.log import with_trace_id
 from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
+from app.settings.locations import LEGACY_COMPILED_DIR, canonical_settings_root
 from app.settings.migration import migrate_settings_location
 from app.settings.tiering import require_lab_profile
 from app.write_guard import WritesBlockedError
@@ -1576,15 +1577,26 @@ def settings_validate(as_json: bool) -> None:
 @click.option("--path", "watch_path", default="vault/settings", type=click.Path(path_type=Path))
 @click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
 def settings_watch(watch_path: Path, auto_heal: bool) -> None:
-    compile_all(auto_heal=auto_heal)
+    vault_root = watch_path.expanduser().parent.resolve()
+    canonical_watch_path = canonical_settings_root(vault_root)
+    if watch_path.expanduser().resolve() != canonical_watch_path:
+        raise click.ClickException(
+            f"settings watch path must be the canonical root: {canonical_watch_path}"
+        )
+    watch_paths = [canonical_watch_path]
+    legacy_watch_path = vault_root / LEGACY_COMPILED_DIR
+    if legacy_watch_path.is_dir() and not legacy_watch_path.is_symlink():
+        watch_paths.append(legacy_watch_path)
+
+    compile_all(auto_heal=auto_heal, vault_root=vault_root)
     click.echo(f"watching {watch_path}")
     last = 0.0
     try:
-        for changes in watch(str(watch_path), recursive=True):
+        for changes in watch(*(str(path) for path in watch_paths), recursive=True):
             now = time.time()
             if now - last < 0.5:
                 continue
-            compile_all(auto_heal=auto_heal)
+            compile_all(auto_heal=auto_heal, vault_root=vault_root)
             changed = ", ".join(str(Path(path).name) for _, path in changes)
             click.echo(f"settings updated: {changed}")
             last = now

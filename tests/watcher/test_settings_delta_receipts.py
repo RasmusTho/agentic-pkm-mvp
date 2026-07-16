@@ -122,8 +122,8 @@ def test_multiple_watcher_specs_emit_one_settings_receipt_per_delta(
     assert total_receipts == 1
     assert summaries["panel"]["changed_in_tick"] >= 1
     assert summaries["ingest"]["changed_in_tick"] >= 1
-    assert summaries["panel"]["emitted_in_tick"] >= 1
-    assert summaries["ingest"]["emitted_in_tick"] >= 1
+    assert summaries["panel"]["emitted_in_tick"] == 0
+    assert summaries["ingest"]["emitted_in_tick"] == 0
 
 
 def test_runtime_gating_key_removal_routes_settings_receipt(

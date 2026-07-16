@@ -196,7 +196,10 @@ def nearest_enclosing_vault_root(
 
 
 def iter_vault_markdown_files(
-    vault_root: Path, *, subtree_root: Path | None = None
+    vault_root: Path,
+    *,
+    subtree_root: Path | None = None,
+    include_settings: bool = False,
 ) -> Iterator[Path]:
     """Yield markdown files owned by ``vault_root`` only (#2522).
 
@@ -224,6 +227,29 @@ def iter_vault_markdown_files(
         return
     if not walk_root.is_dir():
         return
+    control_roots = {
+        Path(SETTINGS_DIR_NAME),
+        Path("@Settings"),
+        Path("_system") / "settings",
+        Path("_system") / "Settings",
+    }
+    try:
+        from app.vault.paths import get_vault_system_dir_rel
+
+        control_roots.add(Path(get_vault_system_dir_rel(selected_root_real)) / "Settings")
+    except (OSError, ValueError):
+        pass
+
+    def _is_control_path(relative: Path) -> bool:
+        return any(relative == prefix or relative.is_relative_to(prefix) for prefix in control_roots)
+
+    if not include_settings:
+        try:
+            walk_relative = walk_root_real.relative_to(selected_root_real)
+        except ValueError:
+            return
+        if _is_control_path(walk_relative):
+            return
     if walk_root_real != selected_root_real:
         if nearest_enclosing_vault_root(walk_root_real, search_root=selected_root_real) != selected_root_real:
             return
@@ -232,6 +258,15 @@ def iter_vault_markdown_files(
         kept: list[str] = []
         for name in dirnames:
             child = Path(dirpath) / name
+            try:
+                child_rel = child.resolve().relative_to(selected_root_real)
+            except (OSError, ValueError):
+                continue
+            if not include_settings and _is_control_path(child_rel):
+                continue
+            if include_settings and _is_control_path(child_rel):
+                kept.append(name)
+                continue
             if is_vault_root(child):
                 continue
             kept.append(name)
@@ -247,6 +282,12 @@ def iter_vault_markdown_files(
                 try:
                     real = candidate.resolve()
                 except OSError:
+                    continue
+                try:
+                    real_relative = real.relative_to(selected_root_real)
+                except ValueError:
+                    continue
+                if not include_settings and _is_control_path(real_relative):
                     continue
                 if nearest_enclosing_vault_root(real, search_root=selected_root_real) != selected_root_real:
                     continue

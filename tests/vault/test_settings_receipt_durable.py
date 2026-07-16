@@ -24,6 +24,7 @@ from app.receipts.settings_receipts import (
     SettingsReceiptQuery,
     query_settings_receipts,
 )
+from app.receipts.settings_write import emit_settings_write_receipt
 from app.settings import compiler
 from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
 from app.vault.manager import VaultManager
@@ -111,6 +112,29 @@ def test_receipt_survives_restart(tmp_path: Path, monkeypatch) -> None:
         outbox_path=outbox_path,
     )
     assert len(empty.rows) == 0
+
+
+def test_required_receipt_fsyncs_before_return(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    fsync_calls: list[int] = []
+    monkeypatch.setattr(
+        "app.receipts.settings_write.os.fsync", lambda descriptor: fsync_calls.append(descriptor)
+    )
+
+    emit_settings_write_receipt(
+        SettingsWriteReceipt(
+            key="settings.location",
+            value={"canonical": "settings"},
+            surface="migration",
+            actor="operator",
+        ),
+        require_durable=True,
+    )
+
+    assert fsync_calls
+    assert outbox_path.read_text(encoding="utf-8").endswith("\n")
 
 
 def test_non_runtime_gating_write_also_durable(tmp_path: Path, monkeypatch) -> None:

@@ -160,4 +160,8 @@ The registry lists canonical event IDs, producers/consumers, and optional schema
   `python -m app.cli settings migrate-location --vault-root <path>`. The command
   checks WriteGuard before its first mutation, refuses canonical/legacy
   conflicts instead of overwriting or merging them, publishes the canonical
-  tree as one swap, and emits a settings-write receipt.
+  tree as one fsynced swap, and emits a durable settings-write receipt. Retired
+  roots and the previous canonical tree are atomically quarantined in the
+  receipt's owned `.settings-migration-*` recovery directory; they are not
+  recursively deleted during the migration. A zero-source rerun is a no-op
+  receipt and does not create another recovery directory.

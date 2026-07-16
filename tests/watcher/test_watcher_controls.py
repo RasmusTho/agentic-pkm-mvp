@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.config import WatcherConfig
-from app.watcher.settings_delta import SettingsSourceDeltaResult
+from app.watcher.settings_delta import (
+    SettingsSourceDeltaResult,
+    is_settings_control_path,
+    is_settings_source_path,
+)
 from app.watcher.state import WatcherState
 import app.watcher.watcher as watcher
 from app.watcher.watcher import run_tick
@@ -97,6 +102,53 @@ def test_settings_source_uses_configured_vault_and_is_not_emitted(
     assert summary["settings_source_reloads_in_tick"] == 1
     assert summary["emitted_in_tick"] == 0
     assert not cfg.outbox_path.exists()
+
+
+def test_nested_local_markdown_is_a_compiler_source() -> None:
+    assert not is_settings_source_path(Path("settings/local.md"))
+    assert is_settings_source_path(Path("settings/agents/local.md"))
+    assert is_settings_control_path(
+        Path("Meta/Settings/health.md"), configured_system_dir="Meta"
+    )
+    assert not is_settings_control_path(Path("Projects/Settings/health.md"))
+
+
+def test_scoped_settings_control_file_is_never_emitted_as_note(tmp_path: Path) -> None:
+    cfg = replace(_config(tmp_path), scope_glob="*.md,**/*.md")
+    (cfg.vault_path / _inbox_dir(tmp_path)).mkdir(parents=True)
+    scoped = cfg.vault_path / "settings" / "vault.md"
+    scoped.parent.mkdir(parents=True)
+    scoped.write_text("---\nvaultId: test\n---\n", encoding="utf-8")
+
+    summary = run_tick(cfg, WatcherState(), now=0.0)
+
+    assert summary["scanned_files"] == 1
+    assert summary["emitted_in_tick"] == 0
+    assert not cfg.outbox_path.exists()
+
+
+def test_deleted_settings_source_reloads_effective_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _config(tmp_path)
+    (cfg.vault_path / _inbox_dir(tmp_path)).mkdir(parents=True)
+    state = WatcherState(
+        files={"settings/global.md": {"mtime": 1.0, "hash": "old"}}
+    )
+    observed: list[Path] = []
+
+    def reload_source(*, rel_path: Path, vault_root: Path | None = None):
+        assert vault_root == cfg.vault_path
+        observed.append(rel_path)
+        return SettingsSourceDeltaResult(is_source=True, reloaded=True)
+
+    monkeypatch.setattr(watcher, "handle_settings_source_delta", reload_source)
+
+    summary = run_tick(cfg, state, now=0.0)
+
+    assert observed == [Path("settings/global.md")]
+    assert summary["settings_source_deletions_in_tick"] == 1
+    assert summary["settings_source_reloads_in_tick"] == 1
 
 
 def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:

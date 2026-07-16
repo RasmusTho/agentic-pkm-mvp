@@ -61,8 +61,31 @@ def is_settings_source_path(rel_path: Path) -> bool:
         return True
     return (
         rel_path.parts[0] == SETTINGS_SOURCE_DIR_NAME
-        and rel_path.name not in SCOPED_SETTINGS_FILENAMES
+        and not (
+            len(rel_path.parts) == 2
+            and rel_path.name in SCOPED_SETTINGS_FILENAMES
+        )
     )
+
+
+def is_settings_control_path(
+    rel_path: Path, *, configured_system_dir: Path | str | None = None
+) -> bool:
+    """True for canonical and compatibility control-plane Markdown."""
+
+    if rel_path.suffix != ".md" or not rel_path.parts:
+        return False
+    if rel_path.parts[0] in {SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name}:
+        return True
+    if (
+        configured_system_dir is not None
+        and rel_path == Path(configured_system_dir) / "Settings" / "health.md"
+    ):
+        return True
+    return rel_path.parts[:2] in {
+        ("_system", "settings"),
+        ("_system", "Settings"),
+    }
 
 
 def handle_settings_source_delta(
@@ -184,4 +207,5 @@ __all__ = [
     "handle_settings_local_delta",
     "handle_settings_source_delta",
     "is_settings_source_path",
+    "is_settings_control_path",
 ]

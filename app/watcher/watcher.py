@@ -17,11 +17,13 @@ from app.watcher.relevance_tick import relevance_tick_enabled, run_relevance_tic
 from app.watcher.settings_delta import (
     handle_settings_local_delta,
     handle_settings_source_delta,
+    is_settings_control_path,
     is_settings_source_path,
 )
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 from app.watcher.state import WatcherState
 from app.vault.manager import iter_vault_markdown_files
+from app.vault.paths import get_vault_system_dir_rel
 
 _WATCHER_LOG = logging.getLogger(__name__)
 
@@ -49,7 +51,9 @@ def _scan_markdown_many(
 ) -> Iterable[tuple[Path, float, Path]]:
     seen: set[Path] = set()
     for scan_root in scan_roots:
-        for path in iter_vault_markdown_files(vault_root, subtree_root=scan_root):
+        for path in iter_vault_markdown_files(
+            vault_root, subtree_root=scan_root, include_settings=True
+        ):
             try:
                 rel = path.relative_to(vault_root)
             except Exception:
@@ -301,14 +305,31 @@ def run_tick(
             continue
         changed_entries.append((rel, mtime, digest))
 
+    settings_source_processed = False
+    removed_settings_sources = sorted(
+        Path(path)
+        for path in state.files.keys() - set(scanned_paths)
+        if is_settings_source_path(Path(path))
+    )
+    if removed_settings_sources:
+        removed_delta = handle_settings_source_delta(
+            rel_path=removed_settings_sources[0],
+            vault_root=cfg.vault_path,
+        )
+        settings_source_processed = True
+        if removed_delta.reloaded:
+            summary["settings_source_reloads_in_tick"] = 1
+        if removed_delta.errors:
+            state.errors += len(removed_delta.errors)
+            summary["settings_source_errors_in_tick"] = len(removed_delta.errors)
+        summary["settings_source_deletions_in_tick"] = len(removed_settings_sources)
+
     summary["changed_in_tick"] = len(changed_entries)
     state.changed_detected += len(changed_entries)
     summary["changed_detected"] = state.changed_detected
 
     emitted_in_tick = 0
     rate_limited_in_tick = 0
-    settings_source_processed = False
-
     for rel, mtime, digest in changed_entries:
         rel_str = str(rel)
         last_seen = state.last_seen(rel_str)
@@ -362,6 +383,18 @@ def run_tick(
             # Settings source markdown is runtime control input, not ordinary
             # vault content. Keep its watcher state but never emit it for panel
             # or ingest consumers.
+            state.update_file_state(
+                rel_str,
+                mtime=mtime,
+                content_hash=digest,
+                settings_runtime_values=settings_delta.values,
+                seen_at=now,
+            )
+            continue
+        if is_settings_control_path(
+            rel,
+            configured_system_dir=get_vault_system_dir_rel(cfg.vault_path),
+        ):
             state.update_file_state(
                 rel_str,
                 mtime=mtime,

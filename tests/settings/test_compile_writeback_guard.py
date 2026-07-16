@@ -17,6 +17,7 @@ from textwrap import dedent
 import pytest
 from click.testing import CliRunner
 
+import app.cli as cli_module
 from app.cli import cli
 from app.settings import compiler
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -100,3 +101,40 @@ def test_blocked_compile_writes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
     # unchanged from before the blocked compile attempt.
     after = {p: p.read_text(encoding="utf-8") for p in sorted(vault.glob("*.md"))}
     assert after == before
+
+
+def test_settings_watch_compiles_the_watched_settings_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watch_path = tmp_path / "custom-vault" / "settings"
+    watch_path.mkdir(parents=True)
+    legacy_watch_path = watch_path.parent / "@Settings"
+    legacy_watch_path.mkdir()
+    compile_calls: list[dict[str, object]] = []
+    watch_calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "compile_all",
+        lambda **kwargs: compile_calls.append(kwargs),
+    )
+
+    def _watch_once(*args: str, **_kwargs: object):
+        watch_calls.append(args)
+        yield [("modified", str(watch_path / "global.md"))]
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_module, "watch", _watch_once)
+
+    result = CliRunner().invoke(
+        cli,
+        ["settings", "watch", "--path", str(watch_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert compile_calls == [
+        {"auto_heal": False, "vault_root": watch_path.parent.resolve()},
+        {"auto_heal": False, "vault_root": watch_path.parent.resolve()},
+    ]
+    assert watch_calls == [(str(watch_path.resolve()), str(legacy_watch_path))]

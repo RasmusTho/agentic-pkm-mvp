@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import json
+import os
 from pathlib import Path
 
 import pytest
 
 from app.services import settings as system_settings
 from app.settings import compiler
+import app.settings.migration as migration_module
 from app.settings.health_settings import load_health_settings
 from app.settings.locations import resolve_compiled_sources, resolve_settings_file
 from app.settings.migration import migrate_settings_location
@@ -112,6 +115,69 @@ def test_settings_source_symlink_must_remain_inside_vault(
     assert (outside / "global.md").read_text(encoding="utf-8") == "# outside\n"
 
 
+def test_migration_rejects_legacy_alias_to_canonical_before_guard(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings"
+    canonical.mkdir(parents=True)
+    (canonical / "global.md").write_text("# canonical\n", encoding="utf-8")
+    (vault / "@Settings").symlink_to(canonical, target_is_directory=True)
+    guard_calls: list[str] = []
+
+    class Guard:
+        def assert_writes_allowed(self, action: str) -> None:
+            guard_calls.append(action)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        migrate_settings_location(vault, write_guard=Guard())  # type: ignore[arg-type]
+
+    assert guard_calls == []
+    assert (canonical / "global.md").read_text(encoding="utf-8") == "# canonical\n"
+
+
+def test_migration_rejects_legacy_file_symlink_before_guard(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    outside = tmp_path / "outside.md"
+    outside.write_text("TOP SECRET\n", encoding="utf-8")
+    legacy = vault / "@Settings"
+    legacy.mkdir(parents=True)
+    (legacy / "global.md").symlink_to(outside)
+    guard_calls: list[str] = []
+
+    class Guard:
+        def assert_writes_allowed(self, action: str) -> None:
+            guard_calls.append(action)
+
+    with pytest.raises(ValueError, match="must not be a symlink|escapes vault root"):
+        migrate_settings_location(vault, write_guard=Guard())  # type: ignore[arg-type]
+
+    assert guard_calls == []
+    assert outside.read_text(encoding="utf-8") == "TOP SECRET\n"
+    assert not (vault / "settings").exists()
+
+
+def test_migration_rejects_nested_legacy_directory_symlink_before_guard(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "agent.md").write_text("TOP SECRET\n", encoding="utf-8")
+    legacy = vault / "@Settings"
+    legacy.mkdir(parents=True)
+    (legacy / "agents").symlink_to(outside, target_is_directory=True)
+    guard_calls: list[str] = []
+
+    class Guard:
+        def assert_writes_allowed(self, action: str) -> None:
+            guard_calls.append(action)
+
+    with pytest.raises(ValueError, match="must not be a symlink|escapes vault root"):
+        migrate_settings_location(vault, write_guard=Guard())  # type: ignore[arg-type]
+
+    assert guard_calls == []
+    assert (outside / "agent.md").read_text(encoding="utf-8") == "TOP SECRET\n"
+
+
 def test_migration_is_governed_and_receipted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault = tmp_path / "vault"
     legacy = vault / "@Settings" / "global.md"
@@ -182,13 +248,23 @@ def test_migration_preserves_unowned_fixed_backup_directory(
         def assert_writes_allowed(self, action: str) -> None:
             assert action == "settings.location.migrate"
 
-    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
-    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+    emitted: list[object] = []
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda receipt, **_kwargs: emitted.append(receipt),
+    )
+    receipt = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
 
     assert sentinel.read_text(encoding="utf-8") == "preserve me\n"
     assert (vault / "settings" / "global.md").read_text(encoding="utf-8") == "# legacy\n"
     assert canonical.read_text(encoding="utf-8") == "# canonical\n"
+    assert emitted == [receipt]
+    assert receipt.old_value["canonical"] == "settings"
     assert not list(vault.glob(".settings-before-migration-*"))
+
+    second = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+    assert second.value["migrated_files"] == 0
+    assert len(list(vault.glob(".settings-migration-*"))) == 1
 
 
 def test_migration_cleanup_failure_is_committed_and_receipted(
@@ -205,11 +281,12 @@ def test_migration_cleanup_failure_is_committed_and_receipted(
             assert action == "settings.location.migrate"
 
     monkeypatch.setattr(
-        "app.settings.migration.emit_settings_write_receipt", emitted.append
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda receipt, **_kwargs: emitted.append(receipt),
     )
     monkeypatch.setattr(
-        "app.settings.migration._remove_legacy_sources",
-        lambda _root: (_ for _ in ()).throw(OSError("cleanup blocked")),
+        "app.settings.migration._quarantine_legacy_sources",
+        lambda _root, _transaction: (_ for _ in ()).throw(OSError("cleanup blocked")),
     )
 
     with caplog.at_level(logging.WARNING, logger="app.settings.migration"):
@@ -237,10 +314,18 @@ def test_migration_receipt_failure_restores_previous_canonical_tree(
         def assert_writes_allowed(self, action: str) -> None:
             assert action == "settings.location.migrate"
 
-    def _fail_receipt(_receipt: object) -> None:
+    def _fail_receipt(_receipt: object, **_kwargs: object) -> None:
         raise OSError("receipt unavailable")
 
+    fsync_directories: list[Path] = []
+    real_fsync_directory = migration_module._fsync_directory
+
+    def _record_fsync(path: Path) -> None:
+        fsync_directories.append(path)
+        real_fsync_directory(path)
+
     monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", _fail_receipt)
+    monkeypatch.setattr("app.settings.migration._fsync_directory", _record_fsync)
 
     with pytest.raises(OSError, match="receipt unavailable"):
         migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
@@ -249,6 +334,552 @@ def test_migration_receipt_failure_restores_previous_canonical_tree(
     assert not (vault / "settings" / "global.md").exists()
     assert legacy.exists()
     assert not list(vault.glob(".settings-before-migration-*"))
+    assert fsync_directories[-1] == vault
+
+
+def test_migration_closes_directory_descriptor_when_lock_acquisition_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open = os.open
+    real_close = os.close
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _record_open(path: Path | str, flags: int) -> int:
+        descriptor = real_open(path, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def _record_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr("app.settings.migration.os.open", _record_open)
+    monkeypatch.setattr("app.settings.migration.os.close", _record_close)
+    monkeypatch.setattr(
+        "app.settings.migration.fcntl.flock",
+        lambda _descriptor, _operation: (_ for _ in ()).throw(OSError("lock failed")),
+    )
+
+    with pytest.raises(OSError, match="lock failed"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert opened
+    assert opened[-1] in closed
+
+
+def test_migration_rechecks_interrupted_transactions_after_lock_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    interrupted = vault / ".settings-migration-interrupted"
+    interrupted.mkdir()
+    interrupted_receipt = migration_module.SettingsWriteReceipt(
+        key="settings.location",
+        value={"canonical": "settings", "migrated_files": 1},
+        surface="migration",
+        actor="operator",
+    )
+    migration_module._write_transaction_state(
+        interrupted,
+        "prepared",
+        had_canonical=False,
+        receipt=interrupted_receipt,
+    )
+    discovery_calls = 0
+    real_discovery = migration_module._owned_transactions
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _appear_after_initial_check(root: Path) -> list[Path]:
+        nonlocal discovery_calls
+        discovery_calls += 1
+        if discovery_calls == 1:
+            return []
+        return real_discovery(root)
+
+    monkeypatch.setattr(
+        "app.settings.migration._owned_transactions", _appear_after_initial_check
+    )
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+
+    receipt = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert not interrupted.exists()
+    assert (vault / "settings" / "global.md").exists()
+    assert (vault / receipt.value["recovery"] / "transaction.json").exists()
+
+
+def test_migration_receipt_failure_preserves_post_publish_canonical_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _write_then_fail(_receipt: object, **_kwargs: object) -> None:
+        (vault / "settings" / "late.md").write_text("late\n", encoding="utf-8")
+        raise OSError("receipt unavailable")
+
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt", _write_then_fail
+    )
+
+    with pytest.raises(OSError, match="receipt unavailable"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "late.md").read_text(encoding="utf-8") == "late\n"
+    transaction = next(vault.glob(".settings-migration-*"))
+    assert (transaction / "canonical-before" / "watchers.md").read_text(
+        encoding="utf-8"
+    ) == "# existing canonical\n"
+    assert legacy.exists()
+
+
+def test_migration_concurrent_legacy_change_is_preserved_after_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("A\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _emit_and_change(_receipt: object, **_kwargs: object) -> None:
+        legacy.write_text("B\n", encoding="utf-8")
+        (legacy.parent / "late.md").write_text("late\n", encoding="utf-8")
+
+    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", _emit_and_change)
+
+    with caplog.at_level(logging.WARNING, logger="app.settings.migration"):
+        receipt = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "global.md").read_text(encoding="utf-8") == "A\n"
+    recovery = vault / receipt.value["recovery"] / "legacy-recovery" / "compiled"
+    assert (recovery / "global.md").read_text(encoding="utf-8") == "B\n"
+    assert (recovery / "late.md").read_text(encoding="utf-8") == "late\n"
+    assert not legacy.exists()
+    assert "all current legacy data will be quarantined" in caplog.text
+
+
+def test_migration_rejects_new_canonical_file_created_during_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    real_manifest_check = migration_module._legacy_manifest_matches
+    injected = False
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _inject_canonical_file(root: Path, expected: object) -> bool:
+        nonlocal injected
+        result = real_manifest_check(root, expected)  # type: ignore[arg-type]
+        if not injected:
+            injected = True
+            (vault / "settings" / "late.md").write_text("late\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(
+        "app.settings.migration._legacy_manifest_matches", _inject_canonical_file
+    )
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError, match="changed during migration preparation"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
+    assert (vault / "settings" / "late.md").read_text(encoding="utf-8") == "late\n"
+    assert legacy.exists()
+
+
+def test_migration_preserves_canonical_write_that_races_after_backup_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical_file = vault / "settings" / "watchers.md"
+    canonical_file.parent.mkdir(parents=True)
+    canonical_file.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    real_manifest = migration_module._canonical_manifest
+    injected = False
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _inject_after_backup(root: Path, candidate: Path):
+        nonlocal injected
+        result = real_manifest(root, candidate)
+        if candidate.name == "canonical-before" and not injected:
+            injected = True
+            (vault / "settings").mkdir()
+            (vault / "settings" / "late.md").write_text("late\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr("app.settings.migration._canonical_manifest", _inject_after_backup)
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError, match="reappeared"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "late.md").read_text(encoding="utf-8") == "late\n"
+    transaction = next(vault.glob(".settings-migration-*"))
+    assert (transaction / "canonical-before" / "watchers.md").read_text(
+        encoding="utf-8"
+    ) == "# existing canonical\n"
+    assert legacy.exists()
+
+
+def test_migration_quarantine_preserves_legacy_write_after_atomic_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy_root = vault / "@Settings"
+    legacy_root.mkdir(parents=True)
+    (legacy_root / "global.md").write_text("A\n", encoding="utf-8")
+    real_replace = os.replace
+    injected = False
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _write_after_quarantine(source: Path | str, target: Path | str) -> None:
+        nonlocal injected
+        source_path = Path(source)
+        target_path = Path(target)
+        real_replace(source, target)
+        if source_path == legacy_root and target_path.name == "compiled" and not injected:
+            injected = True
+            legacy_root.mkdir()
+            (legacy_root / "late.md").write_text("late\n", encoding="utf-8")
+
+    monkeypatch.setattr("app.settings.migration.os.replace", _write_after_quarantine)
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+
+    receipt = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    recovery = vault / receipt.value["recovery"] / "legacy-recovery" / "compiled"
+    assert (recovery / "global.md").read_text(encoding="utf-8") == "A\n"
+    assert (legacy_root / "late.md").read_text(encoding="utf-8") == "late\n"
+
+
+def test_migration_real_receipt_failure_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    invalid_outbox = tmp_path / "outbox-directory"
+    invalid_outbox.mkdir()
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(invalid_outbox))
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    with pytest.raises(RuntimeError, match="durable settings receipt append failed"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
+    assert not (vault / "settings" / "global.md").exists()
+    assert legacy.exists()
+
+
+def test_migration_parent_fsync_uncertainty_keeps_published_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "receipts.jsonl"))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(
+        "app.receipts.settings_write._fsync_parent",
+        lambda _path: (_ for _ in ()).throw(OSError("parent fsync failed")),
+    )
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    receipt = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "global.md").exists()
+    assert legacy.exists()
+    transaction = vault / receipt.value["recovery"]
+    marker = json.loads((transaction / "transaction.json").read_text(encoding="utf-8"))
+    assert marker["state"] == "published"
+    assert len((tmp_path / "receipts.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_committed_marker_failure_preserves_owned_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "receipts.jsonl"))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    real_write_state = migration_module._write_transaction_state
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _fail_committed(
+        transaction: Path,
+        state: str,
+        **kwargs: object,
+    ) -> None:
+        if state == "committed":
+            raise OSError("marker failed")
+        real_write_state(transaction, state, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "app.settings.migration._write_transaction_state", _fail_committed
+    )
+
+    receipt = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    transaction = vault / receipt.value["recovery"]
+    marker = json.loads((transaction / "transaction.json").read_text(encoding="utf-8"))
+    assert marker["state"] == "published"
+    assert (transaction / "legacy-recovery" / "compiled" / "global.md").exists()
+
+
+def test_migration_recovers_crash_between_canonical_renames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+    real_replace = os.replace
+    crashed = False
+
+    def _crash_before_publish(source: Path | str, target: Path | str) -> None:
+        nonlocal crashed
+        source_path = Path(source)
+        target_path = Path(target)
+        if (
+            not crashed
+            and source_path.name.startswith(".settings-migrate-")
+            and target_path == vault / "settings"
+        ):
+            crashed = True
+            raise SystemExit("simulated process crash")
+        real_replace(source, target)
+
+    monkeypatch.setattr("app.settings.migration.os.replace", _crash_before_publish)
+    with pytest.raises(SystemExit, match="simulated process crash"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert not (vault / "settings").exists()
+    assert len(list(vault.glob(".settings-migration-*"))) == 1
+
+    monkeypatch.setattr("app.settings.migration.os.replace", real_replace)
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
+    assert (vault / "settings" / "global.md").read_text(encoding="utf-8") == "# legacy\n"
+    recovery_transactions = list(vault.glob(".settings-migration-*"))
+    assert len(recovery_transactions) == 1
+    marker = json.loads(
+        (recovery_transactions[0] / "transaction.json").read_text(encoding="utf-8")
+    )
+    assert marker["state"] == "committed"
+
+
+def test_migration_recovers_published_tree_without_durable_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _crash_before_receipt(_receipt: object, **_kwargs: object) -> None:
+        raise SystemExit("simulated crash before durable receipt")
+
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt", _crash_before_receipt
+    )
+    with pytest.raises(SystemExit, match="before durable receipt"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "global.md").exists()
+    assert len(list(vault.glob(".settings-migration-*"))) == 1
+
+    migration_module._recover_interrupted_transaction(vault, vault / "settings")
+
+    assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
+    assert not (vault / "settings" / "global.md").exists()
+    assert legacy.exists()
+    assert not list(vault.glob(".settings-migration-*"))
+
+
+def test_recovery_preserves_concurrent_canonical_write_when_no_prior_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _write_then_crash(_receipt: object, **_kwargs: object) -> None:
+        (vault / "settings" / "late.md").write_text("late\n", encoding="utf-8")
+        raise SystemExit("simulated concurrent crash")
+
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt", _write_then_crash
+    )
+    with pytest.raises(SystemExit, match="concurrent crash"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="concurrent canonical data"):
+        migration_module._recover_interrupted_transaction(vault, vault / "settings")
+
+    assert (vault / "settings" / "late.md").read_text(encoding="utf-8") == "late\n"
+    transaction = next(vault.glob(".settings-migration-*"))
+    assert (transaction / "transaction.json").exists()
+    assert legacy.exists()
+
+
+def test_migration_recovery_keeps_published_tree_after_durable_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "receipts.jsonl"))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    real_write_state = migration_module._write_transaction_state
+
+    def _crash_on_committed_state(
+        transaction: Path,
+        state: str,
+        *,
+        had_canonical: bool,
+        receipt: object,
+        published_manifest: object = None,
+    ) -> None:
+        if state == "committed":
+            raise SystemExit("simulated crash after durable receipt")
+        real_write_state(
+            transaction,
+            state,
+            had_canonical=had_canonical,
+            receipt=receipt,  # type: ignore[arg-type]
+            published_manifest=published_manifest,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(
+        "app.settings.migration._write_transaction_state", _crash_on_committed_state
+    )
+    with pytest.raises(SystemExit, match="after durable receipt"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "global.md").exists()
+    assert len(list(vault.glob(".settings-migration-*"))) == 1
+
+    monkeypatch.setattr(
+        "app.settings.migration._write_transaction_state", real_write_state
+    )
+    recovered = migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
+    assert (vault / "settings" / "global.md").read_text(encoding="utf-8") == "# legacy\n"
+    assert not legacy.exists()
+    transaction = vault / recovered.value["recovery"]
+    assert (transaction / "legacy-recovery" / "compiled" / "global.md").exists()
+    marker = json.loads((transaction / "transaction.json").read_text(encoding="utf-8"))
+    assert marker["state"] == "committed"
+    assert len((tmp_path / "receipts.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_migration_refuses_canonical_legacy_conflict_before_guard(tmp_path: Path) -> None:
@@ -285,7 +916,10 @@ def test_migration_converts_compiled_legacy_system_yaml(
         def assert_writes_allowed(self, action: str) -> None:
             assert action == "settings.location.migrate"
 
-    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
     migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
 
     target = vault / "settings" / "system-settings.md"
@@ -329,7 +963,10 @@ def test_migration_preserves_unrelated_uppercase_system_files(
         def assert_writes_allowed(self, action: str) -> None:
             assert action == "settings.location.migrate"
 
-    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
     migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
 
     assert (vault / "settings" / "health.md").read_text(encoding="utf-8") == "# health\n"
@@ -354,11 +991,36 @@ def test_migration_moves_health_from_configured_system_directory(
         def assert_writes_allowed(self, action: str) -> None:
             assert action == "settings.location.migrate"
 
-    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
     migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
 
     assert (vault / "settings" / "health.md").read_text(encoding="utf-8") == "# configured health\n"
     assert not configured_health.exists()
+
+
+def test_migration_moves_lowercase_legacy_health_on_case_sensitive_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy_health = vault / "_system" / "settings" / "health.md"
+    legacy_health.parent.mkdir(parents=True)
+    legacy_health.write_text("# lower health\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "health.md").read_text(encoding="utf-8") == "# lower health\n"
+    assert not legacy_health.exists()
 
 
 def test_migration_rejects_configured_health_path_outside_vault_before_guard(

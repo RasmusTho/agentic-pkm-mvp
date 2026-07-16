@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from collections.abc import Iterator
@@ -22,6 +23,18 @@ _old_value_override: ContextVar[Any] = ContextVar(
     "settings_receipt_old_value",
     default=_OLD_VALUE_UNSET,
 )
+
+
+class ReceiptDurabilityUncertainError(RuntimeError):
+    """Receipt bytes are fsynced, but creation-directory durability is uncertain."""
+
+
+def _fsync_parent(path: Path) -> None:
+    parent_descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
 
 
 @dataclass(frozen=True)
@@ -43,8 +56,10 @@ class SettingsWriteReceipt:
             object.__setattr__(self, "new_value", self.value)
 
 
-def emit_settings_write_receipt(receipt: SettingsWriteReceipt) -> None:
-    """Append one receipt to both existing sinks without gating the write."""
+def emit_settings_write_receipt(
+    receipt: SettingsWriteReceipt, *, require_durable: bool = False
+) -> None:
+    """Append one receipt to both sinks, optionally requiring the JSONL sink."""
 
     # Deferred to keep the settings compiler import graph acyclic:
     # events.schema -> settings.runtime -> settings.compiler -> settings.writeback.
@@ -67,8 +82,10 @@ def emit_settings_write_receipt(receipt: SettingsWriteReceipt) -> None:
             },
         )
         record = envelope.model_dump(mode="json")
-    except Exception:
+    except Exception as exc:
         logger.warning("settings.write.receipt envelope construction failed", exc_info=True)
+        if require_durable:
+            raise RuntimeError("settings receipt envelope construction failed") from exc
         return
 
     try:
@@ -79,8 +96,22 @@ def emit_settings_write_receipt(receipt: SettingsWriteReceipt) -> None:
         with outbox_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False))
             handle.write("\n")
-    except Exception:
+            if require_durable:
+                handle.flush()
+                os.fsync(handle.fileno())
+        if require_durable:
+            try:
+                _fsync_parent(outbox_path)
+            except OSError as exc:
+                raise ReceiptDurabilityUncertainError(
+                    "settings receipt is visible but parent fsync failed"
+                ) from exc
+    except ReceiptDurabilityUncertainError:
+        raise
+    except Exception as exc:
         logger.warning("settings.write.receipt jsonl append failed", exc_info=True)
+        if require_durable:
+            raise RuntimeError("durable settings receipt append failed") from exc
 
     try:
         from app.services.outbox import (  # noqa: PLC0415
