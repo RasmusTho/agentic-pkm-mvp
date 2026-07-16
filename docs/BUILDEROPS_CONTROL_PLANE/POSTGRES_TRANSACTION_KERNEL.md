@@ -26,12 +26,12 @@ port and PostgreSQL implementation before network deployment or migration can be
   authority-bearing record, with repo-namespaced leases, idempotency keys, outbox operations, and
   promotions;
 - make guarded state + idempotency result + receipt + outbox intent one transaction;
-- expose the committed receipt sequence and PostgreSQL recovery LSN so API acknowledgement/replay,
-  dependent authority transitions, and outbox eligibility can wait until BCP-02 proves independent
-  synchronous durability;
+- expose the committed receipt sequence and PostgreSQL recovery LSN for observability and
+  post-restore reconciliation (ADR-0062 A1: acknowledgement, replay, dependent transitions, and
+  outbox eligibility require the local PostgreSQL commit only);
 - implement atomic claim/heartbeat/release/complete with monotonically fenced ownership;
-- implement an outbox claim/retry/reconciliation state machine with deterministic operation keys,
-  durability-watermark eligibility, and a fenced pre-effect attempt/receipt;
+- implement an outbox claim/retry/reconciliation state machine with deterministic operation keys
+  and a fenced pre-effect attempt/receipt;
 - retain SQLite only as an explicitly injected test/migration adapter, never an automatic runtime
   default; and
 - expose schema/authority-epoch metadata needed by readiness and cutover.
@@ -66,12 +66,9 @@ by BuilderOps governance and remains outside Product persistence authority.
 - A timed-out external call stays `unknown` until reconciled.
 - Stale fencing tokens cannot mutate after lease expiry/reassignment.
 - File projections/artifacts cannot be the sole terminal-state or receipt authority.
-- A transaction result is not externally acknowledgeable without its committed receipt sequence and
-  recovery LSN; BCP-02 owns the independent durability gate.
-- An idempotent replay cannot expose success, and an outbox worker cannot claim an intent, until the
-  independent recovery watermark covers the original transaction LSN. Before an external call, the
-  worker must also wait until the fenced claim/pre-effect attempt transaction LSN is independently
-  durable; stalled durability leaves the effect unattempted.
+- A transaction result binds its committed receipt sequence and recovery LSN for observability and
+  post-restore reconciliation; acknowledgement, replay, and outbox eligibility require the local
+  PostgreSQL commit only (ADR-0062 A1).
 - Missing/ambiguous repo scope fails closed; an identity, lease, idempotency key, or promotion in one
   repo namespace cannot collide with or authorize another.
 - Do not yet switch production clients or remove Product routes.
@@ -90,10 +87,6 @@ by BuilderOps governance and remains outside Product persistence authority.
 - [ ] Outbox claims are crash-recoverable and a timed-out external effect enters reconciliation
   rather than immediate replay or terminal success.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_unknown_external_effect_requires_readback_before_retry`.
-- [ ] With the recovery watermark stalled after local intent and claim commits, API replay exposes no
-  success, the outbox intent is not effect-eligible, and GitHub remains untouched; advancing the
-  watermark through both transaction LSNs permits one reconciled effect.
-  Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_external_effect_waits_for_intent_and_claim_recovery_lsn`.
 - [ ] Production construction requires a PostgreSQL DSN and never selects/creates SQLite implicitly;
   the SQLite adapter is available only through explicit test/migration injection.
   Verify: `tests/builderops/control_plane/test_store_selection.py::test_production_store_fails_closed_without_postgres`.
@@ -105,7 +98,7 @@ by BuilderOps governance and remains outside Product persistence authority.
   authorize repo B.
   Verify: `tests/builderops/control_plane/test_multirepo_namespace.py::test_authority_envelope_is_required_and_repo_namespaces_are_isolated`.
 - [ ] Each accepted transaction returns a committed receipt sequence and recovery LSN bound to its
-  idempotent result for the service acknowledgement gate.
+  idempotent result for observability and post-restore reconciliation.
   Verify: `tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_transaction_result_binds_receipt_sequence_and_recovery_lsn`.
 
 ## Out of Scope
@@ -129,5 +122,5 @@ by BuilderOps governance and remains outside Product persistence authority.
 
 ## Related GitHub Issues
 
-- [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792), the first `agent:ready`
-  candidate after PR #3691 merges and strict readiness validation passes.
+- [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792), the first executable child
+  (PR #3691 merged 2026-07-15; amended by ADR-0062 A1 on 2026-07-16).

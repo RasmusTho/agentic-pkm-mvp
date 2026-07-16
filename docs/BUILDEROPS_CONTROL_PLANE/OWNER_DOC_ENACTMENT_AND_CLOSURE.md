@@ -22,7 +22,10 @@ API/PostgreSQL/independent-lifecycle writeback that runs only after BCP-06.
 
 - update existing issue #3690 rather than create a duplicate;
 - reconcile `SBS_OPERATING_MODEL §3`, Builder System process map, BuilderOps boundary/store/object
-  docs, dispatcher docs, deployment/environment/security/health/operations surfaces, and DOCS_INDEX;
+  docs, dispatcher docs (including `AGENTS.md :: Dispatcher policy` and
+  `AGENTS.md :: BuilderOps Vault workflow boundary`), deployment/environment/security/health/
+  operations surfaces, ADR-0057's OD-K4 substrate clause (superseded at cutover per ADR-0062 A3),
+  and DOCS_INDEX;
 - make current-state language match the deployed topology and retain ADR-0010's authority split;
 - mark superseded host-stable SQLite/direct-store/Product-route instructions explicitly;
 - reconcile #3686/PR #3695 and #3603/PR #3620 lifecycle truth from their actual outcomes;
@@ -70,14 +73,17 @@ without changing Product runtime or inventing a new Product SBS component.
   Verify: doc writeback at `docs/architecture/SBS_OPERATING_MODEL.md :: 3. Builder System Boundary And Work Classification`
   and `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md :: 1. Executive Model`.
 - [ ] Store/boundary/dispatcher docs define authenticated API-only clients, one PostgreSQL
-  operational authority, intent/attempt durability-gated outbox/readback semantics, evidence-only
-  quarantine versus duplicate-preventing authority tombstones, conditional protected-base/manifest
-  merge fencing, and SQLite migration/test-only posture.
+  operational authority, locally committed fenced outbox/readback semantics (ADR-0062 A1),
+  evidence-only quarantine versus duplicate-preventing authority tombstones, conditional
+  protected-base/manifest merge fencing, and SQLite migration/test-only posture.
   Verify: reconciled anchors in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`,
-  `docs/builderops/BUILDEROPS_VAULT_STORE.md`, and `docs/AGENT_ISSUE_DISPATCHER.md`.
+  `docs/builderops/BUILDEROPS_VAULT_STORE.md`, `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`,
+  `docs/AGENT_ISSUE_DISPATCHER.md`, and `AGENTS.md` (Dispatcher policy + BuilderOps Vault workflow
+  boundary sections).
 - [ ] Deployment/security/health/operations docs own the separate Compose/pin/credential/health/
-  full-backup/continuous-WAL/restore-through-acknowledged-LSN and independently recoverable key/KMS
-  custody lifecycle without implying Product ownership.
+  alerting, failure-domain-separated deployment (ADR-0062 A2), encrypted-backup/archived-WAL/
+  restore-from-backup, and independently recoverable key/KMS custody lifecycle without implying
+  Product ownership.
   Verify: reconciled anchors in `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, `docs/SECURITY.md`,
   `docs/HEALTH.md`, and `docs/OPERATIONS.md`.
 - [ ] BCP-INV-01 through BCP-INV-10 are registered only with the tests/gates/doctors that actually
@@ -88,10 +94,10 @@ without changing Product runtime or inventing a new Product SBS component.
   final state with no obsolete `agent:*` labels on closed items.
   Verify: GitHub/backlog reconciliation receipt linked on the parent.
 - [ ] The parent capability checklist is complete and its closure receipt links cutover,
-  stalled-durability/no-external-effect proof, authority-ambiguity resolution/tombstone
-  reconciliation, protected-base/manifest post-validation race rejection, restore without Demerzel
-  host secrets, independent key-custody recovery, no-authority-rewind recovery, executor/GitHub
-  readback, tests, and owner-doc diff.
+  authority-ambiguity resolution/tombstone reconciliation, protected-base/manifest post-validation
+  race rejection, restore without Demerzel host secrets, independent key-custody recovery,
+  no-authority-rewind recovery, post-restore GitHub reconciliation, executor/GitHub readback, tests,
+  and owner-doc diff.
   Verify: parent #3788 closure comment.
 
 ## Out of Scope

@@ -13,7 +13,8 @@ can_parallelize_with: [BCP-02]
 
 ## Purpose
 
-Authority-bearing state currently exists in CWD/worktree-local BuilderOps SQLite, dispatcher
+Authority-bearing state currently exists in CWD/worktree-local BuilderOps SQLite (including the
+CKM/Capability Evidence Graph tables written through the same store; ADR-0062 A3), dispatcher
 SQLite/JSONL, file-first model inquiries/promotions, and epic-run JSON. Issue #3686 and PR #3695
 prove path fragmentation; their host-stable SQLite destination is superseded, but their discovery and
 host-identity lessons remain migration inputs.
@@ -29,8 +30,10 @@ host-identity lessons remain migration inputs.
 - derive `RepoRef`, scope, and stack only from recorded source evidence, registered worktree/repo
   identity, or an acknowledged deterministic mapping; quarantine evidence-only ambiguity and require
   authority-bearing ambiguity to be resolved or converted to duplicate-preventing tombstones;
-- dry-run and import tasks/events/records/attempts/idempotency/artifact references/receipts while
-  reporting counts, deduplication, conflicts, omissions, quarantine, and tombstones;
+- dry-run and import tasks/events/records/attempts/idempotency/artifact references/receipts —
+  including the CKM/CEG tables (ADR-0062 A3), whose schema may keep growing until the freeze and
+  must stay import-coverable — while reporting counts, deduplication, conflicts, omissions,
+  quarantine, and tombstones;
 - expire/tombstone all legacy live leases and create a new PostgreSQL authority epoch/fencing base;
 - make import idempotent and restart-safe without mutating source files; and
 - produce machine-readable preflight, dry-run, import, and reconciliation receipts consumed by BCP-06.
@@ -103,6 +106,10 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 - [ ] Inquiry/epic-run identities, transitions, promotions, and receipts are represented in
   PostgreSQL with content-hash references to immutable artifacts and no file-only terminal state.
   Verify: `tests/builderops/control_plane/test_legacy_artifact_import.py::test_file_first_authority_imports_envelope_and_receipts`.
+- [ ] CKM/Capability Evidence Graph tables (ADR-0057 substrate, ADR-0062 A3) are inventoried and
+  imported with the same identity/provenance discipline, covering any schema additions made between
+  spec acceptance and freeze.
+  Verify: `tests/builderops/control_plane/test_legacy_import.py::test_ckm_ceg_tables_are_inventoried_and_imported`.
 - [ ] Legacy `RepoRef`/scope/stack is backfilled only from evidence-bound mappings. Evidence-only
   ambiguity may remain plain non-authoritative quarantine; authority-bearing ambiguity must be
   evidence-resolved or duplicate-preventing tombstoned and cannot authorize a lease, effect,

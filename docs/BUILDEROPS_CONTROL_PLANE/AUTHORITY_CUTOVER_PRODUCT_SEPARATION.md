@@ -26,13 +26,14 @@ import, cutover, Product route/process removal, legacy retirement, and end-to-en
 - remove BuilderOps/Signboard ownership from Product FastAPI, Product startup/bootstrap, Product
   Compose mounts/env/secrets/health, and Product deployment paths;
 - disable/remove production SQLite/JSONL/JSON authority construction and SSH direct-store paths;
-- run health/readiness, API/executor end-to-end, crash recovery, full-backup + continuous-WAL
-  restore-through-watermark drill with Demerzel's host secret store unavailable, and
+- run health/readiness, API/executor end-to-end, crash recovery, a full-backup + archived-WAL
+  restore-from-backup drill with Demerzel's host secret store unavailable (ADR-0062 A1), and
   Product-independence acceptance;
 - archive legacy sources read-only with inventory hashes and retention; and
 - define rollback before activation as prior image + pre-import backup, and recovery after activation
-  as a compatible image or full-backup + continuous-WAL replay through the recorded highest
-  acknowledged LSN/receipt sequence; never rewind accepted state or reactivate SQLite.
+  as a compatible image or full-backup + archived-WAL restore to the latest archived point, followed
+  by a mandatory GitHub reconciliation of external effects and a new lease/fencing epoch before the
+  executor resumes (ADR-0062 A1); never rewind state that survived or reactivate SQLite.
 
 ## Concretely
 
@@ -40,8 +41,9 @@ The operator runs one fail-closed cutover command/plan: preflight inventory and 
 backup, final import, authority-epoch activation, client/executor switch, Product route/startup
 removal, end-to-end proof, and archive receipt. Any failed gate stops before authority activation or
 leaves the PostgreSQL epoch authoritative for forward repair. Once a client can receive an accepted
-response, snapshot rewind is forbidden; recovery must prove all acknowledged idempotency/state/
-receipt/outbox/fencing records survive or are replayed through the acknowledged LSN and reconciled.
+response, snapshot rewind of surviving state is forbidden; recovery restores the latest archived
+point, reconciles external effects against GitHub, and activates a new fencing epoch before writes
+resume (ADR-0062 A1: the tail since the last archived point is an accepted loss window).
 
 ## Why This Matters
 
@@ -72,10 +74,10 @@ unchanged.
   the same change, with a fail-loud preflight.
 - No dual-write/dual-authority window is permitted.
 - Pre-activation rollback may restore the pre-import backup. Post-activation recovery is
-  forward-only and must preserve every acknowledged transition; full backup + continuous WAL must
-  replay through the recorded highest acknowledged LSN/receipt sequence and reconcile unknown
-  external effects before reopening writes. Missing independent WAL durability or independently
-  recoverable key/KMS custody blocks authority readiness and cutover.
+  forward-only: restore the latest archived point, reconcile unknown external effects against
+  GitHub, and start a new fencing epoch before reopening writes (ADR-0062 A1). A missing/failed
+  restore drill or missing independently recoverable key/KMS custody blocks cutover; archiving lag
+  is an alert condition, not an acknowledgement gate.
 - Product Runtime behavior unrelated to BuilderOps remains unchanged and independently verifiable.
 - Archived sources are immutable evidence, not rollback authority.
 - Owner docs are not rewritten as shipped until this task's receipts exist; BCP-07 owns writeback.
@@ -89,9 +91,9 @@ unchanged.
   quarantine contains evidence-only material.
   Verify: cutover receipt containing BCP-03 inventory/import/reconciliation hashes.
 - [ ] MacBook client plus Demerzel executor complete a record→lease→attempt→outbox→GitHub readback→
-  receipt flow against one PostgreSQL epoch after restart, while a stalled independent recovery
-  watermark proves API replay and GitHub execution remain fail-closed until both intent and
-  pre-effect attempt LSNs are durable.
+  receipt flow against one PostgreSQL epoch after restart, and the flow proceeds normally while the
+  `pkm-*` stacks are stopped/restarted and while backup archiving is stalled (which raises a loud
+  alert; ADR-0062 A1/A2).
   Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch` plus Demerzel runtime receipt.
 - [ ] Cutover consumes the BCP-05 proof that a protected-base or delivery-manifest change after final
   validation invalidates the GitHub conditional/merge-group fence and performs no merge.
@@ -103,16 +105,16 @@ unchanged.
   fail closed if the API is unavailable.
   Verify: `tests/architecture/test_builderops_store_boundary.py::test_cutover_leaves_no_legacy_authority_producer`.
 - [ ] With Demerzel's host secret store unavailable, independently recoverable key/KMS custody
-  decrypts the post-import full backup plus continuous WAL and restores a disposable database through
-  the highest acknowledged LSN/receipt sequence with matching epoch/counts/hashes and passing
-  `/readyz` plus outbox/lease integrity checks.
-  Verify: restore-through-watermark receipt bound to the authoritative full backup, WAL lineage, and
+  decrypts the post-import full backup plus archived WAL and restores a disposable database to the
+  latest archived point with matching epoch/counts/hashes and passing `/readyz` plus outbox/lease
+  integrity checks.
+  Verify: restore-from-backup receipt bound to the authoritative full backup, WAL lineage, and
   independent key-custody recovery proof.
 - [ ] Recovery rehearsal proves pre-activation backup rollback is unavailable after activation and
-  that compatible-image or full-backup + continuous-WAL recovery reaches the recorded highest
-  acknowledged LSN/receipt sequence and preserves every transition, idempotency result, receipt,
-  outbox outcome, and fencing state before writes reopen, with no SQLite activation path.
-  Verify: `tests/ops/test_builderops_cutover.py::test_post_activation_recovery_cannot_rewind_acknowledged_state`.
+  that compatible-image or restore-from-backup recovery reaches the latest archived point, performs
+  GitHub reconciliation, and activates a new fencing epoch before writes reopen, with no SQLite
+  activation path and no rewind of surviving state.
+  Verify: `tests/ops/test_builderops_cutover.py::test_post_activation_recovery_cannot_rewind_surviving_state`.
 - [ ] Legacy stores are archived read-only with hashes/retention and #3686/PR #3695 are reconciled as
   superseded-target evidence.
   Verify: archive/reconciliation receipt plus GitHub lifecycle receipt.
