@@ -80,7 +80,13 @@ producer and consumer has a replacement and proves reversibility to the single-v
   acquires the existing host-global ownership fence/ownership-ledger lock first, then the target and
   every source mutation gate plus exclusive binding-effect lease in one canonical binding-ID order.
   The target participates in fencing/proof but is never included in the retirement tombstone set. The
-  coordinator completes every final scan/buffer drain, stages every
+  coordinator closes new MVR-06D queue claims and runs its authoritative recovery for every
+  source-bound queued, claimed, dispatched, and `effect_pending` row. An effect that completed before
+  its receipt is reconstructed and receipted under the original source binding before the final
+  target rescan; every row must reach one proven terminal outcome. Missing or ambiguous effect/receipt
+  evidence blocks the batch before publish and leaves every source active—reduction never relabels,
+  drops, or quarantines unsettled work to manufacture completion. The coordinator then completes
+  every final scan/buffer drain, stages every
   dimension/default/background-intent repair and immutable tombstone, and proves the target
   package/rebuild before publishing anything. It then takes
   the instance/channel registry's existing exclusive sidecar lock and uses that store's normal
@@ -211,6 +217,11 @@ can break startup or strand durable state. Both failures are latent outages rath
   lease or completes before the reducer's final proof; the complete manifest/receipt always covers
   the exact published target revision and no accepted target mutation is overwritten.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_fences_target_write_and_projection_races`
+- [ ] Before target proof or retirement publish, reduction gates new source-bound claims and uses
+  MVR-06D recovery to terminally reconcile and receipt every queued/claimed/dispatched/effect-pending
+  row. A crash after effect but before receipt is recovered under the source binding and included by
+  the final rescan; ambiguous evidence blocks with all sources active and no complete reduction receipt.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_effect_pending_before_retirement_commit`
 - [ ] Any retained compatibility adapter is named in transition debt with owner, removal condition,
   and production guard; otherwise the old app-local import path is removed.
   - Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`
@@ -232,6 +243,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_authorizes_each_source_target_write_and_retirement tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_fences_target_write_and_projection_races`
+- `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_effect_pending_before_retirement_commit`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
