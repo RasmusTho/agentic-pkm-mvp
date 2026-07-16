@@ -802,19 +802,22 @@ Backward compatibility: existing consumers that only read `cognition_mode` conti
 
 ### `settings.write.receipt`
 
-Durable accountability record for every governed settings write (#2787, RESEARCH-01 divergence
-D-1). Emitted by `SettingsService.update_setting` (`app/vault/settings_service.py`) immediately
-after the in-memory `SettingsWriteReceipt` is built, for both runtime-gating and non-runtime-gating
-keys. Mirrors the `promotion.transition.applied` durability pattern: written best-effort to both
-the JSONL audit surface and the DB outbox, keyed via the shared `derive_idempotency_key` helper
-(`app/services/outbox.py`, KERNEL-02) as an event-id-keyed emission (`EVENT_ID_FINGERPRINT`) — the
-topic schema registry (KERNEL-08) has not landed yet.
+Durable accountability record for every settings write (#2787, #3162). The shared seam in
+`app/receipts/settings_write.py` is called by the API/CLI/MCP settings service, watcher file-delta
+apply, compiler auto-heal writeback, and the pre-vault app-local store. Receipts observe writes and
+never authorize or gate them. They preserve the existing best-effort dual-sink posture: JSONL audit
+surface plus DB outbox, keyed via the shared `derive_idempotency_key` helper
+(`app/services/outbox.py`, KERNEL-02) as an event-id-keyed emission (`EVENT_ID_FINGERPRINT`). A sink
+failure cannot turn a successful settings write into a failed write.
 
 Payload:
 - `key` (`string`): the setting key written.
-- `value` (any): the new value.
-- `surface` (`string`): origin surface — `'api'`, `'cli'`, `'file'`, or `'mcp'`.
-- `actor` (`string`): stable actor identity (`'human'` for all UI/API/CLI/file origins today).
+- `value` / `new_value` (any): the new value (`value` remains the compatibility field).
+- `old_value` (any): the value observed before the write, or null when absent.
+- `file` (`string` or null): the mutated settings file when the writer has one.
+- `surface` (`string`): origin surface — `'api'`, `'cli'`, `'file'`, `'mcp'`, `'auto-heal'`, or
+  `'app-local'`.
+- `actor` (`string`): stable actor identity (`'human'`, `'agent'`, or `'system'` on current writers).
 - `timestamp` (`string`, ISO-8601): receipt timestamp (mirrors the in-memory receipt's own
   timestamp, not necessarily the outbox envelope's `timestamp`).
 - `is_runtime_gating` (`bool`): whether the key is in `RUNTIME_GATING_SETTINGS`.
@@ -827,7 +830,9 @@ Interpretation:
 - this is the accountability/receipt-supporting layer for settings writes, not an intent or
   execution-result event,
 - durability is additive: `SettingsService.update_setting`'s return-value contract
-  (`(EffectiveSetting, SettingsWriteReceipt)`) is unchanged.
+  (`(EffectiveSetting, SettingsWriteReceipt)`) is unchanged,
+- compiler auto-heal keys are file-qualified (for example `global.timeout_ms`), while app-local and
+  canonical settings-service keys retain their native setting names.
 
 ### `promote.intent.created`
 
