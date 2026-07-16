@@ -53,3 +53,28 @@ def test_dockerfile_python_minor_matches_ci_smoke() -> None:
     assert set(ci_versions) == {docker_minor}, (
         f"Dockerfile python {docker_minor} != ci-smoke python-version {sorted(set(ci_versions))}"
     )
+
+
+def test_tts_layer_is_opt_in_so_default_build_succeeds() -> None:
+    """requirements-tts.txt pins piper-tts==1.2.0 -> piper-phonemize~=1.1.0,
+    which publishes no cp312 linux wheels and no sdist, so installing it on
+    the python:3.12 base fails EVERY default build (`docker build .`,
+    compose build, app-image-build.yml — none pass INSTALL_TTS). The
+    app-image-build.yml "Build SHA-tagged app image" job requires the default
+    build to produce a working image, so the TTS layer must be opt-in
+    (default 0) until the pins gain 3.12 support; the guarded RUN keeps the
+    skip loud in the build log."""
+    text = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    assert re.search(r"^ARG INSTALL_TTS=0\s*$", text, flags=re.MULTILINE), (
+        "INSTALL_TTS must default to 0: the TTS pins cannot install on the "
+        "python:3.12 base, so a default of 1 makes every default build fail "
+        "(app-image-build.yml passes no INSTALL_TTS build-arg)"
+    )
+    assert 'if [ "$INSTALL_TTS" = "1" ]' in text, (
+        "the TTS install must stay behind the INSTALL_TTS guard so it can be "
+        "re-enabled with --build-arg INSTALL_TTS=1 once the pins support 3.12"
+    )
+    assert "SKIPPING requirements-tts.txt" in text, (
+        "the skip must be loud in the build log so a missing TTS layer is "
+        "diagnosable from CI output alone"
+    )
