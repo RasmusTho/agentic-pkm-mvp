@@ -315,7 +315,7 @@ migration, preflight, and fail-loud gate merge together.
   health for the safe singleton/empty supervisor; 06C documents dormant multi-binding and safe relocation;
   06D writes the completed zero/one/many runtime-control and health truth plus DB schema and event
   semantics for recoverable PostgreSQL queue claims, including many-binding activation
-- Transition debt impact: reduces D13/D14; residual adapters remain for task 07
+- Transition debt impact: reduces D13/D14; residual adapters remain for task 07A
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
 
 ## Constraints

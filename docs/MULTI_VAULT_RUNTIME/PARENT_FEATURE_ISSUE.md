@@ -103,7 +103,7 @@ consumer migration and validation after those contracts are frozen.
 - Implementing directly from the parent.
 - The #2566 overlay UI, unrelated Settings Spine children, arbitrary/manual semantic cross-vault
   consolidation, multi-writer-policy redesign, distributed federation, or production promotion.
-  MVR-07's deterministic governed reduction package is in scope solely to prove topology-rule-6
+  MVR-07B's deterministic governed reduction package is in scope solely to prove topology-rule-6
   reversibility without merging meaning, attribution, or receipts.
 - Treating dimensions as roles/confidentiality/sphere/topology authority.
 
@@ -149,8 +149,9 @@ Preserves the invariant→producers rule from #1991/#1997, the no-silent-fallbac
 | 06B | [BIND_BACKGROUND_LIFECYCLES — bridge handoff](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 06A and #3163 |
 | 06C | [BIND_BACKGROUND_LIFECYCLES — supervision](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 06B |
 | 06D | [BIND_BACKGROUND_LIFECYCLES — queued work/aggregate proof](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 06C |
-| 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PRESERVE_SINGLE_VAULT_MIGRATION.md) | filed after spec merge | blocked on 04, 05A–05D, and 06A–06D |
-| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | filed after spec merge | final validation child |
+| 07A | [PRESERVE_SINGLE_VAULT_MIGRATION — compatibility/smoke](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PRESERVE_SINGLE_VAULT_MIGRATION.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 04, 05A–05D, and 06A–06D |
+| 07B | [PRESERVE_SINGLE_VAULT_MIGRATION — governed reduction](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PRESERVE_SINGLE_VAULT_MIGRATION.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 07A |
+| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | filed after spec merge | blocked on 07A–07B; final validation child |
 
 Issue numbers replace the placeholders only after the specification PR merges and strict Issue
 contract validation passes. No parallel parent or child hub is created for #2566, #3156/#3163,
@@ -167,7 +168,7 @@ live Issues/PRs, and dispatcher truth before the next pickup.
 
 #2143 closes only after:
 
-1. issues 01A–01C, tasks 02–04, issues 05A–05D and 06A–06D, and tasks 07–08 have merged with no residual `agent:*` labels;
+1. issues 01A–01C, tasks 02–04, issues 05A–05D, 06A–06D, 07A–07B, and 08 have merged with no residual `agent:*` labels;
 2. all capability-acceptance targets in `README.md` pass on merged `origin/main`;
 3. #2566 and #3156/#3163 are reconciled without duplicated scope and their state is truthful;
 4. architecture, ActiveContextSet, topology, settings/context, environment, transition-debt, and

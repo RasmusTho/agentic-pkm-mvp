@@ -200,7 +200,7 @@ This slice promotes the existing seed without changing content-vault authority.
   validates and transforms that export into the exact legacy `AppLocalSettingsStore` path before an
   old image starts. A rollback must therefore see the latest committed registrations and
   last-active state, not merely the pre-migration snapshot. This compatibility exporter/transformer
-  remains required until MVR-07 proves that no supported rollback reader needs it.
+  remains required until MVR-07A proves that no supported rollback reader needs it.
 - Treat rollback into a scalar previous image as an explicit authority boundary for the registry
   state MVR-01 introduces. If current state has multiple registrations, rollback preflight requires one operator-supplied
   `rollback_vault_binding_id`; it validates that exact registration and materializes a constrained

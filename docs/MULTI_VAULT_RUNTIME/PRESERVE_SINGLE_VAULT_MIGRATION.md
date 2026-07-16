@@ -1,7 +1,7 @@
 ---
 name: Preserve Single Vault Migration
 description: Remove unapproved global assumptions while proving no-vault and one-vault compatibility
-task_id: MVR-07
+task_id: MVR-07A / MVR-07B
 source_anchor: "docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Topology rules"
 parent_capability: Multi-vault runtime selection
 prerequisites: [MVR-04, MVR-05, MVR-06]
@@ -14,10 +14,12 @@ can_parallelize_with: []
 ## Purpose
 
 Multi-vault is incomplete if existing callers still rely on hidden process-global resolution or
-if one-vault/no-vault installations regress. This slice removes bounded adapters only after every
+if one-vault/no-vault installations regress. This capability group removes bounded adapters only after every
 producer and consumer has a replacement and proves reversibility to the single-vault floor.
 
 ## What This Task Does
+
+### MVR-07A — compatibility inventory and smoke fitness
 
 - Inventory HTTP, CLI, agent, MCP, watcher, worker, settings, health, startup, compose, tests, and
   channel scripts for global `VAULT_ROOT`, `WATCHER_VAULT_PATH`, `VaultManager.context` and its
@@ -58,9 +60,12 @@ producer and consumer has a replacement and proves reversibility to the single-v
   drains/removals complete. The standing channel's compatibility/explicit mode, members, default,
   revisions, projections, and operator state remain byte-for-byte unchanged; if isolation cannot be
   established, fail before the first governed mutation.
+
+### MVR-07B — governed topology reduction
+
 - Introduce a durable `minimum_runtime_topology_reduction` floor before the first reduction drain
   reservation can be written. A production-derived channel/native inventory first fences new
-  reduction and queue ingress, drains/stops every pre-MVR-07 API, worker, watcher, outbox dispatcher,
+  reduction and queue ingress, drains/stops every pre-MVR-07B API, worker, watcher, outbox dispatcher,
   queue recovery process, CLI daemon, and auxiliary producer that can claim or mutate participant
   rows, proves their sessions/claims gone, and installs a restart fence. Only then may migration
   record the floor and enable the reservation schema. Missing inventory coverage, drain failure, or
@@ -68,7 +73,7 @@ producer and consumer has a replacement and proves reversibility to the single-v
 - Apply invariant→producers to that floor: existing-install migration, channel bootstrap, native init,
   rollback/roll-forward tools, and in-process/integration fixtures all install and preflight the same
   schema and process inventory before enforcement. Once recorded, every earlier MVR-06D-or-older
-  runtime refuses API/worker/queue startup; rollback uses an MVR-07-compatible image that understands
+  runtime refuses API/worker/queue startup; rollback uses an MVR-07B-compatible image that understands
   reservation recovery and reduction lineage. Roll-forward reloads the durable reservation/journal
   and resumes the same drain/abort/commit state without reopening ordinary claims. The floor may be
   lowered only by a later explicit reversible migration after reduction state is proven absent or
@@ -150,7 +155,42 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Cross-task invariants`
 - `docs/architecture/SBS_TRANSITION_DEBT.md :: D1 / D13 / D14`
 
+## Bounded Implementation Issue Decomposition
+
+1. **MVR-07A — compatibility inventory and smoke fitness:** remove or name residual scalar/global
+   adapters, prove no-vault/one-vault parity, and deliver the isolated redacted test-channel smoke
+   harness plus teardown/ownership safety. It depends on MVR-04, MVR-05A–05D, and MVR-06A–06D.
+   This issue does not create the reduction floor, reservation schema, or move content.
+2. **MVR-07B — governed topology reduction:** install the minimum-runtime floor and every producer,
+   preflight, rollback/roll-forward path for the reduction reservation, then deliver the governed
+   collision-safe reduction, queue drain, atomic retirement, reversible lineage, and owner-doc
+   writebacks. It depends on merged MVR-07A and keeps floor + all reservation producers together per
+   invariant→producers. No 07B runtime precondition may be borrowed into 07A.
+
+The post-spec extraction creates two child issues and two merge receipts on #2143. They execute
+serially; MVR-08 depends on both.
+
 ## SBS Impact
+
+### MVR-07A — compatibility inventory and smoke fitness
+
+- Primary subsystem: WSP
+- Secondary subsystem(s): EBF, HIX, OEF, SFC, PDM
+- Write class: no product write class; invocation-owned smoke fixtures only
+- Authority impact: no change; smoke uses existing production GOV paths
+- Persistence impact: validates migrated registry/default/dimension/settings producers and rollback reader
+- Derived/rebuildable impact: validates caches/indexes and disposable smoke projections rebuild/teardown
+- Human knowledge impact: no production content move or attribution change
+- Memory impact: validates no-vault/one-vault retrieval and memory parity
+- Retrieval/context impact: removes unapproved scalar resolution after consumer migrations
+- Sync/deployment impact: validates dev/test/prod bootstrap and isolated smoke assumptions
+- External boundary impact: keeps env/mount adapters explicit; smoke roots are invocation-owned/redacted
+- New or changed contract: compatibility inventory and smoke fitness contract
+- Owner-doc impact: factual adapter/debt state only
+- Transition debt impact: closes or explicitly re-baselines D1/D13/D14 residues
+- Fitness rule impact: full consumer inventory plus no/one-vault and isolated-smoke guards
+
+### MVR-07B — governed topology reduction
 
 - Primary subsystem: WSP
 - Secondary subsystem(s): GOV, HKA, EBF, HIX, OEF, SFC, PDM
@@ -165,13 +205,14 @@ can break startup or strand durable state. Both failures are latent outages rath
 - Memory impact: validates single-vault retrieval/memory parity
 - Retrieval/context impact: removes unapproved scalar resolution after consumer migrations
 - Sync/deployment impact: validates dev/test/prod bootstrap and promotion assumptions; fences every
-  incompatible queue/API process before the MVR-07 floor or first reservation write
+  incompatible queue/API process before the MVR-07B floor or first reservation write
 - External boundary impact: keeps env/mount adapters explicit and narrow
 - New or changed contract: migration completion/compatibility fitness contract
 - Owner-doc impact: will-update-in-PR at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`,
   `docs/RELEASE_CHANNELS/README.md`, and factual adapter/debt state
 - Transition debt impact: closes or explicitly re-baselines D1/D13/D14 residues
-- Fitness rule impact: adds full consumer inventory and no/one-vault compatibility guards
+- Fitness rule impact: adds mixed-version, queue-drain, authority, atomic-retirement, rollback, and
+  topology-reversibility guards
 
 ## Constraints
 
@@ -188,73 +229,73 @@ can break startup or strand durable state. Both failures are latent outages rath
   deactivation composes MVR-06B removal/tombstone/reference repair through one all-source batch commit;
   direct registry deletion and partial per-source retirement are forbidden.
 - No reduction reservation may exist until every incompatible queue producer is stopped and the
-  durable MVR-07 floor/restart fence is active; pre-MVR-07 rollback remains fail-closed thereafter.
+  durable MVR-07B floor/restart fence is active; pre-MVR-07B rollback remains fail-closed thereafter.
 
 ## Acceptance Criteria
 
-- [ ] The architecture inventory finds no unapproved production global vault resolution outside
+- [ ] **MVR-07A:** The architecture inventory finds no unapproved production global vault resolution outside
   named bootstrap/compatibility adapters, including direct or aliased reads of the real
   `VaultManager.context`/`_context` seam.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam`
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_real_vault_manager_context_accessor_cannot_escape_inventory`
-- [ ] The test-channel smoke harness exercises two bindings/sessions, one dimension read, one
+- [ ] **MVR-07A:** The test-channel smoke harness exercises two bindings/sessions, one dimension read, one
   governed write, and background health through production entrypoints while emitting a redacted receipt.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
-- [ ] Before the first durable reduction reservation write, deployment/native cutover fences new
+- [ ] **MVR-07B:** Before the first durable reduction reservation write, deployment/native cutover fences new
   claims, drains and stops every enabled incompatible API/worker/watcher/outbox/queue recovery/CLI
-  producer from production truth, proves claims and sessions gone, records the MVR-07 minimum-runtime
+  producer from production truth, proves claims and sessions gone, records the MVR-07B minimum-runtime
   floor, and prevents old-process restart. Fault injection exposes no old worker claim after the floor.
-  - Verify: `tests/ops/test_mvr07_reduction_mixed_version_fence.py::test_incompatible_workers_stop_before_reduction_floor_and_reservation`
-- [ ] Existing-install migration, channel/native bootstrap, rollback/roll-forward tools, and fixtures
+  - Verify: `tests/ops/test_mvr07b_reduction_mixed_version_fence.py::test_incompatible_workers_stop_before_reduction_floor_and_reservation`
+- [ ] **MVR-07B:** Existing-install migration, channel/native bootstrap, rollback/roll-forward tools, and fixtures
   produce/preflight the floor and reservation schema before enforcement. The floor blocks every
   MVR-06D-or-older API/worker startup, while a compatible image resumes the exact durable
   reservation/journal without duplicate claims or fallback.
-  - Verify: `tests/migrations/test_mvr07_reduction_floor.py::test_all_producers_install_reduction_floor_schema_before_enforcement`
-  - Verify: `tests/ops/test_mvr07_reduction_mixed_version_fence.py::test_reduction_floor_blocks_old_rollback_and_resumes_compatible_rollforward`
-- [ ] Deployment and release-channel owner docs record the shipped MVR-07 floor, compatible
+  - Verify: `tests/migrations/test_mvr07b_reduction_floor.py::test_all_producers_install_reduction_floor_schema_before_enforcement`
+  - Verify: `tests/ops/test_mvr07b_reduction_mixed_version_fence.py::test_reduction_floor_blocks_old_rollback_and_resumes_compatible_rollforward`
+- [ ] **MVR-07B:** Deployment and release-channel owner docs record the shipped MVR-07B floor, compatible
   rollback/roll-forward image rule, process inventory, and operator preflight in the floor-advancing PR.
   - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
     doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
-- [ ] The smoke harness rejects either manifest binding when its canonical root is outside the
+- [ ] **MVR-07A:** The smoke harness rejects either manifest binding when its canonical root is outside the
   declared test sandbox, overlaps a known prod/dev/native root, aliases the other fixture, or escapes
   through a symlink. It also rejects every pre-existing/raced root or missing/mismatched ownership
   marker, performs zero registrations/content writes on rejection, and never deletes a root it did
   not atomically create and mark for the current invocation.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
-- [ ] Successful and failure-injected smoke runs drain and remove every fixture lifecycle,
+- [ ] **MVR-07A:** Successful and failure-injected smoke runs drain and remove every fixture lifecycle,
   projection, dimension/default/registration, sandbox root, and host-global ownership lease, then
   delete only their marked disposable instance-state/DB/runtime namespace and prove the exact
   pre-run standing test-channel baseline, including compatibility/explicit intent mode, is unchanged;
   incomplete isolation or teardown returns FAIL.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
-- [ ] Existing no-vault and one-vault journeys preserve startup, picker, request, restart, watcher
+- [ ] **MVR-07A:** Existing no-vault and one-vault journeys preserve startup, picker, request, restart, watcher
   idle/bind, CLI/agent/MCP, retrieval, governed-write, and receipt behavior.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
-- [ ] Registry/default/dimension migrations can read existing state and a documented rollback
+- [ ] **MVR-07A:** Registry/default/dimension migrations can read existing state and a documented rollback
   reader can recover the single-vault binding without content or provenance loss.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_single_vault_rollback_reader_preserves_binding`
-- [ ] Test and promotion channel bootstrap still provisions one deterministic vault and passes its
+- [ ] **MVR-07A:** Test and promotion channel bootstrap still provisions one deterministic vault and passes its
   fail-loud preflight.
   - Verify: `tests/runtime/test_multi_vault_channel_bootstrap.py::test_test_channel_keeps_deterministic_single_vault_preflight`
-- [ ] Two distinct content vaults can be reduced to one explicitly selected target without losing
+- [ ] **MVR-07B:** Two distinct content vaults can be reduced to one explicitly selected target without losing
   content, meaning, original binding attribution, settings scope, receipt/outbox lineage, or human-
   readable provenance; conflicts remain namespaced rather than overwritten, and the manifest can
   reattach the material to its original source boundaries.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_two_distinct_vaults_reduce_to_one_without_losing_content_provenance_or_receipts`
-- [ ] A topology reduction failure is atomic and recoverable: pre-commit failure preserves the
+- [ ] **MVR-07B:** A topology reduction failure is atomic and recoverable: pre-commit failure preserves the
   original active topology, post-commit recovery rolls forward and rebuilds every binding-keyed
   projection before healthy reads, and source registrations remain active until the complete
   reduction receipt is durable.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
-- [ ] Reduction independently GOV-authorizes every source read/export, target governed HKA write,
+- [ ] **MVR-07B:** Reduction independently GOV-authorizes every source read/export, target governed HKA write,
   and source retirement; binding/revision/purpose-bound tokens and receipts preserve source/target
   attribution, while deny or authority-revision races fail before the affected artifact or retirement.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_authorizes_each_source_target_write_and_retirement`
-- [ ] Source deactivation runs only through the MVR-06B removal journal and atomically repairs
+- [ ] **MVR-07B:** Source deactivation runs only through the MVR-06B removal journal and atomically repairs
   dimension, default, background-intent, projection, ownership, and tombstone lineage references;
   injected failure cannot leave a directly deleted registration or a selectable incomplete target.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
-- [ ] Multi-source retirement acquires host-global ownership-ledger fence → canonical exclusive
+- [ ] **MVR-07B:** Multi-source retirement acquires host-global ownership-ledger fence → canonical exclusive
   target-and-source per-binding leases → instance-registry sidecar lock, keeps the target out of the
   tombstone set, and holds its lease through target proof and one durable registry batch commit. A
   crash after the first or any later per-source prepare leaves every source registration active and
@@ -262,39 +303,39 @@ can break startup or strand durable state. Both failures are latent outages rath
   target selectability, ownership releases, and the complete receipt without a partially retired
   topology or lock-order inversion.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
-- [ ] A target content write or projection rebuild racing reduction waits for the target's exclusive
+- [ ] **MVR-07B:** A target content write or projection rebuild racing reduction waits for the target's exclusive
   lease or completes before the reducer's final proof; the complete manifest/receipt always covers
   the exact published target revision and no accepted target mutation is overwritten.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_fences_target_write_and_projection_races`
-- [ ] Before target proof or retirement publish, reduction reserves target/source claim ownership to
+- [ ] **MVR-07B:** Before target proof or retirement publish, reduction reserves target/source claim ownership to
   its drain worker, fences outside claims, and uses the normal MVR-06D global/shared-lease path to
   terminally reconcile and receipt every participant's queued/claimed/dispatched/effect-pending row.
   A crash after effect but before receipt is recovered
   under its original binding and included by the final target rescan; ambiguous evidence on either
   side blocks with all sources active, target unselectable, and no complete reduction receipt.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_effect_pending_before_retirement_commit`
-- [ ] A valid pending participant row with proven no prior effect redispatches and reaches its normal
+- [ ] **MVR-07B:** A valid pending participant row with proven no prior effect redispatches and reaches its normal
   terminal receipt through the reduction-owned drain reservation before reduction takes
   participant-exclusive leases. After exclusives are acquired the reducer only reloads/rechecks the
   terminal invariant; it never
   deadlocks by trying to redispatch through a shared lease it already excludes.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_drains_valid_pending_no_effect_before_exclusive_leases`
-- [ ] The durable reduction drain reservation fences every ordinary/outside target/source claim while
+- [ ] **MVR-07B:** The durable reduction drain reservation fences every ordinary/outside target/source claim while
   granting exactly one `reduction_id`-bound MVR-06D recovery worker claim ownership. That worker uses
   the unchanged global/shared-lease authorization/effect/receipt path; restart resumes the reservation
   without duplicate dispatch, and governed abort clears it only with symmetric gate restoration.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_drain_reservation_excludes_outside_claims_but_admits_recovery`
-- [ ] A target-bound effect that commits and crashes before receipt/ack is terminally recovered and
+- [ ] **MVR-07B:** A target-bound effect that commits and crashes before receipt/ack is terminally recovered and
   receipted before target proof; an ambiguous target effect blocks publish rather than allowing a
   complete manifest/receipt with missing target lineage.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_target_effect_pending_before_target_proof`
-- [ ] Governed pre-commit abort removes only reduction-owned target copies and symmetrically restores
+- [ ] **MVR-07B:** Governed pre-commit abort removes only reduction-owned target copies and symmetrically restores
   the target and every source to their exact pre-prepare queue gates, producer posture, selectability,
   and effects after authority/revision revalidation. Crash during abort resumes idempotently; a target
   that was selectable before prepare accepts ordinary effects again, while failed revalidation stays
   explicitly degraded rather than stranding a silent closed gate.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_precommit_abort_restores_target_and_source_gates`
-- [ ] Any retained compatibility adapter is named in transition debt with owner, removal condition,
+- [ ] **MVR-07A:** Any retained compatibility adapter is named in transition debt with owner, removal condition,
   and production guard; otherwise the old app-local import path is removed.
   - Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`
 
@@ -306,12 +347,19 @@ can break startup or strand durable state. Both failures are latent outages rath
 
 ## How to Verify (Pre-Merge)
 
+Issue extraction copies only its matching validation subsection plus the shared gates.
+
+### MVR-07A validation
+
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
-- `pytest -q tests/ops/test_mvr07_reduction_mixed_version_fence.py tests/migrations/test_mvr07_reduction_floor.py`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py::test_real_vault_manager_context_accessor_cannot_escape_inventory`
+
+### MVR-07B validation
+
+- `pytest -q tests/ops/test_mvr07b_reduction_mixed_version_fence.py tests/migrations/test_mvr07b_reduction_floor.py`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_two_distinct_vaults_reduce_to_one_without_losing_content_provenance_or_receipts tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_authorizes_each_source_target_write_and_retirement tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
@@ -321,6 +369,9 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_drain_reservation_excludes_outside_claims_but_admits_recovery`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_target_effect_pending_before_target_proof`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_precommit_abort_restores_target_and_source_gates`
+
+### Shared gates for both children
+
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
@@ -331,7 +382,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 Migrated registry/default/dimension state survives restart and remains readable by the documented
 compatible rollback path. No-vault remains idle; one-vault restarts against the same explicit
 identity. The durable MVR-05 floor prevents a scalar image from touching binding-keyed shared
-database/outbox state. After first reduction enablement, the MVR-07 floor additionally prevents any
+database/outbox state. After first reduction enablement, the MVR-07B floor additionally prevents any
 pre-reservation-aware API/worker from starting; a compatible runtime resumes the journal before
 ordinary claims. Any
 retained adapter is durable transition debt with a removal condition, not hidden behavior.
@@ -344,7 +395,7 @@ retained adapter is durable transition debt with a removal condition, not hidden
 
 ## Related GitHub Issues
 
-Create one child under #2143 after MVR-04/05/06. Use Sol/xhigh for the governed topology reduction,
-authority, data migration, and rollback design; mechanically isolated inventory/compatibility work
-may de-escalate to Terra/high only after those contracts are frozen.
+Create MVR-07A under #2143 after MVR-04/05/06, then MVR-07B after 07A merges. Use Terra/high for
+07A's mechanically isolated inventory/compatibility/smoke work. Use Sol/xhigh for 07B's floor,
+reservation, governed topology reduction, authority, data migration, and rollback design.
 Apply the invariant→producers and no-silent-fallback learnings from #1991/#2003/#2311.

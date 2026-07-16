@@ -168,7 +168,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - New or changed contract: `ACTIVE_CONTEXT_SET.md` moves from v0 target stub to versioned runtime seam
 - Owner-doc impact: will-update-in-PR at `docs/contracts/ACTIVE_CONTEXT_SET.md`, `docs/SECURITY.md`,
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`
-- Transition debt impact: reduces WSP global-context deviation; legacy adapters remain bounded for task 07
+- Transition debt impact: reduces WSP global-context deviation; legacy adapters remain bounded for task 07A
 - Fitness rule impact: adds request snapshot/generation/no-cross-talk fitness tests
 
 ## Constraints
