@@ -170,23 +170,61 @@ jobs:
               const exactIssueLinkMatches = canonicalBody.match(
                 new RegExp(`${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*${issueTokenTerminator}`, "gm")
               ) || [];
+              const neutralizedClosingLines = canonicalBody.match(
+                /^[ \t]*Verified-Closing-Issues[ \t]*:.*$/gm
+              ) || [];
+              const exactNeutralizedClosingMatches = canonicalBody.match(
+                /^[ \t]*Verified-Closing-Issues:[ \t]*#[1-9][0-9]*(?:,[ \t]*#[1-9][0-9]*)*[ \t]*$/gm
+              ) || [];
+              const refsMatches = canonicalBody.match(
+                new RegExp(`${issueTokenPrefix}[Rr][Ee][Ff][Ss][ \\t]+#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+              ) || [];
               const closingIssueNumbers = new Set(
                 exactIssueLinkMatches.map((match) => {
                   const token = match.match(/#([1-9][0-9]*)(?=$|[ \t\r\n.,;:)\]}])/);
                   return token ? token[1] : "";
                 })
               );
+              const neutralizedIssueNumbers = exactNeutralizedClosingMatches.length === 1
+                ? exactNeutralizedClosingMatches[0]
+                    .split(":", 2)[1]
+                    .split(",")
+                    .map(token => Number(token.trim().slice(1)))
+                : [];
+              const referencedIssueNumbers = new Set([
+                ...refsMatches.map((match) => {
+                  const token = match.match(/#([1-9][0-9]*)(?=$|[ \t\r\n.,;:)\]}])/);
+                  return token ? Number(token[1]) : 0;
+                }),
+                ...exactGoverningIssueMatches.map((match) => Number(match.match(/#([1-9][0-9]*)/)[1])),
+              ]);
               const hasIssueLink = exactIssueLinkMatches.length > 0;
-              const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0;
+              const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0 || neutralizedClosingLines.length > 0;
               const valid =
                 !hasUnsupportedLineSeparator &&
                 governingIssueLines.length === 1 &&
                 exactGoverningIssueMatches.length === 1 &&
                 hasIssueLink &&
                 issueLinkMentions.length === exactIssueLinkMatches.length &&
-                closingIssueNumbers.size <= maxClosingIssues;
+                closingIssueNumbers.size <= maxClosingIssues &&
+                neutralizedClosingLines.length === 0;
+              const neutralizedValid =
+                !hasUnsupportedLineSeparator &&
+                governingIssueLines.length === 1 &&
+                exactGoverningIssueMatches.length === 1 &&
+                issueLinkMentions.length === 0 &&
+                neutralizedClosingLines.length === 1 &&
+                exactNeutralizedClosingMatches.length === 1 &&
+                neutralizedIssueNumbers.length > 0 &&
+                neutralizedIssueNumbers.length <= maxClosingIssues &&
+                new Set(neutralizedIssueNumbers).size === neutralizedIssueNumbers.length &&
+                neutralizedIssueNumbers.every((number, index) =>
+                  Number.isInteger(number) && number > 0 &&
+                  (index === 0 || neutralizedIssueNumbers[index - 1] < number) &&
+                  referencedIssueNumbers.has(number)
+                );
               return {
-                closingIssueCount: closingIssueNumbers.size,
+                closingIssueCount: hasIssueLink ? closingIssueNumbers.size : neutralizedIssueNumbers.length,
                 exactGoverningIssueMatches,
                 exactIssueLinkMatches,
                 governingIssueLines,
@@ -194,6 +232,7 @@ jobs:
                 hasIssueLink,
                 hasUnsupportedLineSeparator,
                 issueLinkMentions,
+                neutralizedValid,
                 valid,
               };
             };
@@ -250,8 +289,8 @@ jobs:
               return;
             }
             if (hasIssueAuthority) {
-              if (!issueAuthority.valid) {
-                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and between one and ten unique positive closing issues. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
+              if (!issueAuthority.valid && !issueAuthority.neutralizedValid) {
+                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and between one and ten unique positive closing issues. During verified merge only, a sorted `Verified-Closing-Issues: #<id>[, #<id>]` line with evidence-only Refs may replace closing keywords so GitHub cannot auto-close mutable body authority. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
                 return;
               }
               return;

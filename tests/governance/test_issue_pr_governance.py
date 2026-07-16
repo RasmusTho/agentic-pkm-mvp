@@ -8,9 +8,12 @@ from pathlib import Path
 import pytest
 
 from app.dispatcher.verification_contract import (
+    IssueAuthority,
     MAX_CLOSING_ISSUES,
+    neutralize_closing_issue_references,
     resolve_issue_authority,
     resolve_issue_contract,
+    resolve_neutralized_issue_authority,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -185,6 +188,65 @@ def test_issue_backed_pr_accepts_single_and_multi_issue_authority() -> None:
     assert authority.governing_issue == 3603
     assert authority.closing_issues == (3626, 3698)
     assert authority.supporting_issues == (3626, 3698)
+
+
+def test_verified_merge_neutralized_authority_matches_javascript_and_python() -> None:
+    body = (
+        "Governing-Issue: #3821\n"
+        "Refs #3821\n"
+        "Fixes #3820\n"
+        "Closes #3823\n"
+        "Refs #3900"
+    )
+    expected = IssueAuthority(
+        governing_issue=3821,
+        closing_issues=(3820, 3823),
+        supporting_issues=(3820, 3823, 3900),
+    )
+
+    neutralized = neutralize_closing_issue_references(body, expected)
+    javascript = _js_issue_authority(neutralized)
+
+    assert "Verified-Closing-Issues: #3820, #3823" in neutralized
+    assert resolve_neutralized_issue_authority(neutralized) == expected
+    assert javascript["valid"] is False
+    assert javascript["neutralizedValid"] is True
+    assert javascript["closingIssueCount"] == 2
+    assert javascript["issueLinkMentions"] == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        (
+            "Governing-Issue: #3821\nRefs #3820\nRefs #3823\n"
+            "Verified-Closing-Issues: #3823, #3820\n"
+        ),
+        (
+            "Governing-Issue: #3821\nRefs #3820\n"
+            "Verified-Closing-Issues: #3820, #3820\n"
+        ),
+        "Governing-Issue: #3821\nVerified-Closing-Issues: #3820\n",
+        (
+            "Governing-Issue: #3821\nRefs #3820\nFixes #3820\n"
+            "Verified-Closing-Issues: #3820\n"
+        ),
+        (
+            "Governing-Issue: #3821\nRefs #3820\n"
+            "Verified-Closing-Issues : #3820\n"
+        ),
+        (
+            "Governing-Issue: #3821\n"
+            + "\n".join(f"Refs #{4000 + index}" for index in range(11))
+            + "\nVerified-Closing-Issues: "
+            + ", ".join(f"#{4000 + index}" for index in range(11))
+            + "\n"
+        ),
+    ],
+)
+def test_verified_merge_neutralized_authority_fails_closed(body: str) -> None:
+    assert resolve_neutralized_issue_authority(body) is None
+    assert _js_issue_authority(body)["neutralizedValid"] is False
 
 
 def test_closing_authority_limit_matches_javascript_and_python_contracts() -> None:
@@ -389,8 +451,9 @@ def test_workflow_requires_exactly_one_positive_governing_identity_for_issue_bac
         "const exactIssueLinkMatches =",
         "const hasIssueAuthority =",
         "const valid =",
-        "if (!issueAuthority.valid)",
+        "if (!issueAuthority.valid && !issueAuthority.neutralizedValid)",
         "exactly one positive `Governing-Issue: #<id>` line",
+        "Verified-Closing-Issues: #<id>[, #<id>]",
     ):
         assert fragment in text, fragment
 

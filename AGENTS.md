@@ -329,6 +329,19 @@ Builder-agent rules:
   multi-Issue PR, the governing parent may remain open and be named with `Refs #<id>` while closing
   keywords name only the fully delivered issues; follow
   `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`.
+- At verification, resolve every AC/`Verify:` target on the exact closing issues. When an approved
+  multi-Issue PR has a distinct open governing parent, validate that parent as the issue-set contract
+  (batch authorization, child/scope map, shared constraints, source anchors, validation path, and
+  exact authority identities); unfinished feature-level ACs on the open parent do not block delivery
+  of fully verified closing children.
+- Before an issue-backed merge, neutralize authenticated body closers to evidence-only `Refs`,
+  revalidate the live exact head/body/empty closing-link set, merge with a fixed non-closing message,
+  and explicitly close only the authenticated issue set. Preserve the exact v2 authority and repair
+  budget in a durable receipt; detect race-added closing references and reopen only closures GitHub
+  attributes to that PR before restoring the authenticated body.
+- The post-merge owner-doc result is PR-specific. Record it on every exact closed issue and also on a
+  distinct open governing parent; issue-free lanes record it on the PR. A generic receipt or one for
+  another PR does not satisfy the closure gate.
 - If a PR changes files under `app/` or `tests/`, run `ruff check app tests` before merge and include the lint output or tooling limitation in the PR body. Docs-only PRs can keep validation lightweight and should not run full smoke by default unless the touched surface requires it.
 - Do not treat chat-only requests as canonical implementation tasks when an Issue is expected.
 - Do not expand scope beyond the Issue without updating the task contract first.

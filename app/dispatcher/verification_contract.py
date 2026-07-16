@@ -38,6 +38,7 @@ _CLOSING_ATTEMPT_TARGET = (
 # issue; ten leaves room for an explicitly approved batch without permitting
 # PR-controlled API fan-out.
 MAX_CLOSING_ISSUES = 10
+NEUTRALIZED_CLOSING_ISSUES_PREFIX = "Verified-Closing-Issues:"
 
 GOVERNING_ISSUE_LINE_PATTERN = re.compile(
     rf"(?m)^[ \t]*{_GOVERNING_KEYWORD}[ \t]*:.*$"
@@ -61,6 +62,20 @@ SUPPORTING_ISSUE_PATTERN = re.compile(
     rf"[Rr][Ee][Ff][Ss][ \t]+)#([1-9][0-9]*)"
     rf"{_ISSUE_TOKEN_TERMINATOR}",
     re.M,
+)
+_NEUTRALIZABLE_CLOSING_ISSUE_PATTERN = re.compile(
+    rf"(?P<prefix>{_ISSUE_TOKEN_PREFIX})"
+    rf"{_CLOSING_KEYWORD}{_ASCII_CLOSING_SEPARATOR}"
+    rf"#(?P<issue>[1-9][0-9]*)"
+    rf"{_ISSUE_TOKEN_TERMINATOR}",
+    re.M,
+)
+_NEUTRALIZED_CLOSING_LINE_PATTERN = re.compile(
+    r"(?m)^[ \t]*Verified-Closing-Issues[ \t]*:.*$"
+)
+_NEUTRALIZED_CLOSING_PATTERN = re.compile(
+    r"(?m)^[ \t]*Verified-Closing-Issues:[ \t]*"
+    r"(#[1-9][0-9]*(?:,[ \t]*#[1-9][0-9]*)*)[ \t]*$"
 )
 
 
@@ -114,6 +129,100 @@ def closing_issue_authority_exceeds_limit(pr_body: object) -> bool:
         int(match) for match in CLOSING_ISSUE_PATTERN.findall(canonical_body)
     }
     return len(closing) > MAX_CLOSING_ISSUES
+
+
+def has_closing_issue_attempt(value: object) -> bool:
+    """Return whether a title/body contains any recognized closing attempt."""
+    return isinstance(value, str) and CLOSING_ISSUE_ATTEMPT_PATTERN.search(value) is not None
+
+
+def neutralize_closing_issue_references(
+    pr_body: object,
+    expected: IssueAuthority,
+) -> str:
+    """Replace authenticated closing references with evidence-only ``Refs``.
+
+    The caller must already hold the immutable verification authority. This
+    helper refuses malformed or changed bodies, uses the same ASCII-exact
+    grammar as dispatch, and proves that every closing attempt was removed
+    without dropping the governing identity or cumulative supporting refs.
+    """
+    authority = resolve_issue_authority(pr_body)
+    if authority != expected or not isinstance(pr_body, str):
+        raise ValueError("PR body does not match authenticated issue authority")
+
+    def _replace(match: re.Match[str]) -> str:
+        return f"{match.group('prefix')}Refs #{match.group('issue')}"
+
+    if _NEUTRALIZED_CLOSING_LINE_PATTERN.search(pr_body):
+        raise ValueError("PR body already contains neutralized closing authority")
+    neutralized, replacements = _NEUTRALIZABLE_CLOSING_ISSUE_PATTERN.subn(
+        _replace,
+        pr_body,
+    )
+    if replacements == 0 or has_closing_issue_attempt(neutralized):
+        raise ValueError("PR closing authority was not fully neutralized")
+
+    canonical = neutralized.replace("\r\n", "\n")
+    governing_lines = GOVERNING_ISSUE_LINE_PATTERN.findall(canonical)
+    governing_matches = GOVERNING_ISSUE_PATTERN.findall(canonical)
+    referenced = {
+        int(match) for match in SUPPORTING_ISSUE_PATTERN.findall(canonical)
+    }
+    referenced_without_governor = referenced - {expected.governing_issue}
+    if (
+        len(governing_lines) != 1
+        or governing_matches != [str(expected.governing_issue)]
+        or not set(expected.closing_issues).issubset(referenced)
+        or referenced_without_governor != set(expected.supporting_issues)
+    ):
+        raise ValueError("neutralized PR body changed issue evidence authority")
+    marker = NEUTRALIZED_CLOSING_ISSUES_PREFIX + " " + ", ".join(
+        f"#{issue}" for issue in expected.closing_issues
+    )
+    separator = "" if neutralized.endswith("\n") else "\n"
+    result = f"{neutralized}{separator}{marker}\n"
+    if resolve_neutralized_issue_authority(result) != expected:
+        raise ValueError("neutralized PR body changed issue authority")
+    return result
+
+
+def resolve_neutralized_issue_authority(pr_body: object) -> IssueAuthority | None:
+    """Resolve the bounded non-closing authority used only during exact-head merge."""
+    if not isinstance(pr_body, str) or re.search(r"\r(?!\n)|[\u2028\u2029]", pr_body):
+        return None
+    canonical_body = pr_body.replace("\r\n", "\n")
+    governing_lines = GOVERNING_ISSUE_LINE_PATTERN.findall(canonical_body)
+    governing_matches = GOVERNING_ISSUE_PATTERN.findall(canonical_body)
+    marker_lines = _NEUTRALIZED_CLOSING_LINE_PATTERN.findall(canonical_body)
+    marker_matches = _NEUTRALIZED_CLOSING_PATTERN.findall(canonical_body)
+    if (
+        len(governing_lines) != 1
+        or len(governing_matches) != 1
+        or len(marker_lines) != 1
+        or len(marker_matches) != 1
+        or CLOSING_ISSUE_ATTEMPT_PATTERN.search(canonical_body)
+    ):
+        return None
+    closing = tuple(int(token[1:]) for token in marker_matches[0].split(", "))
+    if (
+        tuple(sorted(set(closing))) != closing
+        or len(closing) > MAX_CLOSING_ISSUES
+    ):
+        return None
+    governing = int(governing_matches[0])
+    supporting = tuple(
+        sorted(
+            {
+                int(match)
+                for match in SUPPORTING_ISSUE_PATTERN.findall(canonical_body)
+                if int(match) != governing
+            }
+        )
+    )
+    if not set(closing).issubset({governing, *supporting}):
+        return None
+    return IssueAuthority(governing, closing, supporting)
 
 
 def resolve_issue_contract(pr_body: object) -> tuple[int, tuple[int, ...]] | None:

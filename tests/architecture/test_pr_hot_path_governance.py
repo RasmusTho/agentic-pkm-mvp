@@ -67,12 +67,12 @@ def test_verification_execution_checklist_uses_exact_closing_issue_set() -> None
     text = _read(".codex/skills/verification-and-closure/SKILL.md")
 
     for fragment in (
-        "close every and only `closing_issues`",
+        "explicitly close every and only the authenticated `closing_issues`",
         "remove all agent labels from every closed issue",
         "never project an unclosed governing parent `Done`",
-        "receipt on every\n    closed issue",
-        "governing and closing identities to\n   match the authenticated context exactly",
-        "accept any bounded monotonic additions as the cumulative\n   evidence set",
+        "same PR-specific\n    result on every exact closed issue",
+        "governing/closing identities equal the\n   durable receipt",
+        "bounded monotonic supporting additions may be retained only as evidence",
     ):
         assert fragment in text
 
@@ -82,13 +82,13 @@ def test_verification_merge_uses_fixed_non_closing_commit_identity() -> None:
     normalized_text = " ".join(text.split())
 
     for fragment in (
-        "reject any canonical closing-keyword attempt",
-        "exact-head REST merge endpoint with the verified SHA",
-        "explicit, fixed non-closing commit title and message",
-        "Never let GitHub synthesize the merge commit from the PR title/body",
-        "never accept caller-supplied free-form",
-        "prove its title/message contains no canonical or",
-        "malformed closing-keyword attempt",
+        "reject any mismatch or title closing attempt",
+        "exact-head REST endpoint using the verified SHA",
+        "fixed non-closing commit title/message",
+        "Never use GitHub-synthesized or caller-supplied free-form merge text",
+        "prove its title/message contains no canonical or malformed closing attempt",
+        "converts every authenticated closer to evidence-only `Refs`",
+        "`closingIssuesReferences` is empty",
     ):
         assert fragment in normalized_text
 
@@ -177,6 +177,76 @@ def test_canonical_agent_rules_allow_open_multi_issue_governor() -> None:
         "PR_HOT_PATH.md :: Multi-Issue PR Scope",
     ):
         assert fragment in normalized_agents
+
+
+def test_open_governing_parent_uses_issue_set_gate_not_unfinished_feature_acs() -> None:
+    agents = " ".join(_read("AGENTS.md").split())
+    hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
+    closure_skill = " ".join(
+        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+    )
+
+    for text in (agents, hot_path, closure_skill):
+        assert "exact closing" in text
+        assert "issue-set contract" in text
+        assert "unfinished feature" in text
+        assert "do not block delivery" in text
+    assert "all acceptance criteria from the governing Issue" not in closure_skill
+
+
+def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
+    agents = " ".join(_read("AGENTS.md").split())
+    hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
+    closure_skill = " ".join(
+        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+    )
+
+    for fragment in (
+        "neutralize",
+        "fixed non-closing",
+        "explicitly close",
+        "authenticated issue set",
+        "race-added",
+        "restoring the authenticated body",
+        "durable receipt",
+    ):
+        assert (
+            fragment in agents.lower()
+            or fragment in hot_path.lower()
+            or fragment in closure_skill.lower()
+        )
+    for fragment in (
+        "scripts/prepare_verified_issue_set_merge.py",
+        "closingIssuesReferences` is empty",
+        "latest `pr-contract` run triggered by that `edited` event",
+        "Never reuse the pre-edit green `pr-contract` result",
+        "explicitly close every and only",
+        "plan_post_merge_reconciliation",
+        "restore the authenticated original PR body",
+    ):
+        assert fragment in closure_skill
+
+
+def test_owner_doc_policy_requires_pr_specific_child_and_open_parent_receipts() -> None:
+    agents = " ".join(_read("AGENTS.md").split())
+    hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
+    closure_skill = " ".join(
+        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+    )
+    owner_doc_skill = " ".join(
+        _read(".codex/skills/post-merge-owner-doc/SKILL.md").split()
+    )
+
+    assert "post-merge owner-doc result is PR-specific" in agents
+    assert "every exact closed issue" in agents
+    assert "distinct open governing parent" in agents
+    assert "generic receipt or one for another PR" in agents
+    assert "PR-specific receipt on every closed child" in hot_path
+    assert "every exact closed issue" in closure_skill
+    assert "post-merge owner-doc check: PR #<PR>;" in closure_skill
+    assert "every exact authenticated closing issue" in owner_doc_skill
+    assert "distinct open governing parent" in owner_doc_skill
+    assert "generic receipt" in owner_doc_skill
 
 
 import re as _re

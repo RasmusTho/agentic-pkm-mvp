@@ -17,44 +17,166 @@ jobs:
       - uses: actions/github-script@v7
         with:
           script: |
-            const pr = context.payload.pull_request;
-            const prNumber = pr.number;
-            const RECEIPT_MARKER = "post-merge owner-doc check";
+            const crypto = require("crypto");
+            const prNumber = context.payload.pull_request.number;
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
             const NUDGE_PREFIX = "post-merge owner-doc watchdog:";
 
-            // Paginate closingIssuesReferences until hasNextPage is false
+            // owner-doc-watchdog-helpers:start
+            const resolveGoverningIssue = (candidateBody) => {
+              if (typeof candidateBody !== "string" || /\r(?!\n)|[\u2028\u2029]/.test(candidateBody)) {
+                return null;
+              }
+              const canonicalBody = candidateBody.replace(/\r\n/g, "\n");
+              const keyword = "[Gg][Oo][Vv][Ee][Rr][Nn][Ii][Nn][Gg]-[Ii][Ss][Ss][Uu][Ee]";
+              const lines = canonicalBody.match(new RegExp(`^[ \\t]*${keyword}[ \\t]*:.*$`, "gm")) || [];
+              const exact = [...canonicalBody.matchAll(
+                new RegExp(`^[ \\t]*${keyword}:[ \\t]*#([1-9][0-9]*)[ \\t]*$`, "gm")
+              )];
+              return lines.length === 1 && exact.length === 1 ? Number(exact[0][1]) : null;
+            };
+
+            const bodySha256 = (body) => crypto.createHash("sha256").update(body, "utf8").digest("hex");
+
+            const resolveAuthorityReceipt = (comments, livePr, expectedRepository) => {
+              const trusted = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+              const governing = resolveGoverningIssue(livePr.body || "");
+              const digest = bodySha256(livePr.body || "");
+              const receipts = [];
+              for (const comment of comments) {
+                if (!trusted.has(comment.author_association) || typeof comment.body !== "string") continue;
+                const match = comment.body.match(
+                  /verified issue-set merge authority:\s*```json\s*([\s\S]*?)\s*```/m
+                );
+                if (!match) continue;
+                let receipt;
+                try { receipt = JSON.parse(match[1]); } catch { continue; }
+                const closing = receipt.closing_issues;
+                const supporting = receipt.authenticated_supporting_issues;
+                const liveSupporting = receipt.live_supporting_issues;
+                if (
+                  receipt.contract !== "verified_issue_set_merge_authority.v1" ||
+                  receipt.repository !== expectedRepository ||
+                  receipt.pr_number !== livePr.number ||
+                  receipt.head_sha !== livePr.head.sha ||
+                  governing !== receipt.governing_issue ||
+                  !Array.isArray(closing) || closing.length === 0 || closing.length > 10 ||
+                  closing.some(n => !Number.isInteger(n) || n <= 0) ||
+                  new Set(closing).size !== closing.length ||
+                  closing.some((n, index) => index > 0 && closing[index - 1] >= n) ||
+                  !Array.isArray(supporting) ||
+                  supporting.some(n => !Number.isInteger(n) || n <= 0) ||
+                  new Set(supporting).size !== supporting.length ||
+                  supporting.some((n, index) => index > 0 && supporting[index - 1] >= n) ||
+                  !Array.isArray(liveSupporting) ||
+                  liveSupporting.some(n => !Number.isInteger(n) || n <= 0) ||
+                  new Set(liveSupporting).size !== liveSupporting.length ||
+                  liveSupporting.some((n, index) => index > 0 && liveSupporting[index - 1] >= n) ||
+                  supporting.some(n => !liveSupporting.includes(n)) ||
+                  closing.some(n => n !== governing && !supporting.includes(n)) ||
+                  ![receipt.body_sha256, receipt.neutralized_body_sha256].includes(digest) ||
+                  typeof receipt.run_id !== "string" || receipt.run_id.length === 0 ||
+                  typeof receipt.repair_budget !== "object" || receipt.repair_budget === null
+                ) continue;
+                receipts.push(receipt);
+              }
+              if (receipts.length === 0) return null;
+              const authorityKey = receipt => JSON.stringify([
+                receipt.contract,
+                receipt.repository,
+                receipt.pr_number,
+                receipt.head_sha,
+                receipt.body_sha256,
+                receipt.neutralized_body_sha256,
+                receipt.governing_issue,
+                receipt.closing_issues,
+                receipt.authenticated_supporting_issues,
+                receipt.live_supporting_issues,
+                receipt.run_id,
+              ]);
+              const keys = new Set(receipts.map(authorityKey));
+              return keys.size === 1 ? receipts[receipts.length - 1] : null;
+            };
+
+            const receiptTargets = ({closingIssues, governingIssue, governingState}) => {
+              const targets = new Set(closingIssues);
+              if (
+                Number.isInteger(governingIssue) && governingIssue > 0 &&
+                !targets.has(governingIssue) && governingState === "open"
+              ) targets.add(governingIssue);
+              return [...targets].sort((a, b) => a - b);
+            };
+
+            const hasReceiptForPr = (comments, number) => {
+              const prefix = `post-merge owner-doc check: PR #${number};`;
+              return comments.some(comment =>
+                typeof comment.body === "string" &&
+                comment.body.split(/\r?\n/).some(line => line.startsWith(prefix))
+              );
+            };
+            // owner-doc-watchdog-helpers:end
+
+            const { data: livePr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            const prComments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
             let linkedIssues = [];
             let cursor = null;
             do {
-              const cursorArg = cursor ? `, after: "${cursor}"` : "";
               const result = await github.graphql(`
-                query($owner: String!, $repo: String!, $pr: Int!) {
+                query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
                   repository(owner: $owner, name: $repo) {
                     pullRequest(number: $pr) {
-                      closingIssuesReferences(first: 100${cursorArg}) {
+                      closingIssuesReferences(first: 100, after: $cursor) {
                         nodes { number }
                         pageInfo { hasNextPage endCursor }
                       }
                     }
                   }
                 }
-              `, { owner: context.repo.owner, repo: context.repo.repo, pr: prNumber });
-              const conn = result.repository.pullRequest.closingIssuesReferences;
-              linkedIssues = linkedIssues.concat(conn.nodes.map(n => n.number));
-              cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
-            } while (cursor !== null);
-
-            const NUDGE = `${NUDGE_PREFIX} check not yet run for PR #${prNumber}.\n\nInvoke \`$post-merge-owner-doc\` on PR #${prNumber} to complete the delivery feedback loop. The skill will leave a receipt comment (outcome 1: docs PR, outcome 2: follow-up issue, or outcome 3: no-change note).`;
-
-            if (linkedIssues.length === 0) {
-              // No linked issues — check the PR itself for a receipt comment
-              const prComments = await github.paginate(github.rest.issues.listComments, {
+              `, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: prNumber,
+                pr: prNumber,
+                cursor,
               });
-              const hasReceipt = prComments.some(c => c.body.includes(RECEIPT_MARKER));
-              if (!hasReceipt) {
+              const conn = result.repository.pullRequest.closingIssuesReferences;
+              linkedIssues = linkedIssues.concat(conn.nodes.map(node => node.number));
+              cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+            } while (cursor !== null);
+            linkedIssues = [...new Set(linkedIssues)].sort((a, b) => a - b);
+
+            const authorityReceipt = resolveAuthorityReceipt(prComments, livePr, repository);
+            const authoritativeClosing = authorityReceipt ? authorityReceipt.closing_issues : linkedIssues;
+            const governingIssue = authorityReceipt
+              ? authorityReceipt.governing_issue
+              : resolveGoverningIssue(livePr.body || "");
+            let governingState = null;
+            if (governingIssue && !authoritativeClosing.includes(governingIssue)) {
+              const { data: governing } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: governingIssue,
+              });
+              governingState = governing.state;
+            }
+            const targets = receiptTargets({
+              closingIssues: authoritativeClosing,
+              governingIssue,
+              governingState,
+            });
+
+            const NUDGE = `${NUDGE_PREFIX} check not yet run for PR #${prNumber}.\n\nInvoke \`$post-merge-owner-doc\` on PR #${prNumber} to complete the delivery feedback loop. The skill must leave a PR-specific receipt on every authenticated closed issue and on a distinct open governing parent; issue-free lanes use the PR thread.`;
+
+            if (targets.length === 0) {
+              if (!hasReceiptForPr(prComments, prNumber)) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -65,15 +187,13 @@ jobs:
               return;
             }
 
-            // For each closed issue, check whether a receipt comment exists
-            for (const issueNumber of linkedIssues) {
+            for (const issueNumber of targets) {
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
               });
-              const hasReceipt = comments.some(c => c.body.includes(RECEIPT_MARKER));
-              if (!hasReceipt) {
+              if (!hasReceiptForPr(comments, prNumber)) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,

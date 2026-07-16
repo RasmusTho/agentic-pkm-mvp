@@ -75,6 +75,13 @@ owner-doc writebacks. The shared PR authority contract permits at most ten uniqu
 larger delivery sets must be split before publication so evidence collection and verification remain
 bounded.
 
+For an approved batch whose governing parent remains open, merge verification resolves every AC and
+`Verify:` target on the exact closing children. The parent is validated as the governing issue-set
+contract (batch authorization, child/scope map, shared constraints, source anchors, and validation
+path); unfinished feature-acceptance ACs on that parent do not block delivery of completed children.
+After merge, the owner-doc check leaves one PR-specific receipt on every closed child and on the
+distinct open governing parent.
+
 ## Review-Before-CI
 
 For docs-authoring, governance, and direct-repair PRs, run the cheap local review gate before pushing
@@ -230,6 +237,10 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 ## Safety Invariants
 
 - current SHA truth before merge
+- issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
+  revalidates the neutralized live body/head/closing links, uses a fixed non-closing merge message,
+  explicitly closes only the authenticated issue set, reconciles any body-race closure attributable
+  to that PR, restores the authenticated body, and preserves the exact authority in durable receipts
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified
