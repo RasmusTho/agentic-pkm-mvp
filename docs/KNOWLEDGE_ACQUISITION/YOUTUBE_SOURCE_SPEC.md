@@ -1,4 +1,4 @@
-State: Specification (docs-authoring; target-state framing). §Transcript acquisition and §Metadata are implemented for the explicit-URL `fetch` path (KA-01, #2796, `app/knowledge_acquisition/youtube_plugin.py`) — caption-first, manual-track preferred, original-language only, captionless as a normal outcome, immutable raw record with dedup. ASR fallback (§Transcript acquisition point 2) is implemented (KA-02, #2797): a captionless item now falls back to the existing `app/media/transcribe.py` faster-whisper chain and lands as a raw record differing only in `acquisition_method: asr` + quality note; ASR is never invoked when a usable caption track exists. §Writeback is implemented (KA-05, #2800, `app/knowledge_acquisition/candidate_writeback.py`): candidate assembly re-derives normalize + extraction in-process from `raw`, then writes the `youtube_source_note` through the governed `WriteGuard` call site with the mandated posture markers (`authority.requires_review: true` + `review_state: draft`, per #2793); the template extension shipped in the same PR. Stage events and no-egress replay are implemented (KA-06, #2801, `app/knowledge_acquisition/stage_events.py` + `replay.py`; `python -m app.cli acquire-replay`), completing the §Phase 2 vertical slice end to end — verified by the real-URL operator receipt on #2795 (2026-07-05), which also caught and fixed a caption-track-selection defect (#2957, PR #2958: `vtt` now explicitly preferred over `json3`/`srv3`). §Discovery remains not implemented (Phase 4).
+State: Specification (docs-authoring; target-state framing). §Transcript acquisition and §Metadata are implemented for the explicit-URL `fetch` path (KA-01, #2796, `app/knowledge_acquisition/youtube_plugin.py`) — caption-first, manual-track preferred, original-language only, captionless as a normal outcome, immutable raw record with dedup. ASR fallback (§Transcript acquisition point 2) is implemented (KA-02, #2797): a captionless item now falls back to the existing `app/media/transcribe.py` faster-whisper chain and lands as a raw record differing only in `acquisition_method: asr` + quality note; ASR is never invoked when a usable caption track exists. §Writeback is implemented (KA-05, #2800, `app/knowledge_acquisition/candidate_writeback.py`): candidate assembly re-derives normalize + extraction in-process from `raw`, then writes the `youtube_source_note` through the governed `WriteGuard` call site with the mandated posture markers (`authority.requires_review: true` + `review_state: draft`, per #2793); the template extension shipped in the same PR. Stage events and no-egress replay are implemented (KA-06, #2801, `app/knowledge_acquisition/stage_events.py` + `replay.py`; `python -m app.cli acquire-replay`), completing the §Phase 2 vertical slice end to end — verified by the real-URL operator receipt on #2795 (2026-07-05), which also caught and fixed a caption-track-selection defect (#2957, PR #2958: `vtt` now explicitly preferred over `json3`/`srv3`). §Discovery remains not implemented (Phase 4). **§Discovery mechanism revised by owner directive 2026-07-16:** playlist-shaped sources (inbox/owned/private playlists, Liked Videos) move to OAuth `youtube.readonly` + Data API; Takeout + RSS stays for subscriptions; cookie-based access is banned outright — decision record and delivery plan in `docs/YOUTUBE_SOURCE_SYNC/README.md :: Decision record` (tasks YSS-01..YSS-11).
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
@@ -14,8 +14,8 @@ scheduling, more sources) is built.
 | --- | --- |
 | `source_kind` | `youtube_url` — the value the existing `provenance.source_kind` vocabulary already uses (`ARTIFACT_METADATA_CONTRACT.md`, triage policy §4.3, the shipped template); no second identifier is introduced |
 | `capabilities` | `captions` (v1); `discover`, `backfill` (Phase 4); `media` (audio, fallback path only). `fetch` is the required operation, not a capability |
-| `egress_posture` | youtube.com + googlevideo.com; auth: none (logged-out); low volume (tens of items/week), politeness sleeps; PO-token provider plugin as a declared local dependency |
-| `auth_degradation` | Everything in v1 works logged-out. Cookie-based private lists (Watch Later, Liked) are a Phase 4 *optional, degradable* capability with explicit operator opt-in — 2025–2026 posture: YouTube suspends accounts / bans IPs for logged-in automated access, so absence of cookies disables only that capability. |
+| `egress_posture` | youtube.com + googlevideo.com; auth: none (logged-out) for fetch/backfill; low volume (tens of items/week), politeness sleeps; PO-token provider plugin as a declared local dependency. Phase 4 discovery adds www.googleapis.com + accounts.google.com/oauth2.googleapis.com (OAuth 2.0 `youtube.readonly`, playlist-shaped sources only — `docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Egress posture`) |
+| `auth_degradation` | Everything in v1 works logged-out. Phase 4 playlist/Liked discovery requires OAuth `youtube.readonly` and is fully degradable: absent, expired, or revoked consent disables exactly those sources with a reason code, never the plugin. Cookie-based access is banned outright (2025–2026 posture: YouTube suspends accounts / bans IPs for logged-in automated access), so Watch Later and Watch History are unsupported — no cookie fallback exists. |
 
 ## Transcript acquisition (caption-first, decided)
 
@@ -51,9 +51,11 @@ date, duration, description, chapters, tags, language, thumbnail reference. Meta
 `raw` record and drives the early rejection filters (language, duration, duplicate, ignored
 channel) defined in the pipeline contract.
 
-## Discovery (Phase 4 — decided mechanism, deferred implementation)
+## Discovery (Phase 4 — mechanism revised 2026-07-16; delivery via `docs/YOUTUBE_SOURCE_SYNC/`)
 
-Per `RESEARCH_2026-07.md` §Subscription discovery, the hybrid with zero OAuth coupling:
+Per `RESEARCH_2026-07.md` §Subscription discovery **as revised by the owner directive of
+2026-07-16** (`docs/YOUTUBE_SOURCE_SYNC/README.md :: Decision record` — the directive supersedes
+points 4–5 below as originally decided; points 1–3 conform unchanged):
 
 1. **Bootstrap + periodic reconcile: Google Takeout** — `subscriptions.csv` (channel IDs/titles)
    and playlist CSVs (incl. Liked). Takeout is snapshot-grade: bootstrap and drift repair, not the
@@ -64,11 +66,15 @@ Per `RESEARCH_2026-07.md` §Subscription discovery, the hybrid with zero OAuth c
 3. **Gap repair: yt-dlp `--flat-playlist`** logged-out, rare cadence (weekly/monthly), as
    `backfill` — catches anything past the RSS window. Convergent with what Pinchflat /
    TubeArchivist / ytdl-sub all landed on: cheap frequent incremental + rare full reconcile.
-4. **YouTube Data API v3: not used.** Its only unique value over this stack is near-real-time
-   Liked sync; it costs an OAuth consent flow + Google Cloud project upkeep, and it cannot read
-   Watch Later at all (dead since 2016). Contradicts minimal-auth local-first posture.
-5. **Watch Later**: reachable only via cookies (posture above). The in-system alternative — an
-   explicit "queue for acquisition" action on the user's side — is preferred.
+4. **YouTube Data API v3: used for playlist-shaped sources only** (revised 2026-07-16; the
+   original "not used" ruling stands superseded for this point). The save-to-playlist ≤3-minute
+   inbox UX, private playlists, and Liked Videos are unreachable any other sanctioned way. OAuth
+   2.0 at exactly `youtube.readonly`, fully degradable per `auth_degradation`. Subscriptions stay
+   off the API (points 1–3 above remain the subscription mechanism).
+5. **Watch Later / Watch History: unsupported.** The Data API does not expose them, and cookies,
+   scraping, and browser sessions are banned in the standard flow (revised 2026-07-16 — the
+   former "optional cookie-based degradable capability" posture is removed). The supported
+   alternative is the inbox playlist itself (*Save → inbox*).
 
 Explicit URLs and public playlist URLs need none of this and are the v1 entry points.
 
