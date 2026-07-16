@@ -201,6 +201,9 @@ services:
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
       VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
+      # Opt-in worker /metrics endpoint (builder-ops-stability Issue 6):
+      # empty/unset keeps it off; see ops/observability/prometheus.yml.
+      WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

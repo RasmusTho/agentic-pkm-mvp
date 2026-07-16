@@ -1,0 +1,75 @@
+---
+# Basic alert rules for the local observability stack
+# (builder-ops-stability spec Issue 6). Every rule is based on a signal that
+# actually exists today:
+# - `up` from Prometheus itself for each scrape job,
+# - `http_requests_total{status=...}` from prometheus-fastapi-instrumentator
+#   (status codes grouped, e.g. "5xx"),
+# - `pkm_worker_last_tick_timestamp_seconds` from app/workers/metrics.py
+#   (only present when the worker runs with WORKER_METRICS_PORT set).
+groups:
+  - name: pkm-availability
+    rules:
+      # The worker scrape target is listed unconditionally in prometheus.yml
+      # while its /metrics endpoint is opt-in (WORKER_METRICS_PORT, default
+      # off), and Prometheus records up == 0 for an unreachable target from
+      # the very first scrape. A bare `up == 0` rule would therefore fire a
+      # permanent false critical for job="worker" in the default setup, so
+      # ServiceDown excludes the worker and WorkerMetricsDown below covers it.
+      - alert: ServiceDown
+        expr: up{job!="worker"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target {{ $labels.job }} is down"
+          description: >-
+            Prometheus has failed to scrape {{ $labels.job }}
+            ({{ $labels.instance }}) for 5 minutes.
+
+      - alert: WorkerMetricsDown
+        expr: >-
+          up{job="worker"} == 0
+          and max_over_time(up{job="worker"}[1h]) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Outbox worker metrics endpoint is down"
+          description: >-
+            The opt-in outbox worker /metrics endpoint
+            ({{ $labels.instance }}) was up within the last hour but has now
+            been unreachable for 5 minutes. This rule never fires while the
+            endpoint has simply not been enabled (WORKER_METRICS_PORT unset,
+            the default), and it auto-resolves about an hour after the
+            endpoint was last seen up, so deliberately stopping the worker
+            clears it on its own.
+
+      - alert: ApiHigh5xxErrorRate
+        expr: >-
+          (
+            sum(rate(http_requests_total{job="fastapi", status="5xx"}[15m]))
+            /
+            sum(rate(http_requests_total{job="fastapi"}[15m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx error rate above 5%"
+          description: >-
+            More than 5% of FastAPI requests returned 5xx over the last 15
+            minutes (prometheus-fastapi-instrumentator http_requests_total).
+
+      - alert: WorkerTickStalled
+        expr: >-
+          (time() - pkm_worker_last_tick_timestamp_seconds{job="worker"}) > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox worker poll loop stalled"
+          description: >-
+            The outbox worker /metrics endpoint is still up but its poll loop
+            has not ticked for more than 2 minutes; the worker is likely
+            wedged (heartbeats normally advance every tick).
