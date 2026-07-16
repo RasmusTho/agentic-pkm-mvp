@@ -38,7 +38,6 @@ STRUCTURE = [
     "vault/9_Extras/Templates",
     "vault/9_Extras/textgenerator",
     "vault/9_Extras/Archive",
-    "vault/_system/settings",
     "vault/_system/schemas",
     "vault/_system/events",
     "vault/_system/logs",
@@ -53,7 +52,7 @@ def ensure_dirs():
         (p / ".gitkeep").write_text("", encoding="utf-8")
 
 
-def write_system_settings_yaml():
+def write_system_settings_md():
     settings_uuid = uuid.uuid4().hex.upper()
     data = {
         "uuid": settings_uuid,
@@ -62,7 +61,7 @@ def write_system_settings_yaml():
         "origin": "local",
         "review_state": "processed",
         "trust": "own",
-        "source_ref": "vault://_system/settings/system-settings.yaml",
+        "source_ref": "vault://settings/system-settings.md",
         "runtime": {
             "environment": "dev",
             "database_url": "postgresql://app:app@localhost:15432/app",
@@ -109,8 +108,9 @@ def write_system_settings_yaml():
             "reembed_on_body_diff": True,
         },
     }
-    path = ROOT / "vault/_system/settings/system-settings.yaml"
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    path = ROOT / "vault/settings/system-settings.md"
+    frontmatter = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
+    path.write_text(f"---\n{frontmatter}\n---\n\n# System settings\n", encoding="utf-8")
 
 
 def write_readable_overview_md():
@@ -130,14 +130,14 @@ def write_readable_overview_md():
     Detta är en **läsbar** översikt för människor. Den **kanoniska** konfigurationen ligger i:
 
     ```
-    vault/_system/settings/system-settings.yaml
+    vault/settings/system-settings.md
     ```
 
-    Rekommendation: öppna YAML-filen ovan när du faktiskt vill ändra värden. Den här sidan länkar vidare, ger förklaringar och kan visa dashboards (Dataview).
+    Rekommendation: öppna Markdown-filen ovan när du faktiskt vill ändra värden. Den här sidan länkar vidare, ger förklaringar och kan visa dashboards (Dataview).
 
     ## Snabbnavigering
 
-    - Kanon: [[../_system/settings/system-settings.yaml]]
+    - Kanon: [[system-settings.md]]
     - Eventkatalog: [[../_system/events/]]
     - Scheman: [[../_system/schemas/]]
     - Arbetsyta: [[../{WORKBENCH_DIR}/]]
@@ -163,7 +163,7 @@ def write_atlas_home():
 
 def main():
     ensure_dirs()
-    write_system_settings_yaml()
+    write_system_settings_md()
     write_readable_overview_md()
     write_atlas_home()
 

@@ -150,3 +150,68 @@ def test_migration_refuses_canonical_legacy_conflict_before_guard(tmp_path: Path
     assert guard_calls == []
     assert canonical.read_text(encoding="utf-8") == "# canonical\n"
     assert legacy.read_text(encoding="utf-8") == "# legacy\n"
+
+
+def test_migration_converts_compiled_legacy_system_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "@Settings" / "system-settings.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("sync:\n  debounce_ms: 41\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    target = vault / "settings" / "system-settings.md"
+    assert target.read_text(encoding="utf-8").startswith("---\nsync:\n")
+    assert not (vault / "settings" / "system-settings.yaml").exists()
+
+
+def test_migration_refuses_colliding_legacy_sources_before_guard(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    compiled = vault / "@Settings" / "system-settings.yaml"
+    system = vault / "_system" / "settings" / "system-settings.yaml"
+    compiled.parent.mkdir(parents=True)
+    system.parent.mkdir(parents=True)
+    compiled.write_text("sync:\n  debounce_ms: 41\n", encoding="utf-8")
+    system.write_text("sync:\n  debounce_ms: 99\n", encoding="utf-8")
+    guard_calls: list[str] = []
+
+    class Guard:
+        def assert_writes_allowed(self, action: str) -> None:
+            guard_calls.append(action)
+
+    with pytest.raises(FileExistsError, match="legacy settings sources conflict"):
+        migrate_settings_location(vault, write_guard=Guard())  # type: ignore[arg-type]
+
+    assert guard_calls == []
+    assert compiled.exists() and system.exists()
+    assert not (vault / "settings").exists()
+
+
+def test_migration_preserves_unrelated_uppercase_system_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy_health = vault / "_system" / "Settings" / "health.md"
+    unrelated = legacy_health.parent / "operator-note.txt"
+    legacy_health.parent.mkdir(parents=True)
+    legacy_health.write_text("# health\n", encoding="utf-8")
+    unrelated.write_text("keep me\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "health.md").read_text(encoding="utf-8") == "# health\n"
+    preserved = unrelated if unrelated.exists() else vault / "settings" / "operator-note.txt"
+    assert preserved.read_text(encoding="utf-8") == "keep me\n"
+    assert not legacy_health.exists()

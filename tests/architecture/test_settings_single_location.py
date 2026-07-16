@@ -27,7 +27,11 @@ def _literal_path(node: ast.AST) -> str | None:
 
 def test_no_new_settings_paths() -> None:
     violations: set[str] = set()
-    for path in sorted((ROOT / "app").rglob("*.py")):
+    code_paths = [
+        *(ROOT / "app").rglob("*.py"),
+        *(ROOT / "scripts").rglob("*.py"),
+    ]
+    for path in sorted(code_paths):
         relative = path.relative_to(ROOT)
         if relative in ALLOWED_COMPAT_MODULES:
             continue

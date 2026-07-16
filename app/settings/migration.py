@@ -30,7 +30,11 @@ def _migration_files(vault_root: Path) -> list[tuple[Path, Path, str | None]]:
     if compiled.exists():
         for source in sorted(compiled.rglob("*")):
             if source.is_file():
-                mappings.append((source, source.relative_to(compiled), None))
+                relative = source.relative_to(compiled)
+                if relative == Path("system-settings.yaml"):
+                    mappings.append((source, Path("system-settings.md"), "yaml_to_markdown"))
+                else:
+                    mappings.append((source, relative, None))
 
     legacy_system_root = (vault_root / LEGACY_SYSTEM_SETTINGS).parent
     if legacy_system_root.exists():
@@ -56,6 +60,55 @@ def _target_text(source: Path, transform: str | None) -> str:
     return _markdown_from_yaml(raw) if transform == "yaml_to_markdown" else raw
 
 
+def _prepared_mappings(
+    canonical: Path,
+    mappings: list[tuple[Path, Path, str | None]],
+) -> list[tuple[Path, Path, str]]:
+    """Validate all sources before the guard and collapse identical aliases."""
+
+    prepared: list[tuple[Path, Path, str]] = []
+    by_target: dict[Path, tuple[Path, str]] = {}
+    for source, relative, transform in mappings:
+        text = _target_text(source, transform)
+        prior = by_target.get(relative)
+        if prior is not None:
+            prior_source, prior_text = prior
+            if prior_text != text:
+                raise FileExistsError(
+                    "legacy settings sources conflict at canonical target: "
+                    f"{prior_source} and {source} both map to {canonical / relative}"
+                )
+            continue
+        target = canonical / relative
+        if target.exists() and target.read_text(encoding="utf-8") != text:
+            raise FileExistsError(
+                f"canonical settings artifact conflicts with legacy source: {target} shadows {source}"
+            )
+        by_target[relative] = (source, text)
+        prepared.append((source, relative, text))
+    return prepared
+
+
+def _remove_legacy_sources(root: Path) -> None:
+    compiled = root / LEGACY_COMPILED_DIR
+    if compiled.exists():
+        shutil.rmtree(compiled)
+
+    legacy_system_root = (root / LEGACY_SYSTEM_SETTINGS).parent
+    if legacy_system_root.exists():
+        shutil.rmtree(legacy_system_root)
+
+    legacy_health = root / LEGACY_HEALTH_SETTINGS
+    if legacy_health.is_file():
+        legacy_health.unlink()
+    try:
+        legacy_health.parent.rmdir()
+    except OSError:
+        # The compatibility directory may hold unrelated operator files. Only
+        # the named health artifact belongs to this migration.
+        pass
+
+
 def migrate_settings_location(
     vault_root: Path,
     *,
@@ -71,12 +124,7 @@ def migrate_settings_location(
     root = Path(vault_root).expanduser().resolve()
     canonical = canonical_settings_root(root)
     mappings = _migration_files(root)
-    for source, relative, transform in mappings:
-        target = canonical / relative
-        if target.exists() and target.read_text(encoding="utf-8") != _target_text(source, transform):
-            raise FileExistsError(
-                f"canonical settings artifact conflicts with legacy source: {target} shadows {source}"
-            )
+    prepared = _prepared_mappings(canonical, mappings)
 
     write_guard.assert_writes_allowed(MIGRATION_ACTION)
 
@@ -87,10 +135,10 @@ def migrate_settings_location(
     try:
         if canonical.exists():
             shutil.copytree(canonical, staged, dirs_exist_ok=True)
-        for source, relative, transform in mappings:
+        for _source, relative, text in prepared:
             target = staged / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(_target_text(source, transform), encoding="utf-8")
+            target.write_text(text, encoding="utf-8")
 
         if backup.exists():
             shutil.rmtree(backup)
@@ -99,13 +147,7 @@ def migrate_settings_location(
         os.replace(staged, canonical)
         published = True
 
-        for legacy in (
-            root / LEGACY_COMPILED_DIR,
-            (root / LEGACY_SYSTEM_SETTINGS).parent,
-            (root / LEGACY_HEALTH_SETTINGS).parent,
-        ):
-            if legacy.exists():
-                shutil.rmtree(legacy)
+        _remove_legacy_sources(root)
         if backup.exists():
             shutil.rmtree(backup)
     except Exception:
@@ -118,8 +160,8 @@ def migrate_settings_location(
 
     receipt = SettingsWriteReceipt(
         key="settings.location",
-        value={"canonical": "settings", "migrated_files": len(mappings)},
-        old_value={"canonical": None, "legacy_files": len(mappings)},
+        value={"canonical": "settings", "migrated_files": len(prepared)},
+        old_value={"canonical": None, "legacy_files": len(prepared)},
         file=str(canonical),
         surface="migration",
         actor="operator",
