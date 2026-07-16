@@ -131,15 +131,100 @@ exec {sys.executable!s} "$@"
     return root, env, sha
 
 
-def _run_deploy(root: Path, env: dict[str, str], sha: str, *extra: str) -> subprocess.CompletedProcess[str]:
+def _run_deploy(
+    root: Path, env: dict[str, str], sha: str, *extra: str, channel: str = "dev"
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", "scripts/deploy_channel.sh", "deploy", "dev", sha, *extra],
+        ["bash", "scripts/deploy_channel.sh", "deploy", channel, sha, *extra],
         cwd=root,
         env=env,
         check=False,
         capture_output=True,
         text=True,
     )
+
+
+_FAKE_PSYCOPG_MODULE = '''\
+"""Fake psycopg shim for tests/deploy/test_deploy_channel.py.
+
+Shadows the real psycopg package via PYTHONPATH so
+scripts/prod_deploy_retry_preflight.py's actual classification logic runs
+against controlled, in-memory rows instead of a live Postgres -- this laptop
+has no PostgreSQL/Docker by design (see AGENTS.md).
+"""
+import json
+import os
+
+
+class OperationalError(Exception):
+    pass
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, sql, params=None):
+        return self
+
+    def fetchall(self):
+        return self._rows
+
+    def close(self):
+        pass
+
+
+class _FakeConnection:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def cursor(self):
+        return _FakeCursor(self._rows)
+
+    def close(self):
+        pass
+
+
+def connect(dsn, **kwargs):
+    if os.environ.get("FAKE_OUTBOX_DB_UNREACHABLE") == "1":
+        raise OperationalError("fake: db unreachable")
+    raw = os.environ.get("FAKE_OUTBOX_ROWS_JSON", "[]")
+    rows = [tuple(row) for row in json.loads(raw)]
+    return _FakeConnection(rows)
+'''
+
+
+def _configure_prod_retry_preflight(
+    root: Path,
+    env: dict[str, str],
+    tmp_path: Path,
+    *,
+    rows: list[tuple[str, dict, int]] | None = None,
+    unreachable: bool = False,
+) -> None:
+    """Copy the real preflight script into the fixture repo and fake its DB layer.
+
+    ``rows`` is a list of ``(topic, payload_dict, attempts)`` triples standing
+    in for pending (``delivered_at is null``) outbox rows. The real
+    scripts/prod_deploy_retry_preflight.py runs unmodified against these rows
+    through the fake psycopg module below -- only the DB connection is faked,
+    the classification logic under test is real.
+    """
+    shutil.copy2(
+        REPO_ROOT / "scripts/prod_deploy_retry_preflight.py",
+        root / "scripts/prod_deploy_retry_preflight.py",
+    )
+    pylib_dir = tmp_path / "pylib"
+    pylib_dir.mkdir(exist_ok=True)
+    (pylib_dir / "psycopg.py").write_text(_FAKE_PSYCOPG_MODULE, encoding="utf-8")
+    env["PYTHONPATH"] = str(pylib_dir)
+    env["DATABASE_URL"] = "postgresql://fake:fake@localhost/fake"
+    if unreachable:
+        env["FAKE_OUTBOX_DB_UNREACHABLE"] = "1"
+        env.pop("FAKE_OUTBOX_ROWS_JSON", None)
+    else:
+        env.pop("FAKE_OUTBOX_DB_UNREACHABLE", None)
+        env["FAKE_OUTBOX_ROWS_JSON"] = json.dumps(list(rows or []))
 
 
 def test_deploy_preflights_companion_browser_before_pin_or_compose_mutation(
@@ -317,3 +402,79 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
         )
         for event in events
     )
+
+
+def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutation(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[("panel.scan.requested", {"_worker_retry_count": 3}, 0)],
+    )
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode != 0
+    assert "terminal retry boundary" in result.stderr
+    assert not (root / "config/deploy/prod.env").exists()
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_prod_deploy_pending_retry_preflight_is_redacted(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[
+            (
+                "panel.scan.requested",
+                {
+                    "_worker_retry_count": 3,
+                    "note_path": "/private/secret/vault/Some Secret Note.md",
+                    "trace_id": "trace-should-not-leak",
+                    "text": "the quick brown fox jumped over some secret content",
+                },
+                0,
+            )
+        ],
+    )
+    # Override with a DSN carrying embedded credentials/host identity to prove
+    # neither the connection string nor any payload field ever reaches output.
+    env["DATABASE_URL"] = "postgresql://produser:sup3rsecret@prod-db.internal:5432/pkm_prod"
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "Some Secret Note" not in combined
+    assert "/private/secret/vault" not in combined
+    assert "sup3rsecret" not in combined
+    assert "prod-db.internal" not in combined
+    assert "produser" not in combined
+    assert "trace-should-not-leak" not in combined
+    assert "quick brown fox" not in combined
+    assert "terminal_pending_count" in combined
+    assert "panel.scan.requested" in combined
+
+
+def test_prod_deploy_allows_nonterminal_pending_outbox_work(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[
+            ("panel.scan.requested", {"_worker_retry_count": 1}, 0),
+            ("ingest.vault_changed", {}, 2),
+        ],
+    )
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / "config/deploy/prod.env").exists()
+    assert (tmp_path / "docker-called").exists()

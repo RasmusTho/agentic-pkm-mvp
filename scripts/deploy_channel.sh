@@ -297,6 +297,27 @@ capture_watch_gate() {
   return 1
 }
 
+prod_pending_retry_preflight() {
+  # Read-only PROD-only preflight (#3903): detect pending DB-outbox rows
+  # already at a terminal retry boundary -- one more failure and the worker
+  # dead-letters them on its own, no code change involved. Runs before pin
+  # write or Compose mutation so a restart never silently consumes rows that
+  # are already deterministically doomed (the #3124 postmortem: eight
+  # panel.scan.requested rows already at retry-3 dead-lettered the moment
+  # the worker restarted, undetected by every other gate). Never mutates the
+  # outbox; see scripts/prod_deploy_retry_preflight.py and
+  # docs/HEALTH.md :: Outbox and dead-letter signals.
+  local receipt_json rc=0
+  receipt_json="$("${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "prod deploy blocked before pin or Compose mutation: pending outbox work is already at the terminal retry boundary and would dead-letter on worker startup" >&2
+    printf '%s\n' "${receipt_json}" >&2
+    echo "guidance: inspect the reported topic(s) (e.g. python -m app.cli events-doctor --path \"\$INDEX_OUTBOX_PATH\") to find why processing keeps failing, resolve the underlying cause, then redeploy; this preflight is read-only and never mutates the outbox" >&2
+    return 1
+  fi
+  return 0
+}
+
 version_gate() {
   local version_json health_json version_sha health_sha
   version_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/version")"
@@ -374,6 +395,10 @@ fi
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
   exit 86
+fi
+
+if [ "${channel}" = "prod" ]; then
+  prod_pending_retry_preflight || exit 87
 fi
 
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"

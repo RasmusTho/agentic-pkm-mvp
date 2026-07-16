@@ -133,6 +133,56 @@ All values are bounded status strings; no raw state, path, secret, token, or tra
 The `write_guard` field reflects the current cached `HealthContract` state without evaluating the WriteGuard or running the full health contract diagnostics. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
 <!-- SECTION:HEALTH:END -->
 
+## Outbox and dead-letter signals
+
+Cross-reference for every outbox signal that touches dead-lettering: the always-on read/alert
+signal above (`## Dead-letter signal`) plus the PROD deploy-time stop condition below (#3903).
+
+### PROD deploy pending-retry preflight
+
+`scripts/deploy_channel.sh deploy prod <sha>` (and `rollback prod`) run a read-only preflight,
+`scripts/prod_deploy_retry_preflight.py`, before the pin file is written or Compose is touched. It
+inspects pending (`delivered_at is null`) DB outbox rows and blocks the deploy when any row is
+already at a **terminal retry boundary** — a state where the row's very next processing pass
+dead-letters it instead of retrying, with no further code change or failure needed to get there:
+
+- **Worker-level transient retry counter** — the re-emitted event payload's `_worker_retry_count`
+  has already reached `_MAX_TRANSIENT_RETRY_ATTEMPTS` (3, `app/workers/outbox_worker.py`); the next
+  transient failure for that row dead-letters immediately instead of being re-queued
+  (`_queue_transient_retry`).
+- **Dispatch-attempt crash-loop counter** — the outbox row's own `attempts` column has already
+  reached `_MAX_DISPATCH_ATTEMPTS` (5 by default, overridable via `WORKER_MAX_DISPATCH_ATTEMPTS`,
+  same variable the worker itself reads); the next non-transient dispatch failure dead-letters
+  immediately.
+
+This is exactly the failure class that let #3124's promotion pass every existing gate (deploy,
+health, exact-SHA, embedding, live smoke) while eight `panel.scan.requested` rows already at
+retry-3 silently dead-lettered the moment the worker restarted — undetected until post-promotion
+verification.
+
+Posture:
+
+- **Read-only.** The preflight never acks, replays, edits, or otherwise mutates an outbox row
+  (KERNEL-12 invariant, same as `dead_letter_stats()`). It only decides whether the deploy may
+  proceed.
+- **Redacted.** The failure output reports aggregate counts only — `terminal_pending_count`, a
+  `by_topic` breakdown keyed on the event-type label, and a `by_classification` breakdown by which
+  counter is exhausted — never payload content, note/source paths, DSNs, or credentials.
+- **PROD-only.** dev and test channel deploys are unaffected; this does not rework TEST or dev
+  channel startup policy.
+- **Ordinary pending work is unaffected.** A row below both thresholds never blocks a deploy, no
+  matter how large the pending queue is.
+- **Fails open on infra unavailability.** No DSN configured, the DB unreachable, or the outbox
+  query itself failing skips the check (status `skipped`) rather than blocking the deploy — DB/API
+  availability is a distinct, already-gated concern (health/version gates run later in the same
+  script), not this check's job.
+
+Operator action on a block: inspect the reported topic(s) — for example
+`python -m app.cli events-doctor --path "$INDEX_OUTBOX_PATH"`, or the live outbox for the affected
+topic — to find why processing keeps failing, resolve the underlying cause, then redeploy. The
+preflight itself performs no remediation; clearing or replaying the affected rows remains an
+explicit, separate operator/agent action, same as any other dead-letter recovery.
+
 ## False-green register
 
 One authoritative place stating what each always-on health surface's **green** signal
