@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 from inspect import signature
 from threading import Barrier
 
 import pytest
 
 from app.builderops.control_plane import (
+    IdempotencyConflict,
     Lease,
     LeaseRequired,
     LeaseUnavailable,
@@ -17,6 +17,15 @@ from app.builderops.control_plane import (
 )
 
 pytestmark = pytest.mark.pg
+
+
+def _expire_lease(store, lease: Lease) -> None:
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_leases SET expires_at = clock_timestamp() - interval '1 second' "
+            "WHERE repository = %s AND resource_id = %s AND fencing_token = %s",
+            (lease.repository, lease.resource_id, lease.fencing_token),
+        )
 
 
 def test_stale_fencing_token_cannot_mutate_after_reassignment(
@@ -29,8 +38,18 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
         "claim_ttl_seconds",
         "release_on_commit",
         "lease_now",
+        "now",
+        "_now",
     }.isdisjoint(signature(StorePort.commit_transition).parameters)
-    now = datetime.now(timezone.utc)
+    for method_name in (
+        "claim_task",
+        "heartbeat_lease",
+        "release_task",
+        "complete_task",
+        "claim_outbox",
+        "effect_eligible",
+    ):
+        assert {"now", "_now"}.isdisjoint(signature(getattr(StorePort, method_name)).parameters)
     barrier = Barrier(2)
 
     def concurrent_claim(holder: str) -> Lease | LeaseUnavailable:
@@ -42,7 +61,6 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
                 resource_id="concurrent-task",
                 holder=holder,
                 ttl_seconds=30,
-                now=now,
             )
         except LeaseUnavailable as exc:
             return exc
@@ -102,9 +120,9 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
         idempotency_key="reassignment-claim-a",
         request={"command": "claim"},
         ttl_seconds=30,
-        now=now,
     )
-    first = store.heartbeat_lease(first, ttl_seconds=30, now=now + timedelta(seconds=10))
+    first = store.heartbeat_lease(first, ttl_seconds=30)
+    _expire_lease(store, first)
 
     with pytest.raises(StaleFencingToken):
         store.complete_task(
@@ -112,7 +130,6 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
             lease=first,
             idempotency_key="expired-before-reassignment",
             request={"command": "complete"},
-            now=now + timedelta(seconds=41),
         )
 
     restarted_store = type(store)(store.dsn)
@@ -123,7 +140,6 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
         idempotency_key="reassignment-claim-b",
         request={"command": "claim"},
         ttl_seconds=30,
-        now=now + timedelta(seconds=41),
     )
     assert second.fencing_token > first.fencing_token
     replayed_claim, original_lease = restarted_store.claim_task(
@@ -133,12 +149,11 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
         idempotency_key="reassignment-claim-a",
         request={"command": "claim"},
         ttl_seconds=30,
-        now=now + timedelta(seconds=41),
     )
     assert replayed_claim.replayed is True
     assert original_lease.fencing_token == first.fencing_token
     with pytest.raises(StaleFencingToken):
-        store.heartbeat_lease(original_lease, ttl_seconds=30, now=now + timedelta(seconds=42))
+        store.heartbeat_lease(original_lease, ttl_seconds=30)
 
     with pytest.raises(StaleFencingToken):
         store.commit_transition(
@@ -155,7 +170,6 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
         lease=second,
         idempotency_key="current-worker",
         request={"command": "complete"},
-        now=now + timedelta(seconds=42),
     )
     assert accepted.state == "completed"
 
@@ -164,7 +178,6 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
     control_plane_store, envelope
 ) -> None:
     store = control_plane_store
-    now = datetime.now(timezone.utc)
     store.commit_transition(
         envelope=envelope,
         task_id="lifecycle-task",
@@ -181,7 +194,6 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
             idempotency_key="lifecycle-zero-ttl",
             request={"command": "claim"},
             ttl_seconds=0,
-            now=now,
         )
 
     with pytest.raises(RuntimeError, match="after_outbox"):
@@ -192,7 +204,6 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
             idempotency_key="lifecycle-failed-claim",
             request={"command": "claim"},
             ttl_seconds=30,
-            now=now,
             fault_at="after_outbox",
         )
     claimed, first = store.claim_task(
@@ -202,26 +213,24 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
         idempotency_key="lifecycle-claim-a",
         request={"command": "claim"},
         ttl_seconds=30,
-        now=now,
     )
     assert claimed.state == "claimed"
     claim_receipt = store.receipt(envelope.repository, claimed.receipt_sequence)
     assert claim_receipt["lease_holder"] == first.holder
     assert claim_receipt["lease_fencing_token"] == first.fencing_token
     with pytest.raises(ValueError, match="positive ttl_seconds"):
-        store.heartbeat_lease(first, ttl_seconds=0, now=now + timedelta(seconds=1))
-    first = store.heartbeat_lease(first, ttl_seconds=30, now=now + timedelta(seconds=5))
+        store.heartbeat_lease(first, ttl_seconds=0)
+    first = store.heartbeat_lease(first, ttl_seconds=30)
 
     released = store.release_task(
         envelope=envelope,
         lease=first,
         idempotency_key="lifecycle-release-a",
         request={"command": "release"},
-        now=now + timedelta(seconds=6),
     )
     assert released.state == "ready"
     with pytest.raises(StaleFencingToken):
-        store.heartbeat_lease(first, ttl_seconds=30, now=now + timedelta(seconds=7))
+        store.heartbeat_lease(first, ttl_seconds=30)
 
     claimed_again, second = store.claim_task(
         envelope=envelope,
@@ -230,17 +239,22 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
         idempotency_key="lifecycle-claim-b",
         request={"command": "claim"},
         ttl_seconds=30,
-        now=now + timedelta(seconds=7),
     )
     assert claimed_again.state == "claimed"
     assert second.fencing_token > first.fencing_token
+    with pytest.raises(IdempotencyConflict):
+        store.release_task(
+            envelope=envelope,
+            lease=second,
+            idempotency_key="lifecycle-release-a",
+            request={"command": "release"},
+        )
     with pytest.raises(StaleFencingToken):
         store.release_task(
             envelope=envelope,
             lease=first,
             idempotency_key="lifecycle-stale-release",
             request={"command": "release"},
-            now=now + timedelta(seconds=8),
         )
 
     with pytest.raises(RuntimeError, match="after_outbox"):
@@ -249,23 +263,21 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
             lease=second,
             idempotency_key="lifecycle-complete",
             request={"command": "complete"},
-            now=now + timedelta(seconds=8),
             fault_at="after_outbox",
         )
-    second = store.heartbeat_lease(second, ttl_seconds=30, now=now + timedelta(seconds=9))
+    second = store.heartbeat_lease(second, ttl_seconds=30)
     completed = store.complete_task(
         envelope=envelope,
         lease=second,
         idempotency_key="lifecycle-complete",
         request={"command": "complete"},
-        now=now + timedelta(seconds=10),
     )
     assert completed.state == "completed"
     complete_receipt = store.receipt(envelope.repository, completed.receipt_sequence)
     assert complete_receipt["lease_holder"] == second.holder
     assert complete_receipt["lease_fencing_token"] == second.fencing_token
     with pytest.raises(StaleFencingToken):
-        store.heartbeat_lease(second, ttl_seconds=30, now=now + timedelta(seconds=11))
+        store.heartbeat_lease(second, ttl_seconds=30)
 
     with pytest.raises(StateConflict):
         store.claim_task(
@@ -275,7 +287,6 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
             idempotency_key="lifecycle-claim-after-complete",
             request={"command": "claim"},
             ttl_seconds=30,
-            now=now + timedelta(seconds=11),
         )
 
     successor = store.claim_lease(
@@ -283,6 +294,5 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
         resource_id="lifecycle-task",
         holder="worker-c",
         ttl_seconds=30,
-        now=now + timedelta(seconds=11),
     )
     assert successor.fencing_token > second.fencing_token

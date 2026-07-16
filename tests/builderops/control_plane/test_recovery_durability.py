@@ -81,6 +81,9 @@ def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
         worker_id="executor",
         watermark=intent_watermark,
     )
+    claim_receipt = store.receipt(envelope.repository, claim.receipt_sequence)
+    assert claim_receipt["lease_holder"] == claim.worker_id
+    assert claim_receipt["lease_fencing_token"] == claim.fencing_token
     assert store.effect_eligible(claim, watermark=intent_watermark) is False
     claim_scalar_only = RecoveryWatermark(recovered_through=claim.claim_lsn)
     assert store.effect_eligible(claim, watermark=claim_scalar_only) is False

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
 import pytest
 
 from app.builderops.control_plane import (
@@ -11,6 +9,15 @@ from app.builderops.control_plane import (
 )
 
 pytestmark = pytest.mark.pg
+
+
+def _expire_outbox_claim(store, repository: str, operation_key: str) -> None:
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_outbox SET claim_expires_at = clock_timestamp() - interval '1 second' "
+            "WHERE repository = %s AND operation_key = %s",
+            (repository, operation_key),
+        )
 
 
 def _observed_transition(result) -> RecoveryWatermark:
@@ -58,14 +65,12 @@ def test_unknown_external_effect_requires_readback_before_retry(
         outbox={"effect_type": "github.merge", "payload": {"pr": 4000}},
     )
     intent_watermark = _observed_transition(result)
-    now = datetime.now(timezone.utc)
     first_claim = control_plane_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-1",
         watermark=intent_watermark,
         claim_ttl_seconds=1,
-        now=now,
     )
     restarted_store = type(control_plane_store)(control_plane_store.dsn)
     orphaned_claim = restarted_store.outbox_claim(envelope.repository, result.operation_key)
@@ -75,7 +80,6 @@ def test_unknown_external_effect_requires_readback_before_retry(
         restarted_store.effect_eligible(
             first_claim,
             watermark=_observed_claim(intent_watermark, first_claim),
-            now=now,
         )
         is False
     )
@@ -87,14 +91,12 @@ def test_unknown_external_effect_requires_readback_before_retry(
         operation_key=result.operation_key,
         worker_id="executor-2",
         watermark=intent_watermark,
-        now=now + timedelta(seconds=2),
     )
     assert claim.fencing_token > first_claim.fencing_token
     assert (
         restarted_store.effect_eligible(
             first_claim,
             watermark=_observed_claim(intent_watermark, first_claim),
-            now=now + timedelta(seconds=2),
         )
         is False
     )
@@ -163,15 +165,14 @@ def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelo
         outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
     )
     intent_watermark = _observed_transition(result)
-    now = datetime.now(timezone.utc)
     first = control_plane_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="expired-executor",
         watermark=intent_watermark,
         claim_ttl_seconds=1,
-        now=now,
     )
+    _expire_outbox_claim(control_plane_store, envelope.repository, result.operation_key)
 
     with pytest.raises(UnknownEffectNeedsReconciliation):
         control_plane_store.claim_outbox(
@@ -179,8 +180,10 @@ def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelo
             operation_key=result.operation_key,
             worker_id="replacement-executor",
             watermark=intent_watermark,
-            now=now + timedelta(seconds=2),
         )
     recovered = control_plane_store.outbox_claim(envelope.repository, result.operation_key)
-    assert recovered == first
+    assert recovered.operation_key == first.operation_key
+    assert recovered.worker_id == first.worker_id
+    assert recovered.fencing_token == first.fencing_token
+    assert recovered.receipt_sequence == first.receipt_sequence
     assert control_plane_store.outbox_status(envelope.repository, result.operation_key) == "unknown"

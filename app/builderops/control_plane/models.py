@@ -200,13 +200,10 @@ class StorePort(Protocol):
         idempotency_key: str,
         request: Mapping[str, Any],
         ttl_seconds: int = 5400,
-        now: datetime | None = None,
         fault_at: str | None = None,
     ) -> tuple[TransactionResult, Lease]: ...
 
-    def heartbeat_lease(
-        self, lease: Lease, *, ttl_seconds: int, now: datetime | None = None
-    ) -> Lease: ...
+    def heartbeat_lease(self, lease: Lease, *, ttl_seconds: int) -> Lease: ...
 
     def release_task(
         self,
@@ -215,7 +212,6 @@ class StorePort(Protocol):
         lease: Lease,
         idempotency_key: str,
         request: Mapping[str, Any],
-        now: datetime | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult: ...
 
@@ -226,7 +222,6 @@ class StorePort(Protocol):
         lease: Lease,
         idempotency_key: str,
         request: Mapping[str, Any],
-        now: datetime | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult: ...
 
@@ -238,7 +233,6 @@ class StorePort(Protocol):
         worker_id: str,
         watermark: RecoveryWatermark,
         claim_ttl_seconds: int = 300,
-        now: datetime | None = None,
         fault_at: str | None = None,
     ) -> OutboxClaim: ...
 
@@ -247,7 +241,6 @@ class StorePort(Protocol):
         claim: OutboxClaim,
         *,
         watermark: RecoveryWatermark,
-        now: datetime | None = None,
     ) -> bool: ...
 
     def reconcile_outbox(
