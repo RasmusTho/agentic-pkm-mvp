@@ -123,6 +123,11 @@ adapter. Production paths contain no SQLite authority or automatic SQLite fallba
 
 ### D4 — Independent deployment, lifecycle, and trust zone
 
+> **Amended by A2 (2026-07-16):** “reuse” below means Demerzel's operational patterns and
+> capability, not a shared container engine or runtime failure domain. This delivery runs the
+> BuilderOps-only Compose project on a separate BuilderOps VM/container engine on Demerzel. See
+> `## Amendments`.
+
 BuilderOps reuses Demerzel's Docker/PostgreSQL operational capability but has its own Compose project
 and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns distinct:
 
