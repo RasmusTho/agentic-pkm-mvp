@@ -24,33 +24,52 @@ def test_authority_envelope_is_required_and_repo_namespaces_are_isolated(
         )
 
     repo_b = replace(envelope, repository="example/second-repo")
+    leases = []
+    for scoped_envelope in (envelope, repo_b):
+        control_plane_store.commit_transition(
+            envelope=scoped_envelope,
+            task_id="same-id",
+            to_state="ready",
+            idempotency_key="same-create",
+            request={"command": "create"},
+        )
+        _, lease = control_plane_store.claim_task(
+            envelope=scoped_envelope,
+            task_id="same-id",
+            holder="executor",
+            idempotency_key="same-claim",
+            request={"command": "claim"},
+        )
+        leases.append(lease)
     first = control_plane_store.commit_transition(
         envelope=envelope,
         task_id="same-id",
-        to_state="ready",
+        to_state="effect_pending",
         idempotency_key="same-key",
-        request={"command": "create"},
+        request={"command": "schedule-effect"},
         outbox={"effect_type": "github.comment", "payload": {}},
+        lease=leases[0],
     )
     second = control_plane_store.commit_transition(
         envelope=repo_b,
         task_id="same-id",
-        to_state="ready",
+        to_state="effect_pending",
         idempotency_key="same-key",
-        request={"command": "create"},
+        request={"command": "schedule-effect"},
         outbox={"effect_type": "github.comment", "payload": {}},
+        lease=leases[1],
     )
     assert first.operation_key != second.operation_key
     _, lease_a = control_plane_store.claim_lease(
         envelope=envelope,
-        resource_id="same-id",
+        resource_id="same-generic-id",
         holder="a",
         idempotency_key="claim-same-id",
         request={"command": "claim-lease"},
     )
     _, lease_b = control_plane_store.claim_lease(
         envelope=repo_b,
-        resource_id="same-id",
+        resource_id="same-generic-id",
         holder="b",
         idempotency_key="claim-same-id",
         request={"command": "claim-lease"},

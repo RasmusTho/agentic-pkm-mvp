@@ -155,6 +155,8 @@ class PostgresBuilderOpsStore:
             raise ValueError("release_on_commit requires an existing fenced lease")
         if to_state == "claimed" and claim_holder is None:
             raise LeaseRequired("claimed task state requires atomically bound fenced ownership")
+        if outbox is not None and lease is None and claim_holder is None:
+            raise LeaseRequired("outbox intent requires atomically fenced task ownership")
         request_document = {
             "authority_envelope": envelope.as_json(),
             "task_id": task_id,

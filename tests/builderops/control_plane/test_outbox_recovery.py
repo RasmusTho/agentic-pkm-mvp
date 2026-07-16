@@ -86,16 +86,44 @@ def _observed_reconciliation(prior: RecoveryWatermark, reconciliation) -> Recove
     )
 
 
+def _commit_outbox_task(
+    store, envelope, *, task_id: str, key: str, effect_type: str, payload: dict
+):
+    store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="ready",
+        idempotency_key=f"{key}-create",
+        request={"command": "create"},
+    )
+    _, lease = store.claim_task(
+        envelope=envelope,
+        task_id=task_id,
+        holder="executor",
+        idempotency_key=f"{key}-claim",
+        request={"command": "claim"},
+    )
+    return store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="effect_pending",
+        idempotency_key=key,
+        request={"command": "schedule-effect"},
+        outbox={"effect_type": effect_type, "payload": payload},
+        lease=lease,
+    )
+
+
 def test_unknown_external_effect_requires_readback_before_retry(
     control_plane_store, envelope
 ) -> None:
-    result = control_plane_store.commit_transition(
-        envelope=envelope,
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
         task_id="task-3792",
-        to_state="ready",
-        idempotency_key="unknown-effect",
-        request={"command": "create"},
-        outbox={"effect_type": "github.merge", "payload": {"pr": 4000}},
+        key="unknown-effect",
+        effect_type="github.merge",
+        payload={"pr": 4000},
     )
     intent_watermark = _observed_transition(result)
     first_claim = control_plane_store.claim_outbox(
@@ -238,13 +266,13 @@ def test_unknown_external_effect_requires_readback_before_retry(
 def test_reconciliation_receipt_state_and_evidence_commit_atomically(
     control_plane_store, envelope, fault_at: str
 ) -> None:
-    result = control_plane_store.commit_transition(
-        envelope=envelope,
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
         task_id=f"reconciliation-atomic-{fault_at}",
-        to_state="merge_pending",
-        idempotency_key=f"reconciliation-atomic-{fault_at}",
-        request={"command": "claim"},
-        outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
+        key=f"reconciliation-atomic-{fault_at}",
+        effect_type="github.merge",
+        payload={"pr": 3852},
     )
     claim = control_plane_store.claim_outbox(
         envelope=envelope,
@@ -276,13 +304,13 @@ def test_reconciliation_receipt_state_and_evidence_commit_atomically(
 
 
 def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, envelope) -> None:
-    result = control_plane_store.commit_transition(
-        envelope=envelope,
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
         task_id="claim-binding-crash",
-        to_state="merge_pending",
-        idempotency_key="claim-binding-crash",
-        request={"command": "claim"},
-        outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
+        key="claim-binding-crash",
+        effect_type="github.merge",
+        payload={"pr": 3852},
     )
     intent_watermark = _observed_transition(result)
 
@@ -315,13 +343,13 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
 
 
 def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelope) -> None:
-    result = control_plane_store.commit_transition(
-        envelope=envelope,
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
         task_id="expired-claim",
-        to_state="merge_pending",
-        idempotency_key="expired-claim",
-        request={"command": "claim"},
-        outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
+        key="expired-claim",
+        effect_type="github.merge",
+        payload={"pr": 3852},
     )
     intent_watermark = _observed_transition(result)
     first = control_plane_store.claim_outbox(

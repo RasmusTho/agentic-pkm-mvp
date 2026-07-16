@@ -70,6 +70,32 @@ def _observed_reconciliation(prior: RecoveryWatermark, result) -> RecoveryWaterm
     )
 
 
+def _commit_outbox_task(store, envelope, *, task_id: str, key: str):
+    store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="ready",
+        idempotency_key=f"{key}-create",
+        request={"command": "create"},
+    )
+    _, lease = store.claim_task(
+        envelope=envelope,
+        task_id=task_id,
+        holder="executor",
+        idempotency_key=f"{key}-claim",
+        request={"command": "claim"},
+    )
+    return store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="effect_pending",
+        idempotency_key=key,
+        request={"command": "schedule-effect"},
+        outbox={"effect_type": "github.comment", "payload": {"issue": 3792}},
+        lease=lease,
+    )
+
+
 def test_unbound_or_malformed_lsn_never_authorizes_exact_observed_identity() -> None:
     transition = TransactionResult("owner/repo", "task", "ready", 1, "0/0", "operation")
     claim = OutboxClaim("owner/repo", "operation", "worker", 1, "0/0", "0/0", 2, datetime.now(UTC))
@@ -105,13 +131,11 @@ def test_unbound_or_malformed_lsn_never_authorizes_exact_observed_identity() -> 
 
 
 def test_unbound_intent_lsn_is_durability_pending(control_plane_store, envelope) -> None:
-    result = control_plane_store.commit_transition(
-        envelope=envelope,
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
         task_id="unbound-intent",
-        to_state="ready",
-        idempotency_key="unbound-intent",
-        request={"command": "create"},
-        outbox={"effect_type": "github.comment", "payload": {}},
+        key="unbound-intent",
     )
     with control_plane_store._connect() as conn:
         conn.execute(
@@ -132,13 +156,11 @@ def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
     control_plane_store, envelope
 ) -> None:
     store = control_plane_store
-    result = store.commit_transition(
-        envelope=envelope,
+    result = _commit_outbox_task(
+        store,
+        envelope,
         task_id="task-3792",
-        to_state="ready",
-        idempotency_key="durability-gate",
-        request={"command": "create"},
-        outbox={"effect_type": "github.comment", "payload": {"issue": 3792}},
+        key="durability-gate",
     )
     calls: list[str] = []
     stalled = RecoveryWatermark.stalled()
