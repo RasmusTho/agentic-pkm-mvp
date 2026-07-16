@@ -832,7 +832,10 @@ Interpretation:
 - durability is additive: `SettingsService.update_setting`'s return-value contract
   (`(EffectiveSetting, SettingsWriteReceipt)`) is unchanged,
 - compiler auto-heal keys are file-qualified (for example `global.timeout_ms`), while app-local and
-  canonical settings-service keys retain their native setting names.
+  canonical settings-service keys retain their native setting names; compiler-generated reference
+  block mutations use the synthetic file-qualified key `<file>.__reference__`,
+- deleting a settings key emits null for both `value` and `new_value`, while `old_value` preserves
+  the removed value.
 
 ### `promote.intent.created`
 

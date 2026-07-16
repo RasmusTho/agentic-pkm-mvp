@@ -166,6 +166,40 @@ def test_autoheal_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
     assert row.new_value == 8000
 
 
+def test_autoheal_reference_only_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    settings_dir = tmp_path / "vault" / "@Settings"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
+    global_path = settings_dir / "global.md"
+    _write_settings_source(
+        global_path,
+        """
+        ---
+        uuid: global
+        ---
+        ## Runtime
+        ```yaml settings
+        timeout_ms: 8000
+        ```
+        """,
+    )
+
+    compiler.compile_all(auto_heal=True, vault_dir=settings_dir)
+
+    row = next(
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "global.__reference__"
+    )
+    assert row.surface == "auto-heal"
+    assert row.actor == "agent"
+    assert row.file == str(global_path)
+    assert row.old_value is None
+    assert "Reference — Global" in row.new_value
+
+
 def test_app_local_write_receipted(tmp_path: Path, monkeypatch) -> None:
     outbox_path = tmp_path / "outbox.jsonl"
     app_local_path = tmp_path / "app-local.md"

@@ -126,7 +126,9 @@ def test_multiple_watcher_specs_emit_one_settings_receipt_per_delta(
     assert summaries["ingest"]["emitted_in_tick"] >= 1
 
 
-def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> None:
+def test_runtime_gating_key_removal_routes_settings_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     vault_root = tmp_path / "vault"
     initialize_test_vault(vault_root)
 
@@ -137,6 +139,9 @@ def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> N
         if key in {"enableVaultWatcher", "enableAutoIndexing"}
     }
     assert "enableAutoIndexing" in previous_values
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
 
     store = MarkdownSettingsStore()
     document = store.read(local_md)
@@ -185,5 +190,17 @@ def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> N
     assert receipt.surface == "file"
     assert receipt.actor == "human"
     assert receipt.is_runtime_gating is True
-    assert captured_calls == [("enableAutoIndexing", receipt.value, "file", "human", False)]
+    assert receipt.value is None
+    assert receipt.old_value is True
+    assert receipt.new_value is None
+    assert captured_calls == [("enableAutoIndexing", True, "file", "human", False)]
     assert "enableAutoIndexing" not in _read_frontmatter(local_md)
+
+    row = next(
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "enableAutoIndexing"
+    )
+    assert row.value is None
+    assert row.old_value is True
+    assert row.new_value is None

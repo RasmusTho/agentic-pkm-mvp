@@ -356,15 +356,16 @@ class SettingsService:
         )
 
         # Emit actor-tagged receipt for all governed writes.
+        receipt_value = value if persist else None
         receipt = SettingsWriteReceipt(
             key=key,
-            value=value,
+            value=receipt_value,
             surface=surface,
             actor=actor,
             is_runtime_gating=is_runtime_gating,
             file=str(path),
             old_value=old_value,
-            new_value=value,
+            new_value=receipt_value,
         )
         logger.info(
             "settings.write surface=%s actor=%s key=%s runtime_gating=%s ts=%s",

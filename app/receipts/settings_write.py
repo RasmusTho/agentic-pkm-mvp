@@ -17,6 +17,7 @@ from app.events.types import SETTINGS_WRITE_RECEIPT
 
 logger = logging.getLogger(__name__)
 _OLD_VALUE_UNSET = object()
+_NEW_VALUE_UNSET = object()
 _old_value_override: ContextVar[Any] = ContextVar(
     "settings_receipt_old_value",
     default=_OLD_VALUE_UNSET,
@@ -35,10 +36,10 @@ class SettingsWriteReceipt:
     is_runtime_gating: bool = False
     file: str | None = None
     old_value: Any = None
-    new_value: Any = None
+    new_value: Any = field(default=_NEW_VALUE_UNSET, repr=False)
 
     def __post_init__(self) -> None:
-        if self.new_value is None and self.value is not None:
+        if self.new_value is _NEW_VALUE_UNSET:
             object.__setattr__(self, "new_value", self.value)
 
 

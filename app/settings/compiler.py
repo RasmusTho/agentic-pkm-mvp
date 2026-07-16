@@ -16,10 +16,11 @@ from pydantic import ValidationError
 
 from app.events.bus import emit
 from app.components.settings.models_loader import load_models
+from app.receipts.settings_write import SettingsWriteReceipt, emit_settings_write_receipt
 from app.settings.panel_actions_settings import PanelActionsSettings, load_panel_actions_settings
 from app.settings.watcher_settings import WatcherSettings, load_watcher_settings
 from .constraints import as_bool, clamp_int, enum_or_default
-from .docs import inject_reference, render_reference
+from .docs import BEGIN, END, inject_reference, render_reference
 from .loader import read_text, split_sections
 from .models import (
     ClassifierSettings,
@@ -376,6 +377,22 @@ def _update_reference(path: Path, title: str, model: Any, auto_heal: bool, *, va
     updated = inject_reference(markdown, block)
     if updated != markdown:
         write_markdown_via_knowledge_port(path, updated, vault_root=vault_root)
+        old_reference = None
+        if BEGIN in markdown and END in markdown:
+            _, tail = markdown.split(BEGIN, 1)
+            old_reference, _ = tail.split(END, 1)
+            old_reference = old_reference.strip()
+        emit_settings_write_receipt(
+            SettingsWriteReceipt(
+                key=f"{path.stem}.__reference__",
+                value=block,
+                old_value=old_reference,
+                new_value=block,
+                file=str(path),
+                surface="auto-heal",
+                actor="agent",
+            )
+        )
 
 
 def compile_all(
