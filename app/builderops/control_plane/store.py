@@ -156,6 +156,7 @@ class PostgresBuilderOpsStore:
             "request": dict(request),
             "outbox": dict(outbox) if outbox else None,
             "claim_holder": claim_holder,
+            "claim_ttl_seconds": claim_ttl_seconds if claim_holder is not None else None,
             "release_on_commit": release_on_commit,
             "lease_identity": self._lease_identity_json(lease) if lease is not None else None,
             "expected_states": list(expected_states) if expected_states is not None else None,

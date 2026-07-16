@@ -242,6 +242,15 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
     claim_receipt = store.receipt(envelope.repository, claimed.receipt_sequence)
     assert claim_receipt["lease_holder"] == first.holder
     assert claim_receipt["lease_fencing_token"] == first.fencing_token
+    with pytest.raises(IdempotencyConflict):
+        store.claim_task(
+            envelope=envelope,
+            task_id="lifecycle-task",
+            holder="worker-a",
+            idempotency_key="lifecycle-claim-a",
+            request={"command": "claim"},
+            ttl_seconds=31,
+        )
     with pytest.raises(ValueError, match="positive ttl_seconds"):
         store.heartbeat_lease(first, ttl_seconds=0)
     first = store.heartbeat_lease(first, ttl_seconds=30)
