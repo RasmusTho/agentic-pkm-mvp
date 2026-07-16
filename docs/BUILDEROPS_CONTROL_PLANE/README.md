@@ -1,4 +1,4 @@
-State: Accepted target-state specification (owner decision, 2026-07-15). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding; BCP-01 becomes the first executable child after PR #3691 merges and strict readiness validation passes. Existing issues #3603 and #3690 are reconciled into the sequence.
+State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding; PR #3691 merged 2026-07-15 and BCP-01 (#3792) is in progress. Existing issues #3603 and #3690 are reconciled into the sequence.
 Doc role: Specification directory
 Authority: Owns the bounded task decomposition and cross-task invariants after merge. ADR-0062 owns the architectural decision; ADR-0010 owns the repo/BuilderOps authority seam; shipped owner docs win for current behavior.
 Owner: BuilderOps governance / Architecture spine
@@ -32,11 +32,11 @@ required CI, review gates, repository protection, and GitHub merge results remai
 | # | Task | ID | Issue | Delivers | Depends on |
 |---|---|---|---|---|---|
 | 1 | [PostgreSQL Transaction Kernel](POSTGRES_TRANSACTION_KERNEL.md) | BCP-01 | #3792 | Store port, PostgreSQL schema/migrations, fenced leases, atomic idempotency + state + receipt + outbox | — |
-| 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 | Separate service app/Compose project, auth, release pin, health, full backup + continuous WAL recovery, trust boundary | BCP-01 |
+| 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 | Separate service app/Compose project outside the `pkm-*` failure domain, auth, release pin, health + alerting, encrypted backup + archived-WAL recovery, trust boundary | BCP-01 |
 | 3 | [Legacy Authority Migration](LEGACY_AUTHORITY_MIGRATION.md) | BCP-03 | #3789 | Complete SQLite/JSONL/JSON inventory, read-only import, evidence-quarantine/authority-tombstone report, authority epoch | BCP-01 |
 | 4 | [API-Only Client Cutover](API_ONLY_CLIENT_CUTOVER.md) | BCP-04 | #3791 | MacBook skills/CLI/automation use authenticated API and fail closed with no local/direct-DB fallback | BCP-02 |
 | 5 | [Demerzel Review And Merge Orchestration](DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md) | BCP-05 | existing #3603; baseline PR #3620 merged | Migrate the delivered executor to API/PostgreSQL/outbox and scoped merge authority | BCP-02, BCP-04 |
-| 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove restore-through-watermark/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
+| 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove restore-from-backup/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
 | 7 | [Owner-Doc Enactment And Closure](OWNER_DOC_ENACTMENT_AND_CLOSURE.md) | BCP-07 | existing #3690 | Reconcile shipped Builder System/store/dispatcher/deployment/security/health docs and close parent | BCP-06 |
 
 Execution order:
@@ -44,7 +44,7 @@ Execution order:
 `BCP-01 -> BCP-02`; `BCP-03` may start after BCP-01 and run beside BCP-02. Then
 `BCP-02 -> BCP-04 -> BCP-05`; `BCP-03 + BCP-04 + BCP-05 -> BCP-06 -> BCP-07`.
 
-Parent validation hub: #3788. BCP-01 is the first `agent:ready` candidate after PR #3691 merges;
+Parent validation hub: #3788. BCP-01 (#3792) was released first and is in progress;
 dependency-blocked children remain `agent:blocked`.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
@@ -57,15 +57,17 @@ not by rewriting that merge.
 2. **API-only authority.** Every production client, including the Demerzel executor, uses the
    authenticated API. Only the BuilderOps data layer reaches PostgreSQL.
 3. **Atomic local transition.** Idempotency result, guarded state mutation, receipt, and outbox intent
-   commit in one PostgreSQL transaction. If any part fails, none becomes visible. API success/replay,
-   dependent authority transitions, and outbox claim eligibility wait until that commit/recovery LSN
-   is durable outside Demerzel's primary host and storage failure domains; a co-resident target fails
-   readiness.
-4. **Durable, reconciled external effects.** After an eligible intent is claimed, its fenced
-   pre-effect attempt/receipt commit must also cross the independent recovery watermark before the
-   executor calls GitHub. A stalled watermark leaves GitHub untouched. A timeout is `unknown`, not
-   `failed`; retry reads GitHub before repeating, and terminal success requires GitHub readback bound
-   to repo and current SHA.
+   commit in one PostgreSQL transaction. If any part fails, none becomes visible. The local
+   PostgreSQL commit is the acknowledgement gate for API success/replay, dependent authority
+   transitions, and outbox claim eligibility (ADR-0062 A1). Recovery durability is asynchronous:
+   encrypted backups plus archived WAL to a target outside Demerzel's primary host/storage failure
+   domains. A co-resident recovery target fails readiness (structural misconfiguration is
+   fail-closed); stalled archiving raises a loud alert, not an acknowledgement block.
+4. **Durable, reconciled external effects.** After an eligible intent is claimed, the executor
+   commits a fenced pre-effect attempt/receipt locally before calling GitHub; an uncommitted attempt
+   leaves GitHub untouched (ADR-0062 A1). A timeout is `unknown`, not `failed`; retry reads GitHub
+   before repeating, and terminal success requires GitHub readback bound to repo and current SHA.
+   After a restore, external effects reconcile against GitHub before the executor resumes.
 5. **Fenced leases.** Stale workers cannot mutate after expiry/reassignment; fencing survives API,
    worker, and database restarts.
 6. **Credential/policy non-transitivity and non-persistence.** A credential/lease for repo A cannot
@@ -77,12 +79,17 @@ not by rewriting that merge.
    receipts, artifacts, logs/metrics, WAL, or BuilderOps backups. Backup/WAL decryption uses
    independently recoverable key/KMS custody outside Demerzel's failure domains rather than depending
    solely on its host secret store.
-7. **Independent lifecycle.** Product start/stop/deploy/health/backup cannot start, stop, publish, or
-   restore BuilderOps, and BuilderOps failure does not change Product process ownership.
+7. **Independent lifecycle and failure domain.** Product start/stop/deploy/health/backup cannot
+   start, stop, publish, or restore BuilderOps, and BuilderOps failure does not change Product
+   process ownership. The BuilderOps service/database run outside the `pkm-*` container-VM failure
+   domain (ADR-0062 A2), and `/healthz` is wired into the operator alerting path. Degraded mode:
+   with the control plane unreachable, repo-authorized direct git/GitHub work continues without
+   fabricating BuilderOps state; orchestration-gated actions wait.
 8. **No authority rewind.** Before activation, rollback may use the pre-import PostgreSQL backup.
-   After activation, a compatible image or full-backup + continuous-WAL recovery must reach the
-   highest acknowledged LSN/receipt sequence before writes reopen; it never rewinds accepted state
-   or re-enables SQLite/JSONL/JSON.
+   After activation, recovery restores the latest archived point, reconciles external effects
+   against GitHub, and starts a new fencing epoch before writes reopen (ADR-0062 A1: the tail since
+   the last archived point is an accepted loss window); it never rewinds surviving state or
+   re-enables SQLite/JSONL/JSON.
 9. **Artifact integrity.** Large artifacts may remain content-addressed files, but identity, state,
    terminal receipts, and promotion/outbox status are PostgreSQL-authoritative.
 10. **Fail-loud cutover.** Incomplete producer-derived source coverage, an unenumerated host/
@@ -94,9 +101,9 @@ not by rewriting that merge.
 Partial-failure examples:
 
 - If the API commits an outbox row and crashes before responding, an idempotent client retry creates
-  no second intent and returns success only after the original LSN is independently durable.
-- If intent or pre-effect attempt WAL is stalled before the independent recovery target, the executor
-  does not call GitHub; once both watermarks advance, the same deterministic operation executes once.
+  no second intent and returns the original committed result.
+- If the executor crashes between claiming an intent and committing its fenced pre-effect attempt,
+  GitHub is untouched; on restart the same deterministic operation executes once.
 - If GitHub accepts a merge/create request and the executor times out, the executor reconciles by
   deterministic marker/repo/SHA before retry and records the readback receipt.
 - If import sees two authority-bearing records with one identity and different hashes, neither is
@@ -120,9 +127,8 @@ Partial-failure examples:
   without direct database access or local-authority fallback.
   Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch`.
 - [ ] A crash at each state/outbox/external-effect boundary produces no duplicate accepted transition
-  and a reconcilable receipt chain; stalled independent durability exposes no success and leaves
-  GitHub untouched until intent and pre-effect attempt LSNs are durable.
-  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once` plus `tests/builderops/control_plane/test_recovery_durability.py::test_external_effect_waits_for_intent_and_claim_recovery_lsn`.
+  and a reconcilable receipt chain.
+  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once`.
 - [ ] A producer-derived manifest proves the complete MacBook/Demerzel worktree/container source
   universe, and every expected source is imported, quarantined, tombstoned, explicitly accounted
   missing, or archived, with no live lease carried into the new epoch. Evidence-backed repo
@@ -133,14 +139,13 @@ Partial-failure examples:
 - [ ] Product Runtime contains no BuilderOps route, process bootstrap, data mount, secret, or health
   dependency, and its lifecycle remains healthy with BuilderOps stopped.
   Verify: `tests/architecture/test_builderops_product_separation.py::test_product_runtime_has_no_builderops_ownership`.
-- [ ] A full backup plus synchronously durable continuous WAL restores into a disposable database
-  through the highest acknowledged LSN/receipt sequence with Demerzel's host secret store
-  unavailable, using independently recoverable key/KMS custody, and passes readiness/invariant
-  checks before authoritative cutover.
-  Verify: BCP-02 restore-through-watermark drill and BCP-06 cutover/recovery gate.
+- [ ] An encrypted full backup plus archived WAL restores into a disposable database to the latest
+  archived point with Demerzel's host secret store unavailable, using independently recoverable
+  key/KMS custody, and passes readiness/invariant checks before authoritative cutover.
+  Verify: BCP-02 restore-from-backup drill and BCP-06 cutover/recovery gate.
 - [ ] Durable-state, WAL, and restored-backup negative scans prove no raw client/database/GitHub/
-  model/recovery-decryption credential is persisted, and post-activation recovery cannot lose
-  acknowledged state.
+  model/recovery-decryption credential is persisted, and post-activation recovery cannot rewind
+  surviving state.
   Verify: BCP-02 credential-persistence test plus BCP-06 no-authority-rewind rehearsal.
 - [ ] A verification-gated merge uses the repo-scoped executor credential, independently binds the
   protected-base delivery manifest and host credential mapping to the current PR SHA, executes only

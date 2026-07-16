@@ -60,10 +60,9 @@ reshape a Product SBS subsystem.
 ## Suggested Validation
 
 - keep a child/PR/receipt ledger on the parent;
-- require the BCP-06 end-to-end cutover, stalled-durability/no-GitHub-effect fault proof,
-  authority-ambiguity resolution/tombstone reconciliation, restore-through-acknowledged-watermark,
-  protected-base/manifest post-validation race rejection, and independent recovery-key/KMS custody
-  receipts before BCP-07; and
+- require the BCP-06 end-to-end cutover, authority-ambiguity resolution/tombstone reconciliation,
+  restore-from-backup drill (ADR-0062 A1), protected-base/manifest post-validation race rejection,
+  and independent recovery-key/KMS custody receipts before BCP-07; and
 - close only through BCP-07's parent-closure handoff.
 
 ## Source Docs
@@ -76,7 +75,7 @@ reshape a Product SBS subsystem.
 
 | Task | GitHub work item | Initial state |
 |---|---|---|
-| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | `agent:blocked` until PR #3691 merges; then first `agent:ready` candidate after strict validation |
+| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | released first (PR #3691 merged 2026-07-15); in progress |
 | BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | `agent:blocked` on BCP-01 |
 | BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | `agent:blocked` on BCP-01 |
 | BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | `agent:blocked` on BCP-02 |
@@ -98,10 +97,9 @@ authoritative cutover gates.
 ## Validation / Acceptance Path
 
 After BCP-06, attach the Demerzel end-to-end API/executor/GitHub readback receipt, legacy-import
-reconciliation (including evidence-only quarantine versus duplicate-preventing authority tombstones),
-stalled-durability proof that GitHub remains untouched until intent and pre-effect attempt LSNs are
-independently durable, protected-base/manifest post-validation race proof, independent Product/
-BuilderOps lifecycle proof, and full-backup + continuous-WAL restore-through-acknowledged-watermark
-drill with Demerzel's host secret store unavailable and independently recoverable key/KMS custody.
-Only then
+reconciliation (including evidence-only quarantine versus duplicate-preventing authority tombstones
+and the CKM/CEG tables per ADR-0062 A3), protected-base/manifest post-validation race proof,
+independent Product/BuilderOps lifecycle and failure-domain proof (ADR-0062 A2), and the encrypted
+full-backup + archived-WAL restore-from-backup drill (ADR-0062 A1) with Demerzel's host secret store
+unavailable and independently recoverable key/KMS custody. Only then
 may #3690/BCP-07 promote current-state owner docs and close this parent.
