@@ -2029,7 +2029,8 @@ class CodexExecLauncher:
             lines = result.stdout.splitlines()
             stderr_chunks = [str(getattr(result, "stderr", "") or "")[-16_384:]]
         thread_id: str | None = resume_session_id
-        terminal: dict[str, object] | None = None
+        terminal_strict: dict[str, object] | None = None
+        terminal_fallback: dict[str, object] | None = None
         terminal_error: str | None = None
         terminal_rate_limited = False
         try:
@@ -2088,7 +2089,11 @@ class CodexExecLauncher:
                                 # so a policy-v2 run still fails closed there
                                 # (with the accurate invalid_receipt_contract
                                 # reason) instead of being misclassified as a
-                                # launcher contract failure here.
+                                # launcher contract failure here. A fallback
+                                # match is ranked below every strict match: a
+                                # trailing legacy-shaped message must never
+                                # clobber a strictly-valid final receipt the
+                                # stream already produced.
                                 if not isinstance(candidate, Mapping):
                                     continue
                                 try:
@@ -2099,7 +2104,9 @@ class CodexExecLauncher:
                                     )
                                 except jsonschema.ValidationError:
                                     continue
-                            terminal = candidate
+                                terminal_fallback = dict(candidate)
+                            else:
+                                terminal_strict = candidate
         except Exception:
             stop_heartbeat.set()
             terminate_and_reap_child()
@@ -2180,6 +2187,10 @@ class CodexExecLauncher:
             )
         if not thread_id:
             raise RuntimeError("codex exec produced no thread identity")
+        # The latest strictly-valid receipt always outranks any legacy-shaped
+        # fallback candidate; the fallback is used only when the whole stream
+        # produced no strict match.
+        terminal = terminal_strict if terminal_strict is not None else terminal_fallback
         if terminal is None:
             raise RuntimeError("codex exec produced no schema-valid final agent receipt")
         return thread_id, terminal

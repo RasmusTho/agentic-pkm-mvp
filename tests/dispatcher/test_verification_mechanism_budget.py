@@ -681,6 +681,54 @@ def test_v2_clean_review_rejects_failure_binding_fields(tmp_path) -> None:
         )
 
 
+def _coordinator_stream(*agent_message_payloads: object) -> str:
+    """One codex-exec JSONL stream: thread start plus final agent messages."""
+
+    lines = [
+        json.dumps(
+            {
+                "type": "thread.started",
+                "thread_id": "01900000-0000-7000-8000-000000000042",
+            }
+        )
+    ]
+    lines += [
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "text": json.dumps(payload),
+                },
+            }
+        )
+        for payload in agent_message_payloads
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _stream_launcher(tmp_path: Path, stdout: str) -> CodexExecLauncher:
+    """A real CodexExecLauncher whose process runner replays one stream."""
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    Result.stdout = stdout
+
+    def runner(command, **kwargs):
+        return Result()
+
+    repo_root = Path(__file__).resolve().parents[2]
+    return CodexExecLauncher(
+        tmp_path,
+        repo_root / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=repo_root / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+
+
 def test_v1_real_launcher_stream_filter_accepts_legacy_clean_review_receipt(
     tmp_path,
 ) -> None:
@@ -722,42 +770,9 @@ def test_v1_real_launcher_stream_filter_accepts_legacy_clean_review_receipt(
         ],
         "human_exception": None,
     }
-    stdout = (
-        json.dumps(
-            {
-                "type": "thread.started",
-                "thread_id": "01900000-0000-7000-8000-000000000042",
-            }
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "type": "item.completed",
-                "item": {
-                    "type": "agent_message",
-                    "text": json.dumps(legacy_receipt),
-                },
-            }
-        )
-        + "\n"
-    )
-
-    class Result:
-        returncode = 0
-        stderr = ""
-
-    Result.stdout = stdout
-
-    def runner(command, **kwargs):
-        return Result()
-
-    repo_root = Path(__file__).resolve().parents[2]
-    launcher = CodexExecLauncher(
+    launcher = _stream_launcher(
         tmp_path,
-        repo_root / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
-        tmp_path / "context.json",
-        adapter_path=repo_root / ".codex/agents/verification-closer.toml",
-        runner=runner,
+        _coordinator_stream(legacy_receipt),
     )
     result = VerificationConsumer(
         state,
@@ -784,6 +799,89 @@ def test_v1_real_launcher_stream_filter_accepts_legacy_clean_review_receipt(
     assert reviews[0]["finding_id"] is None
     assert reviews[0]["failure_domain"] is None
     assert reviews[0]["mechanism_id"] is None
+
+
+@pytest.mark.parametrize("policy", ["v1", "v2"])
+def test_strict_terminal_receipt_outranks_trailing_legacy_candidate(
+    tmp_path, policy
+) -> None:
+    """A strictly-valid final receipt must win over trailing legacy-shaped
+    stream garbage. The legacy fallback selection widened what the stream
+    pre-filter matches; with last-match-wins it could let a later
+    legacy-shaped agent message clobber an earlier strictly-valid receipt,
+    which the consumer then rejects under the run's real policy —
+    terminalizing a run that had already produced a correct receipt."""
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    if policy == "v1":
+        with state.store._connect() as conn:
+            conn.execute(
+                "UPDATE verification_runs SET repair_budget_policy='v1' "
+                "WHERE run_id=?",
+                (run.run_id,),
+            )
+            conn.commit()
+    else:
+        current = state.get(run.run_id)
+        assert current is not None
+        assert current.repair_budget_policy == "v2"
+
+    strict_receipt = {
+        "verdict": "blocked",
+        "head_sha": HEAD,
+        "summary": "strict final receipt",
+        "receipt_ids": ["strict-1"],
+        "retry_after": None,
+        "review_events": None,
+        "human_exception": None,
+    }
+    trailing_legacy = {
+        "verdict": "blocked",
+        "head_sha": HEAD,
+        "summary": "trailing legacy-shaped message",
+        "receipt_ids": ["legacy-1"],
+        "retry_after": None,
+        "review_events": [
+            {
+                "kind": "review",
+                "session_id": "legacy-trailing",
+                "capability": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+                "outcome": "clean",
+                "finding_id": "F1",
+                "failure_domain": CODE,
+                "mechanism_id": "parser",
+                "strongest": None,
+            }
+        ],
+        "human_exception": None,
+    }
+    launcher = _stream_launcher(
+        tmp_path,
+        _coordinator_stream(strict_receipt, trailing_legacy),
+    )
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        launcher,
+        "host",
+    ).consume(request())
+
+    # The strict receipt (no review events) is the selected terminal for both
+    # policies; the trailing legacy candidate is discarded, never rejected
+    # under the run's policy and never applied durably.
+    assert result.status == "failed"
+    assert result.stop_reason != "invalid_receipt_contract"
+    assert isinstance(result.terminal_receipt, dict)
+    assert result.terminal_receipt.get("review_events") is None
+    assert result.terminal_receipt.get("outcome") != "launcher_contract_failed"
+    assert [
+        attempt
+        for attempt in state.attempts(run.run_id)
+        if attempt["kind"] == "review"
+    ] == []
 
 
 def test_declared_v4_missing_budget_identity_fails_closed_without_repair(
