@@ -39,6 +39,23 @@ except Exception:
     )
     raise SystemExit(86)
 '
+
+  # Offline, pre-mutation proof that the actual post-deploy smoke command
+  # (`python -m pytest tests/companion_ui/test_companion_ui_live_smoke.py -q`)
+  # can import and start. Collection only — never runs the live smoke itself
+  # and never requires a running gateway. Without COMPANION_UI_SMOKE_URL set,
+  # the module intentionally self-skips at module level (pytest exit 5, "no
+  # tests collected"), which is the expected offline/pre-mutation outcome and
+  # must not be treated as a preflight failure; any other nonzero exit means
+  # pytest is missing or the module failed to import.
+  local pytest_status=0
+  "${PYTHON}" -m pytest \
+    "${ROOT}/tests/companion_ui/test_companion_ui_live_smoke.py" \
+    --collect-only -q || pytest_status=$?
+  if [ "${pytest_status}" -ne 0 ] && [ "${pytest_status}" -ne 5 ]; then
+    echo "companion UI pytest smoke preflight: pytest could not collect tests/companion_ui/test_companion_ui_live_smoke.py (pytest missing or the live-smoke module failed to import; pytest exit ${pytest_status})" >&2
+    return 86
+  fi
 }
 
 run_channel() {

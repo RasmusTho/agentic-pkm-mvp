@@ -89,6 +89,10 @@ if [ "${{1:-}}" = "-c" ] && [[ "${{2:-}}" == *sync_playwright* ]]; then
   exit 0
 fi
 if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "pytest" ]; then
+  if [[ "$*" == *"--collect-only"* ]] && [ "${{FAKE_PYTEST_SMOKE_PREFLIGHT:-pass}}" = "fail" ]; then
+    echo 'fake pytest: live-smoke module collection failed' >&2
+    exit 1
+  fi
   exit 0
 fi
 if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "app.release_channels.fleet_model_fitness" ]; then
@@ -133,6 +137,20 @@ def test_deploy_preflights_companion_browser_before_pin_or_compose_mutation(
 
     assert result.returncode != 0
     assert "browser preflight failed before channel mutation" in result.stderr
+    assert not (root / "config/deploy/dev.env").exists()
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_deploy_preflights_companion_pytest_smoke_before_pin_or_compose_mutation(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_PYTEST_SMOKE_PREFLIGHT"] = "fail"
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode != 0
+    assert "companion UI pytest smoke preflight" in result.stderr
     assert not (root / "config/deploy/dev.env").exists()
     assert not (tmp_path / "docker-called").exists()
 
