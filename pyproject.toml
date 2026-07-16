@@ -84,3 +84,4 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.settings" = ["*.yaml"]
+"app.builderops.control_plane.migrations" = ["*.sql"]
