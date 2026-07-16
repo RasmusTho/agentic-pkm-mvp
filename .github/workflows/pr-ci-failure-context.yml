@@ -3,7 +3,6 @@ name: PR CI Failure Context
 on:
   workflow_run:
     workflows:
-      - CI
       - CI Smoke
       - Issue and PR Governance
       - import-linter

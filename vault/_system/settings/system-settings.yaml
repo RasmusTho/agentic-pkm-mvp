@@ -17,10 +17,10 @@ paths:
 ingest:
   active_vault_path: vault
   file_glob:
-  - '**/*.md'
-  - '**/*.yaml'
+    - '**/*.md'
+    - '**/*.yaml'
   ignore_glob:
-  - _system/**
+    - _system/**
   write_policy: write_on_diff
 index:
   bm25_enabled: true
@@ -28,26 +28,26 @@ index:
   embedding_model: deterministic-1536
   min_confidence: 0.15
   rules:
-  - when:
-      review_state: inbox
-    action: soft_exclude
-    weight: 0.05
-  - when:
-      review_state: archived
-    action: include
-    weight: 0.25
-  - when:
-      review_state: promoted
-    action: include
-    weight: 1.0
-  - when:
-      maturity: evergreen
-    action: include
-    weight: 1.2
-  - when:
-      review_state: evergreen
-    action: include
-    weight: 1.2
+    - when:
+        review_state: inbox
+      action: soft_exclude
+      weight: 0.05
+    - when:
+        review_state: archived
+      action: include
+      weight: 0.25
+    - when:
+        review_state: promoted
+      action: include
+      weight: 1.0
+    - when:
+        maturity: evergreen
+      action: include
+      weight: 1.2
+    - when:
+        review_state: evergreen
+      action: include
+      weight: 1.2
 sync:
   debounce_ms: 1200
   inactive_grace_s: 5

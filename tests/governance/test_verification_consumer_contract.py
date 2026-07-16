@@ -6,7 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONSUMER = ROOT / "app/dispatcher/verification_consumer.py"
 LOOP = ROOT / "app/dispatcher/verification_agent_loop.py"
-CI = ROOT / ".github/workflows/ci.yml"
+# The unit-test lane moved from the retired ci.yml into ci-smoke.yaml (#3892).
+CI = ROOT / ".github/workflows/ci-smoke.yaml"
 
 
 def test_consumer_delegates_all_mutation_authority_to_verification_skill() -> None:
@@ -57,7 +58,7 @@ def test_codex_exec_contract_is_explicit_and_structured() -> None:
 def test_required_verification_check_runs_repo_wide_mypy() -> None:
     workflow = CI.read_text(encoding="utf-8")
     unit_job = workflow.split("name: Unit tests (not pg)", 1)[1].split(
-        "  validate-context:", 1
+        "  contract-validation:", 1
     )[0]
     assert "Run mandatory repo-wide mypy gate" in unit_job
     assert "mypy app" in unit_job

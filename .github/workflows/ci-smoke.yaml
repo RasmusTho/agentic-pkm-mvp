@@ -517,3 +517,241 @@ jobs:
       - name: Run PanelAgent LLM E2E
         if: steps.live-llm.outputs.enabled == 'true'
         run: pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"
+
+  pr-unit-tests-not-pg:
+    name: Unit tests (not pg)
+    # Moved from the retired ci.yml (#3892) so the subsystem-scoped unit-test
+    # lane, the mandatory repo-wide mypy gate, and the intent-classification
+    # golden gate keep running on the PR path. Docs-only PRs skip the heavy
+    # steps via the paths filter below.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      # API tests import the nested Companion package directly. Keep both
+      # package roots explicit so subsystem selection cannot make collection
+      # depend on a prior Companion-specific setup step.
+      PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/companion-ui/companion-app
+      # NOTE: do NOT set PYTEST_DISABLE_PLUGIN_AUTOLOAD here. Disabling autoload
+      # suppresses pytest-asyncio (and others), so every @pytest.mark.asyncio
+      # test in tests/sync/* and tests/agents/* false-fails. This job must mirror
+      # the nightly full suite, which autoloads plugins. See issue #2036.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect unit-test surface
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - 'app/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'companion-ui/**'
+              - 'config/**'
+              - 'configs/**'
+              - 'conftest.py'
+              - 'sitecustomize.py'
+              - 'pyproject.toml'
+              - 'requirements*.txt'
+              - 'dev-requirements.txt'
+              - 'mypy.ini'
+              - 'pytest.ini'
+              - 'alembic.ini'
+              - '.github/workflows/ci-smoke.yaml'
+
+      - uses: actions/setup-python@v5
+        if: steps.changes.outputs.code == 'true'
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            dev-requirements.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        if: steps.changes.outputs.code == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r dev-requirements.txt
+
+      - name: Intent-classification golden gate (KERNEL-13)
+        # Explicit, named gate over the classification_case.v1 golden set
+        # (docs/eval/classification_golden.yaml): per-class precision/recall,
+        # confusion matrix, and the blocking mutation-side confusion hard
+        # gate, driven through the real classifier path via the deterministic
+        # replay fixture. Also runs inside the full not-pg suite below; the
+        # dedicated step keeps the gate visible and fails fast with a named
+        # signal when the classifier or dataset regresses (KERNEL-13, #2775).
+        if: steps.changes.outputs.code == 'true'
+        shell: bash
+        env:
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+        run: |
+          set -o pipefail
+          pytest -q -m "not pg" tests/eval/test_classification_golden.py
+
+      - name: Fetch PR base ref
+        if: steps.changes.outputs.code == 'true'
+        shell: bash
+        # Never fetch the base ref shallow: the checkout above is fetch-depth 0
+        # (full history), and a shallow fetch here cuts the base tip's parents
+        # whenever the base branch advanced after checkout — merge-base(origin/<base>,
+        # HEAD) then fails and `git diff base...HEAD` exits 128 in the selection
+        # step (seen on PR #3499 reruns while main advanced under the run).
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+
+      - name: Select subsystem-scoped pytest targets
+        if: steps.changes.outputs.code == 'true'
+        id: select-tests
+        shell: bash
+        run: |
+          python scripts/select_pr_tests.py \
+            --base-ref "origin/${{ github.base_ref }}" \
+            --head-ref HEAD \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Run mandatory repo-wide mypy gate
+        if: steps.changes.outputs.code == 'true'
+        run: mypy app
+
+      - name: Run not-pg unit tests
+        if: steps.changes.outputs.code == 'true'
+        shell: bash
+        timeout-minutes: 22
+        env:
+          # Per-test timeout must fire well before the 22-min job wall clock,
+          # otherwise an intermittently-hanging test (a pure-Python block such
+          # as a join()/queue.get()/Event.wait() with no timeout) loses the race
+          # to the job cap and the run dies with NO diagnostics — no stack dump,
+          # no test name. 120s is ~20-40x the slowest legitimate single test yet
+          # leaves the whole suite (~5 min) untouched, so a hang fails fast AND
+          # prints the offending test's nodeid + full traceback. See #2259.
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+        run: |
+          set -o pipefail
+          echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
+          echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
+          pytest ${{ steps.select-tests.outputs.pytest_args }} | tee pytest-not-pg.log
+
+      - name: Skip unit tests for docs-only PR
+        if: steps.changes.outputs.code != 'true'
+        run: echo "Docs-only PR detected; skipping the unit-test lane."
+
+      - name: Upload test logs
+        if: always() && steps.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-not-pg-logs
+          path: pytest-not-pg.log
+
+  contract-validation:
+    # Activated dead gates (#3892): import-linter, OpenAPI/AsyncAPI
+    # validation, and YAML/JSON lint moved here from the retired
+    # workflow_dispatch-only ci.yml (validate-context job) and
+    # architecture-ci.yaml (validate-contracts + arch-imports jobs) so they
+    # run automatically on every PR touching their surfaces. Docs-only PRs
+    # skip every heavy step via the paths filters below.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect contract surfaces
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            imports:
+              - 'app/**'
+              - 'importlinter.ini'
+              - '.github/workflows/ci-smoke.yaml'
+            openapi:
+              - 'api/**'
+              - 'app/api/**'
+              - '.github/workflows/ci-smoke.yaml'
+            asyncapi:
+              - 'events/**'
+            yaml_json:
+              - '**/*.yaml'
+              - '**/*.yml'
+              - '**/*.json'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install import-linter
+        if: github.event_name != 'pull_request' || steps.changes.outputs.imports == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install import-linter==2.11
+
+      - name: Lint imports (import-linter, blocking)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.imports == 'true'
+        # bare `lint-imports` cannot auto-discover importlinter.ini — must pass --config
+        run: lint-imports --config importlinter.ini
+
+      - name: Install contract lint dependencies
+        if: github.event_name != 'pull_request' || steps.changes.outputs.yaml_json == 'true' || steps.changes.outputs.openapi == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint jsonschema openapi-spec-validator
+          npm install -g jsonlint
+
+      - name: Lint YAML and JSON
+        if: github.event_name != 'pull_request' || steps.changes.outputs.yaml_json == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          yamllint -c .yamllint.yml .
+          find data -name "*.json" -not -path "./node_modules/*" -print0 | xargs -0 -r jsonlint -q
+
+      - name: Validate context JSON against schema
+        if: github.event_name != 'pull_request' || steps.changes.outputs.yaml_json == 'true'
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          schema = 'data/context/schema.yaml'
+          for root, _, files in os.walk('data'):
+              for name in files:
+                  if not name.endswith('.json'):
+                      continue
+                  path = os.path.join(root, name)
+                  subprocess.run([sys.executable, '-m', 'jsonschema', '-i', path, schema], check=True)
+          PY
+
+      - name: Ensure required context files exist
+        if: github.event_name != 'pull_request' || steps.changes.outputs.yaml_json == 'true'
+        run: |
+          test -f data/context/roadmap.yaml
+          test -f data/context/retrieval.yaml
+          test -f golden/note_evergreen.md
+
+      - name: Validate OpenAPI document
+        if: github.event_name != 'pull_request' || steps.changes.outputs.openapi == 'true'
+        run: python -m openapi_spec_validator api/openapi.yaml
+
+      - name: Lint OpenAPI (Redocly)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.openapi == 'true'
+        run: npx --yes @redocly/cli@latest lint api/openapi.yaml
+
+      - name: Validate AsyncAPI
+        if: steps.changes.outputs.asyncapi == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f events/asyncapi.yaml ]; then
+            npx --yes @asyncapi/cli@latest validate events/asyncapi.yaml
+          else
+            echo "events/asyncapi.yaml not present; the AsyncAPI gate activates when the spec lands."
+          fi

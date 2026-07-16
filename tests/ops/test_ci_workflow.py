@@ -4,39 +4,58 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
-CI_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml"
-BROWSER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "browser-runtime.yml"
-IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "app-image-build.yml"
-IMPORT_LINTER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "import-linter.yaml"
-INTEGRATION_NIGHTLY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "integration-nightly.yaml"
+WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+CI_SMOKE_WORKFLOW = WORKFLOWS_DIR / "ci-smoke.yaml"
+BROWSER_WORKFLOW = WORKFLOWS_DIR / "browser-runtime.yml"
+IMAGE_WORKFLOW = WORKFLOWS_DIR / "app-image-build.yml"
+IMPORT_LINTER_WORKFLOW = WORKFLOWS_DIR / "import-linter.yaml"
+INTEGRATION_NIGHTLY_WORKFLOW = WORKFLOWS_DIR / "integration-nightly.yaml"
+ARCHITECTURE_CI_WORKFLOW = WORKFLOWS_DIR / "architecture-ci.yaml"
+FAILURE_CONTEXT_WORKFLOW = WORKFLOWS_DIR / "pr-ci-failure-context.yml"
 
 
-def _workflow_text() -> str:
-    return CI_WORKFLOW.read_text(encoding="utf-8")
+def _smoke_text() -> str:
+    return CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _unit_tests_job_text() -> str:
+    workflow = _smoke_text()
+    return workflow[
+        workflow.index("pr-unit-tests-not-pg:") : workflow.index("contract-validation:")
+    ]
+
+
+def _contract_job_text() -> str:
+    workflow = _smoke_text()
+    return workflow[workflow.index("contract-validation:") :]
 
 
 def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
-    workflow = _workflow_text()
+    # Moved from the retired ci.yml into ci-smoke.yaml (#3892); the PR unit
+    # test lane must keep subsystem-scoped selection, the mandatory mypy
+    # gate, and the intent-classification golden gate.
+    job = _unit_tests_job_text()
 
-    assert "Select subsystem-scoped pytest targets" in workflow
-    assert "scripts/select_pr_tests.py" in workflow
-    assert "steps.select-tests.outputs.pytest_args" in workflow
-    assert 'pytest ${{ steps.select-tests.outputs.pytest_args }} | tee pytest-not-pg.log' in workflow
+    assert "Select subsystem-scoped pytest targets" in job
+    assert "scripts/select_pr_tests.py" in job
+    assert "steps.select-tests.outputs.pytest_args" in job
+    assert 'pytest ${{ steps.select-tests.outputs.pytest_args }} | tee pytest-not-pg.log' in job
+    assert "mypy app" in job
+    assert "tests/eval/test_classification_golden.py" in job
 
 
 def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:
-    workflow = _workflow_text()
+    job = _unit_tests_job_text()
 
-    assert "fetch-depth: 0" in workflow
+    assert "fetch-depth: 0" in job
     # Full (non-shallow) base fetch: --depth=1 cuts the base tip's parents when
     # the base branch advances mid-run, breaking merge-base for diff selection.
-    assert 'git fetch --no-tags origin "${{ github.base_ref }}"' in workflow
-    assert "--depth=1" not in workflow
+    assert 'git fetch --no-tags origin "${{ github.base_ref }}"' in job
+    assert "--depth=1" not in job
 
 
 def test_panel_llm_e2e_runs_only_after_merge() -> None:
-    workflow = CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _smoke_text()
 
     assert "panel_llm_e2e:" in workflow
     assert "if: github.event_name != 'pull_request'" in workflow
@@ -49,7 +68,7 @@ def test_panel_llm_e2e_runs_only_after_merge() -> None:
 
 
 def test_smoke_docker_runs_for_stable_targeting_pull_requests() -> None:
-    workflow = CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _smoke_text()
 
     stable_or_post_merge = "github.event_name != 'pull_request' || github.base_ref == 'stable'"
     ordinary_pull_request = "github.event_name == 'pull_request' && github.base_ref != 'stable'"
@@ -76,13 +95,12 @@ def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_m
 
 
 def test_legacy_smoke_workflow_is_retired_without_stale_references() -> None:
-    workflows_dir = REPO_ROOT / ".github" / "workflows"
-    retired = workflows_dir / "smoke.yml"
+    retired = WORKFLOWS_DIR / "smoke.yml"
 
     # ci-smoke.yaml is the single PR-triggered smoke gate (#3891).
     assert not retired.exists(), "legacy smoke.yml must stay deleted"
 
-    for workflow_path in sorted(workflows_dir.iterdir()):
+    for workflow_path in sorted(WORKFLOWS_DIR.iterdir()):
         if not workflow_path.is_file():
             continue
         text = workflow_path.read_text(encoding="utf-8")
@@ -100,13 +118,106 @@ def test_legacy_smoke_workflow_is_retired_without_stale_references() -> None:
 
 
 def test_ci_smoke_keeps_legacy_skills_lint_when_consolidating_smoke() -> None:
-    workflow = CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _smoke_text()
 
     assert "cache: pip" in workflow
     assert "python3 scripts/lint_skills_consistency.py" in workflow
     assert "docs/DIAGRAMS.md must not contain literal" in workflow
     assert "Mermaid fences must not be indented" in workflow
     assert "Forbidden math fence syntax inside table detected" in workflow
+
+
+def test_dispatch_only_ci_workflows_are_retired_without_stale_references() -> None:
+    # ci.yml and ci-lite.yml were dead workflow_dispatch-era workflows whose
+    # live gates moved into ci-smoke.yaml / integration-nightly.yaml (#3892).
+    assert not (WORKFLOWS_DIR / "ci.yml").exists(), "ci.yml must stay deleted"
+    assert not (WORKFLOWS_DIR / "ci-lite.yml").exists(), "ci-lite.yml must stay deleted"
+
+    for workflow_path in sorted(WORKFLOWS_DIR.iterdir()):
+        if not workflow_path.is_file():
+            continue
+        text = workflow_path.read_text(encoding="utf-8")
+        assert "ci-lite" not in text, (
+            f"{workflow_path.name} references the retired ci-lite.yml workflow"
+        )
+
+    failure_context = FAILURE_CONTEXT_WORKFLOW.read_text(encoding="utf-8")
+    assert "\n      - CI\n" not in failure_context, (
+        "pr-ci-failure-context.yml must not watch the retired CI workflow"
+    )
+    assert "- CI Smoke" in failure_context
+
+
+def test_ci_smoke_runs_import_linter_on_app_paths() -> None:
+    job = _contract_job_text()
+
+    assert "import-linter==2.11" in job
+    assert "lint-imports --config importlinter.ini" in job
+    assert "'app/**'" in job
+    assert "'importlinter.ini'" in job
+
+
+def test_ci_smoke_validates_openapi_and_contract_surfaces() -> None:
+    job = _contract_job_text()
+
+    assert "python -m openapi_spec_validator api/openapi.yaml" in job
+    assert "@redocly/cli" in job
+    assert "'app/api/**'" in job
+    assert "'api/**'" in job
+    assert "events/asyncapi.yaml" in job
+    assert "yamllint -c .yamllint.yml ." in job
+    assert "jsonschema" in job
+
+
+def test_ci_smoke_new_gates_skip_docs_only_pull_requests() -> None:
+    unit_job = _unit_tests_job_text()
+    contract_job = _contract_job_text()
+
+    assert "uses: dorny/paths-filter@v3" in unit_job
+    assert "steps.changes.outputs.code == 'true'" in unit_job
+
+    assert "uses: dorny/paths-filter@v3" in contract_job
+    assert "steps.changes.outputs.imports == 'true'" in contract_job
+    assert "steps.changes.outputs.openapi == 'true'" in contract_job
+    assert "steps.changes.outputs.yaml_json == 'true'" in contract_job
+
+
+def test_integration_nightly_keeps_k6_and_pg_contract_lanes_nightly_only() -> None:
+    nightly = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "k6-search:" in nightly
+    assert "k6 run scripts/k6_search.js" in nightly
+    assert "pg-contracts:" in nightly
+    # Nightly schedule stays unchanged (out of scope for #3892).
+    assert '- cron: "0 2 * * *"' in nightly
+    # k6 must not leak onto the PR path.
+    assert "k6 run" not in _smoke_text()
+
+
+def test_architecture_ci_is_stripped_to_unique_dispatch_only_jobs() -> None:
+    text = ARCHITECTURE_CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch" in text
+    assert "pull_request" not in text
+    assert "qas-010:" in text
+    assert "docs-guard:" in text
+    # Absorbed gates must not linger here as dead duplicate steps.
+    assert "lint-imports" not in text
+    assert "openapi_spec_validator" not in text
+    assert "@redocly" not in text
+    assert "@asyncapi/cli" not in text
+    assert "yamllint" not in text
+    assert "k6 run" not in text
+
+
+def test_no_workflow_silently_ignores_alembic_upgrade_failures() -> None:
+    for workflow_path in sorted(WORKFLOWS_DIR.iterdir()):
+        if not workflow_path.is_file():
+            continue
+        text = workflow_path.read_text(encoding="utf-8")
+        assert "alembic upgrade head || true" not in text, (
+            f"{workflow_path.name} masks migration failures with '|| true'"
+        )
 
 
 def test_integration_nightly_installs_required_media_libraries() -> None:

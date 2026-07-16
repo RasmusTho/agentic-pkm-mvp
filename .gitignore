@@ -55,6 +55,12 @@ tmp/index.jsonl
 /runtime/panel/
 /runtime/agent_memory/
 /runtime/eval/
+# Settings-compiler swap artifacts written as dot-prefixed *siblings* of
+# runtime/settings/ (app/settings/compiler.py): .settings.lock, .settings.next,
+# .settings.previous, and .settings.staged-* temp dirs. The /runtime/settings/
+# entry above does not cover these, and a leftover runtime/.settings.lock is
+# exactly what dirtied `git status --porcelain` on the #3891/#3892 branch.
+/runtime/.settings.*
 # companion-ui/companion-app (companion_ui tests run from this cwd and write
 # runtime/panel/panel_confirmation.sqlite3 etc. relative to it):
 /companion-ui/companion-app/runtime/settings/
@@ -63,6 +69,7 @@ tmp/index.jsonl
 /companion-ui/companion-app/runtime/orientation/
 /companion-ui/companion-app/runtime/panel/
 /companion-ui/companion-app/runtime/agent_memory/
+/companion-ui/companion-app/runtime/.settings.*
 # Promotion-plan receipts are local ops artifacts, not repo truth (#2081).
 # Scoped to ops/promotions/ and ops/test-promotions/ only — tracked ops/** siblings (benchmarks, observability, quality) stay tracked.
 ops/promotions/
