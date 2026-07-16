@@ -77,15 +77,20 @@ producer and consumer has a replacement and proves reversibility to the single-v
   re-expansion/reattachment to the original binding boundaries, so receipts and provenance continue to
   name their original sources even while the runtime operates with one active content vault.
 - Retire sources only through a batch coordinator over MVR-06B's authoritative removal journal. It
-  acquires the existing host-global ownership fence/ownership-ledger lock first, then every source's
-  mutation gate and exclusive binding-effect lease in canonical binding order,
-  completes every final scan/buffer drain, stages every dimension/default/background-intent repair and
-  immutable tombstone, and proves the target package/rebuild before publishing anything. It then takes
+  acquires the existing host-global ownership fence/ownership-ledger lock first, then the target and
+  every source mutation gate plus exclusive binding-effect lease in one canonical binding-ID order.
+  The target participates in fencing/proof but is never included in the retirement tombstone set. The
+  coordinator completes every final scan/buffer drain, stages every
+  dimension/default/background-intent repair and immutable tombstone, and proves the target
+  package/rebuild before publishing anything. It then takes
   the instance/channel registry's existing exclusive sidecar lock and uses that store's normal
   revision/CAS + fsync + atomic-replace transaction as the one durable commit point for all source
   tombstones, repaired references, target selectability, ownership-release intents, and the complete
-  reduction receipt. While the ownership-ledger lock remains held, ownership release executes only
-  from that committed journal; crash recovery reacquires the same locks in the same order. No
+  reduction receipt. The target's exclusive lease remains held through its final content/checksum and
+  projection proof plus that publish, so a concurrent target write or rebuild cannot stale or be
+  overwritten by the accepted manifest. While the ownership-ledger lock remains held, ownership
+  release executes only from that committed journal; crash recovery reacquires the same locks in the
+  same order. No
   cross-channel registry lock or authority is introduced. The coordinator never directly deletes
   a registration or bypasses MVR-06B lineage rules. A crash after preparing any strict subset leaves
   every source active and the target incomplete/unselectable; a crash after the single commit rolls
@@ -195,12 +200,17 @@ can break startup or strand durable state. Both failures are latent outages rath
   injected failure cannot leave a directly deleted registration or a selectable incomplete target.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
 - [ ] Multi-source retirement acquires host-global ownership-ledger fence → canonical exclusive
-  per-binding leases → instance-registry sidecar lock, and has one durable registry batch commit. A
-  crash after the first or any later
-  per-source prepare leaves every source registration active and the target unselectable, while a
+  target-and-source per-binding leases → instance-registry sidecar lock, keeps the target out of the
+  tombstone set, and holds its lease through target proof and one durable registry batch commit. A
+  crash after the first or any later per-source prepare leaves every source registration active and
+  the target unselectable, while a
   crash after commit recovers all tombstones, repaired references, target selectability, ownership
   releases, and the complete receipt without a partially retired topology or lock-order inversion.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
+- [ ] A target content write or projection rebuild racing reduction waits for the target's exclusive
+  lease or completes before the reducer's final proof; the complete manifest/receipt always covers
+  the exact published target revision and no accepted target mutation is overwritten.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_fences_target_write_and_projection_races`
 - [ ] Any retained compatibility adapter is named in transition debt with owner, removal condition,
   and production guard; otherwise the old app-local import path is removed.
   - Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`
@@ -221,6 +231,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_two_distinct_vaults_reduce_to_one_without_losing_content_provenance_or_receipts tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_authorizes_each_source_target_write_and_retirement tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_batch_retirement_has_one_atomic_commit_point`
+- `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_fences_target_write_and_projection_races`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
