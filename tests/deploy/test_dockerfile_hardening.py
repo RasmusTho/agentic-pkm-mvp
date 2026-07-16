@@ -22,6 +22,18 @@ docs, .git, ops). Contracts guarded here:
    the one docs/ subtree read at runtime (settings registries: model/tool/
    agent/graph/event/prompt loaders in app/components/settings/, plus
    app/settings/ fallbacks and panel-action wiring).
+6. scripts/ is NOT dev-only wholesale: app/** imports scripts.<module>
+   Python modules at module top level (scripts.yaml_roundtrip in
+   app/services/companion_note.py, app/chat/session_log.py,
+   app/promotion/queue.py, ...; scripts.validate_* in app/builderops/).
+   Every such module (plus scripts/__init__.py, so `scripts` resolves as a
+   package) must be re-included in .dockerignore and COPYed by the runtime
+   stage or the worker/watcher/heimdal compose services crash at boot with
+   ModuleNotFoundError.
+7. The TTS layer (requirements-tts.txt) is opt-in: its pins cannot install
+   on the python:3.12 base (piper-phonemize~=1.1.0 has no cp312 linux
+   wheels), so attempting it by default makes `docker build .` fail — the
+   #3896 AC requires the default build to produce a working image.
 """
 
 from __future__ import annotations
@@ -37,17 +49,23 @@ DOCKERIGNORE_PATH = REPO_ROOT / ".dockerignore"
 # (`migrate` runs run_migrations.sh; `api` and the image CMD run start_api.sh).
 COMPOSE_RUNTIME_SCRIPTS = ("scripts/start_api.sh", "scripts/run_migrations.sh")
 
+# Python package trees the runtime stage COPYs into /app. Any scripts.<module>
+# import reachable from these trees must be baked into the image too, or the
+# importing service crashes at boot (contract 6 in the module docstring).
+RUNTIME_PACKAGE_DIRS = ("app", "mimer_runtime", "companion-ui/companion-app")
+
+_SCRIPTS_IMPORT_RE = re.compile(
+    r"^\s*(?:from\s+scripts\.([A-Za-z0-9_]+)\s+import\b|import\s+scripts\.([A-Za-z0-9_]+))",
+    flags=re.MULTILINE,
+)
+
 
 def _dockerfile_text() -> str:
     return DOCKERFILE_PATH.read_text(encoding="utf-8")
 
 
 def _from_lines() -> list[str]:
-    return [
-        line.strip()
-        for line in _dockerfile_text().splitlines()
-        if line.startswith("FROM ")
-    ]
+    return [line.strip() for line in _dockerfile_text().splitlines() if line.startswith("FROM ")]
 
 
 def _dockerignore_patterns() -> list[str]:
@@ -72,9 +90,9 @@ def test_all_stages_share_one_pinned_base_digest() -> None:
         match = re.search(r"@sha256:([0-9a-f]{64})", from_line)
         assert match, f"stage base image is not digest-pinned: {from_line}"
         digests.add(match.group(1))
-    assert len(digests) == 1, (
-        f"all stages must share the same pinned base digest, got {sorted(digests)}"
-    )
+    assert (
+        len(digests) == 1
+    ), f"all stages must share the same pinned base digest, got {sorted(digests)}"
 
 
 def test_no_full_context_copy() -> None:
@@ -105,20 +123,19 @@ def test_runtime_stage_keeps_ffmpeg_and_compose_entrypoints() -> None:
     final_stage = text[text.rindex("FROM ") :]
     assert "ffmpeg" in final_stage, "runtime (final) stage must install ffmpeg"
     for script in COMPOSE_RUNTIME_SCRIPTS:
-        assert script in final_stage, (
-            f"runtime stage must copy {script} (compose executes it in-container)"
-        )
-    assert 'CMD ["/app/scripts/start_api.sh"]' in final_stage, (
-        "image entrypoint/startup behavior must not change"
-    )
+        assert (
+            script in final_stage
+        ), f"runtime stage must copy {script} (compose executes it in-container)"
+    assert (
+        'CMD ["/app/scripts/start_api.sh"]' in final_stage
+    ), "image entrypoint/startup behavior must not change"
 
 
 def test_dockerignore_excludes_dev_only_surfaces() -> None:
     patterns = _dockerignore_patterns()
     for required in ("tests", "docs", ".git", "*.md", "ops", "scripts"):
         assert required in patterns, (
-            f".dockerignore must exclude {required!r} from the build context; "
-            f"got {patterns}"
+            f".dockerignore must exclude {required!r} from the build context; " f"got {patterns}"
         )
 
 
@@ -129,6 +146,84 @@ def test_dockerignore_reincludes_compose_runtime_scripts() -> None:
             f".dockerignore must re-include {script} (negation pattern) so the "
             f"runtime stage can copy the compose entrypoint"
         )
+
+
+def _runtime_imported_scripts_modules() -> set[str]:
+    """scripts.<module> names imported (top-level or lazily) anywhere in the
+    package trees the runtime stage bakes into the image."""
+    modules: set[str] = set()
+    for package_dir in RUNTIME_PACKAGE_DIRS:
+        for path in sorted((REPO_ROOT / package_dir).rglob("*.py")):
+            for from_mod, import_mod in _SCRIPTS_IMPORT_RE.findall(
+                path.read_text(encoding="utf-8")
+            ):
+                modules.add(from_mod or import_mod)
+    return modules
+
+
+def test_runtime_imported_scripts_modules_are_baked_into_image() -> None:
+    """app/** imports scripts.yaml_roundtrip and scripts.validate_* at module
+    top level (app/services/companion_note.py, app/chat/session_log.py,
+    app/promotion/queue.py, app/builderops/model_inquiry_promotion.py, ...).
+    If the image bakes only the two .sh entrypoints, the worker
+    (`python -m app.workers.outbox_worker`), watcher (`python -m app.cli
+    watcher run`) and heimdal-capture-watch compose services all die at boot
+    with ModuleNotFoundError: No module named 'scripts.yaml_roundtrip'
+    (#3896 adversarial review). Derive the needed modules from the source so
+    a future scripts.<module> import cannot silently reopen the gap."""
+    modules = _runtime_imported_scripts_modules()
+    assert modules, (
+        f"expected runtime packages {RUNTIME_PACKAGE_DIRS} to import "
+        "scripts.<module>; if that is no longer true this guard (and the "
+        "scripts/*.py COPY in the Dockerfile) can be retired"
+    )
+    needed_files = sorted(f"scripts/{module}.py" for module in modules | {"__init__"})
+
+    patterns = _dockerignore_patterns()
+    # Join backslash line continuations so a multi-line COPY matches.
+    text = _dockerfile_text().replace("\\\n", " ")
+    final_stage = text[text.rindex("FROM ") :]
+    for needed in needed_files:
+        assert (REPO_ROOT / needed).is_file(), (
+            f"runtime code imports scripts.{Path(needed).stem} but {needed} "
+            "does not exist in the repo"
+        )
+        assert f"!{needed}" in patterns, (
+            f".dockerignore must re-include {needed} (negation pattern under "
+            f"the scripts/ exclusion) — app/** imports it at runtime"
+        )
+        assert re.search(
+            rf"^\s*COPY\s[^\n]*{re.escape(needed)}(\s|$)",
+            final_stage,
+            flags=re.MULTILINE,
+        ), (
+            f"runtime stage must COPY {needed} — app/** imports it at runtime "
+            "(worker/watcher/heimdal services crash at boot without it)"
+        )
+
+
+def test_tts_layer_is_opt_in_so_default_build_succeeds() -> None:
+    """requirements-tts.txt pins piper-tts==1.2.0 -> piper-phonemize~=1.1.0,
+    which publishes no cp312 linux wheels and no sdist, so installing it on
+    the python:3.12 base fails EVERY default build (`docker build .`,
+    compose build, app-image-build.yml — none pass INSTALL_TTS). The #3896 AC
+    requires the default build to produce a working image, so the TTS layer
+    must be opt-in (default 0) until the pins gain 3.12 support; the guarded
+    RUN keeps the skip loud in the build log."""
+    text = _dockerfile_text()
+    assert re.search(r"^ARG INSTALL_TTS=0\s*$", text, flags=re.MULTILINE), (
+        "INSTALL_TTS must default to 0: the TTS pins cannot install on the "
+        "python:3.12 base, so a default of 1 makes every default build fail "
+        "(#3896 AC: image builds)"
+    )
+    assert 'if [ "$INSTALL_TTS" = "1" ]' in text, (
+        "the TTS install must stay behind the INSTALL_TTS guard so it can be "
+        "re-enabled with --build-arg INSTALL_TTS=1 once the pins support 3.12"
+    )
+    assert "requirements-tts.txt" in text, (
+        "the guarded TTS layer (requirements-tts.txt) must remain in the "
+        "builder stage as the opt-in path"
+    )
 
 
 def test_docs_settings_runtime_tree_is_reincluded_and_copied() -> None:

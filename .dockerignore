@@ -47,9 +47,21 @@ golden
 tools
 claude-skills
 
-# scripts/ is dev tooling EXCEPT the two entrypoints docker-compose.yaml
-# executes inside containers (migrate -> run_migrations.sh, api/CMD ->
-# start_api.sh); re-include only those so the runtime COPY can see them.
+# scripts/ is dev tooling EXCEPT:
+# - the two entrypoints docker-compose.yaml executes inside containers
+#   (migrate -> run_migrations.sh, api/CMD -> start_api.sh), and
+# - the scripts.<module> Python modules app/** imports at RUNTIME
+#   (from scripts.yaml_roundtrip import ... at module top level in
+#   app/services/companion_note.py, app/chat/session_log.py,
+#   app/promotion/queue.py, ...; scripts.validate_* in app/builderops/),
+#   plus scripts/__init__.py so `scripts` resolves as a package — see
+#   tests/deploy/test_dockerfile_hardening.py, which derives this set from
+#   the source imports.
+# Re-include only those so the runtime COPY can see them.
 scripts
 !scripts/start_api.sh
 !scripts/run_migrations.sh
+!scripts/__init__.py
+!scripts/yaml_roundtrip.py
+!scripts/validate_issue_readiness.py
+!scripts/validate_source_anchors.py

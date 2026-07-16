@@ -13,9 +13,12 @@
 FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28 AS builder
 
 # TTS layer toggle — see the guarded RUN below. Declared after FROM so it is
-# in scope for this stage; default 1 preserves the previous behavior (every
-# prior Dockerfile attempted the TTS install unconditionally).
-ARG INSTALL_TTS=1
+# in scope for this stage. Default 0: the TTS pins cannot install on this
+# python:3.12 base (see the KNOWN BREAKAGE note at the guarded RUN), so
+# attempting them by default made every default build fail — `docker build .`,
+# the compose builds and app-image-build.yml pass no INSTALL_TTS arg. The
+# layer is opt-in (--build-arg INSTALL_TTS=1) until the pins gain 3.12 support.
+ARG INSTALL_TTS=0
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -27,17 +30,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY requirements.txt requirements-tts.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# KNOWN BREAKAGE, surfaced deliberately (#3896 review): requirements-tts.txt
-# pins piper-tts==1.2.0 -> piper-phonemize~=1.1.0, and piper-phonemize 1.1.0
-# publishes NO cp312 linux wheels and no sdist (PyPI has cp39–cp311 manylinux
-# x86_64/aarch64 wheels only; the sole cp312 wheel is macOS x86_64). On this
-# python:3.12 base the TTS layer therefore CANNOT install on linux — the
-# default build fails loudly here, exactly as the single-stage 3.12 Dockerfile
-# from #3893 already did. It worked on the pre-#3893 python:3.11 base (cp311
-# manylinux wheels exist). Kept attempted-by-default so an image never
-# silently ships without piper/kokoro; until the TTS pins gain 3.12 support
-# (or product policy drops the baked TTS layer), build a TTS-less image
-# explicitly with: docker build --build-arg INSTALL_TTS=0 .
+# KNOWN BREAKAGE (#3896 review): requirements-tts.txt pins piper-tts==1.2.0
+# -> piper-phonemize~=1.1.0, and piper-phonemize 1.1.0 publishes NO cp312
+# linux wheels and no sdist (PyPI has cp39–cp311 manylinux x86_64/aarch64
+# wheels only; the sole cp312 wheel is macOS x86_64). On this python:3.12
+# base the TTS layer therefore CANNOT install on linux; it worked on the
+# pre-#3893 python:3.11 base (cp311 manylinux wheels exist). The #3893 CI
+# alignment (python 3.12) and a buildable default TTS image are mutually
+# exclusive until the TTS pins gain 3.12 support, and the #3896 AC requires
+# the default `docker build .` to produce a working image — so the layer is
+# OPT-IN (ARG INSTALL_TTS=0 above). The default image ships WITHOUT
+# piper/kokoro baked in: app/tts/providers.py degrades (those voices report
+# unavailable rather than crashing) and the skip is loud in the build log.
+# Once the pins support 3.12, bake TTS with: docker build --build-arg INSTALL_TTS=1 .
 RUN if [ "$INSTALL_TTS" = "1" ]; then \
       pip install --no-cache-dir -r requirements-tts.txt; \
     else \
@@ -105,8 +110,18 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #                               service serves (working_dir + PYTHONPATH)
 # - alembic.ini                 root alembic entry (script_location=app/alembic)
 # - sitecustomize.py            import-time classifier persistence hook
-# - scripts/                    ONLY the two entrypoints compose executes
-#                               in-container (migrate + api services)
+# - scripts/                    the two entrypoints compose executes
+#                               in-container (migrate + api services) PLUS the
+#                               scripts.<module> Python modules app/** imports
+#                               at runtime — scripts.yaml_roundtrip at module
+#                               top level in app/services/companion_note.py,
+#                               app/chat/session_log.py, app/promotion/queue.py,
+#                               ... and scripts.validate_* in app/builderops/ —
+#                               with scripts/__init__.py so `scripts` resolves
+#                               as a package. Without these the worker/watcher/
+#                               heimdal services die at boot (ModuleNotFoundError).
+#                               tests/deploy/test_dockerfile_hardening.py derives
+#                               the set from the source imports.
 COPY app/ ./app/
 COPY mimer_runtime/ ./mimer_runtime/
 COPY schemas/ ./schemas/
@@ -116,7 +131,10 @@ COPY vault/ ./vault/
 COPY docs/settings/ ./docs/settings/
 COPY companion-ui/companion-app/ ./companion-ui/companion-app/
 COPY alembic.ini sitecustomize.py ./
-COPY scripts/start_api.sh scripts/run_migrations.sh ./scripts/
+COPY scripts/start_api.sh scripts/run_migrations.sh \
+     scripts/__init__.py scripts/yaml_roundtrip.py \
+     scripts/validate_issue_readiness.py scripts/validate_source_anchors.py \
+     ./scripts/
 RUN chmod +x scripts/start_api.sh scripts/run_migrations.sh
 
 # Pre-create the runtime scratch dir with open perms so the container can create
