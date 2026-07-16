@@ -101,8 +101,10 @@ consumer migration and validation after those contracts are frozen.
 ## Out of Scope
 
 - Implementing directly from the parent.
-- The #2566 overlay UI, unrelated Settings Spine children, cross-vault content consolidation,
-  multi-writer-policy redesign, distributed federation, or production promotion.
+- The #2566 overlay UI, unrelated Settings Spine children, arbitrary/manual semantic cross-vault
+  consolidation, multi-writer-policy redesign, distributed federation, or production promotion.
+  MVR-07's deterministic governed reduction package is in scope solely to prove topology-rule-6
+  reversibility without merging meaning, attribution, or receipts.
 - Treating dimensions as roles/confidentiality/sphere/topology authority.
 
 ## Suggested Validation

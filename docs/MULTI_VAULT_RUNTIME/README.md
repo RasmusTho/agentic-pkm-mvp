@@ -307,9 +307,10 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 Partial delivery remains fail-closed:
 
 - after issue 01B but before 01C atomically installs the complete multi-registration rollback floor,
-  production authority is scalar-sealed: existing many-binding cutover and every picker/API/CLI/
-  import/bootstrap/direct-service producer of registration #2 fail before reservation or mutation;
-  01C unseals them only with the rollback gateway/guards, current export, and roll-forward lineage;
+  the prepared registry remains non-authoritative and the legacy scalar store stays authoritative:
+  every new-schema and registration-#2 picker/API/CLI/import/bootstrap/direct-service producer fails
+  before reservation or mutation; 01C performs guarded authority cutover only with the rollback
+  gateway/guards, current export, and roll-forward lineage;
 - after issue 01C but before task 02, registrations exist but `last_active_vault_ref` remains the
   compatibility behavior; no registration is silently promoted to default;
 - after issue 01B and until issue 05C advances the foreground-ownership floor, cross-channel transfer
