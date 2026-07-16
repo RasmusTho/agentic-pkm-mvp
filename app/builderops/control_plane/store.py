@@ -151,6 +151,7 @@ class PostgresBuilderOpsStore:
         if release_on_commit and lease is None:
             raise ValueError("release_on_commit requires an existing fenced lease")
         request_document = {
+            "authority_envelope": envelope.as_json(),
             "task_id": task_id,
             "to_state": to_state,
             "request": dict(request),

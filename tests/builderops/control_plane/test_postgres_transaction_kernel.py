@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from threading import Barrier
 
 import pytest
@@ -57,6 +58,14 @@ def test_idempotency_replay_and_conflict(control_plane_store, envelope) -> None:
 
     with pytest.raises(IdempotencyConflict):
         _commit(control_plane_store, envelope, state="completed")
+
+    changed_authority = replace(
+        envelope,
+        actor="agent:different",
+        source_refs=("github:issue:other",),
+    )
+    with pytest.raises(IdempotencyConflict):
+        _commit(control_plane_store, changed_authority)
 
     barrier = Barrier(2)
 
