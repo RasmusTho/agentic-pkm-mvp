@@ -1,0 +1,708 @@
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from app.dispatcher.verification_contract import IssueAuthority, MAX_CLOSING_ISSUES
+from app.dispatcher.verified_merge import (
+    VERIFIED_MERGE_AUTHORITY_CONTRACT,
+    build_verified_merge_phase,
+    plan_post_merge_reconciliation,
+    prepare_verified_merge,
+    resolve_post_merge_governing_issue,
+    resolve_post_merge_issue_authority,
+    resolve_verified_merge_authority_receipt,
+    resolve_verified_merge_phase,
+)
+
+
+HEAD = "a" * 40
+REPOSITORY = "RasmusTho/agentic-pkm-mvp"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _context() -> dict[str, object]:
+    return {
+        "contract": "verification_closer_dispatch_context.v2",
+        "run_id": "vrun-authority",
+        "repository": REPOSITORY,
+        "pr_number": 3822,
+        "governing_issue": 3821,
+        "closing_issues": [3820, 3823],
+        "supporting_issues": [3820, 3823],
+        "head_sha": HEAD,
+        "repair_budget": {
+            "policy_version": "v2",
+            "mechanisms": [
+                {
+                    "mechanism_id": "mutable-body-closure",
+                    "standard_attempts_used": 2,
+                    "escalated_attempts_used": 2,
+                }
+            ],
+        },
+    }
+
+
+def _body() -> str:
+    return (
+        "Governing-Issue: #3821\n\n"
+        "Refs #3821\n"
+        "Fixes #3820\n"
+        "Closes: #3823\n"
+        "Refs #3900\n"
+    )
+
+
+def _pr(body: str | None = None) -> dict[str, object]:
+    return {
+        "number": 3822,
+        "state": "open",
+        "merged_at": None,
+        "draft": False,
+        "title": "governance: deterministic issue-set closure",
+        "body": _body() if body is None else body,
+        "head": {"sha": HEAD},
+    }
+
+
+def _trusted_comment(body: str) -> dict[str, object]:
+    return {"author_association": "COLLABORATOR", "body": body}
+
+
+def test_prepare_verified_merge_neutralizes_closers_and_preserves_authority() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[
+            {"number": 3823, "repository": REPOSITORY},
+            {"number": 3820, "repository": REPOSITORY},
+        ],
+    )
+
+    assert "Fixes #3820" not in plan["neutralized_body"]
+    assert "Closes: #3823" not in plan["neutralized_body"]
+    assert "Refs #3820" in plan["neutralized_body"]
+    assert "Refs #3823" in plan["neutralized_body"]
+    assert "Verified-Closing-Issues: #3820, #3823" in plan["neutralized_body"]
+    receipt = plan["authority_receipt"]
+    assert isinstance(receipt, dict)
+    assert receipt["contract"] == VERIFIED_MERGE_AUTHORITY_CONTRACT
+    assert receipt["governing_issue"] == 3821
+    assert receipt["closing_issues"] == [3820, 3823]
+    assert receipt["authenticated_supporting_issues"] == [3820, 3823]
+    assert receipt["live_supporting_issues"] == [3820, 3823, 3900]
+    assert receipt["repair_budget"] == _context()["repair_budget"]
+    assert receipt["body_sha256"] == hashlib.sha256(
+        _body().encode("utf-8")
+    ).hexdigest()
+    assert plan["authority_receipt_comment"].startswith(
+        "verified issue-set merge authority:\n```json\n"
+    )
+    assert "Fixes" not in plan["fixed_commit_title"]
+    assert "Closes" not in plan["fixed_commit_message"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda context, pr, closing: pr.update(
+                body=_body().replace("Closes: #3823", "Refs #3823")
+            ),
+            "live PR authority changed",
+        ),
+        (
+            lambda context, pr, closing: pr.update(title="Fixes #9999"),
+            "live PR snapshot is ineligible",
+        ),
+        (
+            lambda context, pr, closing: closing.append(9999),
+            "GitHub closing links changed",
+        ),
+        (
+            lambda context, pr, closing: context.update(head_sha="b" * 40),
+            "live PR snapshot is ineligible",
+        ),
+    ],
+)
+def test_prepare_verified_merge_fails_closed_on_mutable_authority_races(
+    mutate,
+    message: str,
+) -> None:
+    context = _context()
+    pr = _pr()
+    closing = [3820, 3823]
+    mutate(context, pr, closing)
+
+    with pytest.raises(ValueError, match=message):
+        prepare_verified_merge(
+            context=context,
+            pr=pr,
+            live_closing_issues=closing,
+        )
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "\nCloses #",
+        "\nCloses #\u00a0",
+        "\nFixes owner/repo#9999",
+        "\nResolves https://github.com/owner/repo/issues/9999",
+        "\u2028Closes #9999",
+    ],
+)
+def test_prepare_verified_merge_rejects_noncanonical_closure_attempts(
+    suffix: str,
+) -> None:
+    with pytest.raises(ValueError, match="live PR authority changed"):
+        prepare_verified_merge(
+            context=_context(),
+            pr=_pr(_body() + suffix),
+            live_closing_issues=[3820, 3823],
+        )
+
+
+def test_prepare_verified_merge_keeps_ten_issue_limit() -> None:
+    context = _context()
+    closing = list(range(4000, 4000 + MAX_CLOSING_ISSUES))
+    context["closing_issues"] = closing
+    context["supporting_issues"] = closing
+    body = "Governing-Issue: #3821\n" + "\n".join(
+        f"Fixes #{number}" for number in closing
+    )
+    plan = prepare_verified_merge(
+        context=context,
+        pr=_pr(body),
+        live_closing_issues=closing,
+    )
+    assert plan["authority_receipt"]["closing_issues"] == closing
+
+    over_limit = copy.deepcopy(context)
+    over_limit["closing_issues"] = [*closing, 5000]
+    over_limit["supporting_issues"] = [*closing, 5000]
+    with pytest.raises(ValueError, match="closing issues is malformed"):
+        prepare_verified_merge(
+            context=over_limit,
+            pr=_pr(body + "\nFixes #5000"),
+            live_closing_issues=[*closing, 5000],
+        )
+
+
+def test_prepare_verified_merge_cli_uses_production_planner(tmp_path: Path) -> None:
+    context_path = tmp_path / "context.json"
+    pr_path = tmp_path / "pr.json"
+    closing_path = tmp_path / "closing.json"
+    output_path = tmp_path / "plan.json"
+    context_path.write_text(json.dumps(_context()), encoding="utf-8")
+    pr_path.write_text(json.dumps(_pr()), encoding="utf-8")
+    closing_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.prepare_verified_issue_set_merge",
+            "--context-json",
+            str(context_path),
+            "--pr-json",
+            str(pr_path),
+            "--live-closing-json",
+            str(closing_path),
+            "--output-json",
+            str(output_path),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    plan = json.loads(output_path.read_text(encoding="utf-8"))
+    assert plan["authority_receipt"]["closing_issues"] == [3820, 3823]
+    assert "Refs #3820" in plan["neutralized_body"]
+
+
+def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comments() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+    )
+    original_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+
+    resolved = resolve_verified_merge_authority_receipt(
+        [original_comment],
+        pr=neutral_pr,
+        repository=REPOSITORY,
+        expected_run_id="vrun-authority",
+        expected_repair_budget=_context()["repair_budget"],
+    )
+    assert resolved == plan["authority_receipt"]
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [original_comment],
+            pr=neutral_pr,
+            repository=REPOSITORY,
+            expected_run_id="vrun-authority",
+            expected_repair_budget={"policy_version": "v2", "mechanisms": []},
+        )
+        is None
+    )
+
+    forged = dict(original_comment)
+    forged["author_association"] = "NONE"
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [forged], pr=neutral_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_post_merge_issue_authority(
+            [original_comment], pr=neutral_pr, repository=REPOSITORY
+        )
+        == IssueAuthority(
+            governing_issue=3821,
+            closing_issues=(3820, 3823),
+            supporting_issues=(3820, 3823, 3900),
+        )
+    )
+    assert (
+        resolve_post_merge_issue_authority(
+            [forged], pr=neutral_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_post_merge_governing_issue(
+            [forged], pr=neutral_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [original_comment],
+            pr={**neutral_pr, "head": {"sha": "b" * 40}},
+            repository=REPOSITORY,
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="trusted verified merge authority"):
+        resolve_post_merge_issue_authority(
+            [original_comment],
+            pr={**neutral_pr, "head": {"sha": "b" * 40}},
+            repository=REPOSITORY,
+        )
+    conflicting_receipt = copy.deepcopy(plan["authority_receipt"])
+    assert isinstance(conflicting_receipt, dict)
+    conflicting_receipt["repair_budget"] = {
+        "policy_version": "v2",
+        "mechanisms": [],
+    }
+    conflicting_comment = _trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(conflicting_receipt, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [original_comment, conflicting_comment],
+            pr=neutral_pr,
+            repository=REPOSITORY,
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="trusted verified merge authority"):
+        resolve_post_merge_issue_authority(
+            [original_comment, conflicting_comment],
+            pr=neutral_pr,
+            repository=REPOSITORY,
+        )
+
+
+@pytest.mark.parametrize("live_supporting", [[3820, 3823], [3820, 3823, 3900, 4999]])
+def test_authority_receipt_requires_exact_live_supporting_body_authority(
+    live_supporting: list[int],
+) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+    )
+    receipt = copy.deepcopy(plan["authority_receipt"])
+    assert isinstance(receipt, dict)
+    receipt["live_supporting_issues"] = live_supporting
+    comment = _trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [comment],
+            pr=_pr(str(plan["neutralized_body"])),
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+
+def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+    )
+    reconciled = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="reconciled",
+        pr=merged_pr,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[4999],
+    )
+    restored_pr = {**merged_pr, "body": plan["original_body"]}
+    restored = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="restored",
+        pr=restored_pr,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[4999],
+    )
+    comments = [
+        _trusted_comment(str(item["phase_receipt_comment"]))
+        for item in (prepared, prepared, merged, reconciled, restored)
+    ]
+
+    phase = resolve_verified_merge_phase(
+        comments,
+        authority_receipt=authority,
+        pr=restored_pr,
+    )
+
+    assert phase == restored["phase_receipt"]
+    assert phase["closed_issues"] == [3820, 3823]
+    assert phase["reopened_unauthorized_issues"] == [4999]
+
+    inconsistent_restored = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="restored",
+        pr=restored_pr,
+        closed_issues=[3820, 3823],
+    )
+    assert (
+        resolve_verified_merge_phase(
+            comments[:-1]
+            + [_trusted_comment(str(inconsistent_restored["phase_receipt_comment"]))],
+            authority_receipt=authority,
+            pr=restored_pr,
+        )
+        is None
+    )
+
+
+def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    crashed_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+
+    phase = resolve_verified_merge_phase(
+        [_trusted_comment(str(prepared["phase_receipt_comment"]))],
+        authority_receipt=authority,
+        pr=crashed_pr,
+    )
+
+    assert phase == prepared["phase_receipt"]
+
+
+def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    raced_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+        "body": "Governing-Issue: #3821\n\nRefs #3820\nFixes #4999",
+    }
+    authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))
+
+    resolved = resolve_verified_merge_authority_receipt(
+        [authority_comment, prepared_comment],
+        pr=raced_pr,
+        repository=REPOSITORY,
+        expected_run_id="vrun-authority",
+        expected_repair_budget=_context()["repair_budget"],
+    )
+
+    assert resolved == authority
+    assert resolve_verified_merge_phase(
+        [prepared_comment],
+        authority_receipt=authority,
+        pr=raced_pr,
+        allow_merged_body_drift=True,
+    ) == prepared["phase_receipt"]
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [authority_comment, prepared_comment],
+            pr={**raced_pr, "state": "open", "merged": False, "merged_at": None},
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+
+def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    merged_neutral = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    raced_pr = {
+        **merged_neutral,
+        "body": "Governing-Issue: #3821\n\nRefs #3820\nFixes #4999",
+    }
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_neutral,
+    )
+    reconciled_a = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="reconciled",
+        pr=merged_neutral,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[4999],
+    )
+    reconciled_b = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="reconciled",
+        pr=merged_neutral,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[5000],
+    )
+    authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))
+
+    def comment_for(receipt: dict[str, object]) -> dict[str, object]:
+        return _trusted_comment(
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        )
+
+    forged_authority = {**authority_comment, "author_association": "NONE"}
+    forged_phase = {**prepared_comment, "author_association": "NONE"}
+    stale_phase = copy.deepcopy(prepared["phase_receipt"])
+    assert isinstance(stale_phase, dict)
+    stale_phase["head_sha"] = "c" * 40
+    conflicting_authority = copy.deepcopy(authority)
+    conflicting_authority["repair_budget"] = {
+        "policy_version": "v2",
+        "mechanisms": [],
+    }
+    conflicting_authority_comment = _trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(
+            conflicting_authority, sort_keys=True, separators=(",", ":")
+        )
+        + "\n```"
+    )
+    raced_context = _context()
+    raced_context["closing_issues"] = [4999]
+    raced_context["supporting_issues"] = [4999]
+    body_matching_conflict = prepare_verified_merge(
+        context=raced_context,
+        pr=_pr(str(raced_pr["body"])),
+        live_closing_issues=[4999],
+    )
+    body_matching_conflict_comment = _trusted_comment(
+        str(body_matching_conflict["authority_receipt_comment"])
+    )
+    cases = [
+        [authority_comment],
+        [forged_authority, prepared_comment],
+        [authority_comment, forged_phase],
+        [authority_comment, comment_for(stale_phase)],
+        [authority_comment, conflicting_authority_comment, prepared_comment],
+        [authority_comment, prepared_comment, body_matching_conflict_comment],
+        [
+            authority_comment,
+            prepared_comment,
+            _trusted_comment(str(merged["phase_receipt_comment"])),
+            _trusted_comment(str(reconciled_a["phase_receipt_comment"])),
+            _trusted_comment(str(reconciled_b["phase_receipt_comment"])),
+        ],
+    ]
+
+    for comments in cases:
+        assert (
+            resolve_verified_merge_authority_receipt(
+                comments,
+                pr=raced_pr,
+                repository=REPOSITORY,
+                expected_run_id="vrun-authority",
+            )
+            is None
+        )
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [authority_comment, conflicting_authority_comment, prepared_comment],
+            pr=raced_pr,
+            repository=REPOSITORY,
+            expected_run_id="vrun-authority",
+            expected_repair_budget=_context()["repair_budget"],
+        )
+        is None
+    )
+
+
+def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    merged_pr = {
+        **_pr(str(plan["original_body"])),
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    authority_path = tmp_path / "authority.json"
+    pr_path = tmp_path / "pr.json"
+    closed_path = tmp_path / "closed.json"
+    output_path = tmp_path / "phase.json"
+    authority_path.write_text(
+        json.dumps(plan["authority_receipt"]), encoding="utf-8"
+    )
+    pr_path.write_text(json.dumps(merged_pr), encoding="utf-8")
+    closed_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.build_verified_issue_set_merge_phase",
+            "--authority-json",
+            str(authority_path),
+            "--phase",
+            "restored",
+            "--pr-json",
+            str(pr_path),
+            "--closed-issues-json",
+            str(closed_path),
+            "--output-json",
+            str(output_path),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["phase_receipt"]["phase"] == "restored"
+    assert result["phase_receipt"]["closed_issues"] == [3820, 3823]
+
+
+def test_post_merge_race_reopens_only_closures_attributed_to_current_pr() -> None:
+    plan = plan_post_merge_reconciliation(
+        pr_number=3822,
+        authenticated_closing_issues=[3820, 3823],
+        observed_closing_issues=[3820, 3823, 4999, 5000, 5001],
+        issue_evidence=[
+            {"number": 3820, "state": "closed", "closed_by_pull_requests": [3822]},
+            {"number": 3823, "state": "open", "closed_by_pull_requests": []},
+            {"number": 4999, "state": "closed", "closed_by_pull_requests": [3822]},
+            {"number": 5000, "state": "closed", "closed_by_pull_requests": [3000]},
+            {"number": 5001, "state": "open", "closed_by_pull_requests": []},
+        ],
+    )
+
+    assert plan == {
+        "explicitly_close": [3820, 3823],
+        "reopen_unauthorized": [4999],
+        "unexpected_open_references": [5001],
+        "unresolved_unauthorized_closures": [5000],
+    }
+
+
+def test_post_merge_reconciliation_requires_complete_issue_evidence() -> None:
+    with pytest.raises(ValueError, match="evidence is incomplete"):
+        plan_post_merge_reconciliation(
+            pr_number=3822,
+            authenticated_closing_issues=[3820],
+            observed_closing_issues=[3820, 4999],
+            issue_evidence=[
+                {"number": 3820, "state": "closed", "closed_by_pull_requests": [3822]}
+            ],
+        )

@@ -139,7 +139,9 @@ Builder-agent rules:
 - Only pick work from a GitHub Issue labeled `agent:ready`.
 - Read the full Issue before editing.
 - Treat `Context`, `Scope`, `Constraints`, `Acceptance Criteria`, and `Out of Scope` as binding.
-- Link the PR back to the governing Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
+- Link an issue-backed PR with exactly one `Governing-Issue: #<id>` line plus at least one closing
+  keyword for fully delivered work; the normal single-Issue case uses the same identity for both,
+  while an approved multi-Issue parent may remain open.
 - Do not treat chat-only requests as canonical implementation tasks when an Issue is expected.
 - Do not expand scope beyond the Issue without updating the task contract first.
 ```

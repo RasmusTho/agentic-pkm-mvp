@@ -100,6 +100,42 @@ jobs:
           mkdir -p verification-dispatch
           gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
             > verification-dispatch/pr.json
+          OWNER="${REPOSITORY%%/*}"
+          REPO="${REPOSITORY#*/}"
+          gh api graphql \
+            -F owner="${OWNER}" \
+            -F repo="${REPO}" \
+            -F pr_number="${PR_NUMBER}" \
+            -f query='query($owner: String!, $repo: String!, $pr_number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr_number) {
+                  closingIssuesReferences(first: 11) {
+                    nodes { number repository { nameWithOwner } }
+                  }
+                }
+              }
+            }' \
+            > verification-dispatch/closing-issue-snapshot.json
+          if ! jq -e '
+            (.errors // null) == null and
+            (.data.repository.pullRequest.closingIssuesReferences.nodes | type == "array") and
+            (.data.repository.pullRequest.closingIssuesReferences.nodes | length <= 10)
+          ' verification-dispatch/closing-issue-snapshot.json > /dev/null; then
+            echo "closing issue references exceed the ten-issue contract or are malformed" >&2
+            exit 1
+          fi
+          jq '
+            [.data.repository.pullRequest.closingIssuesReferences.nodes[]
+              | {number, repository: .repository.nameWithOwner}]
+            | sort_by(.repository, .number)
+          ' verification-dispatch/closing-issue-snapshot.json \
+            > verification-dispatch/live-closing-issues.json
+          jq --slurpfile closing verification-dispatch/live-closing-issues.json \
+            '. + {live_closing_issues: $closing[0]}' \
+            verification-dispatch/pr.json \
+            > verification-dispatch/pr-with-closing-issues.json
+          mv verification-dispatch/pr-with-closing-issues.json \
+            verification-dispatch/pr.json
           python3 - <<'PY'
           import json
           import os

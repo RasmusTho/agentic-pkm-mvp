@@ -323,7 +323,30 @@ Builder-agent rules:
 - Read the full Issue before editing.
 - Treat `Context`, `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, `Out of Scope`, `Suggested Validation`, and `Source Docs` as binding.
 - Every `Acceptance Criterion` must declare its verification inline with a `Verify:` marker: a concrete test pointer (`tests/...::test_name`) for behavioral criteria, or a concrete non-test target (doc writeback path plus anchor, runtime receipt, roadmap diff) for non-behavioral criteria. ACs without a resolvable `Verify:` target are not executable and the Issue must not be `agent:ready`.
-- Link the PR back to the governing Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
+- Link every issue-backed PR with exactly one `Governing-Issue: #<id>` line and at least one
+  `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` line for work fully delivered by the PR. In
+  the normal single-Issue case the governing and closing identities are the same. In an approved
+  multi-Issue PR, the governing parent may remain open and be named with `Refs #<id>` while closing
+  keywords name only the fully delivered issues; follow
+  `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`.
+- At verification, resolve every AC/`Verify:` target on the exact closing issues. When an approved
+  multi-Issue PR has a distinct open governing parent, validate that parent as the issue-set contract
+  (batch authorization, child/scope map, shared constraints, source anchors, validation path, and
+  exact authority identities); unfinished feature-level ACs on the open parent do not block delivery
+  of fully verified closing children.
+- Before an issue-backed merge, neutralize authenticated body closers to evidence-only `Refs`,
+  revalidate the live exact head/body/empty closing-link set, merge with a fixed non-closing message,
+  and explicitly close only the authenticated issue set. Preserve the exact v2 authority and repair
+  budget in a trusted durable receipt and advance a continuous prepared -> merged -> reconciled ->
+  restored `verified_issue_set_merge_phase.v1` ledger with
+  `scripts/build_verified_issue_set_merge_phase.py`. A crashed exact-head merge resumes idempotently
+  from that ledger and live merge truth; terminal delivery additionally proves that every and only
+  authenticated issue is closed with closure attribution to this delivery. Detect race-added closing
+  references and reopen only closures GitHub attributes to that PR before restoring the authenticated
+  body.
+- The post-merge owner-doc result is PR-specific. Record it on every exact closed issue and also on a
+  distinct open governing parent; issue-free lanes record it on the PR. A generic receipt or one for
+  another PR does not satisfy the closure gate.
 - If a PR changes files under `app/` or `tests/`, run `ruff check app tests` before merge and include the lint output or tooling limitation in the PR body. Docs-only PRs can keep validation lightweight and should not run full smoke by default unless the touched surface requires it.
 - Do not treat chat-only requests as canonical implementation tasks when an Issue is expected.
 - Do not expand scope beyond the Issue without updating the task contract first.

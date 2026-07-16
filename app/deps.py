@@ -1,6 +1,9 @@
 from __future__ import annotations
+import logging
 from typing import Any, Iterator
 from fastapi import Request
+
+logger = logging.getLogger(__name__)
 
 # Minimal dummy som uppfyller de metoder som routrarna använder
 class _DummyAgentRepository:
@@ -25,7 +28,12 @@ def get_agent_repository(request: Request) -> Any:
         if repo is not None:
             return repo
     except Exception:
-        pass
+        # Intentional swallow: fall through to the dummy repository so the
+        # route still answers — but a silent dummy hides real wiring failures,
+        # so log the cause (#3894).
+        logger.warning(
+            "Falling back to dummy agent repository after lookup failure", exc_info=True
+        )
     return _DummyAgentRepository()
 
 def get_db() -> Iterator[Any]:
@@ -47,4 +55,8 @@ def get_db() -> Iterator[Any]:
             if callable(close):
                 close()
     except Exception:
+        # Intentional swallow: smoke/CI runs without Postgres get a None
+        # session — but in a wired environment this hides a real DB failure,
+        # so log it (#3894).
+        logger.warning("DB session dependency failed; yielding None", exc_info=True)
         yield None

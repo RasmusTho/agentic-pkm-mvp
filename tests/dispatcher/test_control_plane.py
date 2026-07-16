@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -16,6 +19,7 @@ from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
 from app.dispatcher.store import SqliteStore
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 from tests.dispatcher.verification_helpers import (
+    b4e2310_pre_trust_request,
     downgrade_verification_schema_to_v3,
     pre_trust_request,
     request as verification_request,
@@ -94,17 +98,26 @@ def _write_pre_repair_v3_state(tmp_path: Path):
     return paths, run
 
 
-def _write_pre_trust_v3_state(tmp_path: Path):
-    """Create the exact deployed verification state from before trust closure."""
+def _write_pre_trust_v3_state(tmp_path: Path, legacy_request: dict | None = None):
+    """Create the exact deployed verification state from before trust closure.
+
+    ``legacy_request`` selects which historical producer shape is stamped into
+    the row; it defaults to the original pre-trust shape.
+    """
     store, paths = _store(tmp_path)
     store.upsert_task(_task())
     run = VerificationDispatchLedger(store).ingest(verification_request())
-    legacy_request = pre_trust_request()
+    if legacy_request is None:
+        legacy_request = pre_trust_request()
+    legacy_key = legacy_request["idempotency_key"]
+    assert isinstance(legacy_key, str)
+    legacy_run_id = f"vrun-{legacy_key[:16]}"
     with sqlite3.connect(paths.db_path) as conn:
         conn.execute(
             """
             UPDATE verification_runs
-            SET request_json=?, status='backoff', last_heartbeat_at=?,
+            SET run_id=?, idempotency_key=?, contract_version=?, request_json=?,
+                status='backoff', last_heartbeat_at=?,
                 coordinator_session_id='legacy-session',
                 context_pack_json='{"legacy":"context"}',
                 terminal_receipt_json='{"legacy":"terminal"}',
@@ -112,6 +125,9 @@ def _write_pre_trust_v3_state(tmp_path: Path):
             WHERE run_id=?
             """,
             (
+                legacy_run_id,
+                legacy_key,
+                legacy_request["contract_version"],
                 json.dumps(
                     legacy_request,
                     sort_keys=True,
@@ -133,7 +149,7 @@ def _write_pre_trust_v3_state(tmp_path: Path):
                       'legacy-context-hash', 'clean', '{"legacy":true}',
                       '2026-07-13T12:00:01+00:00')
             """,
-            ("attempt-pre-trust", run.run_id),
+            ("attempt-pre-trust", legacy_run_id),
         )
         conn.execute(
             """
@@ -144,13 +160,90 @@ def _write_pre_trust_v3_state(tmp_path: Path):
                       '2026-07-13T12:00:02+00:00',
                       '2026-07-13T12:00:02+00:00')
             """,
-            ("exception-pre-trust", run.run_id, run.requested_head_sha),
+            ("exception-pre-trust", legacy_run_id, run.requested_head_sha),
         )
         conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
         downgrade_verification_schema_to_v3(conn)
         conn.commit()
     paths.events_path.touch()
+    run = replace(
+        run,
+        run_id=legacy_run_id,
+        idempotency_key=legacy_key,
+        request=legacy_request,
+    )
     return paths, run, legacy_request
+
+
+def _write_v1_empty_supporting_v3_state(
+    tmp_path: Path,
+) -> tuple[object, str, dict[str, object]]:
+    """Create a deployed canonical v1 row whose closure semantics are unknown."""
+    store, paths = _store(tmp_path)
+    original = VerificationDispatchLedger(store).ingest(verification_request())
+    legacy_request = verification_request()
+    legacy_request["contract_version"] = "verification_dispatch_request.v1"
+    legacy_request.pop("closing_issues")
+    assert legacy_request["supporting_issues"] == []
+    identity = {
+        "contract_version": legacy_request["contract_version"],
+        "head_sha": legacy_request["current_head_sha"],
+        "pr_number": legacy_request["pr_number"],
+        "repository": legacy_request["repository"],
+        "stage": legacy_request["stage"],
+    }
+    legacy_key = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    legacy_request["idempotency_key"] = legacy_key
+    legacy_run_id = f"vrun-{legacy_key[:16]}"
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE verification_runs
+            SET run_id=?, idempotency_key=?, contract_version=?, request_json=?,
+                closing_authority_json='[3603]', status='running',
+                claimed_by='host', lease_id='legacy-lease',
+                lease_expires_at='2030-01-01T00:00:00+00:00',
+                last_heartbeat_at='2026-07-16T10:00:00+00:00',
+                coordinator_session_id='01900000-0000-7000-8000-000000000003',
+                context_pack_json='{"legacy":"context"}'
+            WHERE run_id=?
+            """,
+            (
+                legacy_run_id,
+                legacy_key,
+                legacy_request["contract_version"],
+                json.dumps(
+                    legacy_request,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                original.run_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                finding_id, failure_domain, mechanism_id, receipt_json, created_at
+            ) VALUES (
+                'attempt-v1-empty', ?, 'standard_repair', 1,
+                '01900000-0000-7000-8000-000000000003', 'gpt-5.6-terra',
+                'high', 'legacy-context-hash', 'fixed', 'F-v1-empty',
+                'review_code_correctness', 'legacy-closing-authority',
+                '{"legacy":true}', '2026-07-16T10:00:01+00:00'
+            )
+            """,
+            (legacy_run_id,),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        downgrade_verification_schema_to_v3(conn)
+        conn.commit()
+    paths.events_path.touch()
+    return paths, legacy_run_id, legacy_request
 
 
 def test_recovery_accepts_and_restores_canonical_v1_until_store_migrates_it(
@@ -240,10 +333,109 @@ def test_pre_repair_v3_backup_restore_self_migrates_without_data_loss(
     assert control_plane.health(restored)["ok"] is True
 
 
-def test_pre_trust_verification_row_migrates_to_inert_audit_state(
+def test_v1_empty_supporting_backup_restore_quarantines_without_budget_reset(
     tmp_path: Path,
 ) -> None:
-    paths, original, legacy_request = _write_pre_trust_v3_state(tmp_path)
+    paths, run_id, legacy_request = _write_v1_empty_supporting_v3_state(tmp_path)
+    before = paths.db_path.read_bytes()
+
+    assert control_plane.health(paths)["ok"] is True
+    assert paths.db_path.read_bytes() == before
+    backup = tmp_path / "backup-v1-empty"
+    control_plane.backup(paths, backup)
+    assert paths.db_path.read_bytes() == before
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored-v1-empty")})
+    assert control_plane.restore(backup, restored)["integrity"] == "ok"
+
+    migrated_state = VerificationDispatchLedger(SqliteStore(restored.db_path))
+    migrated = migrated_state.get(run_id)
+
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.authority_state == "legacy_untrusted"
+    assert migrated.request == legacy_request
+    assert migrated.supporting_authority == ()
+    assert migrated.closing_authority == ()
+    assert migrated.claimed_by is None
+    assert migrated.lease_id is None
+    assert migrated.coordinator_session_id is None
+    assert migrated.context_pack is None
+    assert migrated.repair_budget_policy == "v1"
+    attempts = migrated_state.attempts(run_id)
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == "attempt-v1-empty"
+    assert attempts[0]["kind"] == "standard_repair"
+    budget = migrated_state.repair_budget_projection(run_id)
+    assert budget["policy_version"] == "v1"
+    mechanism = budget["mechanisms"][0]
+    assert mechanism["standard_used"] == 1
+    assert mechanism["standard_remaining"] == 1
+    assert mechanism["escalated_used"] == 0
+    assert mechanism["escalated_remaining"] == 2
+    assert control_plane.health(restored)["ok"] is True
+
+
+def test_pre_closing_v4_recovery_remains_readonly_until_store_migrates(
+    tmp_path: Path,
+) -> None:
+    store, paths = _store(tmp_path)
+    original = VerificationDispatchLedger(store).ingest(verification_request())
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
+        conn.execute("UPDATE dispatcher_meta SET value='4' WHERE key='schema_version'")
+        conn.commit()
+    paths.events_path.touch()
+    before = paths.db_path.read_bytes()
+
+    assert control_plane.health(paths)["ok"] is True
+    assert paths.db_path.read_bytes() == before
+    backup = tmp_path / "backup-v4"
+    control_plane.backup(paths, backup)
+    assert paths.db_path.read_bytes() == before
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored-v4")})
+    assert control_plane.restore(backup, restored)["integrity"] == "ok"
+    with sqlite3.connect(restored.db_path) as conn:
+        version_before = conn.execute(
+            "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        columns_before = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+    assert version_before == "4"
+    assert "closing_authority_json" not in columns_before
+
+    migrated = VerificationDispatchLedger(SqliteStore(restored.db_path)).get(
+        original.run_id
+    )
+
+    assert migrated is not None
+    assert migrated.closing_authority == tuple(original.request["closing_issues"])
+    assert control_plane.health(restored)["ok"] is True
+
+
+def test_recovery_rejects_malformed_v5_missing_closing_authority(
+    tmp_path: Path,
+) -> None:
+    _, paths = _store(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
+        conn.commit()
+    paths.events_path.touch()
+
+    proof = control_plane.health(paths)
+
+    assert proof["ok"] is False
+    assert "closing_authority_json" in proof["db"]["error"]
+
+
+def _assert_pre_trust_row_migrates_to_inert(
+    tmp_path: Path,
+    legacy_request: dict[str, object],
+    leak_markers: tuple[str, ...],
+) -> None:
+    """Shared inert-quarantine contract for every recognized historical shape."""
+    paths, original, stamped = _write_pre_trust_v3_state(tmp_path, legacy_request)
+    assert stamped == legacy_request
 
     migrated_store = SqliteStore(paths.db_path)
     migrated = VerificationDispatchLedger(migrated_store).get(original.run_id)
@@ -265,8 +457,8 @@ def test_pre_trust_verification_row_migrates_to_inert_audit_state(
     compact = _compact_verification_run(migrated)
     assert compact["authority_state"] == "legacy_untrusted"
     assert "request" not in compact
-    assert "base_ref" not in json.dumps(compact, sort_keys=True)
-    assert "head_ref" not in json.dumps(compact, sort_keys=True)
+    for marker in leak_markers:
+        assert marker not in json.dumps(compact, sort_keys=True)
     with sqlite3.connect(paths.db_path) as conn:
         conn.row_factory = sqlite3.Row
         durable = conn.execute(
@@ -279,6 +471,8 @@ def test_pre_trust_verification_row_migrates_to_inert_audit_state(
             "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
         ).fetchone()
     assert durable is not None
+    # The historical request evidence is preserved verbatim; only the
+    # authority projection is neutralized.
     assert json.loads(durable["request_json"]) == legacy_request
     assert json.loads(durable["supporting_authority_json"]) == []
     assert durable["last_heartbeat_at"] is None
@@ -289,31 +483,17 @@ def test_pre_trust_verification_row_migrates_to_inert_audit_state(
         original.run_id,
         '{"legacy":true}',
     )
-    assert [run.run_id for run in VerificationDispatchLedger(migrated_store).list()] == [
-        original.run_id
-    ]
+    assert [
+        run.run_id for run in VerificationDispatchLedger(migrated_store).list()
+    ] == [original.run_id]
     assert control_plane.health(paths)["ok"] is True
 
 
-def test_unrecognized_pre_trust_verification_row_rolls_back_migration(
-    tmp_path: Path,
+def _assert_unrecognized_pre_trust_row_rolls_back(
+    tmp_path: Path, legacy_request: dict[str, object]
 ) -> None:
-    paths, original, legacy_request = _write_pre_trust_v3_state(tmp_path)
-    legacy_request["unexpected"] = "must-not-be-recognized"
-    with sqlite3.connect(paths.db_path) as conn:
-        conn.execute(
-            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
-            (
-                json.dumps(
-                    legacy_request,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ),
-                original.run_id,
-            ),
-        )
-        conn.commit()
+    """Shared fail-closed contract: unrecognized rows abort the migration whole."""
+    paths, _, _ = _write_pre_trust_v3_state(tmp_path, legacy_request)
     before = paths.db_path.read_bytes()
 
     with pytest.raises(ValueError, match="supporting authority is malformed"):
@@ -325,6 +505,100 @@ def test_unrecognized_pre_trust_verification_row_rolls_back_migration(
             row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
         }
     assert "supporting_authority_json" not in columns
+
+
+def test_pre_trust_verification_row_migrates_to_inert_audit_state(
+    tmp_path: Path,
+) -> None:
+    _assert_pre_trust_row_migrates_to_inert(
+        tmp_path, pre_trust_request(), leak_markers=("base_ref", "head_ref")
+    )
+
+
+def test_unrecognized_pre_trust_verification_row_rolls_back_migration(
+    tmp_path: Path,
+) -> None:
+    legacy_request = pre_trust_request()
+    legacy_request["unexpected"] = "must-not-be-recognized"
+    _assert_unrecognized_pre_trust_row_rolls_back(tmp_path, legacy_request)
+
+
+def test_pre_trust_artifact_provenance_row_migrates_to_inert_audit_state(
+    tmp_path: Path,
+) -> None:
+    legacy_request = b4e2310_pre_trust_request()
+    assert "artifact_provenance" in legacy_request
+    assert "supporting_issues" not in legacy_request
+    _assert_pre_trust_row_migrates_to_inert(
+        tmp_path,
+        legacy_request,
+        leak_markers=("base_ref", "head_ref", "artifact_provenance"),
+    )
+
+
+def _b4e2310_extra_top_level_key() -> dict[str, object]:
+    request = b4e2310_pre_trust_request()
+    request["unexpected"] = "must-not-be-recognized"
+    return request
+
+
+def _b4e2310_stray_supporting_issues() -> dict[str, object]:
+    # supporting_issues alongside artifact_provenance is neither historical
+    # shape; it must never be recognized (nor synthesized into authority).
+    request = b4e2310_pre_trust_request()
+    request["supporting_issues"] = None
+    return request
+
+
+def _b4e2310_provenance(mutate: dict[str, object]) -> dict[str, object]:
+    request = b4e2310_pre_trust_request()
+    provenance = request["artifact_provenance"]
+    assert isinstance(provenance, dict)
+    provenance.update(mutate)
+    return request
+
+
+@pytest.mark.parametrize(
+    "malformed_factory",
+    [
+        pytest.param(_b4e2310_extra_top_level_key, id="extra-top-level-key"),
+        pytest.param(_b4e2310_stray_supporting_issues, id="stray-supporting-issues"),
+        pytest.param(
+            lambda: _b4e2310_provenance({"unexpected": "must-not-be-recognized"}),
+            id="extra-provenance-key",
+        ),
+        pytest.param(
+            lambda: _b4e2310_provenance(
+                {"artifact_name": f"verification-dispatch-9999-{'c' * 40}"}
+            ),
+            id="artifact-name-not-head-bound",
+        ),
+        pytest.param(
+            lambda: _b4e2310_provenance({"workflow_run_id": True}),
+            id="boolean-workflow-run-id",
+        ),
+        pytest.param(
+            lambda: _b4e2310_provenance({"repository_id": True}),
+            id="boolean-repository-id",
+        ),
+        pytest.param(
+            lambda: _b4e2310_provenance({"workflow_run_id": "123"}),
+            id="string-workflow-run-id",
+        ),
+        pytest.param(
+            lambda: _b4e2310_provenance({"repository_id": None}),
+            id="null-repository-id",
+        ),
+        pytest.param(
+            lambda: _b4e2310_provenance({"artifact_name": None}),
+            id="null-artifact-name",
+        ),
+    ],
+)
+def test_unrecognized_artifact_provenance_pre_trust_row_rolls_back_migration(
+    tmp_path: Path, malformed_factory
+) -> None:
+    _assert_unrecognized_pre_trust_row_rolls_back(tmp_path, malformed_factory())
 
 
 def test_noncanonical_current_request_rolls_back_additive_migration(
@@ -363,14 +637,20 @@ def test_noncanonical_current_request_rolls_back_additive_migration(
     assert "supporting_authority_json" not in columns
 
 
-def test_pre_trust_advanced_head_is_normalized_to_inert_request_head(
+def test_pre_trust_advanced_head_is_preserved_when_terminal_chain_matches(
     tmp_path: Path,
 ) -> None:
     paths, original, legacy_request = _write_pre_trust_v3_state(tmp_path)
+    repaired_head = "b" * 40
     with sqlite3.connect(paths.db_path) as conn:
         conn.execute(
-            "UPDATE verification_runs SET current_head_sha=? WHERE run_id=?",
-            ("b" * 40, original.run_id),
+            "UPDATE verification_runs SET current_head_sha=?, terminal_receipt_json=? "
+            "WHERE run_id=?",
+            (
+                repaired_head,
+                json.dumps({"outcome": "deferred", "head_sha": repaired_head}),
+                original.run_id,
+            ),
         )
         conn.commit()
 
@@ -380,14 +660,56 @@ def test_pre_trust_advanced_head_is_normalized_to_inert_request_head(
 
     assert migrated is not None
     assert migrated.status == "legacy_untrusted"
-    assert migrated.current_head_sha == original.requested_head_sha
+    assert migrated.requested_head_sha == original.requested_head_sha
+    assert migrated.current_head_sha == repaired_head
     assert migrated.request == legacy_request
 
 
-def test_schema_complete_pre_trust_row_still_enters_inert_quarantine(
+@pytest.mark.parametrize(
+    ("current_head", "terminal_receipt"),
+    [
+        pytest.param("not-a-sha", {"head_sha": "not-a-sha"}, id="malformed-sha"),
+        pytest.param(
+            "b" * 40,
+            {"outcome": "deferred", "head_sha": "c" * 40},
+            id="inconsistent-terminal-chain",
+        ),
+    ],
+)
+def test_malformed_legacy_current_head_rolls_back_migration(
     tmp_path: Path,
+    current_head: str,
+    terminal_receipt: dict[str, object],
 ) -> None:
-    paths, original, legacy_request = _write_pre_trust_v3_state(tmp_path)
+    paths, original, _legacy_request = _write_pre_trust_v3_state(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, terminal_receipt_json=? "
+            "WHERE run_id=?",
+            (current_head, json.dumps(terminal_receipt), original.run_id),
+        )
+        conn.commit()
+    before = paths.db_path.read_bytes()
+
+    with pytest.raises(ValueError, match="legacy verification current head"):
+        SqliteStore(paths.db_path).get_meta("schema_version")
+
+    assert paths.db_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "shape_factory",
+    [
+        pytest.param(pre_trust_request, id="pre-trust"),
+        pytest.param(b4e2310_pre_trust_request, id="b4e2310-artifact-provenance"),
+    ],
+)
+def test_schema_complete_pre_trust_row_still_enters_inert_quarantine(
+    tmp_path: Path, shape_factory
+) -> None:
+    paths, original, legacy_request = _write_pre_trust_v3_state(
+        tmp_path, shape_factory()
+    )
     with sqlite3.connect(paths.db_path) as conn:
         conn.execute(
             "ALTER TABLE verification_runs ADD COLUMN "

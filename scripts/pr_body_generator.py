@@ -127,6 +127,8 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
 def _validate_inputs(inputs: PRBodyInputs) -> None:
     if inputs.lane not in LANES:
         raise PRBodyGeneratorError(f"lane must be one of: {', '.join(sorted(LANES))}")
+    if inputs.issue_number is not None and inputs.issue_number <= 0:
+        raise PRBodyGeneratorError("issue_number must be positive")
     if inputs.lane == "implementation" and inputs.issue_number is None:
         raise PRBodyGeneratorError("implementation lane requires issue_number")
     if inputs.lane == "direct-repair":
@@ -169,7 +171,10 @@ def _change_lane_section(lane: str) -> str:
 def _linked_issue_section(issue_number: int | None) -> str:
     if issue_number is None:
         return "## Linked Issue\n"
-    return f"## Linked Issue\nCloses #{issue_number}"
+    return (
+        f"Governing-Issue: #{issue_number}\n\n"
+        f"## Linked Issue\nCloses #{issue_number}"
+    )
 
 
 def _sbs_impact_section(values: Mapping[str, str]) -> str:

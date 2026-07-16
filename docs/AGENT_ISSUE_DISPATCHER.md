@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-07-10
-Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, #3603, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last reviewed: 2026-07-16
+Last verified against: #3821, PR #3822 exact head `30e30830ea533a971fc7a39fb6fc2e4eded903d8`, `app/dispatcher/schema.py`, `app/dispatcher/verification_dispatch.py`, `app/dispatcher/verification_consumer.py`, `app/dispatcher/verified_merge.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -40,9 +40,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
   idempotent PR/head verification runs, one global active subscription slot, exact lease-token
   fencing, durable retry timestamps, attempts, receipts, and deduplicated Human Exception packets.
-  Schema v4 assigns new runs repair-budget policy `v2`; its additive v3 migration marks every
-  existing run `v1`, retaining the historical PR-wide/global 2+2 meaning without resetting or
-  reinterpreting any attempt.
+  `SCHEMA_VERSION = 6`: schema v4 assigns new runs repair-budget policy `v2`; schema v5 adds the
+  exact `closing_authority_json` projection; and schema v6 adds immutable same-head legacy-recovery
+  audit. Each additive migration validates the complete inherited schema before committing its
+  marker and never resets or reinterprets an attempt or consumed 2+2 repair budget.
 - Initial verification claims acquire the authoritative SQLite write lock before sampling both
   eligibility time and lease expiry. Token-authorized mutations use the same post-lock authority
   clock, so lock waits cannot create already-expired leases or revive expired coordinators.
@@ -157,22 +158,41 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   positive, canonical, and duration-capped at one hour before persistence. The projection retains
   the structured identities and actionable option relationships required for deterministic replay
   and governed owner decisions, then passes the canonical schema and semantic validation again.
-  Check eligibility selects the latest GitHub rerun per
-  check name. Schema-v3 health, backup, and restore validation covers verification runs, attempts,
-  exceptions, head-audit fields, and their write-critical keys. A deployed pre-head-rebinding v3
-  backup may omit only the two additive current/verified-head columns: recovery preserves that
-  artifact, and the first normal store open atomically backfills the current head from the immutable
-  request head while retaining all prior audit rows. Missing older audit tables, columns, or unique
-  keys still fail closed before migration. Both normal self-migration and explicit initialization
-  validate the complete resulting verification schema inside the migration transaction before the
-  v3 marker can be written or committed. The one recognized pre-trust v3 request shape, deployed
-  before `supporting_issues` and authenticated artifact provenance became request authority, is never
-  upgraded by invention. Its immutable request, terminal receipt, attempts, and exceptions remain
-  audit evidence, while migration marks the run `legacy_untrusted`, clears every lease, session,
-  context, retry, and active projection, and stores no supporting authority. Status may list that
-  inert row, but every mutation and reopen path rejects it. A later authenticated canonical artifact
-  on a new head may start a fresh executable chain beside the retained audit row; any other malformed
-  historical request still rolls the whole additive migration back.
+  Check eligibility selects the latest GitHub rerun per check name. Schema-v6 health, backup, and
+  restore validation covers verification runs, attempts, exceptions, head-audit fields,
+  `repair_budget_policy`, exact closing authority, legacy-recovery audit, and all write-critical
+  keys. The additive sequence is explicit: v3 to v4 preserves historical global 2+2 policy as `v1`,
+  v4 to v5 backfills exact closing authority only for canonical v2 requests, and v5 to v6 adds the
+  recovery-audit column. A deployed pre-head-rebinding v3 backup may omit only its documented
+  additive columns; missing older audit tables, columns, unique keys, or malformed rows fail closed
+  before any schema marker commits.
+  All v1 requests have unknown exact closure authority, including otherwise canonical v1 requests
+  that carry `supporting_issues`. Migration therefore makes every recognized v1 row inert as
+  `legacy_untrusted`, empties its executable supporting and closing projections, clears lease,
+  session, context, retry, and active projections, and retains the immutable request, attempts,
+  terminal evidence, and exception audit. Migration preserves a previously rebound
+  `current_head_sha` separately from the immutable requested head only when it is a valid 40-character
+  hexadecimal SHA and the retained terminal chain names that exact current head; malformed or
+  inconsistent current-head state rolls the whole migration back. The two exact pre-trust shapes that predate
+  `supporting_issues` remain permanently inert because compatible legacy supporting authority cannot
+  be proved; any unrecognized historical shape rolls the whole migration back.
+  A same-current-head v1-to-v2 promotion is allowed only for one unambiguous inert chain, a freshly
+  authenticated canonical v2 artifact, and a bounded live observation proving the exact open,
+  unmerged, non-draft repository, PR, stage, head, governing issue, and closing set. The legacy
+  request's exact supporting list must equal the incoming durable supporting authority and remain
+  present in live truth; the non-empty v2 closing set must be a subset of that governing/supporting
+  authority and equal live closing truth. After a canonical-chain token is rechecked under
+  `BEGIN IMMEDIATE`, promotion atomically archives the complete quarantined row and its exception
+  children in `verification_legacy_recovery_audit.v2`, installs the authenticated v2 request and
+  exact authorities, deletes only the now-archived live exception children, and clears stale
+  head-bound execution state. The run id, attempts, repair-policy version, and consumed 2+2 budget
+  remain unchanged. The archived legacy current head stays bound to that recovered v2 request
+  identity; the live row may later rebind to another freshly observed repair head without making
+  the immutable archive unreadable or resetting the chain. An authenticated artifact for the
+  immutable requested head or any unrelated head cannot create a parallel canonical run around a
+  recoverable inert repaired-head chain.
+  Existing v1 recovery-audit receipts remain readable; ambiguity, drift, missing authentication,
+  incompatible supporting authority, or any token mismatch is non-mutating and fail-closed.
   If normal stale-head handling supersedes a chain before the repaired-head artifact arrives, only
   a later artifact with the same repository, PR, stage, and governing issue may reopen that exact
   chain on the new head. Reopening preserves immutable requested-head audit plus all attempts and
@@ -190,7 +210,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   the first authoritative artifact for the newer live head requeues the existing canonical run,
   preserves its immutable requested head, attempts, exceptions, and cumulative 2+2 budget, and
   clears only head-bound coordinator, context, receipt, retry, and verified-head state. An
-  unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed.
+  unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed. Retained
+  merged or open-neutralized recovery artifacts polled before that exact `retry_after` return the
+  current durable run without extending the retry or rewriting its receipt.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
@@ -266,6 +288,56 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   An exact same-session terminal receipt replay reuses its deterministic verification attempt, so
   already-deduplicated review events retain the same closure anchor. A changed receipt or session
   creates a new anchor and must earn fresh reviews.
+
+**Verified issue-set merge and exact closure: SHIPPED IN REPO**
+
+- Verification dispatch request v2 binds one non-empty, sorted set of at most 10 closing issues to
+  the exact repository, PR, and head. `supporting_authority_json` is durable, cumulative evidence
+  authority across restart and takeover, but supporting issues grant no closure authority unless
+  they are also named in the exact `closing_authority_json` set. A trusted collaborator-authored
+  `verified_issue_set_merge_authority.v1` receipt binds the run, governing issue, exact closing and
+  supporting sets, original and neutralized body digests, and current repair-budget projection.
+- Mutable PR text is never merge-time closure authority. Immediately before merge, the verified
+  flow re-reads the exact head, title, body, and GitHub `closingIssuesReferences`, replaces every
+  authenticated closing keyword with evidence-only `Refs` plus a bounded
+  `Verified-Closing-Issues` marker, and requires the freshly triggered `pr-contract` result to prove
+  the trusted receipt, neutralized body, and empty closing references. Merge uses only the fixed
+  non-closing title/message from the plan. The fetched merge commit must match the exact repository
+  and SHA, remain within its response/message caps, and contain no canonical or malformed closing
+  attempt; a merge commit message can never become closer authority.
+- The authority-bound phase ledger is continuous and idempotent:
+  `prepared -> merged -> reconciled -> restored`. Duplicate identical phase receipts are harmless;
+  missing, stale, forged, skipped, or conflicting phases fail closed. If a crash leaves the exact
+  PR open with a neutralized body and a valid `prepared` receipt, recovery ignores any synthetic or
+  malformed open-PR `merge_commit_sha` and passes `merge_commit_sha=null`, `merged_at=null`. If the
+  PR is merged but incomplete, recovery re-authenticates the exact merge commit, authority receipt,
+  checks, repair-budget policy, and highest continuous phase, then resumes at the first missing
+  phase. Neither path resets attempts, durable supporting authority, or the 2+2 budget.
+- Post-merge reconciliation explicitly closes every and only the authenticated closing set, restores
+  the authenticated original body, and proves exact closure attribution before terminal delivery.
+  Candidate enumeration reads the bounded repository issue-event feed through REST, proves its
+  reverse-time coverage through `merged_at`, and unions those candidates with authenticated and
+  phase-known identities under a fixed cap. One bounded GraphQL `ClosedEvent.closer` batch then
+  authenticates every Issue node, latest close timestamp, actor, and closer. A `PullRequest` closer
+  counts only when PR number, repository, merge SHA, actor, and time identify this delivery; a null
+  closer counts only for an expected issue explicitly closed by the exact delivery actor after the
+  merge. Foreign-PR and independently closed issues remain unrelated. Only an unauthorized closure
+  attributed to this PR may be reopened; any unresolved, extra, missing, or ambiguously attributed
+  closure blocks `reconciled`, `restored`, and terminal delivery.
+- Closure reads are deliberately bounded and fail closed: at most 500 repository issue events,
+  20 unioned candidates, one 1 MB GraphQL response, an 8 MB REST event response, a 64 KiB merge
+  commit response, and a 16 KiB commit message. GraphQL node ids cross the CLI as raw `-f` values so
+  untrusted ids cannot trigger `gh -F` file expansion. Ordering gaps, page-cap exhaustion, response
+  overflow, malformed identities, incomplete nodes, conflicting trusted receipts, API failures, or
+  missing actor/time evidence are absence of authority, never permission to merge or close.
+- The post-merge owner-doc watchdog prefers the trusted exact-head merge authority receipt; a
+  trusted-but-invalid receipt fails closed instead of falling back to mutable linked-issue state.
+  Its required targets are every authenticated closed issue plus a distinct open governing parent,
+  or the PR for an issue-free lane. Only a trusted collaborator's exact
+  `post-merge owner-doc check: PR #<PR>;` line is a closure receipt. A watchdog nudge, a generic
+  receipt, or a receipt for another PR is not one, and verification cannot emit its delivery receipt
+  until every required owner-doc receipt is read back.
+
 - `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
   Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
 - GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond

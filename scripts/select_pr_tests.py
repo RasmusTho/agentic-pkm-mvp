@@ -22,6 +22,10 @@ FULL_SUITE_REASONS = (
 )
 
 FULL_SUITE_EXACT = {
+    # Shared CLI registration and path resolution affect many runtime
+    # subsystems. Never narrow their coverage to a single feature owner.
+    "app/cli/__init__.py",
+    "app/config/paths.py",
     "conftest.py",
     "pytest.ini",
     "pyproject.toml",
@@ -110,13 +114,34 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "settings",
-        ("app/settings/", "docs/settings/", "tests/settings/", "tests/config/"),
-        ("tests/settings", "tests/config"),
+        (
+            "app/settings/",
+            "app/cli/settings_explain.py",
+            "app/services/companion_eligibility.py",
+            "app/services/settings.py",
+            "docs/settings/",
+            "tests/settings/",
+            "tests/config/",
+        ),
+        (
+            "tests/settings",
+            "tests/config",
+            "tests/cli/test_settings_explain_cli.py",
+            "tests/services/test_companion_eligibility.py",
+        ),
     ),
     (
         "vault",
-        ("app/vault/", "tests/vault/", "tests/knowledge/", "docs/VAULT", "docs/builderops/BUILDEROPS_VAULT"),
-        ("tests/vault", "tests/knowledge", "tests/ports"),
+        (
+            "app/instance/",
+            "app/vault/",
+            "tests/instance/",
+            "tests/vault/",
+            "tests/knowledge/",
+            "docs/VAULT",
+            "docs/builderops/BUILDEROPS_VAULT",
+        ),
+        ("tests/instance", "tests/vault", "tests/knowledge", "tests/ports"),
     ),
     (
         "companion_ui",
@@ -124,6 +149,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "companion-ui/",
             "app/api/",
             "api/",
+            # FastAPI dependency providers (get_agent_repository / get_db)
+            # consumed by app/api/routers/agent.py; exercised via tests/api.
+            "app/deps.py",
             "tests/companion_ui/",
             "tests/api/",
             "tests/architecture/test_openapi_static_contract.py",
@@ -160,13 +188,28 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/runtime/health_probe.py",
             "app/cli/health.py",
+            # Health snapshot/contract surface: its direct suites live in
+            # tests/health, tests/api (test_health_contract_api.py), tests/cli
+            # (health-contract CLI + authority spine) and the health-focused
+            # tests/observability modules listed in the targets below.
+            "app/health_contract.py",
             "docker-compose.yaml",
             "tests/health/",
             "tests/invariants/test_health_probe.py",
             "tests/invariants/test_health_heartbeat_visibility.py",
             "docs/OBSERVABILITY_STABILIZATION/",
         ),
-        ("tests/health", "tests/invariants", "tests/api"),
+        (
+            "tests/health",
+            "tests/invariants",
+            "tests/api",
+            "tests/cli/test_health_contract_cli.py",
+            "tests/cli/test_health_authority_spine.py",
+            "tests/observability/test_health_contract_settings.py",
+            "tests/observability/test_health_incidents.py",
+            "tests/observability/test_health_state_machine.py",
+            "tests/observability/test_status_bounded_reads.py",
+        ),
     ),
     (
         "store_ingest",
@@ -404,6 +447,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/agents/panel/",
             "app/promotion/",
             "app/panel/",
+            # OTel tracing shim consumed only by the promotion agent
+            # (app/promotion/queue.py, app/agents/promotion/agent.py); its
+            # regressions surface through the promotion suites.
+            "app/observability/tracing.py",
             # The note-update service is the panel-driven note-body write path
             # (handle_panel_update / upsert_executed_ids); its regression suite
             # is tests/services/test_note_update_service.py.

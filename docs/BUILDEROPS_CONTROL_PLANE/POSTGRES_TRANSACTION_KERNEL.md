@@ -11,6 +11,9 @@ can_parallelize_with: []
 
 # PostgreSQL Transaction Kernel
 
+Delivery status: implemented in the development baseline by #3792/PR #3852; not deployed or
+authoritative until the later deployment/cutover slices complete.
+
 ## Purpose
 
 BuilderOps and dispatcher currently split records, tasks, leases, idempotency, receipts, events, and
@@ -19,7 +22,9 @@ port and PostgreSQL implementation before network deployment or migration can be
 
 ## What This Task Does
 
-- define a domain-neutral BuilderOps store port used by API/services without importing SQLite;
+- define a domain-neutral BuilderOps store port used by API/services without importing SQLite or a
+  concrete PostgreSQL adapter, including replay, orphaned-claim recovery, unknown-effect marking,
+  reconciliation, status reads, and receipt-backed record, attempt, promotion, and lease operations;
 - add an independent BuilderOps PostgreSQL schema/migration lineage for repo-scoped tasks, attempts,
   records, transitions, fenced leases, idempotency, append-only receipts, and outbox/dead letters;
 - require `RepoRef`, `scope`, `stack`, actor, source references, and schema version on every
@@ -30,8 +35,9 @@ port and PostgreSQL implementation before network deployment or migration can be
   post-restore reconciliation (ADR-0062 A1: acknowledgement, replay, dependent transitions, and
   outbox eligibility require the local PostgreSQL commit only);
 - implement atomic claim/heartbeat/release/complete with monotonically fenced ownership;
-- implement an outbox claim/retry/reconciliation state machine with deterministic operation keys
-  and a fenced pre-effect attempt/receipt;
+- implement an outbox claim/retry/reconciliation state machine with deterministic operation keys, a
+  fenced pre-effect attempt/receipt, and an idempotent append-only reconciliation receipt bound to
+  the exact claim and readback outcome;
 - retain SQLite only as an explicitly injected test/migration adapter, never an automatic runtime
   default; and
 - expose schema/authority-epoch metadata needed by readiness and cutover.
@@ -69,35 +75,42 @@ by BuilderOps governance and remains outside Product persistence authority.
 - A transaction result binds its committed receipt sequence and recovery LSN for observability and
   post-restore reconciliation; acknowledgement, replay, and outbox eligibility require the local
   PostgreSQL commit only (ADR-0062 A1).
+- If a response is lost after that local commit but before its observability LSN is bound, replay,
+  outbox claim, or status read completes the local binding under the committed identity; no
+  independent recovery proof may gate the committed operation.
+- Initialization verifies exact migration names/checksums and refuses newer, missing, gapped, or
+  inconsistent lineage/epoch metadata. Ledger-free bootstrap requires a genuinely empty schema:
+  no BuilderOps-named table, index, sequence, other relation, or function may already exist.
 - Missing/ambiguous repo scope fails closed; an identity, lease, idempotency key, or promotion in one
-  repo namespace cannot collide with or authorize another.
+  repo namespace cannot collide with or authorize another. GitHub owner/repository identity is
+  canonicalized to lowercase before persistence so case aliases cannot split one authority namespace.
 - Do not yet switch production clients or remove Product routes.
 
 ## Acceptance Criteria
 
-- [ ] One PostgreSQL transaction atomically commits idempotency, guarded state, append-only receipt,
+- [x] One PostgreSQL transaction atomically commits idempotency, guarded state, append-only receipt,
   and outbox intent, and fault injection before commit exposes none of them.
   Verify: `tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_state_receipt_idempotency_and_outbox_commit_atomically`.
-- [ ] Equal retries return the original committed result while conflicting reuse of an idempotency
+- [x] Equal retries return the original committed result while conflicting reuse of an idempotency
   key fails closed.
   Verify: `tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_idempotency_replay_and_conflict`.
-- [ ] Concurrent claim/heartbeat/reassignment uses fencing so a stale worker cannot transition the
+- [x] Concurrent claim/heartbeat/reassignment uses fencing so a stale worker cannot transition the
   task after losing its lease, including across process restart.
   Verify: `tests/builderops/control_plane/test_postgres_leases.py::test_stale_fencing_token_cannot_mutate_after_reassignment`.
-- [ ] Outbox claims are crash-recoverable and a timed-out external effect enters reconciliation
+- [x] Outbox claims are crash-recoverable and a timed-out external effect enters reconciliation
   rather than immediate replay or terminal success.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_unknown_external_effect_requires_readback_before_retry`.
-- [ ] Production construction requires a PostgreSQL DSN and never selects/creates SQLite implicitly;
+- [x] Production construction requires a PostgreSQL DSN and never selects/creates SQLite implicitly;
   the SQLite adapter is available only through explicit test/migration injection.
   Verify: `tests/builderops/control_plane/test_store_selection.py::test_production_store_fails_closed_without_postgres`.
-- [ ] BuilderOps migrations are versioned independently of Product migrations and readiness can
+- [x] BuilderOps migrations are versioned independently of Product migrations and readiness can
   report the authority epoch and schema version.
   Verify: `tests/architecture/test_builderops_migration_boundary.py::test_builderops_migrations_do_not_use_product_lineage`.
-- [ ] Every authority-bearing row rejects a missing mandatory multi-repo envelope, and task/lease/
+- [x] Every authority-bearing row rejects a missing mandatory multi-repo envelope, and task/lease/
   idempotency/outbox/promotion identities are repo-namespaced so repo A cannot collide with or
   authorize repo B.
   Verify: `tests/builderops/control_plane/test_multirepo_namespace.py::test_authority_envelope_is_required_and_repo_namespaces_are_isolated`.
-- [ ] Each accepted transaction returns a committed receipt sequence and recovery LSN bound to its
+- [x] Each accepted transaction returns a committed receipt sequence and recovery LSN bound to its
   idempotent result for observability and post-restore reconciliation.
   Verify: `tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_transaction_result_binds_receipt_sequence_and_recovery_lsn`.
 

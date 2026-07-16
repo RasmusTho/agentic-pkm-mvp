@@ -10,6 +10,8 @@ from app.dispatcher.verification_consumer import (
     VerificationConsumer,
 )
 from tests.dispatcher.test_verification_consumer import (
+    _closure_evidence,
+    _merge_comments,
     Auth,
     Launcher,
     eligible_pr,
@@ -170,6 +172,29 @@ class StaticTruth:
     def checks(self, repository, head_sha):
         self.checked_heads.append(head_sha)
         return green_checks(self.head)
+
+    def pull_request_comments(self, repository, pr_number):
+        return _merge_comments(self.pull_request(repository, pr_number))
+
+    def merge_commit(self, repository, merge_commit_sha):
+        return {
+            "repository": repository,
+            "sha": merge_commit_sha,
+            "message": "Merge verified issue set",
+        }
+
+    def issue_set_closure_evidence(
+        self,
+        repository,
+        pr_number,
+        *,
+        issue_numbers,
+        observed_issue_numbers,
+        merged_at,
+        merge_commit_sha,
+        actor_login,
+    ):
+        return _closure_evidence(issue_numbers)
 
 
 class RepairedDeliveryLauncher(Launcher):

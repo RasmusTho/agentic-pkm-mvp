@@ -17,6 +17,10 @@ ALLOW_DIRS = (
 )
 
 ALLOW_FILES = (
+    # BuilderOps independent PostgreSQL authority (BCP-01, #3792). This is the
+    # dedicated storage adapter behind the domain-neutral control-plane port;
+    # callers do not import psycopg or Product app.db through this exception.
+    'app/builderops/control_plane/store.py',
     'app/services/outbox.py',
     'app/services/audit.py',
     'app/services/decisions.py',

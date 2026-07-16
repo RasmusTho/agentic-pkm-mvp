@@ -38,26 +38,41 @@ jobs:
             --jq '.check_runs[]' \
             | jq -s '{check_runs: .}' \
             > pr-evidence-pack/checks.json
-          ISSUE_NUMBER="$(python3 - <<'PY'
+          python3 - <<'PY' > pr-evidence-pack/issue-numbers.txt
           import json
-          import re
           from pathlib import Path
 
+          from app.dispatcher.verification_contract import (
+              closing_issue_authority_exceeds_limit,
+              resolve_issue_authority,
+          )
+
           body = json.loads(Path("pr-evidence-pack/pr.json").read_text()).get("body") or ""
-          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
-          print(match.group(1) if match else "")
+          authority = resolve_issue_authority(body)
+          if closing_issue_authority_exceeds_limit(body):
+              raise SystemExit(
+                  "over-limit issue authority; refusing issue snapshot fan-out"
+              )
+          if authority:
+              for issue_number in sorted(
+                  {authority.governing_issue, *authority.closing_issues}
+              ):
+                  print(issue_number)
           PY
-          )"
-          if [ -n "${ISSUE_NUMBER}" ]; then
-            gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" \
+          if [ -s pr-evidence-pack/issue-numbers.txt ]; then
+            while IFS= read -r ISSUE_NUMBER; do
+              gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}"
+            done < pr-evidence-pack/issue-numbers.txt \
+              > pr-evidence-pack/issues.jsonl
+            jq -s '.' pr-evidence-pack/issues.jsonl \
               > pr-evidence-pack/issue.json
           else
-            printf '{}\n' > pr-evidence-pack/issue.json
+            printf '[]\n' > pr-evidence-pack/issue.json
           fi
 
       - name: Build PR evidence pack
         run: |
-          python3 scripts/build_pr_evidence_pack.py \
+          python3 -m scripts.build_pr_evidence_pack \
             --pr-json pr-evidence-pack/pr.json \
             --files-json pr-evidence-pack/files.json \
             --checks-json pr-evidence-pack/checks.json \

@@ -113,7 +113,9 @@ cleanup is not automatic in v1.
 
 - Issues are the canonical delivery task contract for implementation work.
 - GitHub Project is an operating view over Issue and PR truth, not a stronger authority than them.
-- Implementation PRs must reference an Issue using `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
+- Implementation PRs must declare exactly one `Governing-Issue: #<id>` and at least one closing
+  keyword for fully delivered work; an approved multi-Issue governing parent may remain open while
+  closing keywords name only delivered children.
 - Docs-authoring PRs may omit an Issue reference only when they are explicitly classified as docs authoring and remain limited to approved docs-authoring surfaces.
 - Governance-lane PRs may omit an Issue reference only when they are explicitly classified as governance lane and remain limited to approved governance surfaces.
 - Agents only pick Issues labeled `agent:ready`.

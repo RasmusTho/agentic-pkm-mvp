@@ -33,14 +33,26 @@ jobs:
             --jq '.[]' \
             | jq -s '.' \
             > post-merge-docs-classifier/files.json
+          gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[]' \
+            | jq -s '.' \
+            > post-merge-docs-classifier/comments.json
           ISSUE_NUMBER="$(python3 - <<'PY'
           import json
-          import re
+          import os
           from pathlib import Path
 
-          body = json.loads(Path("post-merge-docs-classifier/pr.json").read_text()).get("body") or ""
-          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
-          print(match.group(1) if match else "")
+          from app.dispatcher.verified_merge import resolve_post_merge_issue_authority
+
+          pr = json.loads(Path("post-merge-docs-classifier/pr.json").read_text())
+          comments = json.loads(Path("post-merge-docs-classifier/comments.json").read_text())
+          authority = resolve_post_merge_issue_authority(
+              comments,
+              pr=pr,
+              repository=os.environ["REPOSITORY"],
+          )
+          issue_number = authority.governing_issue if authority is not None else None
+          print(issue_number or "")
           PY
           )"
           if [ -n "${ISSUE_NUMBER}" ]; then
@@ -51,11 +63,15 @@ jobs:
           fi
 
       - name: Build post-merge docs classifier artifacts
+        env:
+          REPOSITORY: ${{ github.repository }}
         run: |
-          python3 scripts/post_merge_docs_classifier.py \
+          python3 -m scripts.post_merge_docs_classifier \
             --pr-json post-merge-docs-classifier/pr.json \
             --files-json post-merge-docs-classifier/files.json \
             --issue-json post-merge-docs-classifier/issue.json \
+            --comments-json post-merge-docs-classifier/comments.json \
+            --repository "${REPOSITORY}" \
             --output-json post-merge-docs-classifier/classification.json \
             --output-markdown post-merge-docs-classifier/classification.md
 

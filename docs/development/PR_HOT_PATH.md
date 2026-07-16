@@ -71,7 +71,16 @@ than separate PRs.
 
 Never batch runtime behavior with governance/process changes, Product contract changes with Builder
 System process edits, or children that need different reviewers, CI surfaces, rollback paths, or
-owner-doc writebacks.
+owner-doc writebacks. The shared PR authority contract permits at most ten unique closing issues;
+larger delivery sets must be split before publication so evidence collection and verification remain
+bounded.
+
+For an approved batch whose governing parent remains open, merge verification resolves every AC and
+`Verify:` target on the exact closing children. The parent is validated as the governing issue-set
+contract (batch authorization, child/scope map, shared constraints, source anchors, and validation
+path); unfinished feature-acceptance ACs on that parent do not block delivery of completed children.
+After merge, the owner-doc check leaves one PR-specific receipt on every closed child and on the
+distinct open governing parent.
 
 ## Review-Before-CI
 
@@ -228,6 +237,16 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 ## Safety Invariants
 
 - current SHA truth before merge
+- issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
+  revalidates the neutralized live body/head/closing links and requires `pr-contract` to authenticate
+  its trusted exact-head authority receipt, uses a fixed non-closing merge message,
+  persists trusted authority plus continuous prepared/merged/reconciled/restored phases, explicitly
+  closes only the authenticated issue set, reconciles any body-race closure attributable to that PR,
+  proves every and only authenticated issue is closed with delivery attribution, restores the
+  authenticated body, resumes an open neutralized `prepared` window from exact receipt/body/phase
+  truth, and resumes a crashed post-merge sequence idempotently without resetting attempts or the
+  2+2 repair budget. Explicit expected-issue closes require a null closer plus the delivery actor/time
+  fence; automatic closes require the exact target PR/repository/merge SHA
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

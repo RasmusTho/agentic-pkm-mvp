@@ -53,7 +53,22 @@ def test_workflow_collects_pr_issue_file_and_check_evidence() -> None:
     assert "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" in text
     assert "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs" in text
     assert "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" in text
-    assert "scripts/build_pr_evidence_pack.py" in text
+    assert "python3 -m scripts.build_pr_evidence_pack" in text
+    assert "resolve_issue_authority" in text
+    assert "{authority.governing_issue, *authority.closing_issues}" in text
+    assert "pr-evidence-pack/issues.jsonl" in text
+    assert "jq -s '.'" in text
+    assert "re.search" not in text
+
+
+def test_workflow_fails_closed_on_over_limit_authority_before_issue_fanout() -> None:
+    text = _workflow_text()
+
+    guard = text.index("over-limit issue authority")
+    loop = text.index("while IFS= read -r ISSUE_NUMBER")
+    issue_fetch = text.index('repos/${REPOSITORY}/issues/${ISSUE_NUMBER}')
+    assert "closing_issue_authority_exceeds_limit" in text
+    assert guard < loop < issue_fetch
 
 
 def test_workflow_paginates_files_and_check_runs() -> None:

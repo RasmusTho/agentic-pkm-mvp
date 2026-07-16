@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import hashlib
 import io
 import json
 import os
@@ -35,6 +36,11 @@ from app.dispatcher.verification_agent_loop import (
     VerificationAgentLoop,
     valid_human_exception_packet,
 )
+from app.dispatcher.verification_dispatch import _authenticated_verification_request
+from app.dispatcher.verified_merge import (
+    build_verified_merge_phase,
+    prepare_verified_merge,
+)
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 
 
@@ -42,12 +48,41 @@ from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 class Truth:
     pr: dict[str, object]
     check_rows: list[dict[str, object]]
+    authenticated_supporting: tuple[int, ...] = ()
+    merge_repair_budget: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        self._last_pr = self.pr
 
     def pull_request(self, repository, pr_number):
+        self._last_pr = self.pr
         return self.pr
 
     def checks(self, repository, head_sha):
         return self.check_rows
+
+    def pull_request_comments(self, repository, pr_number):
+        return _merge_comments(
+            self._last_pr,
+            authenticated_supporting=self.authenticated_supporting,
+            repair_budget=self.merge_repair_budget,
+        )
+
+    def merge_commit(self, repository, merge_commit_sha):
+        return _merge_commit(repository=repository, sha=merge_commit_sha)
+
+    def issue_set_closure_evidence(
+        self,
+        repository,
+        pr_number,
+        *,
+        issue_numbers,
+        observed_issue_numbers,
+        merged_at,
+        merge_commit_sha,
+        actor_login,
+    ):
+        return _closure_evidence(issue_numbers)
 
 
 class Auth:
@@ -112,10 +147,12 @@ class PostMergeTerminalReadOutageTruth(Truth):
     def pull_request(self, repository, pr_number):
         self.pull_calls += 1
         if self.pull_calls <= 2:
-            return eligible_pr()
+            self._last_pr = eligible_pr()
+            return self._last_pr
         if self.pull_calls == 3:
             raise RuntimeError("simulated post-merge terminal read outage")
-        return merged_pr()
+        self._last_pr = merged_pr()
+        return self._last_pr
 
 
 class Launcher:
@@ -242,16 +279,46 @@ class DeliveredLauncher(Launcher):
 
 
 class TransitionTruth:
-    def __init__(self, terminal_pr: dict[str, object]) -> None:
+    def __init__(
+        self,
+        terminal_pr: dict[str, object],
+        *,
+        authenticated_supporting: tuple[int, ...] = (),
+    ) -> None:
         # Intake and the post-auth launch fence must both observe stable open
         # authority before the coordinator's delivered receipt changes truth.
         self.prs = iter([eligible_pr(), eligible_pr(), terminal_pr])
+        self._last_pr = eligible_pr()
+        self.authenticated_supporting = authenticated_supporting
 
     def pull_request(self, repository, pr_number):
-        return next(self.prs)
+        self._last_pr = next(self.prs)
+        return self._last_pr
 
     def checks(self, repository, head_sha):
         return GREEN
+
+    def pull_request_comments(self, repository, pr_number):
+        return _merge_comments(
+            self._last_pr,
+            authenticated_supporting=self.authenticated_supporting,
+        )
+
+    def merge_commit(self, repository, merge_commit_sha):
+        return _merge_commit(repository=repository, sha=merge_commit_sha)
+
+    def issue_set_closure_evidence(
+        self,
+        repository,
+        pr_number,
+        *,
+        issue_numbers,
+        observed_issue_numbers,
+        merged_at,
+        merge_commit_sha,
+        actor_login,
+    ):
+        return _closure_evidence(issue_numbers)
 
 
 class TerminalChecksTruth(TransitionTruth):
@@ -270,7 +337,9 @@ class TerminalChecksTruth(TransitionTruth):
 def eligible_pr(**updates):
     value = {
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
-        "body": "Governing-Issue: #3603\n\nRefs #3603",
+        "merge_commit_sha": None,
+        "title": "dispatcher: verify and close issue set",
+        "body": "Governing-Issue: #3603\n\nFixes #3603",
         "base": {"ref": "main", "repo": {"full_name": REPO}},
         "head": {"ref": "branch", "sha": HEAD},
     }
@@ -298,7 +367,7 @@ def test_supporting_issue_addition_during_repair_preserves_governing_authority(
     dispatch_request = request()
     dispatch_request["supporting_issues"] = [3626]
     pr = eligible_pr(
-        body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\nFixes #3745"
+        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\nRefs #3745"
     )
 
     result = VerificationConsumer(
@@ -311,7 +380,7 @@ def test_supporting_issue_addition_during_repair_preserves_governing_authority(
 
 def test_supporting_issue_removal_or_governing_drift_fails_closed(tmp_path) -> None:
     for suffix, body in (
-        ("removed", "Governing-Issue: #3603\n\nRefs #3603"),
+        ("removed", "Governing-Issue: #3603\n\nFixes #3603"),
         ("governing", "Governing-Issue: #3626\n\nFixes #3626"),
     ):
         dispatch_request = request()
@@ -487,6 +556,562 @@ def test_pending_delivered_receipt_replay_is_idempotent(tmp_path) -> None:
     ]
 
 
+def test_delivered_receipt_rejects_unattributed_unauthorized_issue_closure(
+    tmp_path,
+) -> None:
+    class UnauthorizedClosureTruth(TransitionTruth):
+        def issue_set_closure_evidence(self, *args, issue_numbers, **kwargs):
+            return _closure_evidence(issue_numbers, unauthorized=(4999,))
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        UnauthorizedClosureTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_unauthorized_closure"
+    assert result.verified_head_sha is None
+
+
+def test_delivered_receipt_scans_phase_observed_unauthorized_candidate(
+    tmp_path,
+) -> None:
+    class PhaseObservedClosureTruth(TransitionTruth):
+        observed_candidates: list[int] | None = None
+
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(
+                self._last_pr,
+                reopened_unauthorized=(4999,),
+            )
+
+        def issue_set_closure_evidence(
+            self,
+            *args,
+            issue_numbers,
+            observed_issue_numbers,
+            **kwargs,
+        ):
+            self.observed_candidates = list(observed_issue_numbers)
+            return _closure_evidence(issue_numbers, unauthorized=(4999,))
+
+    truth = PhaseObservedClosureTruth(merged_pr())
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        truth,
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert truth.observed_candidates == [4999]
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_unauthorized_closure"
+
+
+def test_delivered_receipt_requires_trusted_exact_head_merge_authority(
+    tmp_path,
+) -> None:
+    class ForgedAuthorityTruth(TransitionTruth):
+        def pull_request_comments(self, repository, pr_number):
+            comments = _merge_comments(self._last_pr)
+            for comment in comments:
+                comment["author_association"] = "NONE"
+            return comments
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        ForgedAuthorityTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_authority_missing"
+    assert result.verified_head_sha is None
+
+
+def test_delivered_receipt_rejects_merge_authority_with_stale_repair_budget(
+    tmp_path,
+) -> None:
+    class StaleBudgetTruth(TransitionTruth):
+        def pull_request_comments(self, repository, pr_number):
+            comments = _merge_comments(self._last_pr)
+            comments[0]["body"] = str(comments[0]["body"]).replace(
+                '"policy_version":"v2"', '"policy_version":"v1"'
+            )
+            return comments
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        StaleBudgetTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_authority_missing"
+    assert result.verified_head_sha is None
+
+
+def _expired_running_verification(state):
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000004",
+        verification_consumer.context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=state.repair_budget_projection(run.run_id),
+        ),
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", running.run_id),
+        )
+        conn.commit()
+    return running
+
+
+def _open_neutralized_recovery_evidence(*, merge_commit_sha: object = None):
+    plan = _merge_plan(HEAD)
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = eligible_pr(
+        body=plan["neutralized_body"],
+        merged=False,
+        merge_commit_sha=merge_commit_sha,
+    )
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    comments = [
+        {
+            "author_association": "COLLABORATOR",
+            "body": plan["authority_receipt_comment"],
+        },
+        {
+            "author_association": "COLLABORATOR",
+            "body": prepared["phase_receipt_comment"],
+        },
+    ]
+    return plan, neutral_pr, comments
+
+
+@pytest.mark.parametrize("entrypoint", ["consume", "recover"])
+@pytest.mark.parametrize(
+    "merge_commit_sha",
+    [
+        pytest.param("7dd63b80" + "0" * 32, id="synthetic-test-merge-sha"),
+        pytest.param("not-a-merge-sha", id="malformed-ignored-field"),
+    ],
+)
+def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
+    tmp_path,
+    entrypoint: str,
+    merge_commit_sha: object,
+) -> None:
+    plan, neutral_pr, comments = _open_neutralized_recovery_evidence(
+        merge_commit_sha=merge_commit_sha
+    )
+
+    class RecoveryTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return comments
+
+    truth = RecoveryTruth(neutral_pr, GREEN)
+
+    class RecoveryLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            assert context_pack["merge_recovery"] == {
+                "body_state": "neutralized",
+                "merge_commit_sha": None,
+                "merged_at": None,
+                "phase": "prepared",
+            }
+            assert context_pack["repair_budget"]["policy_version"] == "v2"
+            truth.pr = eligible_pr(body=plan["original_body"])
+            return super().launch(context_pack, **kwargs)
+
+    state = ledger(tmp_path / entrypoint)
+    running = _expired_running_verification(state)
+    budget_before = state.repair_budget_projection(running.run_id)
+    launcher = RecoveryLauncher()
+    consumer = VerificationConsumer(
+        state, truth, Auth(), launcher, "recovery-host"
+    )
+
+    resumed = (
+        consumer.consume(request())
+        if entrypoint == "consume"
+        else consumer.recover(running.run_id)
+    )
+
+    assert resumed.status == "needs_human"
+    assert len(launcher.calls) == 1
+    assert launcher.calls[0][1] == running.coordinator_session_id
+    assert state.repair_budget_projection(running.run_id) == budget_before
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "forged_authority",
+        "stale_authority",
+        "conflicting_authority",
+        "missing_phase",
+        "stale_phase",
+        "conflicting_phase",
+        "body_digest",
+        "repair_budget",
+    ],
+)
+def test_open_neutralized_recovery_fails_closed_on_untrusted_evidence(
+    tmp_path,
+    corruption: str,
+) -> None:
+    _plan, neutral_pr, comments = _open_neutralized_recovery_evidence()
+    comments = [dict(comment) for comment in comments]
+    if corruption == "forged_authority":
+        comments[0]["author_association"] = "NONE"
+    elif corruption == "stale_authority":
+        comments[0]["body"] = str(comments[0]["body"]).replace(
+            f'"head_sha":"{HEAD}"', f'"head_sha":"{"c" * 40}"'
+        )
+    elif corruption == "conflicting_authority":
+        conflicting = str(comments[0]["body"]).replace(
+            '"mechanism_count":0', '"mechanism_count":1'
+        )
+        comments.append(
+            {"author_association": "MEMBER", "body": conflicting}
+        )
+    elif corruption == "missing_phase":
+        comments = comments[:1]
+    elif corruption == "stale_phase":
+        comments[1]["body"] = str(comments[1]["body"]).replace(
+            f'"head_sha":"{HEAD}"', f'"head_sha":"{"c" * 40}"'
+        )
+    elif corruption == "conflicting_phase":
+        conflicting_phase = str(comments[1]["body"]).replace(
+            '"phase":"prepared"', '"phase":"merged"'
+        )
+        comments.append(
+            {"author_association": "OWNER", "body": conflicting_phase}
+        )
+    elif corruption == "body_digest":
+        neutral_pr = {**neutral_pr, "body": f"{neutral_pr['body']}\n"}
+    elif corruption == "repair_budget":
+        comments[0]["body"] = str(comments[0]["body"]).replace(
+            '"policy_version":"v2"', '"policy_version":"v1"'
+        )
+
+    class RecoveryTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return comments
+
+    state = ledger(tmp_path / corruption)
+    running = _expired_running_verification(state)
+    launcher = Launcher()
+    consumer = VerificationConsumer(
+        state,
+        RecoveryTruth(neutral_pr, GREEN),
+        Auth(),
+        launcher,
+        "recovery-host",
+    )
+
+    with pytest.raises(ValueError, match="no longer resumable"):
+        consumer.recover(running.run_id)
+
+    retained = state.get(running.run_id)
+    assert retained is not None
+    assert retained.status == "running"
+    assert launcher.calls == []
+
+
+@pytest.mark.parametrize("entrypoint", ["consume", "recover"])
+@pytest.mark.parametrize(
+    ("crash_phase", "crash_body_state"),
+    [("prepared", "neutralized"), ("reconciled", "restored")],
+)
+def test_merged_incomplete_run_recovers_idempotently_after_coordinator_crash(
+    tmp_path,
+    entrypoint: str,
+    crash_phase: str,
+    crash_body_state: str,
+) -> None:
+    plan = _merge_plan(HEAD)
+    crashed_pr = merged_pr(
+        body=(
+            plan["neutralized_body"]
+            if crash_body_state == "neutralized"
+            else plan["original_body"]
+        )
+    )
+
+    class RecoveryTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(crashed_pr, GREEN)
+            self.phase = crash_phase
+
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(self._last_pr, phase=self.phase)
+
+    truth = RecoveryTruth()
+
+    class RecoveryLauncher(DeliveredLauncher):
+        def launch(
+            self,
+            context_pack,
+            *,
+            resume_session_id=None,
+            on_thread_started=None,
+            on_heartbeat=None,
+        ):
+            self.calls.append((context_pack, resume_session_id))
+            truth.pr = merged_pr()
+            truth._last_pr = truth.pr
+            truth.phase = "restored"
+            session = resume_session_id or "01900000-0000-7000-8000-000000000004"
+            if on_thread_started:
+                on_thread_started(session)
+            if on_heartbeat:
+                on_heartbeat()
+            receipt = DeliveredLauncher().launch({})[1]
+            return session, receipt
+
+    state = ledger(tmp_path / entrypoint)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    persisted_pack = verification_consumer.context_pack(
+        claimed,
+        eligible_pr(),
+        repair_budget=state.repair_budget_projection(run.run_id),
+    )
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000004",
+        persisted_pack,
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", running.run_id),
+        )
+        conn.commit()
+    budget_before = state.repair_budget_projection(run.run_id)
+    launcher = RecoveryLauncher()
+    consumer = VerificationConsumer(
+        state, truth, Auth(), launcher, "recovery-host"
+    )
+
+    completed = (
+        consumer.consume(_authenticated_verification_request(request()))
+        if entrypoint == "consume"
+        else consumer.recover(run.run_id)
+    )
+
+    assert completed.status == "completed"
+    assert completed.run_id == run.run_id
+    assert completed.verified_head_sha == HEAD
+    assert state.repair_budget_projection(run.run_id) == budget_before
+    assert len(launcher.calls) == 1
+    recovered_pack, resumed_session = launcher.calls[0]
+    assert resumed_session == "01900000-0000-7000-8000-000000000004"
+    assert recovered_pack["merge_recovery"]["phase"] == crash_phase
+    assert recovered_pack["merge_recovery"]["body_state"] == crash_body_state
+
+
+@pytest.mark.parametrize("entrypoint", ["consume", "recover"])
+@pytest.mark.parametrize("recovery_shape", ["merged", "open-neutralized"])
+def test_retained_recovery_artifact_does_not_extend_pending_backoff(
+    tmp_path,
+    entrypoint: str,
+    recovery_shape: str,
+) -> None:
+    plan = _merge_plan(HEAD)
+    if recovery_shape == "merged":
+        retained_pr = merged_pr(body=plan["neutralized_body"])
+    else:
+        _plan, retained_pr, _comments = _open_neutralized_recovery_evidence()
+
+    class RecoveryTruth(Truth):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.remote_calls: list[str] = []
+
+        def pull_request(self, repository, pr_number):
+            self.remote_calls.append("pull_request")
+            if entrypoint == "consume" and len(self.remote_calls) == 1:
+                # Authenticated artifact intake performs one live observation.
+                # Any second pull would be retained-artifact recovery I/O.
+                return self.pr
+            raise RuntimeError("retained recovery pull outage")
+
+        def checks(self, repository, head_sha):
+            self.remote_calls.append("checks")
+            raise RuntimeError("retained recovery checks outage")
+
+    state = ledger(tmp_path / f"{recovery_shape}-{entrypoint}")
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000040",
+        verification_consumer.context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=state.repair_budget_projection(run.run_id),
+        ),
+    )
+    retry_after = "2030-01-01T00:00:00+00:00"
+    deferred = state.backoff(
+        run.run_id,
+        {
+            "outcome": "deferred",
+            "reason": "checks_not_green",
+            "head_sha": HEAD,
+        },
+        retry_after,
+        holder="crashed-host",
+        lease_id=running.lease_id or "",
+    )
+
+    def durable_snapshot() -> dict[str, list[dict[str, object]]]:
+        with state.store._connect() as conn:
+            return {
+                table: [
+                    dict(row)
+                    for row in conn.execute(
+                        f"SELECT * FROM {table} ORDER BY {key}"
+                    )
+                ]
+                for table, key in (
+                    ("verification_runs", "run_id"),
+                    ("verification_attempts", "attempt_id"),
+                    ("verification_exceptions", "exception_id"),
+                )
+            }
+
+    before = durable_snapshot()
+    launcher = Launcher()
+    truth = RecoveryTruth(retained_pr, GREEN)
+    consumer = VerificationConsumer(
+        state,
+        truth,
+        Auth(),
+        launcher,
+        "recovery-host",
+    )
+
+    if entrypoint == "consume":
+        first = consumer.consume(_authenticated_verification_request(request()))
+        second = consumer.consume(request())
+    else:
+        first = consumer.recover(run.run_id)
+        second = consumer.recover(run.run_id)
+
+    assert first == second == deferred
+    assert first.retry_after == retry_after
+    assert first.terminal_receipt == {
+        "outcome": "deferred",
+        "reason": "checks_not_green",
+        "head_sha": HEAD,
+    }
+    assert durable_snapshot() == before
+    assert launcher.calls == []
+    assert truth.remote_calls == (["pull_request"] if entrypoint == "consume" else [])
+
+
+def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
+    tmp_path,
+) -> None:
+    plan = _merge_plan(HEAD)
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    raced_body = "Governing-Issue: #3603\n\nRefs #3603\nFixes #4999"
+    crashed_pr = merged_pr(body=raced_body)
+
+    class RecoveryTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(crashed_pr, GREEN)
+            self.restored = False
+
+        def pull_request_comments(self, repository, pr_number):
+            if self.restored:
+                return _merge_comments(self._last_pr)
+            return [
+                {
+                    "author_association": "COLLABORATOR",
+                    "body": plan["authority_receipt_comment"],
+                },
+                {
+                    "author_association": "COLLABORATOR",
+                    "body": prepared["phase_receipt_comment"],
+                },
+            ]
+
+    truth = RecoveryTruth()
+
+    class RecoveryLauncher(DeliveredLauncher):
+        def launch(self, context_pack, **kwargs):
+            assert context_pack["merge_recovery"]["phase"] == "prepared"
+            assert context_pack["merge_recovery"]["body_state"] == "raced"
+            truth.pr = merged_pr(body=plan["original_body"])
+            truth._last_pr = truth.pr
+            truth.restored = True
+            return super().launch(context_pack, **kwargs)
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000004",
+        verification_consumer.context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=state.repair_budget_projection(run.run_id),
+        ),
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", running.run_id),
+        )
+        conn.commit()
+
+    completed = VerificationConsumer(
+        state, truth, Auth(), RecoveryLauncher(), "recovery-host"
+    ).recover(run.run_id)
+
+    assert completed.status == "completed"
+    assert completed.verified_head_sha == HEAD
+
+
 def _corrupt_pending_delivered_receipt(state, run_id, mutate) -> None:
     current = state.get(run_id)
     assert current is not None
@@ -602,6 +1227,7 @@ def merged_pr(**updates: object) -> dict[str, object]:
         merged=True,
         merged_at="2026-07-15T00:00:00Z",
         merge_commit_sha="b" * 40,
+        merged_by={"login": "verification-closer"},
         base={
             "ref": "main",
             "repo": {"full_name": "RasmusTho/agentic-pkm-mvp"},
@@ -609,6 +1235,364 @@ def merged_pr(**updates: object) -> dict[str, object]:
     )
     value.update(updates)
     return value
+
+
+def _merge_commit(
+    *,
+    repository: str = REPO,
+    sha: str = "b" * 40,
+    message: str = "Merge verified issue set",
+) -> dict[str, object]:
+    return {"repository": repository, "sha": sha, "message": message}
+
+
+def _verification_run_id() -> str:
+    idempotency_key = request()["idempotency_key"]
+    assert isinstance(idempotency_key, str)
+    return f"vrun-{idempotency_key[:16]}"
+
+
+def _merge_plan(
+    head_sha: str,
+    *,
+    body: str = "Governing-Issue: #3603\n\nFixes #3603",
+    authenticated_supporting: tuple[int, ...] = (),
+    repair_budget: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    context = {
+        "contract": "verification_closer_dispatch_context.v2",
+        "run_id": _verification_run_id(),
+        "repository": REPO,
+        "pr_number": 3603,
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "supporting_issues": list(authenticated_supporting),
+        "head_sha": head_sha,
+        "repair_budget": (
+            dict(repair_budget)
+            if repair_budget is not None
+            else {
+                "policy_version": "v2",
+                "mechanism_count": 0,
+                "truncated": False,
+                "omitted_count": 0,
+                "mechanisms": [],
+            }
+        ),
+    }
+    return prepare_verified_merge(
+        context=context,
+        pr=eligible_pr(body=body, head={"ref": "branch", "sha": head_sha}),
+        live_closing_issues=[3603],
+    )
+
+
+def _merge_comments(
+    pr: Mapping[str, object],
+    *,
+    phase: str = "restored",
+    authenticated_supporting: tuple[int, ...] = (),
+    reopened_unauthorized: tuple[int, ...] = (),
+    repair_budget: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    head_sha = pr.get("head", {}).get("sha") if isinstance(pr.get("head"), Mapping) else None
+    assert isinstance(head_sha, str)
+    body = pr.get("body")
+    assert isinstance(body, str)
+    plan = _merge_plan(
+        head_sha,
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603"
+            if "Verified-Closing-Issues:" in body
+            else body
+        ),
+        authenticated_supporting=authenticated_supporting,
+        repair_budget=repair_budget,
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral = eligible_pr(
+        body=plan["neutralized_body"],
+        head={"ref": "branch", "sha": head_sha},
+    )
+    merged_neutral = {
+        **dict(pr),
+        "body": plan["neutralized_body"],
+        "head": {"ref": "branch", "sha": head_sha},
+    }
+    restored = {
+        **merged_neutral,
+        "body": plan["original_body"],
+    }
+    phases = [
+        build_verified_merge_phase(
+            authority_receipt=authority, phase="prepared", pr=neutral
+        ),
+        build_verified_merge_phase(
+            authority_receipt=authority, phase="merged", pr=merged_neutral
+        ),
+        build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="reconciled",
+            pr=merged_neutral,
+            closed_issues=[3603],
+            reopened_unauthorized_issues=list(reopened_unauthorized),
+        ),
+        build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="restored",
+            pr=restored,
+            closed_issues=[3603],
+            reopened_unauthorized_issues=list(reopened_unauthorized),
+        ),
+    ]
+    phase_index = {"prepared": 1, "merged": 2, "reconciled": 3, "restored": 4}[phase]
+    return [
+        {
+            "author_association": "COLLABORATOR",
+            "body": plan["authority_receipt_comment"],
+        },
+        *[
+            {
+                "author_association": "COLLABORATOR",
+                "body": item["phase_receipt_comment"],
+            }
+            for item in phases[:phase_index]
+        ],
+    ]
+
+
+def _closure_evidence(
+    issue_numbers: list[int] | tuple[int, ...],
+    *,
+    unauthorized: tuple[int, ...] = (),
+) -> dict[str, object]:
+    observed = sorted({*issue_numbers, *unauthorized})
+    return {
+        "closure_scan_complete": True,
+        "observed_closing_issues": observed,
+        "issue_evidence": [
+            {
+                "number": number,
+                "state": "closed",
+                "closed_by_delivery": True,
+                "closed_by_pull_requests": [] if number in issue_numbers else [3603],
+            }
+            for number in observed
+        ],
+    }
+
+
+def _repository_issue_event(
+    event_id: int,
+    *,
+    number: int,
+    created_at: str,
+    event: str = "closed",
+    commit_id: str | None = None,
+    commit_repository: str = REPO,
+    issue_repository: str = REPO,
+) -> dict[str, object]:
+    repository_url = f"https://api.github.com/repos/{issue_repository}"
+    issue_url = f"{repository_url}/issues/{number}"
+    return {
+        "id": event_id,
+        "url": f"{repository_url}/issues/events/{event_id}",
+        "event": event,
+        "commit_id": commit_id,
+        "commit_url": (
+            f"https://api.github.com/repos/{commit_repository}/commits/{commit_id}"
+            if commit_id is not None
+            else None
+        ),
+        "created_at": created_at,
+        "issue": {
+            "number": number,
+            "url": issue_url,
+            "repository_url": repository_url,
+            "events_url": f"{issue_url}/events",
+        },
+    }
+
+
+def _rest_issue(number: int, *, node_id: str | None = None) -> dict[str, object]:
+    repository_url = f"https://api.github.com/repos/{REPO}"
+    return {
+        "node_id": node_id or f"I_kwDOclosure{number}",
+        "number": number,
+        "repository_url": repository_url,
+        "url": f"{repository_url}/issues/{number}",
+    }
+
+
+def _graphql_closed_event(
+    created_at: str,
+    *,
+    actor: str = "verification-closer",
+    closer_number: int | None = None,
+    closer_repository: str = REPO,
+    closer_sha: str | None = "b" * 40,
+) -> dict[str, object]:
+    closer: dict[str, object] | None = None
+    if closer_number is not None:
+        closer = {
+            "__typename": "PullRequest",
+            "number": closer_number,
+            "repository": {"nameWithOwner": closer_repository},
+            "mergeCommit": {"oid": closer_sha},
+        }
+    return {
+        "__typename": "ClosedEvent",
+        "actor": {"login": actor},
+        "closer": closer,
+        "createdAt": created_at,
+    }
+
+
+def _graphql_issue(
+    number: int,
+    *,
+    created_at: str,
+    event: dict[str, object] | None = None,
+    node_id: str | None = None,
+    repository: str = REPO,
+    state: str = "CLOSED",
+) -> dict[str, object]:
+    return {
+        "__typename": "Issue",
+        "id": node_id or f"I_kwDOclosure{number}",
+        "number": number,
+        "repository": {"nameWithOwner": repository},
+        "state": state,
+        "closedAt": created_at if state == "CLOSED" else None,
+        "timelineItems": {
+            "nodes": [event or _graphql_closed_event(created_at)]
+            if state == "CLOSED"
+            else []
+        },
+    }
+
+
+def _graphql_result(*nodes: object) -> dict[str, object]:
+    return {"data": {"nodes": list(nodes)}}
+
+
+def _closure_evidence_with_graphql_event(
+    event: dict[str, object],
+) -> dict[str, object]:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                        event=event,
+                    )
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    )
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        raise AssertionError(endpoint)
+
+    return dict(
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("closer_number", "closed_by_pull_requests"),
+    [(None, []), (3603, [3603])],
+)
+def test_gh_source_accepts_only_explicit_or_exact_target_expected_closure(
+    closer_number: int | None,
+    closed_by_pull_requests: list[int],
+) -> None:
+    evidence = _closure_evidence_with_graphql_event(
+        _graphql_closed_event(
+            "2026-07-15T00:00:02Z",
+            closer_number=closer_number,
+        )
+    )
+
+    assert evidence["observed_closing_issues"] == [3603]
+    assert evidence["issue_evidence"] == [
+        {
+            "closed_at": "2026-07-15T00:00:02Z",
+            "closed_by_delivery": True,
+            "closed_by_pull_requests": closed_by_pull_requests,
+            "number": 3603,
+            "state": "closed",
+        }
+    ]
+
+
+def test_foreign_pr_closer_cannot_complete_authenticated_expected_issue(
+    tmp_path,
+) -> None:
+    production_evidence = _closure_evidence_with_graphql_event(
+        _graphql_closed_event(
+            "2026-07-15T00:00:02Z",
+            closer_number=4998,
+            closer_repository=REPO,
+            closer_sha="c" * 40,
+        )
+    )
+    assert production_evidence["observed_closing_issues"] == []
+    assert production_evidence["issue_evidence"] == [
+        {
+            "closed_at": "2026-07-15T00:00:02Z",
+            "closed_by_delivery": False,
+            "closed_by_pull_requests": [],
+            "number": 3603,
+            "state": "closed",
+        }
+    ]
+
+    class ForeignCloserTruth(TransitionTruth):
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return production_evidence
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        ForeignCloserTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert (
+        result.stop_reason
+        == "receipt_live_truth_authenticated_issue_not_closed"
+    )
+    assert result.verified_head_sha is None
 
 
 def _required_check_authority(
@@ -826,6 +1810,1041 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
     )
 
 
+def test_gh_source_attributes_null_rest_commit_with_exact_graphql_closer() -> None:
+    padded_node_id = "MDU6SXNzdWUxMzI="
+
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                        node_id=padded_node_id,
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z", closer_number=3603
+                        ),
+                    ),
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        commit_id=None,
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603, node_id=padded_node_id))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+        REPO,
+        3603,
+        issue_numbers=[3603],
+        observed_issue_numbers=[],
+        merged_at="2026-07-15T00:00:00Z",
+        merge_commit_sha="b" * 40,
+        actor_login="verification-closer",
+    )
+
+    assert evidence["closure_scan_complete"] is True
+    assert evidence["observed_closing_issues"] == [3603, 4999]
+    assert evidence["issue_evidence"] == [
+        {
+            "closed_at": "2026-07-15T00:00:02Z",
+            "closed_by_delivery": True,
+            "closed_by_pull_requests": [],
+            "number": 3603,
+            "state": "closed",
+        },
+        {
+            "closed_at": "2026-07-15T00:00:03Z",
+            "closed_by_delivery": True,
+            "closed_by_pull_requests": [3603],
+            "number": 4999,
+            "state": "closed",
+        },
+    ]
+    graphql_calls = [call for call in calls if call[:3] == ["gh", "api", "graphql"]]
+    assert len(graphql_calls) == 1
+    assert "-F" not in graphql_calls[0]
+    assert graphql_calls[0].count("-f") == 3
+    assert f"ids[]={padded_node_id}" in graphql_calls[0]
+    assert all(
+        argument.startswith("ids[]=")
+        for argument in graphql_calls[0]
+        if argument.startswith("ids[]=")
+    )
+    assert len(calls) == 4
+    assert not any(
+        f"/issues/{number}/events?per_page=100" in argument
+        for call in calls
+        for argument in call
+        for number in (3603, 4999)
+    )
+
+
+def test_gh_source_busy_repository_does_not_expand_closure_calls() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    )
+                )
+            )
+        endpoint = command[-1]
+        if endpoint.startswith(
+            f"repos/{REPO}/issues/events?per_page=100&page="
+        ):
+            page = int(endpoint.rsplit("=", 1)[1])
+            if page < 5:
+                return Result(
+                    [
+                        _repository_issue_event(
+                            page * 1000 + offset,
+                            number=6000 + offset,
+                            created_at=f"2026-07-15T00:00:{9 - page:02d}Z",
+                            event="labeled",
+                        )
+                        for offset in range(100)
+                    ]
+                )
+            return Result(
+                [
+                    _repository_issue_event(
+                        5001,
+                        number=6001,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    )
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        raise AssertionError(f"unbounded busy-repository call: {endpoint}")
+
+    evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+        REPO,
+        3603,
+        issue_numbers=[3603],
+        observed_issue_numbers=[],
+        merged_at="2026-07-15T00:00:00Z",
+        merge_commit_sha="b" * 40,
+        actor_login="verification-closer",
+    )
+
+    assert evidence["observed_closing_issues"] == [3603]
+    assert len(calls) == 7
+    assert sum(
+        "/issues/events?" in call[-1]
+        for call in calls
+        if call[:3] != ["gh", "api", "graphql"]
+    ) == 5
+
+
+@pytest.mark.parametrize(
+    "node_id",
+    [
+        pytest.param("@/private/secret", id="at-file-expansion"),
+        pytest.param("I node", id="space"),
+        pytest.param("I\tnode", id="tab"),
+        pytest.param("I\nnode", id="newline"),
+        pytest.param("I\x00node", id="nul"),
+    ],
+)
+def test_gh_source_rejects_malicious_rest_node_id_before_graphql(
+    node_id: str,
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        1,
+                        number=3603,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    )
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603, node_id=node_id))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="malformed GitHub issue response"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+    assert len(calls) == 2
+    assert not any(call[:3] == ["gh", "api", "graphql"] for call in calls)
+
+
+def test_gh_source_repository_event_pagination_cap_fails_closed() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[str] = []
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        calls.append(endpoint)
+        assert endpoint.startswith(
+            f"repos/{REPO}/issues/events?per_page=100&page="
+        )
+        page = int(endpoint.rsplit("=", 1)[1])
+        return Result(
+            [
+                _repository_issue_event(
+                    page * 1000 + offset,
+                    number=6000 + offset,
+                    created_at=f"2026-07-15T00:00:{10 - page:02d}Z",
+                    event="labeled",
+                )
+                for offset in range(100)
+            ]
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="cap reached before merge coverage",
+    ):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+    assert len(calls) == 5
+
+
+def test_gh_source_repository_close_candidates_keep_existing_cap() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    events = [
+        _repository_issue_event(
+            100 - offset,
+            number=5000 + offset,
+            created_at="2026-07-15T00:00:03Z",
+            commit_id=None,
+        )
+        for offset in range(21)
+    ]
+
+    with pytest.raises(RuntimeError, match="candidates exceed bounded scan"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result(events)
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_foreign_repository_event_identity() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    event = _repository_issue_event(
+        20,
+        number=4999,
+        created_at="2026-07-15T00:00:03Z",
+        commit_id=None,
+        issue_repository="attacker/redirect",
+    )
+
+    with pytest.raises(RuntimeError, match="event identity"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result([event])
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+@pytest.mark.parametrize("closer_number", [None, 4998])
+def test_gh_source_ignores_unrelated_graphql_closer(
+    closer_number: int | None,
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z",
+                            closer_number=closer_number,
+                        ),
+                    ),
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        commit_id=None,
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    evidence = GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+        REPO,
+        3603,
+        issue_numbers=[3603],
+        observed_issue_numbers=[],
+        merged_at="2026-07-15T00:00:00Z",
+        merge_commit_sha="b" * 40,
+        actor_login="verification-closer",
+    )
+
+    assert evidence["observed_closing_issues"] == [3603]
+    assert [item["number"] for item in evidence["issue_evidence"]] == [3603]
+
+
+def test_gh_source_rejects_closed_event_with_omitted_closer_field() -> None:
+    event = _graphql_closed_event("2026-07-15T00:00:02Z")
+    event.pop("closer")
+
+    with pytest.raises(RuntimeError, match="malformed GraphQL ClosedEvent"):
+        _closure_evidence_with_graphql_event(event)
+
+
+@pytest.mark.parametrize("closer_sha", [None, "not-a-sha", "c" * 39])
+def test_gh_source_rejects_any_pull_request_closer_without_valid_merge_sha(
+    closer_sha: str | None,
+) -> None:
+    event = _graphql_closed_event(
+        "2026-07-15T00:00:02Z",
+        closer_number=4998,
+        closer_sha=closer_sha,
+    )
+
+    with pytest.raises(RuntimeError, match="malformed GraphQL PullRequest closer"):
+        _closure_evidence_with_graphql_event(event)
+
+
+@pytest.mark.parametrize(
+    ("closer_repository", "closer_sha"),
+    [("attacker/redirect", "b" * 40), (REPO, "c" * 40)],
+)
+def test_gh_source_rejects_forged_target_pr_closer_identity(
+    closer_repository: str,
+    closer_sha: str,
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z",
+                            closer_number=3603,
+                            closer_repository=closer_repository,
+                            closer_sha=closer_sha,
+                        ),
+                    ),
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="closer identity mismatch"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+@pytest.mark.parametrize(
+    "graphql_payload",
+    [
+        _graphql_result(
+            _graphql_issue(3603, created_at="2026-07-15T00:00:02Z")
+        ),
+        _graphql_result(
+            _graphql_issue(3603, created_at="2026-07-15T00:00:02Z"),
+            _graphql_issue(3603, created_at="2026-07-15T00:00:02Z"),
+        ),
+        _graphql_result(
+            {
+                **_graphql_issue(3603, created_at="2026-07-15T00:00:02Z"),
+                "__typename": "PullRequest",
+            },
+            _graphql_issue(4999, created_at="2026-07-15T00:00:03Z"),
+        ),
+    ],
+    ids=["missing", "duplicate", "malformed"],
+)
+def test_gh_source_rejects_incomplete_or_malformed_graphql_batch(
+    graphql_payload: dict[str, object],
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(graphql_payload)
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="GraphQL closure"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_stale_graphql_closure_snapshot() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:01Z",
+                    ),
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        if endpoint == f"repos/{REPO}/issues/4999":
+            return Result(_rest_issue(4999))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="does not match REST closure"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_oversized_graphql_closure_response() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result("x" * 1_000_001)
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                json.dumps(
+                    [
+                        _repository_issue_event(
+                            19,
+                            number=4998,
+                            created_at="2026-07-14T23:59:59Z",
+                            event="labeled",
+                        )
+                    ]
+                )
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(json.dumps(_rest_issue(3603)))
+        raise AssertionError(endpoint)
+
+    with pytest.raises(RuntimeError, match="exceeds bounded read"):
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
+    tmp_path,
+) -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    budget = state.repair_budget_projection(run.run_id)
+    terminal_pr = merged_pr()
+    comments = _merge_comments(terminal_pr, repair_budget=budget)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at="2026-07-15T00:00:02Z",
+                    ),
+                    _graphql_issue(
+                        4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        event=_graphql_closed_event(
+                            "2026-07-15T00:00:03Z", closer_number=3603
+                        ),
+                    ),
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/git/commits/{'b' * 40}":
+            return Result(
+                {
+                    "sha": "b" * 40,
+                    "url": (
+                        f"https://api.github.com/repos/{REPO}/git/commits/"
+                        + "b" * 40
+                    ),
+                    "message": "Merge verified issue set",
+                }
+            )
+        if endpoint == f"repos/{REPO}/issues/3603/comments?per_page=100&page=1":
+            return Result(comments)
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=4999,
+                        created_at="2026-07-15T00:00:03Z",
+                        commit_id=None,
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint in {
+            f"repos/{REPO}/issues/3603",
+            f"repos/{REPO}/issues/4999",
+        }:
+            number = int(endpoint.rsplit("/", 1)[1])
+            return Result(_rest_issue(number))
+        raise AssertionError(endpoint)
+
+    consumer = VerificationConsumer(
+        state,
+        GhCliVerificationSource(runner=runner),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    )
+    evidence = consumer._read_delivery_evidence(
+        run,
+        terminal_pr,
+        expected_repair_budget=budget,
+    )
+
+    assert evidence["observed_closing_issues"] == [3603, 4999]
+    assert (
+        verification_consumer.delivered_live_truth_rejection(
+            run,
+            terminal_pr,
+            GREEN,
+            evidence,
+            expected_head_sha=HEAD,
+            expected_repair_budget=budget,
+        )
+        == "unauthorized_closure"
+    )
+
+
+def test_gh_source_rejects_malformed_repository_event_commit() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    event = _repository_issue_event(
+        20,
+        number=4999,
+        created_at="2026-07-15T00:00:03Z",
+        commit_id="not-a-sha",
+    )
+
+    with pytest.raises(RuntimeError, match="malformed.*commit identity"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result([event])
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_foreign_repository_commit_url() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    event = _repository_issue_event(
+        20,
+        number=4999,
+        created_at="2026-07-15T00:00:03Z",
+        commit_id="b" * 40,
+        commit_repository="attacker/redirect",
+    )
+
+    with pytest.raises(RuntimeError, match="malformed.*commit identity"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result([event])
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_rejects_out_of_order_repository_events() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    events = [
+        _repository_issue_event(
+            20,
+            number=4999,
+            created_at="2026-07-14T23:59:59Z",
+            event="labeled",
+        ),
+        _repository_issue_event(
+            21,
+            number=5000,
+            created_at="2026-07-15T00:00:03Z",
+            event="labeled",
+        ),
+    ]
+
+    with pytest.raises(RuntimeError, match="ordering mismatch"):
+        GhCliVerificationSource(
+            runner=lambda *_args, **_kwargs: Result(events)
+        ).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+
+
+def test_gh_source_fetches_exact_bounded_merge_commit_identity() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    sha = "b" * 40
+    endpoint = f"repos/{REPO}/git/commits/{sha}"
+
+    def runner(command, **_kwargs):
+        assert command[-1] == endpoint
+        return Result(
+            {
+                "sha": sha,
+                "url": f"https://api.github.com/repos/{REPO}/git/commits/{sha}",
+                "message": "Merge verified issue set\n\nAuthority retained by receipt.",
+                "verification": {"payload": "must-not-cross-boundary"},
+            }
+        )
+
+    assert GhCliVerificationSource(runner=runner).merge_commit(REPO, sha) == {
+        "repository": REPO,
+        "sha": sha,
+        "message": "Merge verified issue set\n\nAuthority retained by receipt.",
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "sha": "c" * 40,
+            "url": f"https://api.github.com/repos/{REPO}/git/commits/{'c' * 40}",
+            "message": "Merge verified issue set",
+        },
+        {
+            "sha": "b" * 40,
+            "url": (
+                "https://api.github.com/repos/attacker/redirect/git/commits/"
+                + "b" * 40
+            ),
+            "message": "Merge verified issue set",
+        },
+    ],
+)
+def test_gh_source_rejects_mismatched_merge_commit_identity(payload) -> None:
+    class Result:
+        returncode = 0
+        stdout = json.dumps(payload)
+
+    with pytest.raises(RuntimeError, match="merge commit identity mismatch"):
+        GhCliVerificationSource(runner=lambda *_args, **_kwargs: Result()).merge_commit(
+            REPO, "b" * 40
+        )
+
+
+def test_gh_source_merge_commit_read_is_size_bounded() -> None:
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"padding": "x" * 70_000})
+
+    with pytest.raises(RuntimeError, match="exceeds bounded read"):
+        GhCliVerificationSource(runner=lambda *_args, **_kwargs: Result()).merge_commit(
+            REPO, "b" * 40
+        )
+
+
+def test_merged_recovery_pending_replay_uses_durable_authority_budget_after_advance(
+    tmp_path,
+) -> None:
+    repaired_head = "c" * 40
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    persisted_pack = verification_consumer.context_pack(
+        claimed,
+        eligible_pr(),
+        repair_budget=state.repair_budget_projection(run.run_id),
+    )
+    launch_budget = persisted_pack["repair_budget"]
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000030",
+        persisted_pack,
+    )
+    rebound = state.rebind_head(
+        run.run_id,
+        repaired_head,
+        expected_head_sha=HEAD,
+        observed_repository=REPO,
+        observed_pr_number=3603,
+        observed_head_sha=repaired_head,
+        holder="crashed-host",
+        lease_id=running.lease_id or "",
+    )
+    state.record_attempt(
+        run.run_id,
+        "standard_repair",
+        "repair-session",
+        "gpt-5.6-terra",
+        "high",
+        {"head_sha": repaired_head},
+        "fixed",
+        {
+            "finding_id": "F-recovery",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "same-session-repair",
+        },
+        holder="crashed-host",
+        lease_id=rebound.lease_id or "",
+    )
+    advanced_budget = state.repair_budget_projection(run.run_id)
+    assert advanced_budget != launch_budget
+    plan = _merge_plan(repaired_head, repair_budget=launch_budget)
+    crashed_pr = merged_pr(
+        body=plan["neutralized_body"],
+        head={"ref": "branch", "sha": repaired_head},
+    )
+
+    class RecoveryTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(crashed_pr, green_checks(repaired_head))
+            self.phase = "prepared"
+            self.fail_next_pull = False
+
+        def pull_request(self, repository, pr_number):
+            if self.fail_next_pull:
+                self.fail_next_pull = False
+                raise RuntimeError("simulated post-launch GitHub read outage")
+            return super().pull_request(repository, pr_number)
+
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(
+                self._last_pr,
+                phase=self.phase,
+                repair_budget=launch_budget,
+            )
+
+    truth = RecoveryTruth()
+
+    class RecoveryLauncher(DeliveredLauncher):
+        def launch(self, context_pack, **kwargs):
+            assert context_pack["head_sha"] == repaired_head
+            assert context_pack["repair_budget"] == advanced_budget
+            assert context_pack["requested_head_sha"] == HEAD
+            truth.pr = merged_pr(head={"ref": "branch", "sha": repaired_head})
+            truth._last_pr = truth.pr
+            truth.phase = "restored"
+            truth.fail_next_pull = True
+            session, receipt = super().launch(context_pack, **kwargs)
+            return session, {**receipt, "head_sha": repaired_head}
+
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", run.run_id),
+        )
+        conn.commit()
+
+    consumer = VerificationConsumer(
+        state, truth, Auth(), RecoveryLauncher(), "recovery-host"
+    )
+    pending = consumer.recover(run.run_id)
+
+    assert pending.status == "backoff"
+    assert pending.terminal_receipt["reason"] == "postlaunch_live_truth_unavailable"
+    assert pending.terminal_receipt["pending_terminal_receipt"]["verdict"] == "delivered"
+    assert pending.terminal_receipt["merge_authority_repair_budget"] == launch_budget
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (run.run_id,),
+        )
+        conn.commit()
+
+    completed = consumer.consume(
+        _authenticated_verification_request(request(repaired_head))
+    )
+
+    assert completed.status == "completed"
+    assert completed.head_sha == repaired_head
+    assert completed.requested_head_sha == HEAD
+    assert [row["kind"] for row in state.attempts(run.run_id)] == [
+        "standard_repair",
+        "verification",
+        "review",
+        "review",
+    ]
+    assert len(consumer.launcher.calls) == 1
+    assert state.repair_budget_projection(run.run_id) == advanced_budget
+
+
 def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id: int = 123):
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w") as archive:
@@ -873,6 +2892,29 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
                         "status": "completed",
                         "conclusion": "success",
                         "head_sha": "b" * 40,
+                        "repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                        "head_repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                    }
+                )
+            )
+        if command[-1].endswith("actions/runs/99"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": 99,
+                        "run_attempt": 1,
+                        "name": "CI",
+                        "path": ".github/workflows/ci.yml",
+                        "event": "pull_request",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": HEAD,
                         "repository": {
                             "id": 456,
                             "full_name": "RasmusTho/agentic-pkm-mvp",
@@ -1076,6 +3118,29 @@ def test_pending_request_rejects_workflow_run_mismatch() -> None:
     assert len(calls) == 3
 
 
+def test_pending_request_rejects_v1_empty_supporting_closure_authority() -> None:
+    payload = artifact_request()
+    payload["contract_version"] = "verification_dispatch_request.v1"
+    payload.pop("closing_issues")
+    assert payload["supporting_issues"] == []
+    identity = {
+        "contract_version": payload["contract_version"],
+        "head_sha": payload["current_head_sha"],
+        "pr_number": payload["pr_number"],
+        "repository": payload["repository"],
+        "stage": payload["stage"],
+    }
+    payload["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    source, calls = _artifact_source_for_request(payload)
+
+    with pytest.raises(ValueError, match="request artifact is malformed"):
+        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+
+    assert len(calls) == 4
+
+
 @pytest.mark.parametrize("pr,checks,reason", [
     ({}, GREEN, "malformed_pr"),
     (eligible_pr(draft=True), GREEN, "draft"),
@@ -1101,7 +3166,78 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     assert resumed is None
     assert pack["agent_adapter"] == ".codex/agents/verification-closer.toml"
     assert pack["verification_skill"] == ".codex/skills/verification-and-closure/SKILL.md"
+    assert pack["verified_merge_phase_contract"] == (
+        "verified_issue_set_merge_phase.v1"
+    )
+    assert pack["verified_merge_phase_writer"] == (
+        "scripts/build_verified_issue_set_merge_phase.py"
+    )
+    assert pack["governing_issue"] == 3603
+    assert pack["closing_issues"] == [3603]
+    assert pack["supporting_issues"] == []
     assert "body" not in pack and "credentials" not in pack
+
+
+def test_multi_issue_context_separates_parent_closure_and_evidence_authority(
+    tmp_path,
+) -> None:
+    dispatch_request = request()
+    dispatch_request["supporting_issues"] = [3626, 3698, 3705]
+    dispatch_request["closing_issues"] = [3626, 3698]
+    pr = eligible_pr(
+        body=(
+            "Governing-Issue: #3603\n\nRefs #3705\n"
+            "Fixes #3626\nCloses #3698"
+        )
+    )
+    launcher = Launcher()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "needs_human"
+    pack, _ = launcher.calls[0]
+    assert pack["governing_issue"] == 3603
+    assert pack["closing_issues"] == [3626, 3698]
+    assert pack["supporting_issues"] == [3626, 3698, 3705]
+
+
+def test_live_body_cannot_expand_authenticated_closing_authority(tmp_path) -> None:
+    dispatch_request = request()
+    dispatch_request["closing_issues"] = [3626]
+    dispatch_request["supporting_issues"] = [3626]
+    pr = eligible_pr(
+        body=(
+            "Governing-Issue: #3603\nFixes #3626\n"
+            "Refs #9999\nCloses #9999"
+        )
+    )
+    launcher = Launcher()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
+
+
+@pytest.mark.parametrize("separator", ["\r", "\u2028", "\u2029"])
+def test_unsupported_authority_line_separator_never_launches_consumer(
+    tmp_path, separator
+) -> None:
+    launcher = Launcher()
+    pr = eligible_pr(body=f"Governing-Issue: #3603{separator}Fixes #3603")
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
 
 
 def test_needs_human_receipt_persists_deduplicated_exception(tmp_path) -> None:
@@ -1302,7 +3438,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
     ]
     original_head = HEAD
     truth = Truth(
-        eligible_pr(body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626"),
+        eligible_pr(body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"),
         GREEN,
     )
 
@@ -1313,7 +3449,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
             truth.pr = eligible_pr(
                 body=(
                     "Governing-Issue: #3603\n\nRefs #3603\n"
-                    "Fixes #3626\nFixes #3745"
+                    "Fixes #3603\nRefs #3626\nRefs #3745"
                 ),
                 head={"ref": "branch", "sha": new_head},
             )
@@ -1510,6 +3646,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
     class ReviewOnlyDeliveryLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
             self.calls.append((context_pack, kwargs.get("resume_session_id")))
+            truth.merge_repair_budget = context_pack["repair_budget"]
             truth.pr = merged_pr(head={"ref": "branch", "sha": new_head})
             return "01900000-0000-7000-8000-000000000020", {
                 "verdict": "delivered",
@@ -1766,15 +3903,17 @@ def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None
     dispatch_request = request()
     dispatch_request["supporting_issues"] = [3626]
     original_pr = eligible_pr(
-        body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626"
+        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
     )
     terminal_pr = merged_pr(
         body=(
             "Governing-Issue: #3603\n\nRefs #3603\n"
-            "Fixes #3626\nFixes #3745"
+            "Fixes #3603\nRefs #3626\nRefs #3745"
         )
     )
-    truth = TransitionTruth(terminal_pr)
+    truth = TransitionTruth(
+        terminal_pr, authenticated_supporting=(3626,)
+    )
     truth.prs = iter([original_pr, original_pr, terminal_pr])
     result = VerificationConsumer(
         ledger(tmp_path),
@@ -1786,6 +3925,37 @@ def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None
 
     assert result.status == "completed"
     assert result.verified_head_sha == HEAD
+
+
+def test_same_head_live_supporting_add_remove_is_never_dispatched(
+    tmp_path,
+) -> None:
+    dispatch_request = request()
+    dispatch_request["supporting_issues"] = [3626]
+    added = eligible_pr(
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603\n"
+            "Refs #3626\nRefs #9999"
+        )
+    )
+    terminal = merged_pr(
+        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
+    )
+    truth = TransitionTruth(
+        terminal, authenticated_supporting=(3626,)
+    )
+    truth.prs = iter([added, added, terminal])
+    launcher = DeliveredLauncher()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), truth, Auth(), launcher, "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "completed"
+    pack, _ = launcher.calls[0]
+    assert pack["supporting_issues"] == [3626]
+    assert 9999 not in pack["supporting_issues"]
+    assert result.supporting_authority == (3626,)
 
 
 def test_delivered_receipt_rejects_unnamed_or_missing_required_gate(tmp_path) -> None:
@@ -1894,6 +4064,91 @@ def test_delivered_receipt_rejects_closed_unmerged_or_mismatched_merge(
 
     assert result.status == "failed"
     assert result.stop_reason == reason
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fixes #3603\n\ncaller supplied body",
+        "Merge verified issue set\n\nCloses #not-a-number",
+        "Merge verified issue set\n\nResolves other/repository#4999",
+        (
+            "Merge verified issue set\n\nFixes "
+            "https://github.com/other/repository/issues/4999"
+        ),
+    ],
+)
+def test_delivered_receipt_rejects_merge_commit_closing_attempts(
+    tmp_path, message
+) -> None:
+    class ClosingCommitTruth(TransitionTruth):
+        def merge_commit(self, repository, merge_commit_sha):
+            return _merge_commit(
+                repository=repository,
+                sha=merge_commit_sha,
+                message=message,
+            )
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        ClosingCommitTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_commit_closing_attempt"
+
+
+def test_delivered_receipt_rejects_cross_repository_merge_commit_evidence(
+    tmp_path,
+) -> None:
+    class CrossRepositoryCommitTruth(TransitionTruth):
+        def merge_commit(self, repository, merge_commit_sha):
+            return _merge_commit(
+                repository="attacker/redirect",
+                sha=merge_commit_sha,
+            )
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        CrossRepositoryCommitTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_merge_commit_repository_mismatch"
+
+
+def test_merged_recovery_rejects_closing_merge_commit_before_phase_acceptance(
+    tmp_path,
+) -> None:
+    class ClosingCommitTruth(Truth):
+        def merge_commit(self, repository, merge_commit_sha):
+            return _merge_commit(
+                repository=repository,
+                sha=merge_commit_sha,
+                message="Merge verified issue set\n\nFixes other/repository#4999",
+            )
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    consumer = VerificationConsumer(
+        state,
+        ClosingCommitTruth(merged_pr(), GREEN),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="merge_commit_closing_attempt",
+    ):
+        consumer._merged_recovery_pack(run, merged_pr(), GREEN)
 
 
 def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_path, monkeypatch) -> None:

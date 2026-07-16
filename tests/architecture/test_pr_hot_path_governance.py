@@ -55,12 +55,42 @@ def test_verification_skill_distinguishes_issue_backed_and_direct_repair_modes()
     text = _read(".codex/skills/verification-and-closure/SKILL.md")
 
     for fragment in (
-        "For issue-backed PRs, close or update the governing Issue as usual.",
+        "For issue-backed PRs, close the exact closing issues and update the governing issue",
         "For direct repair PRs, verify the `Direct Repair` block instead of issue ACs.",
         "Do not create an Issue after the fact solely for a bounded direct repair.",
         "Direct repair merged: PR #<n>, type=<type>, validation=<checks>.",
     ):
         assert fragment in text, fragment
+
+
+def test_verification_execution_checklist_uses_exact_closing_issue_set() -> None:
+    text = _read(".codex/skills/verification-and-closure/SKILL.md")
+
+    for fragment in (
+        "explicitly close every and only the authenticated `closing_issues`",
+        "remove all agent labels from every closed issue",
+        "never project an unclosed governing parent `Done`",
+        "same PR-specific\n    result on every exact closed issue",
+        "governing/closing identities equal the\n   durable receipt",
+        "bounded monotonic supporting additions may be retained only as evidence",
+    ):
+        assert fragment in text
+
+
+def test_verification_merge_uses_fixed_non_closing_commit_identity() -> None:
+    text = _read(".codex/skills/verification-and-closure/SKILL.md")
+    normalized_text = " ".join(text.split())
+
+    for fragment in (
+        "reject any mismatch or title closing attempt",
+        "exact-head REST endpoint using the verified SHA",
+        "fixed non-closing commit title/message",
+        "Never use GitHub-synthesized or caller-supplied free-form merge text",
+        "prove its title/message contains no canonical or malformed closing attempt",
+        "converts every authenticated closer to evidence-only `Refs`",
+        "`closingIssuesReferences` is empty",
+    ):
+        assert fragment in normalized_text
 
 
 def test_issue_to_code_skill_accepts_direct_repair_without_unconditional_issue_traceability() -> None:
@@ -74,6 +104,18 @@ def test_issue_to_code_skill_accepts_direct_repair_without_unconditional_issue_t
         assert fragment in text, fragment
 
 
+def test_issue_to_code_requires_canonical_issue_authority_at_publication() -> None:
+    text = _read(".codex/skills/issue-to-code/SKILL.md")
+
+    for fragment in (
+        "exactly one `Governing-Issue: #<issue>` line",
+        "closing-keyword line for fully delivered work",
+        "approved multi-Issue PR",
+        "PR_HOT_PATH.md :: Multi-Issue PR Scope",
+    ):
+        assert fragment in " ".join(text.split())
+
+
 def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox() -> None:
     text = _read(".github/workflows/issue-pr-governance.yml")
 
@@ -82,6 +124,8 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
         "const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing",
         "const hasBuilderOpsRouting =",
         "const tier1LanePattern =",
+        "const classifyIssueAuthority =",
+        "const hasIssueAuthority =",
         "const builderOpsRoutingSatisfied =",
         "PR body must include `## BuilderOps Routing`",
         "const isDirectRepair =",
@@ -97,7 +141,7 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
         "const docsAuthoringPattern ="
     )
     assert text.index("const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing") < text.index(
-        "const issueLinkPattern ="
+        "const classifyIssueAuthority ="
     )
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
 
@@ -111,6 +155,140 @@ def test_pr_template_includes_builderops_routing_receipt() -> None:
         "Reason:",
     ):
         assert fragment in text, fragment
+
+
+def test_publication_surfaces_require_governing_issue_identity() -> None:
+    template = _read(".github/pull_request_template.md")
+    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+
+    assert "Governing-Issue: #" in template
+    assert "Governing-Issue: #<ISSUE_NUMBER>" in publish_skill
+    assert "Fixes #<ISSUE_NUMBER>" in publish_skill
+
+
+def test_canonical_agent_rules_allow_open_multi_issue_governor() -> None:
+    agents = _read("AGENTS.md")
+    normalized_agents = " ".join(agents.split())
+
+    for fragment in (
+        "exactly one `Governing-Issue: #<id>` line",
+        "the governing parent may remain open",
+        "closing keywords name only the fully delivered issues",
+        "PR_HOT_PATH.md :: Multi-Issue PR Scope",
+    ):
+        assert fragment in normalized_agents
+
+
+def test_open_governing_parent_uses_issue_set_gate_not_unfinished_feature_acs() -> None:
+    agents = " ".join(_read("AGENTS.md").split())
+    hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
+    closure_skill = " ".join(
+        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+    )
+
+    for text in (agents, hot_path, closure_skill):
+        assert "exact closing" in text
+        assert "issue-set contract" in text
+        assert "unfinished feature" in text
+        assert "do not block delivery" in text
+    assert "all acceptance criteria from the governing Issue" not in closure_skill
+
+
+def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
+    agents = " ".join(_read("AGENTS.md").split())
+    hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
+    closure_skill = " ".join(
+        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+    )
+
+    for fragment in (
+        "neutralize",
+        "fixed non-closing",
+        "explicitly close",
+        "authenticated issue set",
+        "race-added",
+        "restoring the authenticated body",
+        "durable receipt",
+    ):
+        assert (
+            fragment in agents.lower()
+            or fragment in hot_path.lower()
+            or fragment in closure_skill.lower()
+        )
+    for fragment in (
+        "scripts/prepare_verified_issue_set_merge.py",
+        "scripts/build_verified_issue_set_merge_phase.py",
+        "closingIssuesReferences` is empty",
+        "latest `pr-contract` run triggered by that `edited` event",
+        "Never reuse the pre-edit green `pr-contract` result",
+        "explicitly close every and only",
+        "plan_post_merge_reconciliation",
+        "restore the authenticated original PR body",
+        "prepared/merged/reconciled/restored",
+        "merged-but-incomplete",
+        "without resetting attempts or the 2+2 repair budget",
+        "every and only authenticated closing issue",
+    ):
+        assert fragment in closure_skill
+
+    for fragment in (
+        "prepared/merged/reconciled/restored phases",
+        "every and only authenticated issue is closed",
+        "resumes a crashed post-merge sequence idempotently",
+        "without resetting attempts or the 2+2 repair budget",
+    ):
+        assert fragment in hot_path
+
+    verification_closer = " ".join(
+        _read(".codex/agents/verification-closer.toml").split()
+    )
+    for fragment in (
+        "prepared -> merged -> reconciled -> restored",
+        "merged but incomplete",
+        "without resetting attempts or the 2+2 budget",
+        "every and only the authenticated closing issues",
+    ):
+        assert fragment in verification_closer
+
+
+def test_dispatcher_owner_doc_owns_schema_v6_merge_and_closure_invariants() -> None:
+    owner_doc = " ".join(_read("docs/AGENT_ISSUE_DISPATCHER.md").split())
+
+    for fragment in (
+        "SCHEMA_VERSION = 6",
+        "All v1 requests have unknown exact closure authority",
+        "verification_legacy_recovery_audit.v2",
+        "at most 10 closing issues",
+        "prepared -> merged -> reconciled -> restored",
+        "synthetic or malformed open-PR `merge_commit_sha`",
+        "One bounded GraphQL `ClosedEvent.closer` batch",
+        "a merge commit message can never become closer authority",
+        "trusted-but-invalid receipt fails closed",
+        "post-merge owner-doc check: PR #<PR>;",
+    ):
+        assert fragment in owner_doc
+
+
+def test_owner_doc_policy_requires_pr_specific_child_and_open_parent_receipts() -> None:
+    agents = " ".join(_read("AGENTS.md").split())
+    hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
+    closure_skill = " ".join(
+        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+    )
+    owner_doc_skill = " ".join(
+        _read(".codex/skills/post-merge-owner-doc/SKILL.md").split()
+    )
+
+    assert "post-merge owner-doc result is PR-specific" in agents
+    assert "every exact closed issue" in agents
+    assert "distinct open governing parent" in agents
+    assert "generic receipt or one for another PR" in agents
+    assert "PR-specific receipt on every closed child" in hot_path
+    assert "every exact closed issue" in closure_skill
+    assert "post-merge owner-doc check: PR #<PR>;" in closure_skill
+    assert "every exact authenticated closing issue" in owner_doc_skill
+    assert "distinct open governing parent" in owner_doc_skill
+    assert "generic receipt" in owner_doc_skill
 
 
 import re as _re

@@ -123,10 +123,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
+      issues: read
     steps:
       - uses: actions/github-script@v7
         with:
           script: |
+            const crypto = require("crypto");
             const { data: pullRequest } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -144,8 +146,225 @@ jobs:
             // (e.g. a change list describing this very check) is not mistaken for the section.
             const builderOpsRoutingMatch = body.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
-            const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
-            const hasIssueLink = issueLinkPattern.test(body);
+            // authority-classifier:start
+            const classifyIssueAuthority = (candidateBody) => {
+              const hasUnsupportedLineSeparator = /\r(?!\n)|[\u2028\u2029]/.test(candidateBody);
+              const canonicalBody = candidateBody.replace(/\r\n/g, "\n");
+              const governingKeyword = "[Gg][Oo][Vv][Ee][Rr][Nn][Ii][Nn][Gg]-[Ii][Ss][Ss][Uu][Ee]";
+              const closingKeyword = "(?:[Ff][Ii][Xx](?:[Ee][Ss]|[Ee][Dd])?|[Cc][Ll][Oo][Ss][Ee](?:[Ss]|[Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee](?:[Ss]|[Dd])?)";
+              const issueTokenPrefix = "(?:^|[^0-9A-Za-z_])";
+              const issueTokenTerminator = "(?=$|[ \\t\\r\\n.,;:)\\]}])";
+              const asciiClosingSeparator = "(?:[ \\t]+|[ \\t]*:[ \\t]*)";
+              const explicitWhitespace = "[ \\t\\n\\v\\f\\r\\x85\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
+              const closingAttemptSeparator = `(?:${explicitWhitespace}+|${explicitWhitespace}*:${explicitWhitespace}*)`;
+              const githubIssueUrlTarget = "[Hh][Tt][Tt][Pp][Ss]?://[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+/[Ii][Ss][Ss][Uu][Ee][Ss]/";
+              const closingAttemptTarget = `(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#|${githubIssueUrlTarget})`;
+              const maxClosingIssues = 10;
+              const governingIssueLines = canonicalBody.match(
+                new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
+              ) || [];
+              const exactGoverningIssueMatches = canonicalBody.match(
+                new RegExp(`^[ \\t]*${governingKeyword}:[ \\t]*#([1-9][0-9]*)[ \\t]*$`, "gm")
+              ) || [];
+              const issueLinkMentions = canonicalBody.match(
+                new RegExp(`${issueTokenPrefix}${closingKeyword}${closingAttemptSeparator}${closingAttemptTarget}`, "gm")
+              ) || [];
+              const exactIssueLinkMatches = canonicalBody.match(
+                new RegExp(`${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+              ) || [];
+              const neutralizedClosingLines = canonicalBody.match(
+                /^[ \t]*Verified-Closing-Issues[ \t]*:.*$/gm
+              ) || [];
+              const exactNeutralizedClosingMatches = canonicalBody.match(
+                /^[ \t]*Verified-Closing-Issues:[ \t]*#[1-9][0-9]*(?:,[ \t]*#[1-9][0-9]*)*[ \t]*$/gm
+              ) || [];
+              const refsMatches = canonicalBody.match(
+                new RegExp(`${issueTokenPrefix}[Rr][Ee][Ff][Ss][ \\t]+#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+              ) || [];
+              const closingIssueNumbers = new Set(
+                exactIssueLinkMatches.map((match) => {
+                  const token = match.match(/#([1-9][0-9]*)(?=$|[ \t\r\n.,;:)\]}])/);
+                  return token ? token[1] : "";
+                })
+              );
+              const neutralizedIssueNumbers = exactNeutralizedClosingMatches.length === 1
+                ? exactNeutralizedClosingMatches[0]
+                    .split(":", 2)[1]
+                    .split(",")
+                    .map(token => Number(token.trim().slice(1)))
+                : [];
+              const governingIssueNumber = exactGoverningIssueMatches.length === 1
+                ? Number(exactGoverningIssueMatches[0].match(/#([1-9][0-9]*)/)[1])
+                : null;
+              const referencedIssueNumbers = new Set([
+                ...refsMatches.map((match) => {
+                  const token = match.match(/#([1-9][0-9]*)(?=$|[ \t\r\n.,;:)\]}])/);
+                  return token ? Number(token[1]) : 0;
+                }),
+                ...exactGoverningIssueMatches.map((match) => Number(match.match(/#([1-9][0-9]*)/)[1])),
+              ]);
+              const hasIssueLink = exactIssueLinkMatches.length > 0;
+              const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0 || neutralizedClosingLines.length > 0;
+              const valid =
+                !hasUnsupportedLineSeparator &&
+                governingIssueLines.length === 1 &&
+                exactGoverningIssueMatches.length === 1 &&
+                hasIssueLink &&
+                issueLinkMentions.length === exactIssueLinkMatches.length &&
+                closingIssueNumbers.size <= maxClosingIssues &&
+                neutralizedClosingLines.length === 0;
+              const neutralizedValid =
+                !hasUnsupportedLineSeparator &&
+                governingIssueLines.length === 1 &&
+                exactGoverningIssueMatches.length === 1 &&
+                issueLinkMentions.length === 0 &&
+                neutralizedClosingLines.length === 1 &&
+                exactNeutralizedClosingMatches.length === 1 &&
+                neutralizedIssueNumbers.length > 0 &&
+                neutralizedIssueNumbers.length <= maxClosingIssues &&
+                new Set(neutralizedIssueNumbers).size === neutralizedIssueNumbers.length &&
+                neutralizedIssueNumbers.every((number, index) =>
+                  Number.isInteger(number) && number > 0 &&
+                  (index === 0 || neutralizedIssueNumbers[index - 1] < number) &&
+                  referencedIssueNumbers.has(number)
+                );
+              return {
+                closingIssues: [...closingIssueNumbers].map(Number).sort((a, b) => a - b),
+                closingIssueCount: hasIssueLink ? closingIssueNumbers.size : neutralizedIssueNumbers.length,
+                exactGoverningIssueMatches,
+                exactIssueLinkMatches,
+                governingIssueLines,
+                hasIssueAuthority,
+                hasIssueLink,
+                hasUnsupportedLineSeparator,
+                issueLinkMentions,
+                governingIssue: governingIssueNumber,
+                neutralizedClosingIssues: neutralizedIssueNumbers,
+                neutralizedValid,
+                supportingIssues: [...referencedIssueNumbers]
+                  .filter(number => number !== governingIssueNumber)
+                  .sort((a, b) => a - b),
+                valid,
+              };
+            };
+            // authority-classifier:end
+            // neutralized-authority-validator:start
+            const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            const AUTHORITY_MARKER = "verified issue-set merge authority:";
+            const AUTHORITY_FIELDS = [
+              "authenticated_supporting_issues", "body_sha256", "closing_issues", "contract",
+              "governing_issue", "head_sha", "live_supporting_issues", "neutralized_body_sha256",
+              "pr_number", "repair_budget", "repository", "run_id",
+            ].sort();
+            const arraysEqual = (left, right) =>
+              left.length === right.length && left.every((value, index) => value === right[index]);
+            const hasExactFields = (value, fields) =>
+              value !== null && typeof value === "object" && !Array.isArray(value) &&
+              arraysEqual(Object.keys(value).sort(), fields);
+            const isSortedIssueArray = (value, {allowEmpty = true, maximum = null} = {}) =>
+              Array.isArray(value) && (allowEmpty || value.length > 0) &&
+              (maximum === null || value.length <= maximum) &&
+              value.every((number, index) =>
+                Number.isInteger(number) && number > 0 &&
+                (index === 0 || value[index - 1] < number)
+              );
+            const canonicalJson = value => {
+              if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+              if (value !== null && typeof value === "object") {
+                return `{${Object.keys(value).sort().map(key =>
+                  `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+                ).join(",")}}`;
+              }
+              return JSON.stringify(value);
+            };
+            const sha256 = value => crypto.createHash("sha256").update(value, "utf8").digest("hex");
+            const trustedAuthorityReceipts = comments => {
+              const escaped = AUTHORITY_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const pattern = new RegExp(`${escaped}\\s*\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\``, "gm");
+              const receipts = [];
+              for (const comment of comments) {
+                if (!TRUSTED_ASSOCIATIONS.has(comment.author_association) || typeof comment.body !== "string") continue;
+                const matches = [...comment.body.matchAll(pattern)];
+                if (matches.length !== 1) continue;
+                try {
+                  const receipt = JSON.parse(matches[0][1]);
+                  if (receipt !== null && typeof receipt === "object" && !Array.isArray(receipt)) {
+                    receipts.push(receipt);
+                  }
+                } catch {}
+              }
+              return receipts;
+            };
+            const resolveNeutralizedMergeAuthority = ({comments, issueAuthority, pullRequest, repository}) => {
+              if (!issueAuthority.neutralizedValid) return null;
+              const liveBody = pullRequest.body || "";
+              const liveDigest = sha256(liveBody);
+              const valid = trustedAuthorityReceipts(comments).filter(receipt => {
+                const closing = receipt.closing_issues;
+                const authenticatedSupporting = receipt.authenticated_supporting_issues;
+                const liveSupporting = receipt.live_supporting_issues;
+                return (
+                  hasExactFields(receipt, AUTHORITY_FIELDS) &&
+                  receipt.contract === "verified_issue_set_merge_authority.v1" &&
+                  receipt.repository === repository && receipt.pr_number === pullRequest.number &&
+                  receipt.head_sha === pullRequest.head?.sha &&
+                  typeof receipt.run_id === "string" && receipt.run_id.length > 0 &&
+                  receipt.repair_budget !== null && typeof receipt.repair_budget === "object" &&
+                  !Array.isArray(receipt.repair_budget) &&
+                  receipt.governing_issue === issueAuthority.governingIssue &&
+                  isSortedIssueArray(closing, {allowEmpty: false, maximum: 10}) &&
+                  arraysEqual(closing, issueAuthority.neutralizedClosingIssues) &&
+                  isSortedIssueArray(authenticatedSupporting) &&
+                  isSortedIssueArray(liveSupporting) &&
+                  arraysEqual(liveSupporting, issueAuthority.supportingIssues) &&
+                  authenticatedSupporting.every(number => liveSupporting.includes(number)) &&
+                  closing.every(number =>
+                    number === receipt.governing_issue || authenticatedSupporting.includes(number)
+                  ) &&
+                  typeof receipt.body_sha256 === "string" && /^[0-9a-f]{64}$/.test(receipt.body_sha256) &&
+                  typeof receipt.neutralized_body_sha256 === "string" &&
+                  /^[0-9a-f]{64}$/.test(receipt.neutralized_body_sha256) &&
+                  receipt.body_sha256 !== receipt.neutralized_body_sha256 &&
+                  receipt.neutralized_body_sha256 === liveDigest
+                );
+              });
+              if (valid.length === 0 || new Set(valid.map(canonicalJson)).size !== 1) return null;
+              return valid[valid.length - 1];
+            };
+            // neutralized-authority-validator:end
+            const issueAuthority = classifyIssueAuthority(body);
+            const hasIssueAuthority = issueAuthority.hasIssueAuthority;
+            const titleClosureAttempt = classifyIssueAuthority(
+              pullRequest.title || ""
+            ).issueLinkMentions.length > 0;
+            if (titleClosureAttempt) {
+              core.setFailed("Closing keywords are forbidden in the PR title because GitHub may copy the title into a generated merge commit outside the authenticated PR-body closing set.");
+              return;
+            }
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            if (
+              !Number.isInteger(pullRequest.commits) ||
+              pullRequest.commits < 0 ||
+              commits.length !== pullRequest.commits
+            ) {
+              core.setFailed("PR commit enumeration is incomplete or malformed; fail closed because GitHub caps the pull-request commit list and an unscanned commit could carry closure authority.");
+              return;
+            }
+            const commitClosureAttempt = commits.some((item) => {
+              const message = item && item.commit && item.commit.message
+                ? item.commit.message
+                : "";
+              return classifyIssueAuthority(message).issueLinkMentions.length > 0;
+            });
+            if (commitClosureAttempt) {
+              core.setFailed("Closing keywords belong only in the authenticated PR-body authority contract; commit-message closing references are forbidden because GitHub can apply them outside the persisted closing set.");
+              return;
+            }
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
               if (!match) {
@@ -159,12 +378,34 @@ jobs:
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*(.*?)\s*(?:\n|$)/i) &&
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)/i);
             const builderOpsRoutingSatisfied =
-              hasBuilderOpsRouting || (isTier1Lane && !hasIssueLink && !builderOpsRoutingSection);
+              hasBuilderOpsRouting || (isTier1Lane && !hasIssueAuthority && !builderOpsRoutingSection);
             if (!builderOpsRoutingSatisfied) {
               core.setFailed("PR body must include `## BuilderOps Routing` with concrete `Records/projections/receipts:` and `Reason:` lines. Tier 1 docs-authoring/governance-lane PRs may omit the section entirely when nothing was routed (absence = none); an unfilled template section is still rejected.");
               return;
             }
-            if (hasIssueLink) {
+            if (hasIssueAuthority) {
+              if (!issueAuthority.valid && !issueAuthority.neutralizedValid) {
+                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and between one and ten unique positive closing issues. During verified merge only, a sorted `Verified-Closing-Issues: #<id>[, #<id>]` line with evidence-only Refs may replace closing keywords so GitHub cannot auto-close mutable body authority. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
+                return;
+              }
+              if (issueAuthority.neutralizedValid) {
+                const comments = await github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  per_page: 100,
+                });
+                const mergeAuthority = resolveNeutralizedMergeAuthority({
+                  comments,
+                  issueAuthority,
+                  pullRequest,
+                  repository: `${context.repo.owner}/${context.repo.repo}`,
+                });
+                if (mergeAuthority === null) {
+                  core.setFailed("A neutralized PR body is valid only during verified merge and requires one trusted, non-conflicting exact-head verified-merge authority receipt bound to the live body and complete issue set.");
+                  return;
+                }
+              }
               return;
             }
             // Regex handles Direct Repair block in any position:
