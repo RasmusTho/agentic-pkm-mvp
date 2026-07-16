@@ -25,3 +25,42 @@ def test_companion_api_paths_select_api_targets() -> None:
     assert "companion_ui" in selection.subsystems
     assert "tests/companion_ui" in selection.targets
     assert "tests/api" in selection.targets
+
+
+def test_observability_runtime_paths_select_observability_coverage() -> None:
+    # Structured-logging surface (#3895): app/observability/** is owned so a
+    # logging/tracer change runs its home suite instead of fail-closing as
+    # unowned before pytest starts.
+    selection = select_tests(
+        [
+            "app/observability/__init__.py",
+            "app/observability/logging_setup.py",
+            "app/observability/tracer.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("observability",)
+    assert selection.unowned_paths == ()
+    assert "tests/observability" in selection.targets
+    assert "tests/api" in selection.targets
+
+
+def test_trace_middleware_is_owned_by_companion_ui() -> None:
+    # TraceIdMiddleware is wired only into app/api/app.py; its regression
+    # lives in tests/api (a companion_ui target).
+    selection = select_tests(["app/middleware/trace.py"])
+
+    assert selection.unowned_paths == ()
+    assert "companion_ui" in selection.subsystems
+    assert "tests/api" in selection.targets
+
+
+def test_watcher_cli_entrypoint_is_owned_by_watcher_sync() -> None:
+    # `python -m app.cli watcher run` is the watcher process entrypoint; its
+    # CLI regressions live in tests/watcher (e.g. test_cli_idle_vs_disabled).
+    selection = select_tests(["app/cli/watcher.py"])
+
+    assert selection.unowned_paths == ()
+    assert "watcher_sync" in selection.subsystems
+    assert "tests/watcher" in selection.targets
