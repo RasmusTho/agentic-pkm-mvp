@@ -53,6 +53,18 @@ Notes on the current model:
 - Companion UI gateways are now declared as managed compose units in the repo, but the running fleet has not yet adopted the pinned-image model. The cutover guard therefore checks gateway-unit participation in the recreate set before #2698 can treat a channel as ready.
 - A partial build-identity foundation already exists: #2602 bakes `VCS_REF`/`BUILT_AT` into the image (Dockerfile ARG/LABEL/ENV), `get_runtime_version()` in `app/version.py` reads them (falling back to `git rev-parse` for local dev), `/version` returns `{git_sha, built_at}`, and `/api/health` carries a top-level `version` field. **But the `test`/`prod` `/app` bind-mount overrides the baked code**, so today those channels run the host checkout, not the image — the SHA marker can disagree with what is actually executing until the bind-mount is retired.
 
+### Multi-vault instance-state rollout boundary
+
+MVR-01A introduces the dormant `app.instance.vault_registry` store and its private-file,
+cross-process lock, CAS, snapshot, and corruption-recovery contracts. It does not change current
+channel mounts or make that schema authoritative. The production picker continues to write the
+legacy scalar app-local payload.
+
+The protected per-channel `/app/instance-state` volume, cross-consumer mount/preflight, backup and
+rollback transformer are MVR-01B work. MVR-01C owns the guarded authority cutover. A deployment must
+therefore not infer that the presence of the dormant schema permits a second active production
+binding or retire the legacy source before those later gates are present.
+
 ### Target
 
 | Surface | dev | test | prod |

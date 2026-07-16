@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 from uuid import uuid4
 
-from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
+from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 
 if TYPE_CHECKING:

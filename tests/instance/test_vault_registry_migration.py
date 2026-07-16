@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import pytest
+
+import app.instance.vault_registry as registry_module
+from app.instance.vault_registry import RegistryMigrationError, VaultRegistryStore
+from app.vault.markdown_settings import MarkdownSettingsStore
+
+
+def _write_legacy(path, frontmatter) -> None:
+    MarkdownSettingsStore().write_frontmatter(path, frontmatter, body="# Legacy app-local settings\n")
+
+
+def test_legacy_app_local_state_migrates_losslessly(tmp_path) -> None:
+    path = tmp_path / "app-local.md"
+    _write_legacy(
+        path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "scope": "app-local",
+            "appInstallId": "app-stable",
+            "lastActiveVaultRef": "path:/vault/a",
+            "futureTopLevel": {"preserve": True},
+            "knownVaults": {
+                "path:/vault/a": {
+                    "path": "/vault/a",
+                    "vaultId": "vault-a",
+                    "vaultName": "A",
+                    "localInstanceId": "clone-a",
+                    "lastOpenedAt": "2026-07-01T00:00:00Z",
+                    "futureRegistration": "keep-me",
+                }
+            },
+        },
+    )
+
+    migrated = VaultRegistryStore(path).load_or_migrate()
+    registration = next(iter(migrated.registrations.values()))
+    assert migrated.app_install_id == "app-stable"
+    assert migrated.last_active_vault_ref == "path:/vault/a"
+    assert migrated.extensions["futureTopLevel"] == {"preserve": True}
+    assert registration.ref == "path:/vault/a"
+    assert registration.vault_id == "vault-a"
+    assert registration.local_instance_id == "clone-a"
+    assert registration.last_opened_at == "2026-07-01T00:00:00Z"
+    assert registration.extensions["futureRegistration"] == "keep-me"
+
+
+def test_settings_rebind_provisional_ids_are_adopted_atomically(tmp_path) -> None:
+    path = tmp_path / "app-local.md"
+    _write_legacy(
+        path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-stable",
+            "knownVaults": {
+                "path:/vault/a": {"path": "/vault/a", "vaultId": "vault-a", "localInstanceId": "clone-a"}
+            },
+            "settingsRebind": {
+                "schema": "settings_rebind.v1",
+                "prior": {"ref": "path:/vault/a", "path": "/vault/a", "vaultBindingId": "provisional-a"},
+                "candidate": {"ref": "path:/vault/a", "path": "/vault/a", "vaultBindingId": "provisional-a"},
+                "applied": {"ref": "path:/vault/a", "path": "/vault/a", "vaultBindingId": "provisional-a"},
+            },
+        },
+    )
+
+    migrated = VaultRegistryStore(path).load_or_migrate()
+    assert set(migrated.registrations) == {"provisional-a"}
+    assert migrated.settings_rebind is not None
+    for key in ("prior", "candidate", "applied"):
+        assert migrated.settings_rebind[key]["vaultBindingId"] == "provisional-a"
+
+    alias_path = tmp_path / "alias.md"
+    _write_legacy(
+        alias_path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-alias",
+            "knownVaults": {"path:/vault/a": {"path": "/vault/a"}},
+            "settingsRebind": {
+                "schema": "settings_rebind.v1",
+                "candidate": {"path": "/vault/../vault/a", "vaultBindingId": "provisional-alias"},
+            },
+        },
+    )
+    assert set(VaultRegistryStore(alias_path).load_or_migrate().registrations) == {"provisional-alias"}
+
+
+def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "app-local.md"
+    _write_legacy(
+        path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-stable",
+            "knownVaults": {
+                "path:/vault/a": {"path": "/vault/a"},
+                "alias:/vault/a": {"path": "/vault/a"},
+            },
+            "settingsRebind": {
+                "schema": "settings_rebind.v1",
+                "candidate": {"path": "/vault/a", "vaultBindingId": "provisional-a"},
+            },
+        },
+    )
+    original = path.read_bytes()
+
+    with pytest.raises(RegistryMigrationError, match="ambiguous"):
+        VaultRegistryStore(path).load_or_migrate()
+
+    assert path.read_bytes() == original
+    assert not path.with_suffix(path.suffix + ".last-good").exists()
+
+    write_failure_path = tmp_path / "write-failure.md"
+    _write_legacy(
+        write_failure_path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-write-failure",
+            "knownVaults": {"path:/vault/b": {"path": "/vault/b"}},
+        },
+    )
+    write_failure_original = write_failure_path.read_bytes()
+    real_atomic_write = registry_module._atomic_private_write
+
+    def fail_registry_replace(candidate, payload):
+        if candidate == write_failure_path:
+            raise OSError("injected migration replace failure")
+        real_atomic_write(candidate, payload)
+
+    monkeypatch.setattr(registry_module, "_atomic_private_write", fail_registry_replace)
+    with pytest.raises(OSError, match="injected migration replace failure"):
+        VaultRegistryStore(write_failure_path).load_or_migrate()
+    assert write_failure_path.read_bytes() == write_failure_original
+    assert not write_failure_path.with_suffix(write_failure_path.suffix + ".last-good").exists()
+
+    collision_path = tmp_path / "collision.md"
+    collision_store = VaultRegistryStore(collision_path)
+    collision_store.register(
+        registry_module.VaultRegistration("binding-a", "path:/vault/a", "/vault/a")
+    )
+    collision_before = collision_path.read_bytes()
+    with pytest.raises(registry_module.RegistryError, match="path identity collision"):
+        collision_store.register(
+            registry_module.VaultRegistration(
+                "binding-alias",
+                "path:/vault/alias",
+                "/vault/../vault/a",
+            )
+        )
+    assert collision_path.read_bytes() == collision_before

@@ -9,7 +9,7 @@ from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
 
 from app.events.schema import make_outbox_event
 from app.events.types import SETTINGS_WRITE_RECEIPT
-from app.vault.app_local import AppLocalSettingsStore
+from app.instance.vault_registry import AppLocalSettingsStore
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore
 

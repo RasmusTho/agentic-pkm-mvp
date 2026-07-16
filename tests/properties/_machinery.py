@@ -375,14 +375,15 @@ REGISTERED_HEAL_TRANSITIONS: dict[str, HealTransition] = {
             "/api/companion/memory/review-queue",
         ),
     ),
-    "app.vault.app_local::AppLocalSettingsStore.save": HealTransition(
-        seam="app.vault.app_local::AppLocalSettingsStore.save",
+    "app.instance.vault_registry::AppLocalSettingsStore.save": HealTransition(
+        seam="app.instance.vault_registry::AppLocalSettingsStore.save",
         wg_gated=False,
         justification=(
             "App-local registry bootstrap-on-first-read: AppLocalSettingsStore"
             ".load() creates the missing .app-local.md file with a fresh "
             "appInstallId the first time any GET route triggers "
-            "VaultManager.load_last_active() on a cold manager (app_local.py "
+            "VaultManager.load_last_active() on a cold manager (the instance "
+            "registry compatibility store "
             "load() calling self.save() when self.path does not exist yet). "
             "Not WriteGuard-gated -- found by this property's route-walk "
             "(previously undocumented, a genuine new Q4 instance this issue "
@@ -473,7 +474,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write."
     ),
-    ("app/vault/app_local.py", 153): (
+    ("app/instance/vault_registry.py", 768): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "

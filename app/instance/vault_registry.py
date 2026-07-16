@@ -1,0 +1,827 @@
+from __future__ import annotations
+
+import copy
+import fcntl
+import hashlib
+import os
+import stat
+import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterator, Mapping, Protocol
+from uuid import uuid4
+
+import yaml
+
+
+CURRENT_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v1"
+APP_LOCAL_SCHEMA = "design-handoff.app-local.v1"
+REGISTRY_AUTHORITY_DORMANT = "dormant"
+
+_APP_DIR_NAME = "Agentic PKM"
+_SETTINGS_FILENAME = "app-local.md"
+_CONTAINER_RUNTIME_DIR = Path("/app/tmp")
+_REGISTRY_FIELDS = {
+    "schema",
+    "authority",
+    "revision",
+    "appInstallId",
+    "lastActiveVaultRef",
+    "registrations",
+    "settingsRebind",
+}
+_REGISTRATION_FIELDS = {
+    "ref",
+    "path",
+    "vaultId",
+    "vaultName",
+    "localInstanceId",
+    "lastOpenedAt",
+}
+
+
+class RegistryError(RuntimeError):
+    """Base class for fail-closed registry errors."""
+
+
+class RegistryMigrationError(RegistryError):
+    """Legacy state cannot be migrated without guessing identity."""
+
+
+class RegistryRevisionConflict(RegistryError):
+    """A caller attempted to write from a stale registry revision."""
+
+
+class CapabilityNotReadyError(RegistryError):
+    """A later delivery floor has not been installed."""
+
+
+class RegistryParseError(RegistryError):
+    """A registry Markdown payload is malformed."""
+
+
+class RegistrySecurityError(RegistryError):
+    """Registry path permissions, ownership, or type violate the private-state contract."""
+
+
+@dataclass(frozen=True)
+class _RegistryDocument:
+    frontmatter: dict[str, Any]
+    body: str
+
+
+class _MarkdownStore(Protocol):
+    def read(self, path: Path) -> Any: ...
+
+    def write_frontmatter(self, path: Path, frontmatter: Mapping[str, Any], *, body: str | None = None) -> None: ...
+
+
+@dataclass(frozen=True)
+class RegistryActivationProof:
+    rollback_exporter: bool = False
+    rollback_transformer: bool = False
+    previous_image_preflight: bool = False
+
+
+@dataclass(frozen=True)
+class VaultRegistration:
+    vault_binding_id: str
+    ref: str
+    path: str
+    vault_id: str | None = None
+    local_instance_id: str | None = None
+    vault_name: str | None = None
+    last_opened_at: str | None = None
+    extensions: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RegistrySnapshot:
+    schema: str
+    authority: str
+    revision: int
+    app_install_id: str
+    last_active_vault_ref: str | None
+    registrations: dict[str, VaultRegistration]
+    settings_rebind: dict[str, Any] | None = None
+    extensions: dict[str, Any] = field(default_factory=dict)
+
+
+class VaultRegistryStore:
+    """Locked, atomic store for the dormant MVR registry schema.
+
+    MVR-01A deliberately does not wire this store into picker/runtime authority. The
+    legacy scalar ``AppLocalSettingsStore`` remains authoritative until later
+    rollback/cutover capability is present.
+    """
+
+    CURRENT_SCHEMA = CURRENT_REGISTRY_SCHEMA
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock_path = path.with_suffix(path.suffix + ".lock")
+        self.snapshot_path = path.with_suffix(path.suffix + ".last-good")
+        self.snapshot_checksum_path = path.with_suffix(path.suffix + ".last-good.sha256")
+
+    def load(self) -> RegistrySnapshot:
+        with self._locked():
+            if not self.path.exists():
+                snapshot = self._empty_snapshot()
+                self._write_locked(snapshot)
+                return snapshot
+            return self._read_current_locked(recover=True)
+
+    def load_or_migrate(self) -> RegistrySnapshot:
+        with self._locked():
+            if not self.path.exists():
+                snapshot = self._empty_snapshot()
+                self._write_locked(snapshot)
+                return snapshot
+            try:
+                document = _read_document(self.path)
+            except (OSError, RegistryParseError):
+                return self._read_current_locked(recover=True)
+            schema = _optional_str(document.frontmatter.get("schema"))
+            if schema == CURRENT_REGISTRY_SCHEMA:
+                return self._snapshot_from_frontmatter(document.frontmatter)
+            if schema != APP_LOCAL_SCHEMA:
+                raise RegistryMigrationError(f"unsupported registry migration schema: {schema or '<missing>'}")
+            migrated = self._migrate_legacy_frontmatter(document.frontmatter)
+            self._write_locked(migrated)
+            return migrated
+
+    def register(
+        self,
+        registration: VaultRegistration,
+        *,
+        expected_revision: int | None = None,
+    ) -> RegistrySnapshot:
+        if not registration.vault_binding_id.strip():
+            raise RegistryError("vault_binding_id is required")
+        if not registration.ref.strip() or not registration.path.strip():
+            raise RegistryError("registration ref and path are required")
+        with self._locked():
+            current = self._read_current_locked(recover=True) if self.path.exists() else self._empty_snapshot()
+            self._assert_revision(current, expected_revision)
+            registrations = dict(current.registrations)
+            existing = registrations.get(registration.vault_binding_id)
+            if existing is not None and existing != registration:
+                raise RegistryError(f"vault_binding_id collision: {registration.vault_binding_id}")
+            self._assert_registration_unique(registration, registrations)
+            registrations[registration.vault_binding_id] = registration
+            updated = self._with_registrations(current, registrations)
+            self._write_locked(updated)
+            return updated
+
+    def list_registrations(self) -> tuple[VaultRegistration, ...]:
+        """Return a stable binding-id ordered view of dormant registrations."""
+
+        snapshot = self.load()
+        return tuple(snapshot.registrations[key] for key in sorted(snapshot.registrations))
+
+    def lookup(self, vault_binding_id: str) -> VaultRegistration | None:
+        return self.load().registrations.get(vault_binding_id)
+
+    def update_registration(
+        self,
+        registration: VaultRegistration,
+        *,
+        expected_revision: int | None = None,
+    ) -> RegistrySnapshot:
+        """Update mutable binding metadata without changing stable identities."""
+
+        with self._locked():
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            existing = current.registrations.get(registration.vault_binding_id)
+            if existing is None:
+                raise RegistryError(f"unknown vault_binding_id: {registration.vault_binding_id}")
+            for field_name in ("vault_id", "local_instance_id"):
+                old_value = getattr(existing, field_name)
+                new_value = getattr(registration, field_name)
+                if old_value is not None and new_value != old_value:
+                    raise RegistryError(f"stable registration identity cannot change: {field_name}")
+            registrations = dict(current.registrations)
+            self._assert_registration_unique(registration, registrations)
+            registrations[registration.vault_binding_id] = registration
+            updated = self._with_registrations(current, registrations)
+            self._write_locked(updated)
+            return updated
+
+    def remove_registration(
+        self,
+        vault_binding_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> RegistrySnapshot:
+        """Remove one dormant registration; production removal remains sealed."""
+
+        with self._locked():
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            if vault_binding_id not in current.registrations:
+                raise RegistryError(f"unknown vault_binding_id: {vault_binding_id}")
+            registrations = dict(current.registrations)
+            del registrations[vault_binding_id]
+            updated = self._with_registrations(current, registrations)
+            self._write_locked(updated)
+            return updated
+
+    def require_authoritative_activation(self, proof: RegistryActivationProof) -> None:
+        if not (proof.rollback_exporter and proof.rollback_transformer and proof.previous_image_preflight):
+            raise CapabilityNotReadyError(
+                "MVR-01B rollback exporter/transformer and previous-image preflight are required "
+                "before registry authority activation"
+            )
+        raise CapabilityNotReadyError("MVR-01C authority cutover is not delivered by MVR-01A")
+
+    def _empty_snapshot(self) -> RegistrySnapshot:
+        return RegistrySnapshot(
+            schema=CURRENT_REGISTRY_SCHEMA,
+            authority=REGISTRY_AUTHORITY_DORMANT,
+            revision=0,
+            app_install_id=f"app-{uuid4()}",
+            last_active_vault_ref=None,
+            registrations={},
+        )
+
+    def _assert_revision(self, current: RegistrySnapshot, expected: int | None) -> None:
+        if expected is not None and current.revision != expected:
+            raise RegistryRevisionConflict(
+                f"expected revision {expected}, found {current.revision}; reload before retry"
+            )
+
+    def _assert_registration_unique(
+        self,
+        candidate: VaultRegistration,
+        registrations: Mapping[str, VaultRegistration],
+    ) -> None:
+        candidate_path = _canonical_path(candidate.path)
+        for binding_id, item in registrations.items():
+            if binding_id == candidate.vault_binding_id:
+                continue
+            if item.ref == candidate.ref:
+                raise RegistryError(f"registry ref collision: {candidate.ref}")
+            if _canonical_path(item.path) == candidate_path:
+                raise RegistryError(f"registry path identity collision: {candidate.path}")
+
+    def _with_registrations(
+        self,
+        current: RegistrySnapshot,
+        registrations: dict[str, VaultRegistration],
+    ) -> RegistrySnapshot:
+        return RegistrySnapshot(
+            schema=current.schema,
+            authority=current.authority,
+            revision=current.revision + 1,
+            app_install_id=current.app_install_id,
+            last_active_vault_ref=current.last_active_vault_ref,
+            registrations=registrations,
+            settings_rebind=copy.deepcopy(current.settings_rebind),
+            extensions=copy.deepcopy(current.extensions),
+        )
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        _ensure_private_directory(self.path.parent)
+        existed = self.lock_path.exists()
+        descriptor = os.open(
+            self.lock_path,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            _assert_private_stat(os.fstat(descriptor), self.lock_path, directory=False)
+            if not existed:
+                os.fchmod(descriptor, 0o600)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with os.fdopen(descriptor, "a+b", closefd=True) as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _read_current_locked(self, *, recover: bool) -> RegistrySnapshot:
+        try:
+            _assert_private(self.path, directory=False)
+            document = _read_document(self.path)
+            return self._snapshot_from_frontmatter(document.frontmatter)
+        except RegistrySecurityError:
+            raise
+        except (OSError, RegistryParseError, RegistryError) as exc:
+            if not recover:
+                raise
+            recovered = self._load_verified_snapshot_locked()
+            if recovered is None:
+                raise RegistryError("registry is corrupt and no unambiguous last-good snapshot exists") from exc
+            snapshot, payload = recovered
+            _atomic_private_write(self.path, payload)
+            return snapshot
+
+    def _load_verified_snapshot_locked(self) -> tuple[RegistrySnapshot, bytes] | None:
+        if not self.snapshot_path.exists() or not self.snapshot_checksum_path.exists():
+            return None
+        _assert_private(self.snapshot_path, directory=False)
+        _assert_private(self.snapshot_checksum_path, directory=False)
+        payload = self.snapshot_path.read_bytes()
+        expected = self.snapshot_checksum_path.read_text(encoding="ascii").strip()
+        if not expected or hashlib.sha256(payload).hexdigest() != expected:
+            return None
+        try:
+            text = payload.decode("utf-8")
+            frontmatter, _ = _split_rendered(text, self.snapshot_path)
+            snapshot = self._snapshot_from_frontmatter(frontmatter)
+        except (UnicodeDecodeError, RegistryParseError, RegistryError):
+            return None
+        return snapshot, payload
+
+    def _write_locked(self, snapshot: RegistrySnapshot) -> None:
+        if snapshot.schema != CURRENT_REGISTRY_SCHEMA or snapshot.authority != REGISTRY_AUTHORITY_DORMANT:
+            raise RegistryError("MVR-01A may persist only the dormant current registry schema")
+        payload = _render_markdown_settings(
+            self._frontmatter_from_snapshot(snapshot),
+            "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
+        ).encode("utf-8")
+        _atomic_private_write(self.path, payload)
+        _atomic_private_write(self.snapshot_path, payload)
+        checksum = (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii")
+        _atomic_private_write(self.snapshot_checksum_path, checksum)
+
+    def _frontmatter_from_snapshot(self, snapshot: RegistrySnapshot) -> dict[str, Any]:
+        frontmatter = copy.deepcopy(snapshot.extensions)
+        frontmatter.update(
+            {
+                "schema": snapshot.schema,
+                "authority": snapshot.authority,
+                "revision": snapshot.revision,
+                "appInstallId": snapshot.app_install_id,
+                "lastActiveVaultRef": snapshot.last_active_vault_ref,
+                "registrations": {
+                    binding_id: _registration_to_frontmatter(item)
+                    for binding_id, item in sorted(snapshot.registrations.items())
+                },
+                "settingsRebind": copy.deepcopy(snapshot.settings_rebind),
+            }
+        )
+        return frontmatter
+
+    def _snapshot_from_frontmatter(self, frontmatter: Mapping[str, Any]) -> RegistrySnapshot:
+        schema = _optional_str(frontmatter.get("schema"))
+        if schema != CURRENT_REGISTRY_SCHEMA:
+            raise RegistryError(f"registry schema mismatch: {schema or '<missing>'}")
+        authority = _optional_str(frontmatter.get("authority"))
+        if authority != REGISTRY_AUTHORITY_DORMANT:
+            raise RegistryError(f"unsupported registry authority state: {authority or '<missing>'}")
+        revision_value = frontmatter.get("revision", 0)
+        if not isinstance(revision_value, int) or revision_value < 0:
+            raise RegistryError("registry revision must be a non-negative integer")
+        raw_registrations = frontmatter.get("registrations") or {}
+        if not isinstance(raw_registrations, dict):
+            raise RegistryError("registry registrations must be a mapping")
+        registrations: dict[str, VaultRegistration] = {}
+        refs: set[str] = set()
+        for binding_id, raw in raw_registrations.items():
+            if not isinstance(raw, dict):
+                raise RegistryError(f"registration {binding_id} must be a mapping")
+            registration = _registration_from_frontmatter(str(binding_id), raw)
+            if registration.ref in refs:
+                raise RegistryError(f"duplicate registry ref: {registration.ref}")
+            refs.add(registration.ref)
+            registrations[registration.vault_binding_id] = registration
+        app_install_id = _optional_str(frontmatter.get("appInstallId"))
+        if app_install_id is None:
+            raise RegistryError("registry appInstallId is required")
+        extensions = {key: copy.deepcopy(value) for key, value in frontmatter.items() if key not in _REGISTRY_FIELDS}
+        settings_rebind = frontmatter.get("settingsRebind")
+        if settings_rebind is not None and not isinstance(settings_rebind, dict):
+            raise RegistryError("settingsRebind must be a mapping")
+        return RegistrySnapshot(
+            schema=schema,
+            authority=authority,
+            revision=revision_value,
+            app_install_id=app_install_id,
+            last_active_vault_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
+            registrations=registrations,
+            settings_rebind=copy.deepcopy(settings_rebind),
+            extensions=extensions,
+        )
+
+    def _migrate_legacy_frontmatter(self, frontmatter: Mapping[str, Any]) -> RegistrySnapshot:
+        app_install_id = _optional_str(frontmatter.get("appInstallId"))
+        if app_install_id is None:
+            raise RegistryMigrationError("legacy appInstallId is missing")
+        raw_known = frontmatter.get("knownVaults") or {}
+        if not isinstance(raw_known, dict):
+            raise RegistryMigrationError("legacy knownVaults must be a mapping")
+        candidates: dict[str, dict[str, Any]] = {}
+        for ref, raw in raw_known.items():
+            if not isinstance(raw, dict):
+                raise RegistryMigrationError(f"legacy registration {ref} must be a mapping")
+            path = _optional_str(raw.get("path"))
+            if path is None:
+                raise RegistryMigrationError(f"legacy registration {ref} has no path")
+            candidates[str(ref)] = dict(raw)
+        rebind_key = next(
+            (key for key in ("settingsRebind", "settingsRebindV1", "settings_rebind.v1") if key in frontmatter),
+            None,
+        )
+        raw_rebind = copy.deepcopy(frontmatter.get(rebind_key)) if rebind_key else None
+        if raw_rebind is not None and not isinstance(raw_rebind, dict):
+            raise RegistryMigrationError("settings_rebind.v1 must be a mapping")
+        binding_by_ref: dict[str, str] = {}
+        rewritten_rebind = copy.deepcopy(raw_rebind)
+        if rewritten_rebind is not None:
+            for key in ("prior", "candidate", "applied"):
+                value = rewritten_rebind.get(key)
+                if value is None:
+                    continue
+                if not isinstance(value, dict):
+                    raise RegistryMigrationError(f"settings rebind {key} must be a mapping")
+                binding_id = _optional_str(value.get("vaultBindingId"))
+                if binding_id is None:
+                    raise RegistryMigrationError(f"settings rebind {key} has no provisional vaultBindingId")
+                matched_ref = _resolve_legacy_reference(value, candidates)
+                previous = binding_by_ref.get(matched_ref)
+                if previous is not None and previous != binding_id:
+                    raise RegistryMigrationError("conflicting provisional binding identities")
+                if binding_id in binding_by_ref.values() and previous != binding_id:
+                    raise RegistryMigrationError("one provisional binding identity matches multiple registrations")
+                binding_by_ref[matched_ref] = binding_id
+                value["ref"] = matched_ref
+                value["vaultBindingId"] = binding_id
+        registrations: dict[str, VaultRegistration] = {}
+        for ref, raw in candidates.items():
+            binding_id = binding_by_ref.get(ref) or f"binding-{uuid4()}"
+            if binding_id in registrations:
+                raise RegistryMigrationError(f"duplicate vault_binding_id during migration: {binding_id}")
+            registrations[binding_id] = VaultRegistration(
+                vault_binding_id=binding_id,
+                ref=ref,
+                path=str(raw["path"]),
+                vault_id=_optional_str(raw.get("vaultId")),
+                local_instance_id=_optional_str(raw.get("localInstanceId")),
+                vault_name=_optional_str(raw.get("vaultName")),
+                last_opened_at=_optional_str(raw.get("lastOpenedAt")),
+                extensions={key: copy.deepcopy(value) for key, value in raw.items() if key not in _REGISTRATION_FIELDS},
+            )
+        known_legacy_fields = {
+            "schema",
+            "scope",
+            "appInstallId",
+            "lastActiveVaultRef",
+            "knownVaults",
+            "settingsRebind",
+            "settingsRebindV1",
+            "settings_rebind.v1",
+        }
+        return RegistrySnapshot(
+            schema=CURRENT_REGISTRY_SCHEMA,
+            authority=REGISTRY_AUTHORITY_DORMANT,
+            revision=1,
+            app_install_id=app_install_id,
+            last_active_vault_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
+            registrations=registrations,
+            settings_rebind=rewritten_rebind,
+            extensions={key: copy.deepcopy(value) for key, value in frontmatter.items() if key not in known_legacy_fields},
+        )
+
+
+def preflight_registry_payload(path: Path) -> RegistrySnapshot:
+    store = VaultRegistryStore(path)
+    snapshot = store.load()
+    _assert_private(path.parent, directory=True)
+    for candidate in (path, store.lock_path, store.snapshot_path, store.snapshot_checksum_path):
+        _assert_private(candidate, directory=False)
+    return snapshot
+
+
+def _resolve_legacy_reference(value: Mapping[str, Any], candidates: Mapping[str, Mapping[str, Any]]) -> str:
+    ref = _optional_str(value.get("ref"))
+    if ref is not None:
+        candidate = candidates.get(ref)
+        if candidate is None:
+            raise RegistryMigrationError(f"settings rebind reference is missing from legacy registry: {ref}")
+        path = _optional_str(value.get("path"))
+        if path is not None and _canonical_path(path) != _canonical_path(str(candidate["path"])):
+            raise RegistryMigrationError(f"settings rebind reference/path conflict: {ref}")
+        return ref
+    path = _optional_str(value.get("path"))
+    if path is None:
+        raise RegistryMigrationError("settings rebind reference has neither ref nor path")
+    matches = [key for key, candidate in candidates.items() if _canonical_path(str(candidate["path"])) == _canonical_path(path)]
+    if len(matches) != 1:
+        raise RegistryMigrationError("ambiguous settings rebind path migration")
+    return matches[0]
+
+
+def _canonical_path(value: str) -> str:
+    return str(Path(value).expanduser().resolve(strict=False))
+
+
+def _registration_to_frontmatter(item: VaultRegistration) -> dict[str, Any]:
+    value = copy.deepcopy(item.extensions)
+    value.update(
+        {
+            "ref": item.ref,
+            "path": item.path,
+            "vaultId": item.vault_id,
+            "vaultName": item.vault_name,
+            "localInstanceId": item.local_instance_id,
+            "lastOpenedAt": item.last_opened_at,
+        }
+    )
+    return value
+
+
+def _registration_from_frontmatter(binding_id: str, raw: Mapping[str, Any]) -> VaultRegistration:
+    ref = _optional_str(raw.get("ref"))
+    path = _optional_str(raw.get("path"))
+    if ref is None or path is None:
+        raise RegistryError(f"registration {binding_id} requires ref and path")
+    return VaultRegistration(
+        vault_binding_id=binding_id,
+        ref=ref,
+        path=path,
+        vault_id=_optional_str(raw.get("vaultId")),
+        local_instance_id=_optional_str(raw.get("localInstanceId")),
+        vault_name=_optional_str(raw.get("vaultName")),
+        last_opened_at=_optional_str(raw.get("lastOpenedAt")),
+        extensions={key: copy.deepcopy(value) for key, value in raw.items() if key not in _REGISTRATION_FIELDS},
+    )
+
+
+def _split_rendered(text: str, path: Path) -> tuple[dict[str, Any], str]:
+    lines = text.splitlines()
+    in_conflict = False
+    saw_separator = False
+    for line in lines:
+        if line.startswith("<<<<<<<"):
+            in_conflict = True
+            saw_separator = False
+        elif in_conflict and line.startswith("======="):
+            saw_separator = True
+        elif in_conflict and saw_separator and line.startswith(">>>>>>>"):
+            raise RegistryParseError(f"registry contains Git conflict markers: {path}")
+    if not text.startswith("---\n"):
+        raise RegistryParseError(f"registry is missing YAML frontmatter: {path}")
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        raise RegistryParseError(f"registry frontmatter is malformed: {path}")
+    try:
+        data = yaml.safe_load(parts[1]) or {}
+    except yaml.YAMLError as exc:
+        raise RegistryParseError(f"registry YAML is invalid: {path}") from exc
+    if not isinstance(data, dict):
+        raise RegistryParseError(f"registry frontmatter must be a mapping: {path}")
+    body = parts[2].removeprefix("\n")
+    return data, body
+
+
+def _read_document(path: Path) -> _RegistryDocument:
+    frontmatter, body = _split_rendered(path.read_text(encoding="utf-8"), path)
+    return _RegistryDocument(frontmatter=frontmatter, body=body)
+
+
+def _render_markdown_settings(frontmatter: Mapping[str, Any], body: str) -> str:
+    yaml_block = yaml.safe_dump(dict(frontmatter), sort_keys=False, allow_unicode=True).strip()
+    normalized_body = body if body.startswith("\n") else f"\n{body}"
+    if not normalized_body.endswith("\n"):
+        normalized_body += "\n"
+    return f"---\n{yaml_block}\n---\n{normalized_body}"
+
+
+def _ensure_private_directory(path: Path) -> None:
+    if path.exists():
+        _assert_private(path, directory=True)
+        return
+    path.mkdir(parents=True, exist_ok=False, mode=0o700)
+    os.chmod(path, 0o700)
+    _assert_private(path, directory=True)
+
+
+def _atomic_private_write(path: Path, payload: bytes) -> None:
+    _ensure_private_directory(path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_descriptor = os.open(path.parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _assert_private(path: Path, *, directory: bool) -> None:
+    if not path.exists():
+        raise RegistryError(f"required registry path is missing: {path}")
+    _assert_private_stat(path.stat(), path, directory=directory)
+
+
+def _assert_private_stat(metadata: os.stat_result, path: Path, *, directory: bool) -> None:
+    expected = 0o700 if directory else 0o600
+    actual = metadata.st_mode & 0o777
+    expected_kind = stat.S_ISDIR(metadata.st_mode) if directory else stat.S_ISREG(metadata.st_mode)
+    if not expected_kind:
+        raise RegistrySecurityError(f"unsafe registry path type for {path.name}")
+    if metadata.st_uid != os.geteuid():
+        raise RegistrySecurityError(f"unsafe registry ownership for {path.name}")
+    if actual != expected:
+        raise RegistrySecurityError(
+            f"unsafe registry mode for {path.name}: {oct(actual)}; expected {oct(expected)}"
+        )
+
+
+def _can_host(directory: Path) -> bool:
+    probe = directory
+    while True:
+        if probe.exists():
+            return probe.is_dir() and os.access(probe, os.W_OK)
+        parent = probe.parent
+        if parent == probe:
+            return False
+        probe = parent
+
+
+def _usable_home() -> Path | None:
+    home_env = os.getenv("HOME", "").strip()
+    if home_env:
+        candidate = Path(home_env)
+    else:
+        try:
+            candidate = Path.home()
+        except (RuntimeError, OSError):
+            return None
+    if str(candidate) == candidate.anchor:
+        return None
+    return candidate
+
+
+def default_app_local_settings_path() -> Path:
+    override = os.getenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "").strip()
+    if override:
+        return Path(override).expanduser()
+    xdg = os.getenv("XDG_DATA_HOME", "").strip()
+    if xdg:
+        base = Path(xdg).expanduser() / _APP_DIR_NAME
+        if _can_host(base):
+            return base / _SETTINGS_FILENAME
+    home = _usable_home()
+    if home is not None:
+        base = home / "Library" / "Application Support" / _APP_DIR_NAME
+        if _can_host(base):
+            return base / _SETTINGS_FILENAME
+    base = _CONTAINER_RUNTIME_DIR / "agentic-pkm"
+    if _can_host(base):
+        return base / _SETTINGS_FILENAME
+    return Path(tempfile.gettempdir()) / "agentic-pkm" / _SETTINGS_FILENAME
+
+
+@dataclass(frozen=True)
+class KnownVaultRef:
+    ref: str
+    path: str
+    vault_id: str | None = None
+    vault_name: str | None = None
+    local_instance_id: str | None = None
+    last_opened_at: str | None = None
+
+
+@dataclass
+class AppLocalSettings:
+    app_install_id: str
+    last_active_vault_ref: str | None = None
+    known_vaults: dict[str, KnownVaultRef] = field(default_factory=dict)
+
+
+class AppLocalSettingsStore:
+    """Legacy scalar authority retained until the MVR-01B/01C cutover."""
+
+    def __init__(self, path: Path | None = None, markdown_store: _MarkdownStore | None = None) -> None:
+        self.path = path or default_app_local_settings_path()
+        if markdown_store is None:
+            from app.vault.markdown_settings import MarkdownSettingsStore
+
+            markdown_store = MarkdownSettingsStore()
+        self.markdown_store = markdown_store
+
+    def load(self) -> AppLocalSettings:
+        if not self.path.exists():
+            settings = AppLocalSettings(app_install_id=f"app-{uuid4()}")
+            self.save(settings)
+            return settings
+        doc = self.markdown_store.read(self.path)
+        raw_known = doc.frontmatter.get("knownVaults") or {}
+        known: dict[str, KnownVaultRef] = {}
+        if isinstance(raw_known, dict):
+            for ref, value in raw_known.items():
+                if not isinstance(value, dict):
+                    continue
+                path = str(value.get("path") or "").strip()
+                if not path:
+                    continue
+                known[str(ref)] = KnownVaultRef(
+                    ref=str(ref),
+                    path=path,
+                    vault_id=_optional_str(value.get("vaultId")),
+                    vault_name=_optional_str(value.get("vaultName")),
+                    local_instance_id=_optional_str(value.get("localInstanceId")),
+                    last_opened_at=_optional_str(value.get("lastOpenedAt")),
+                )
+        install_id = str(doc.frontmatter.get("appInstallId") or "").strip() or f"app-{uuid4()}"
+        return AppLocalSettings(
+            app_install_id=install_id,
+            last_active_vault_ref=_optional_str(doc.frontmatter.get("lastActiveVaultRef")),
+            known_vaults=known,
+        )
+
+    def save(self, settings: AppLocalSettings) -> None:
+        known = {
+            ref: {
+                "path": item.path,
+                "vaultId": item.vault_id,
+                "vaultName": item.vault_name,
+                "localInstanceId": item.local_instance_id,
+                "lastOpenedAt": item.last_opened_at,
+            }
+            for ref, item in sorted(settings.known_vaults.items())
+        }
+        self.markdown_store.write_frontmatter(
+            self.path,
+            {
+                "schema": APP_LOCAL_SCHEMA,
+                "scope": "app-local",
+                "appInstallId": settings.app_install_id,
+                "lastActiveVaultRef": settings.last_active_vault_ref,
+                "knownVaults": known,
+            },
+            body=(
+                "# App Local Settings\n"
+                "This file stores local application preferences and recently used vaults.\n"
+                "It does not define project behavior.\n"
+            ),
+        )
+
+    def upsert_known_vault(self, item: KnownVaultRef, *, make_active: bool = True) -> AppLocalSettings:
+        settings = self.load()
+        settings.known_vaults[item.ref] = item
+        if make_active:
+            settings.last_active_vault_ref = item.ref
+        self.save(settings)
+        return settings
+
+    def backup_corrupt_and_reset(self) -> Path | None:
+        if not self.path.exists():
+            return None
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}")
+        suffix = 1
+        while backup.exists():
+            backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}-{suffix}")
+            suffix += 1
+        os.replace(self.path, backup)
+        return backup
+
+
+def _optional_str(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+__all__ = [
+    "APP_LOCAL_SCHEMA",
+    "CURRENT_REGISTRY_SCHEMA",
+    "AppLocalSettings",
+    "AppLocalSettingsStore",
+    "CapabilityNotReadyError",
+    "KnownVaultRef",
+    "RegistryActivationProof",
+    "RegistryError",
+    "RegistryMigrationError",
+    "RegistryRevisionConflict",
+    "RegistrySecurityError",
+    "RegistrySnapshot",
+    "VaultRegistration",
+    "VaultRegistryStore",
+    "default_app_local_settings_path",
+    "preflight_registry_payload",
+]

@@ -96,6 +96,18 @@ DB isolation is two-layer: a **container layer** (shipped, PR #596) provides phy
 
 The channel is the operational identity; the environment is the runtime selector that resolves paths and policies. A channel's build can be inspected by resolving its code ref; its data footprint can be inspected by resolving its DB name (via Issue #594), vault root, and runtime-artifact directory.
 
+### Multi-vault registry rollout state
+
+The codebase contains a dormant, versioned instance-vault registry boundary under
+`app.instance.vault_registry`; the legacy scalar app-local store remains authoritative for every
+release channel. This first slice supplies private atomic persistence, locking/CAS, migration and
+recovery behavior for validation, but it does not authorize channel storage cutover or a second
+production registration.
+
+No release-channel procedure may treat that dormant file as authoritative until MVR-01B has
+installed the protected per-channel instance-state volume plus rollback exporter/transformer and
+MVR-01C has passed the previous-image guard and atomically activated the new authority floor.
+
 ## Invariants (MUST hold)
 
 These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Environment Invariants](../ENVIRONMENTS.md) with channel-scoped isolation rules.
