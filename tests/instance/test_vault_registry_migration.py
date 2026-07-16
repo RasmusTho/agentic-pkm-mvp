@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 import app.instance.vault_registry as registry_module
+from app.instance.filesystem_identity import FilesystemRootIdentity
 from app.instance.vault_registry import RegistryMigrationError, VaultRegistryStore
 from app.vault.markdown_settings import MarkdownSettingsStore
 
@@ -100,6 +101,41 @@ def test_settings_rebind_provisional_ids_are_adopted_atomically(tmp_path) -> Non
     alias_migration = VaultRegistryStore(alias_path).load_or_migrate()
     assert set(alias_migration.registrations) == {"provisional-alias"}
     assert alias_migration.settings_rebind["candidate"]["ref"] == "alias:/vault/a"
+
+    physical_alias_path = tmp_path / "physical-alias.md"
+    _write_legacy(
+        physical_alias_path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-physical-alias",
+            "lastActiveVaultRef": "mount:/b",
+            "knownVaults": {
+                "mount:/a": {"path": "/mount/a", "vaultId": "vault-a"},
+                "mount:/b": {"path": "/mount/b", "vaultId": "vault-a"},
+            },
+            "settingsRebind": {
+                "schema": "settings_rebind.v1",
+                "candidate": {
+                    "ref": "mount:/b",
+                    "path": "/mount/b",
+                    "vaultBindingId": "provisional-physical",
+                },
+            },
+        },
+    )
+    real_resolver = registry_module.resolve_filesystem_root_identity
+
+    def same_inode(value):
+        identity = real_resolver(value)
+        if str(value) in {"/mount/a", "/mount/b"}:
+            return FilesystemRootIdentity(identity.canonical_path, 17, 29)
+        return identity
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(registry_module, "resolve_filesystem_root_identity", same_inode)
+        physical_alias = VaultRegistryStore(physical_alias_path).load_or_migrate()
+    assert set(physical_alias.registrations) == {"provisional-physical"}
+    assert physical_alias.registrations["provisional-physical"].ref == "mount:/b"
 
 
 def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, monkeypatch) -> None:

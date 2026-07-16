@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
+import app.instance.vault_registry as registry_module
+from app.instance.filesystem_identity import FilesystemRootIdentity
 from app.instance.vault_registry import RegistryError, VaultRegistration, VaultRegistryStore
 
 
@@ -79,3 +83,37 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
     assert reloaded.registrations["binding-a"].path == "/moved/a"
     assert reloaded.registrations["binding-a"].local_instance_id == "clone-a"
     assert reloaded.registrations["binding-b"].local_instance_id == "clone-b"
+
+
+def test_persisted_registry_rejects_canonical_and_physical_identity_collisions(tmp_path, monkeypatch) -> None:
+    canonical_path = tmp_path / "canonical.md"
+    canonical_store = VaultRegistryStore(canonical_path)
+    canonical_store.register(VaultRegistration("binding-a", "path:/vault/a", "/vault/a"))
+    document = registry_module._read_document(canonical_path)
+    document.frontmatter["registrations"]["binding-alias"] = {
+        "ref": "alias:/vault/a",
+        "path": "/vault/../vault/a",
+    }
+    payload = registry_module._render_markdown_settings(document.frontmatter, document.body).encode()
+    canonical_path.write_bytes(payload)
+    canonical_store.snapshot_path.write_bytes(payload)
+    canonical_store.snapshot_checksum_path.write_text(hashlib.sha256(payload).hexdigest() + "\n")
+
+    with pytest.raises(RegistryError, match="no unambiguous last-good snapshot"):
+        canonical_store.load()
+
+    physical_path = tmp_path / "physical.md"
+    physical_store = VaultRegistryStore(physical_path)
+    physical_store.register(VaultRegistration("binding-a", "path:/mount/a", "/mount/a"))
+    physical_store.register(VaultRegistration("binding-b", "path:/mount/b", "/mount/b"))
+    real_resolver = registry_module.resolve_filesystem_root_identity
+
+    def same_inode(value):
+        identity = real_resolver(value)
+        if str(value) in {"/mount/a", "/mount/b"}:
+            return FilesystemRootIdentity(identity.canonical_path, 41, 73)
+        return identity
+
+    monkeypatch.setattr(registry_module, "resolve_filesystem_root_identity", same_inode)
+    with pytest.raises(RegistryError, match="no unambiguous last-good snapshot"):
+        physical_store.load()

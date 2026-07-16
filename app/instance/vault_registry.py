@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 import fcntl
 import hashlib
+import json
 import os
 import stat
 import tempfile
@@ -15,10 +18,18 @@ from uuid import uuid4
 
 import yaml
 
+from app.instance.filesystem_identity import (
+    FilesystemIdentityError,
+    FilesystemRootIdentity,
+    resolve_filesystem_root_identity,
+    same_filesystem_root,
+)
+
 
 CURRENT_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v1"
 APP_LOCAL_SCHEMA = "design-handoff.app-local.v1"
 REGISTRY_AUTHORITY_DORMANT = "dormant"
+_TRANSACTION_SCHEMA = "agentic-pkm.instance-vault-registry-transaction.v1"
 
 _APP_DIR_NAME = "Agentic PKM"
 _SETTINGS_FILENAME = "app-local.md"
@@ -124,6 +135,7 @@ class VaultRegistryStore:
         self.lock_path = path.with_suffix(path.suffix + ".lock")
         self.snapshot_path = path.with_suffix(path.suffix + ".last-good")
         self.snapshot_checksum_path = path.with_suffix(path.suffix + ".last-good.sha256")
+        self.transaction_path = path.with_suffix(path.suffix + ".transaction")
 
     def load(self) -> RegistrySnapshot:
         with self._locked():
@@ -258,13 +270,13 @@ class VaultRegistryStore:
         candidate: VaultRegistration,
         registrations: Mapping[str, VaultRegistration],
     ) -> None:
-        candidate_path = _canonical_path(candidate.path)
+        candidate_identity = _root_identity(candidate.path)
         for binding_id, item in registrations.items():
             if binding_id == candidate.vault_binding_id:
                 continue
             if item.ref == candidate.ref:
                 raise RegistryError(f"registry ref collision: {candidate.ref}")
-            if _canonical_path(item.path) == candidate_path:
+            if same_filesystem_root(_root_identity(item.path), candidate_identity):
                 raise RegistryError(f"registry path identity collision: {candidate.path}")
 
     def _validate_registration(self, registration: VaultRegistration) -> None:
@@ -311,6 +323,7 @@ class VaultRegistryStore:
         with os.fdopen(descriptor, "a+b", closefd=True) as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
+                self._recover_transaction_locked()
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
@@ -369,36 +382,170 @@ class VaultRegistryStore:
             "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
         ).encode("utf-8")
         checksum = (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii")
-        writes = (
-            (self.path, payload),
-            (self.snapshot_path, payload),
-            (self.snapshot_checksum_path, checksum),
-        )
         previous = {
             self.path: _read_previous_transaction_file(self.path, allow_legacy_mode=True),
             self.snapshot_path: _read_previous_transaction_file(self.snapshot_path),
             self.snapshot_checksum_path: _read_previous_transaction_file(self.snapshot_checksum_path),
         }
-        attempted: list[Path] = []
+        next_generation = {
+            self.path: payload,
+            self.snapshot_path: payload,
+            self.snapshot_checksum_path: checksum,
+        }
+        prepared = self._transaction_manifest("prepared", previous, next_generation)
+        _atomic_private_write(self.transaction_path, prepared)
         try:
-            for path, contents in writes:
-                attempted.append(path)
-                _atomic_private_write(path, contents)
-        except BaseException:
-            rollback_errors: list[OSError] = []
-            for path in reversed(attempted):
-                try:
-                    old_payload = previous[path]
-                    if old_payload is None:
-                        path.unlink(missing_ok=True)
-                        _fsync_directory(path.parent)
-                    else:
-                        _atomic_private_write_raw(path, old_payload)
-                except OSError as rollback_error:
-                    rollback_errors.append(rollback_error)
-            if rollback_errors:
-                raise RegistryError("registry transaction failed and rollback could not restore prior state")
+            self._apply_generation(next_generation)
+            committed = self._transaction_manifest("committed", previous, next_generation)
+            _atomic_private_write(self.transaction_path, committed)
+        except Exception:
+            try:
+                _atomic_private_write(self.transaction_path, prepared)
+                self._apply_generation(previous, use_raw_writer=True)
+                self._verify_generation(previous)
+                self._clear_transaction_journal()
+            except Exception as rollback_exc:
+                raise RegistryError(
+                    "registry transaction failed and rollback could not restore prior state"
+                ) from rollback_exc
             raise
+        try:
+            self._verify_generation(next_generation)
+            self._clear_transaction_journal()
+        except OSError:
+            # The committed journal is itself a durable completion receipt. A later locked
+            # reader will idempotently finish verification/cleanup without losing the commit.
+            pass
+
+    def _transaction_manifest(
+        self,
+        phase: str,
+        previous: Mapping[Path, bytes | None],
+        next_generation: Mapping[Path, bytes | None],
+    ) -> bytes:
+        document = {
+            "schema": _TRANSACTION_SCHEMA,
+            "phase": phase,
+            "previous": self._encode_generation(previous),
+            "next": self._encode_generation(next_generation),
+        }
+        return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+    def _encode_generation(self, generation: Mapping[Path, bytes | None]) -> dict[str, object]:
+        return {
+            name: (
+                None
+                if generation[path] is None
+                else {
+                    "payload": base64.b64encode(generation[path] or b"").decode("ascii"),
+                    "sha256": hashlib.sha256(generation[path] or b"").hexdigest(),
+                }
+            )
+            for name, path in self._transaction_artifacts().items()
+        }
+
+    def _decode_generation(self, value: object) -> dict[Path, bytes | None]:
+        if not isinstance(value, dict) or set(value) != set(self._transaction_artifacts()):
+            raise RegistryError("registry transaction generation is malformed")
+        decoded: dict[Path, bytes | None] = {}
+        for name, path in self._transaction_artifacts().items():
+            artifact = value[name]
+            if artifact is None:
+                decoded[path] = None
+                continue
+            if not isinstance(artifact, dict) or set(artifact) != {"payload", "sha256"}:
+                raise RegistryError("registry transaction artifact is malformed")
+            encoded = artifact["payload"]
+            expected_digest = artifact["sha256"]
+            if not isinstance(encoded, str) or not isinstance(expected_digest, str):
+                raise RegistryError("registry transaction artifact is malformed")
+            try:
+                payload = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise RegistryError("registry transaction artifact encoding is invalid") from exc
+            if hashlib.sha256(payload).hexdigest() != expected_digest:
+                raise RegistryError("registry transaction artifact digest is invalid")
+            decoded[path] = payload
+        return decoded
+
+    def _transaction_artifacts(self) -> dict[str, Path]:
+        return {
+            "main": self.path,
+            "snapshot": self.snapshot_path,
+            "checksum": self.snapshot_checksum_path,
+        }
+
+    def _recover_transaction_locked(self) -> None:
+        if not os.path.lexists(self.transaction_path):
+            return
+        _assert_private(self.transaction_path, directory=False)
+        try:
+            document = json.loads(self.transaction_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RegistryError("registry transaction journal is corrupt") from exc
+        if not isinstance(document, dict) or set(document) != {"schema", "phase", "previous", "next"}:
+            raise RegistryError("registry transaction journal is malformed")
+        if document["schema"] != _TRANSACTION_SCHEMA or document["phase"] not in {"prepared", "committed"}:
+            raise RegistryError("registry transaction journal schema or phase is invalid")
+        previous = self._decode_generation(document["previous"])
+        next_generation = self._decode_generation(document["next"])
+        self._validate_next_generation(next_generation)
+        self._assert_current_generation_belongs_to_transaction(previous, next_generation)
+        target = previous if document["phase"] == "prepared" else next_generation
+        self._apply_generation(target)
+        self._verify_generation(target)
+        self._clear_transaction_journal()
+
+    def _validate_next_generation(self, generation: Mapping[Path, bytes | None]) -> None:
+        payload = generation.get(self.path)
+        snapshot = generation.get(self.snapshot_path)
+        checksum = generation.get(self.snapshot_checksum_path)
+        if payload is None or snapshot != payload or checksum is None:
+            raise RegistryError("registry transaction next generation is incomplete")
+        if checksum != (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii"):
+            raise RegistryError("registry transaction next generation checksum is invalid")
+        try:
+            frontmatter, _ = _split_rendered(payload.decode("utf-8"), self.path)
+            self._snapshot_from_frontmatter(frontmatter)
+        except (UnicodeDecodeError, RegistryParseError, RegistryError) as exc:
+            raise RegistryError("registry transaction next generation payload is invalid") from exc
+
+    def _assert_current_generation_belongs_to_transaction(
+        self,
+        previous: Mapping[Path, bytes | None],
+        next_generation: Mapping[Path, bytes | None],
+    ) -> None:
+        for path in self._transaction_artifacts().values():
+            current = _read_previous_transaction_file(path, allow_legacy_mode=path == self.path)
+            if current not in {previous[path], next_generation[path]}:
+                raise RegistryError(f"registry transaction artifact diverged outside journal: {path.name}")
+
+    def _apply_generation(
+        self,
+        generation: Mapping[Path, bytes | None],
+        *,
+        use_raw_writer: bool = False,
+    ) -> None:
+        for path in (self.snapshot_path, self.snapshot_checksum_path, self.path):
+            payload = generation[path]
+            if payload is None:
+                if os.path.lexists(path):
+                    _read_previous_transaction_file(path, allow_legacy_mode=path == self.path)
+                    path.unlink()
+                    _fsync_directory(path.parent)
+            else:
+                writer = _atomic_private_write_raw if use_raw_writer else _atomic_private_write
+                writer(path, payload)
+
+    def _verify_generation(self, generation: Mapping[Path, bytes | None]) -> None:
+        for path in self._transaction_artifacts().values():
+            actual = _read_previous_transaction_file(path, allow_legacy_mode=path == self.path)
+            if actual != generation[path]:
+                raise RegistryError(f"registry transaction verification failed for {path.name}")
+
+    def _clear_transaction_journal(self) -> None:
+        self.transaction_path.unlink(missing_ok=True)
+        _fsync_directory(self.transaction_path.parent)
 
     def _frontmatter_from_snapshot(self, snapshot: RegistrySnapshot) -> dict[str, Any]:
         frontmatter = copy.deepcopy(snapshot.extensions)
@@ -432,14 +579,12 @@ class VaultRegistryStore:
         if not isinstance(raw_registrations, dict):
             raise RegistryError("registry registrations must be a mapping")
         registrations: dict[str, VaultRegistration] = {}
-        refs: set[str] = set()
         for binding_id, raw in raw_registrations.items():
             if not isinstance(raw, dict):
                 raise RegistryError(f"registration {binding_id} must be a mapping")
             registration = _registration_from_frontmatter(str(binding_id), raw)
-            if registration.ref in refs:
-                raise RegistryError(f"duplicate registry ref: {registration.ref}")
-            refs.add(registration.ref)
+            self._validate_registration(registration)
+            self._assert_registration_unique(registration, registrations)
             registrations[registration.vault_binding_id] = registration
         app_install_id = _optional_str(frontmatter.get("appInstallId"))
         if app_install_id is None:
@@ -564,13 +709,13 @@ def _resolve_legacy_reference(
         if candidate is None:
             raise RegistryMigrationError(f"settings rebind reference is missing from legacy registry: {ref}")
         path = _optional_str(value.get("path"))
-        if path is not None and _canonical_path(path) != _canonical_path(str(candidate["path"])):
+        if path is not None and not _same_root(path, str(candidate["path"])):
             raise RegistryMigrationError(f"settings rebind reference/path conflict: {ref}")
         return canonical_ref
     path = _optional_str(value.get("path"))
     if path is None:
         raise RegistryMigrationError("settings rebind reference has neither ref nor path")
-    matches = [key for key, candidate in candidates.items() if _canonical_path(str(candidate["path"])) == _canonical_path(path)]
+    matches = [key for key, candidate in candidates.items() if _same_root(str(candidate["path"]), path)]
     if len(matches) != 1:
         raise RegistryMigrationError("ambiguous settings rebind path migration")
     return matches[0]
@@ -581,13 +726,23 @@ def _coalesce_legacy_candidates(
     *,
     last_active_ref: str | None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    groups: dict[str, list[str]] = {}
+    groups: list[list[str]] = []
     for ref, raw in candidates.items():
-        groups.setdefault(_canonical_path(str(raw["path"])), []).append(ref)
+        matching = [group for group in groups if _same_root(str(candidates[group[0]]["path"]), str(raw["path"]))]
+        if len(matching) > 1:
+            merged_group = [ref]
+            for group in matching:
+                groups.remove(group)
+                merged_group.extend(group)
+            groups.append(merged_group)
+        elif matching:
+            matching[0].append(ref)
+        else:
+            groups.append([ref])
 
     coalesced: dict[str, dict[str, Any]] = {}
     aliases: dict[str, str] = {}
-    for refs in groups.values():
+    for refs in groups:
         primary = last_active_ref if last_active_ref in refs else sorted(refs)[0]
         merged = copy.deepcopy(dict(candidates[primary]))
         for ref in refs:
@@ -608,7 +763,18 @@ def _coalesce_legacy_candidates(
 
 
 def _canonical_path(value: str) -> str:
-    return str(Path(value).expanduser().resolve(strict=False))
+    return _root_identity(value).canonical_path
+
+
+def _root_identity(value: str) -> FilesystemRootIdentity:
+    try:
+        return resolve_filesystem_root_identity(value)
+    except FilesystemIdentityError as exc:
+        raise RegistryError(str(exc)) from exc
+
+
+def _same_root(left: str, right: str) -> bool:
+    return same_filesystem_root(_root_identity(left), _root_identity(right))
 
 
 def _registration_to_frontmatter(item: VaultRegistration) -> dict[str, Any]:

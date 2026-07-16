@@ -82,7 +82,11 @@ Known vaults must not be keyed only by `vaultId`; two local paths can point to c
 The runtime package boundary for this mechanical state is now
 `app.instance.vault_registry`. It provides a versioned, locked, atomic registry model with stable
 `vault_binding_id`, logical `vault_id`, and clone-local `local_instance_id` kept distinct. The old
-`app.vault.app_local` path is a compatibility re-export.
+`app.vault.app_local` path is a compatibility re-export. Persisted and migrated registrations use
+one instance-owned root resolver: lexical/symlink aliases compare by canonical path, while existing
+roots also compare by device/inode so bind-mount aliases cannot become separate bindings. Each
+multi-file main/snapshot/checksum update carries a private prepared/committed journal; restart rolls
+prepared state back and committed state forward before any lock-respecting read.
 
 This is an enabling boundary, not a multi-vault authority cutover. The scalar legacy app-local
 store remains the production picker authority until the MVR-01B rollback capability and MVR-01C

@@ -56,9 +56,9 @@ Notes on the current model:
 ### Multi-vault instance-state rollout boundary
 
 MVR-01A introduces the dormant `app.instance.vault_registry` store and its private-file,
-cross-process lock, CAS, snapshot, and corruption-recovery contracts. It does not change current
-channel mounts or make that schema authoritative. The production picker continues to write the
-legacy scalar app-local payload.
+cross-process lock, CAS, physical-root identity, crash-recoverable transaction journal, snapshot,
+and corruption-recovery contracts. It does not change current channel mounts or make that schema
+authoritative. The production picker continues to write the legacy scalar app-local payload.
 
 The protected per-channel `/app/instance-state` volume, cross-consumer mount/preflight, backup and
 rollback transformer are MVR-01B work. MVR-01C owns the guarded authority cutover. A deployment must
