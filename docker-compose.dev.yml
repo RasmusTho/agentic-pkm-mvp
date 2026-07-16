@@ -24,8 +24,21 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
-      VAULT_ROOT: ${VAULT_ROOT:-}
-      VAULT_ROOT_DEV: ${VAULT_ROOT_DEV:-}
+      # Deliberately no VAULT_ROOT / VAULT_ROOT_DEV keys here (#3875, follow-up
+      # to #3659/#3666 review thread PRRT_kwDOQEip6s6RRnQ2). Compose's service
+      # `environment:` mapping always wins over `env_file:` for a given key,
+      # and `${VAULT_ROOT:-}` only interpolates from the Compose CLI/shell
+      # environment -- never from a service `env_file:`. `deploy_channel_compose.sh`
+      # deliberately does not pass the governed runtime env file as a CLI
+      # `--env-file` (that would expose its DSNs to Compose interpolation), so
+      # an explicit key here always resolved to an empty string and blanked
+      # whatever the base compose's `env_file:` chain (config/runtime.defaults.env
+      # + the WATCHER_RUNTIME_ENV_FILE-referenced runtime env) actually bound --
+      # erasing an active dev vault selection on every deploy. Omitting the
+      # keys lets the governed env_file chain supply the value untouched, and
+      # as a side effect a stale parent-shell VAULT_ROOT/VAULT_ROOT_DEV can no
+      # longer leak in either, since Compose only interpolates variables that
+      # are textually referenced in the compose file.
 
   worker:
     environment:
@@ -33,8 +46,8 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
-      VAULT_ROOT: ${VAULT_ROOT:-}
-      VAULT_ROOT_DEV: ${VAULT_ROOT_DEV:-}
+      # See the `api` service comment above: no VAULT_ROOT / VAULT_ROOT_DEV
+      # keys here so the governed env_file chain supplies the binding.
 
   watcher:
     environment:
@@ -42,8 +55,8 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
-      VAULT_ROOT: ${VAULT_ROOT:-}
-      VAULT_ROOT_DEV: ${VAULT_ROOT_DEV:-}
+      # See the `api` service comment above: no VAULT_ROOT / VAULT_ROOT_DEV
+      # keys here so the governed env_file chain supplies the binding.
 
   heimdal-capture-watch:
     environment:
