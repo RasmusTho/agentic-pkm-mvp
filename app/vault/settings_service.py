@@ -30,16 +30,26 @@ VAULT_SHARED_SETTING_FILES = (
     "workflow.md",
     "design-handoff.md",
     "companion-ui.md",
+    "youtube.md",
 )
 VAULT_LOCAL_SETTING_FILES = ("local.md",)
 VALID_SOURCE_SCOPES = {"app-local", "vault-shared", "vault-local"}
 
 # Runtime-gating settings: authority-bearing writes that reconfigure whether
-# the watcher/indexing runtime runs (registry.py:734, config.py:92).
+# the watcher/indexing runtime runs (registry.py:734, config.py:92) or whether
+# the YouTube source-sync runner may run at all
+# (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Settings model).
 # These must route through the governed write seam (WriteGuard + actor receipt).
 # See docs/COMPANION_UI_PRODUCT_SPEC.md :: Runtime control actions and
 # companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Control-action register.
-RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset({"enableVaultWatcher", "enableAutoIndexing"})
+RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset(
+    {
+        "enableVaultWatcher",
+        "enableAutoIndexing",
+        "youtubeSync.enabled",
+        "youtubeSync.runnerEnabled",
+    }
+)
 
 _SETTINGS_WRITE_ACTION = "settings.runtime_gating.write"
 
@@ -59,6 +69,8 @@ class SettingDefinition:
     allowed_machine_roles: tuple[str, ...] = ()
     allowed_values: tuple[Any, ...] = ()
     aliases: tuple[str, ...] = ()
+    min_value: float | None = None
+    max_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +259,144 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         allowed_values=("primary", "satellite", "readOnlySatellite", "automationNode", "testNode"),
     ),
     SettingDefinition("syncRole", "string", "local", "Local sync role.", "vault-local", "gitignore", True, True, True, "local.md"),
+    # YouTube source sync (YSS-01): keys, scopes, defaults, and bounds are
+    # normative in docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Settings model.
+    SettingDefinition(
+        "youtubeSync.enabled",
+        "boolean",
+        False,
+        "Master switch for YouTube source sync; flipped by completing setup.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+    ),
+    SettingDefinition(
+        "youtubeSync.inboxPollSeconds",
+        "number",
+        180,
+        "Poll interval in seconds for the inbox playlist.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=60,
+        max_value=3600,
+    ),
+    SettingDefinition(
+        "youtubeSync.playlistPollSeconds",
+        "number",
+        3600,
+        "Non-inbox playlist poll interval in seconds.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=300,
+        max_value=86400,
+    ),
+    SettingDefinition(
+        "youtubeSync.subscriptionsPollSeconds",
+        "number",
+        21600,
+        "Subscription feed poll interval in seconds.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=3600,
+        max_value=86400,
+    ),
+    SettingDefinition(
+        "youtubeSync.reconcileIntervalDays",
+        "number",
+        7,
+        "Days between reconcile/gap-repair sweeps.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=1,
+        max_value=90,
+    ),
+    SettingDefinition(
+        "youtubeSync.maxConcurrentAcquisitions",
+        "number",
+        2,
+        "Maximum concurrent acquisition requests drained at once.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=1,
+        max_value=8,
+    ),
+    SettingDefinition(
+        "youtubeSync.subscriptionDefaultPolicy",
+        "enum",
+        "discover_only",
+        "Default acquisition policy mode for subscription-feed sources.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        allowed_values=(
+            "discover_only",
+            "candidate_metadata_only",
+            "acquire_transcript",
+            "acquire_if_filter_matches",
+        ),
+    ),
+    SettingDefinition(
+        "youtubeSync.captionsEnabled",
+        "boolean",
+        True,
+        "Acquire captions/transcripts for discovered videos.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+    ),
+    SettingDefinition(
+        "youtubeSync.mediaDownloadEnabled",
+        "boolean",
+        False,
+        "Full media archival master switch; engine deferred, refused while undelivered.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+    ),
+    SettingDefinition(
+        "youtubeSync.runnerEnabled",
+        "boolean",
+        False,
+        "Whether this machine runs the YouTube sync loop; the DB lease remains the hard guard.",
+        "vault-local",
+        "gitignore",
+        True,
+        True,
+        True,
+        "local.md",
+    ),
 )
 
 
@@ -566,9 +716,13 @@ def _validate_value(definition: SettingDefinition, value: Any) -> _ValidationRes
             return True, None
         return False, f"{definition.key} must be a boolean"
     if definition.type == "number":
-        if isinstance(value, int | float) and not isinstance(value, bool):
-            return True, None
-        return False, f"{definition.key} must be a number"
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            return False, f"{definition.key} must be a number"
+        if definition.min_value is not None and value < definition.min_value:
+            return False, f"{definition.key} must be >= {definition.min_value}"
+        if definition.max_value is not None and value > definition.max_value:
+            return False, f"{definition.key} must be <= {definition.max_value}"
+        return True, None
     if definition.type == "array":
         if isinstance(value, list):
             return True, None

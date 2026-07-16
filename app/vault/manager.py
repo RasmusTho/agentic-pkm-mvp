@@ -745,6 +745,23 @@ def _initial_settings_files(
             "# Companion UI Settings\nShared Companion UI defaults for this vault.\nLocal UI preferences may override these in local settings.\n",
         ),
         (
+            "youtube.md",
+            {
+                "schema": "design-handoff.youtube-sync.v1",
+                "scope": "vault-shared",
+                "youtubeSync.enabled": False,
+                "youtubeSync.inboxPollSeconds": 180,
+                "youtubeSync.playlistPollSeconds": 3600,
+                "youtubeSync.subscriptionsPollSeconds": 21600,
+                "youtubeSync.reconcileIntervalDays": 7,
+                "youtubeSync.maxConcurrentAcquisitions": 2,
+                "youtubeSync.subscriptionDefaultPolicy": "discover_only",
+                "youtubeSync.captionsEnabled": True,
+                "youtubeSync.mediaDownloadEnabled": False,
+            },
+            "# YouTube Sync Settings\nShared defaults for YouTube source sync (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md).\nWhich machine runs the sync loop is vault-local (`youtubeSync.runnerEnabled` in local.md).\nNo secret values belong in this file; account bindings and tokens are app-local.\n",
+        ),
+        (
             "local.md",
             {
                 "schema": "design-handoff.local.v1",
@@ -758,6 +775,7 @@ def _initial_settings_files(
                 "allowSharedSettingsEdits": machine_role in {"primary", "automationNode", "testNode"},
                 "allowLocalSettingsEdits": True,
                 "localExportPath": None,
+                "youtubeSync.runnerEnabled": False,
             },
             "# Local Settings\nSettings for this local clone of the vault.\nThis file should not be committed to Git.\nUse this file for machine-specific paths, satellite behavior, local runtime preferences, and local automation settings.\n",
         ),

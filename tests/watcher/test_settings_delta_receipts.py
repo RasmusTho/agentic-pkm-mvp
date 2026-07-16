@@ -11,7 +11,7 @@ import yaml
 import app.watcher.registry as registry
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsStore
-from app.vault.settings_service import SettingsService
+from app.vault.settings_service import RUNTIME_GATING_SETTINGS, SettingsService
 from app.receipts.settings_receipts import query_settings_receipts
 from app.watcher.settings_delta import SETTINGS_LOCAL_REL, handle_settings_local_delta
 from tests.helpers.vault_settings import initialize_test_vault
@@ -28,7 +28,7 @@ def test_delta_apply_receipted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     previous_values = {
         key: value
         for key, value in _read_frontmatter(vault_root / SETTINGS_LOCAL_REL).items()
-        if key in {"enableVaultWatcher", "enableAutoIndexing"}
+        if key in RUNTIME_GATING_SETTINGS
     }
     _write_local_settings(vault_root, {"enableAutoIndexing": False})
 
@@ -136,7 +136,7 @@ def test_runtime_gating_key_removal_routes_settings_receipt(
     previous_values = {
         key: value
         for key, value in _read_frontmatter(local_md).items()
-        if key in {"enableVaultWatcher", "enableAutoIndexing"}
+        if key in RUNTIME_GATING_SETTINGS
     }
     assert "enableAutoIndexing" in previous_values
     outbox_path = tmp_path / "outbox.jsonl"

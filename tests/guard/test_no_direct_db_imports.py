@@ -116,6 +116,12 @@ ALLOW_FILES = (
     'app/heimdal/observation_log.py',
     'app/heimdal/cursor_store.py',
     'app/heimdal/_backend.py',
+    # YouTube source-sync source registry (YSS-01, #3916). Same bounded pattern
+    # as the Heimdal stores above: a dedicated migration-owned table
+    # (`acquisition_source_registry`, migration a7f3c2e9d1b4) with dual
+    # pg/memory backends, direct DSN connection, no ORM layer to route through;
+    # backend selection mirrors app/heimdal/_backend.py.
+    'app/knowledge_acquisition/source_registry.py',
     # Consent ledger v0 (#3042, Epic #3019 slice A5). Same bounded pattern as
     # the observation log / cursor store above: a dedicated append-only
     # grants table, direct DSN connection, no ORM layer to route through.

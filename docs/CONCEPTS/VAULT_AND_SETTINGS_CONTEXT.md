@@ -149,9 +149,14 @@ Vault initialization creates missing files only:
   workflow.md
   design-handoff.md
   companion-ui.md
+  youtube.md
   local.md
   .gitignore
 ```
+
+`youtube.md` (YouTube source-sync shared defaults, YSS-01) is created at initialization but is
+not a *required* file: validation does not demand it, and settings resolution falls back to
+built-in defaults when it is absent, so vaults initialized before it existed stay valid.
 
 `settings/.gitignore` ignores local-only settings:
 
