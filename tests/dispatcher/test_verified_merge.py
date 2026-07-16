@@ -431,6 +431,172 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
     assert phase == prepared["phase_receipt"]
 
 
+def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    raced_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+        "body": "Governing-Issue: #3821\n\nRefs #3820\nFixes #4999",
+    }
+    authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))
+
+    resolved = resolve_verified_merge_authority_receipt(
+        [authority_comment, prepared_comment],
+        pr=raced_pr,
+        repository=REPOSITORY,
+        expected_run_id="vrun-authority",
+        expected_repair_budget=_context()["repair_budget"],
+    )
+
+    assert resolved == authority
+    assert resolve_verified_merge_phase(
+        [prepared_comment],
+        authority_receipt=authority,
+        pr=raced_pr,
+        allow_merged_body_drift=True,
+    ) == prepared["phase_receipt"]
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [authority_comment, prepared_comment],
+            pr={**raced_pr, "state": "open", "merged": False, "merged_at": None},
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+
+def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    merged_neutral = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    raced_pr = {
+        **merged_neutral,
+        "body": "Governing-Issue: #3821\n\nRefs #3820\nFixes #4999",
+    }
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_neutral,
+    )
+    reconciled_a = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="reconciled",
+        pr=merged_neutral,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[4999],
+    )
+    reconciled_b = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="reconciled",
+        pr=merged_neutral,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[5000],
+    )
+    authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))
+
+    def comment_for(receipt: dict[str, object]) -> dict[str, object]:
+        return _trusted_comment(
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        )
+
+    forged_authority = {**authority_comment, "author_association": "NONE"}
+    forged_phase = {**prepared_comment, "author_association": "NONE"}
+    stale_phase = copy.deepcopy(prepared["phase_receipt"])
+    assert isinstance(stale_phase, dict)
+    stale_phase["head_sha"] = "c" * 40
+    conflicting_authority = copy.deepcopy(authority)
+    conflicting_authority["repair_budget"] = {
+        "policy_version": "v2",
+        "mechanisms": [],
+    }
+    conflicting_authority_comment = _trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(
+            conflicting_authority, sort_keys=True, separators=(",", ":")
+        )
+        + "\n```"
+    )
+    raced_context = _context()
+    raced_context["closing_issues"] = [4999]
+    raced_context["supporting_issues"] = [4999]
+    body_matching_conflict = prepare_verified_merge(
+        context=raced_context,
+        pr=_pr(str(raced_pr["body"])),
+        live_closing_issues=[4999],
+    )
+    body_matching_conflict_comment = _trusted_comment(
+        str(body_matching_conflict["authority_receipt_comment"])
+    )
+    cases = [
+        [authority_comment],
+        [forged_authority, prepared_comment],
+        [authority_comment, forged_phase],
+        [authority_comment, comment_for(stale_phase)],
+        [authority_comment, conflicting_authority_comment, prepared_comment],
+        [authority_comment, prepared_comment, body_matching_conflict_comment],
+        [
+            authority_comment,
+            prepared_comment,
+            _trusted_comment(str(merged["phase_receipt_comment"])),
+            _trusted_comment(str(reconciled_a["phase_receipt_comment"])),
+            _trusted_comment(str(reconciled_b["phase_receipt_comment"])),
+        ],
+    ]
+
+    for comments in cases:
+        assert (
+            resolve_verified_merge_authority_receipt(
+                comments,
+                pr=raced_pr,
+                repository=REPOSITORY,
+                expected_run_id="vrun-authority",
+            )
+            is None
+        )
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [authority_comment, conflicting_authority_comment, prepared_comment],
+            pr=raced_pr,
+            repository=REPOSITORY,
+            expected_run_id="vrun-authority",
+            expected_repair_budget=_context()["repair_budget"],
+        )
+        is None
+    )
+
+
 def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
     plan = prepare_verified_merge(
         context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]

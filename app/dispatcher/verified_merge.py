@@ -154,13 +154,25 @@ def _body_authority(body: object) -> IssueAuthority | None:
     return resolve_issue_authority(body) or resolve_neutralized_issue_authority(body)
 
 
+def _complete_merged_identity(pr: Mapping[str, object]) -> bool:
+    merge_commit_sha = pr.get("merge_commit_sha")
+    return bool(
+        pr.get("state") == "closed"
+        and pr.get("merged") is True
+        and isinstance(pr.get("merged_at"), str)
+        and pr.get("merged_at")
+        and isinstance(merge_commit_sha, str)
+        and _SHA_PATTERN.fullmatch(merge_commit_sha) is not None
+    )
+
+
 def _valid_authority_receipt(
     receipt: Mapping[str, object],
     *,
     pr: Mapping[str, object],
     repository: str,
     expected_run_id: str | None,
-    expected_repair_budget: Mapping[str, object] | None,
+    require_live_body: bool = True,
 ) -> bool:
     body = pr.get("body")
     head = pr.get("head")
@@ -172,14 +184,6 @@ def _valid_authority_receipt(
         or receipt.get("pr_number") != pr.get("number")
         or not isinstance(head, Mapping)
         or receipt.get("head_sha") != head.get("sha")
-        or authority is None
-        or receipt.get("governing_issue") != authority.governing_issue
-        or not isinstance(body, str)
-        or _body_digest(body)
-        not in {
-            receipt.get("body_sha256"),
-            receipt.get("neutralized_body_sha256"),
-        }
         or not isinstance(receipt.get("run_id"), str)
         or not receipt.get("run_id")
         or (
@@ -187,10 +191,17 @@ def _valid_authority_receipt(
             and receipt.get("run_id") != expected_run_id
         )
         or not isinstance(receipt.get("repair_budget"), Mapping)
-        or (
-            expected_repair_budget is not None
-            and receipt.get("repair_budget") != expected_repair_budget
-        )
+    ):
+        return False
+    if require_live_body and (
+        authority is None
+        or receipt.get("governing_issue") != authority.governing_issue
+        or not isinstance(body, str)
+        or _body_digest(body)
+        not in {
+            receipt.get("body_sha256"),
+            receipt.get("neutralized_body_sha256"),
+        }
     ):
         return False
     try:
@@ -212,12 +223,25 @@ def _valid_authority_receipt(
         )
     except ValueError:
         return False
+    governing_issue = receipt.get("governing_issue")
     return bool(
-        closing == authority.closing_issues
+        _positive_int(governing_issue)
+        and (
+            not require_live_body
+            or (authority is not None and closing == authority.closing_issues)
+        )
         and set(authenticated_supporting).issubset(live_supporting)
-        and set(authenticated_supporting).issubset(authority.supporting_issues)
+        and (
+            not require_live_body
+            or (
+                authority is not None
+                and set(authenticated_supporting).issubset(
+                    authority.supporting_issues
+                )
+            )
+        )
         and set(closing).issubset(
-            {authority.governing_issue, *authenticated_supporting}
+            {governing_issue, *authenticated_supporting}
         )
         and receipt.get("body_sha256") != receipt.get("neutralized_body_sha256")
         and all(
@@ -238,23 +262,61 @@ def resolve_verified_merge_authority_receipt(
 ) -> dict[str, object] | None:
     """Resolve one trusted exact-head merge receipt without accepting conflicts."""
 
+    receipts = _comment_receipts(comments, VERIFIED_MERGE_AUTHORITY_MARKER)
     valid = [
         dict(receipt)
-        for receipt in _comment_receipts(
-            comments, VERIFIED_MERGE_AUTHORITY_MARKER
-        )
+        for receipt in receipts
         if _valid_authority_receipt(
             receipt,
             pr=pr,
             repository=repository,
             expected_run_id=expected_run_id,
-            expected_repair_budget=expected_repair_budget,
         )
     ]
+    if _complete_merged_identity(pr):
+        body = pr.get("body")
+        if isinstance(body, str):
+            live_digest = _body_digest(body)
+            valid.extend(
+                dict(receipt)
+                for receipt in receipts
+                if live_digest
+                not in {
+                    receipt.get("body_sha256"),
+                    receipt.get("neutralized_body_sha256"),
+                }
+                and _valid_authority_receipt(
+                    receipt,
+                    pr=pr,
+                    repository=repository,
+                    expected_run_id=expected_run_id,
+                    require_live_body=False,
+                )
+            )
     if not valid:
         return None
     identities = {_canonical_digest(receipt) for receipt in valid}
-    return valid[-1] if len(identities) == 1 else None
+    if len(identities) != 1:
+        return None
+    authority_receipt = valid[-1]
+    if (
+        expected_repair_budget is not None
+        and authority_receipt.get("repair_budget") != expected_repair_budget
+    ):
+        return None
+    body = pr.get("body")
+    if isinstance(body, str) and _body_digest(body) not in {
+        authority_receipt.get("body_sha256"),
+        authority_receipt.get("neutralized_body_sha256"),
+    }:
+        if resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority_receipt,
+            pr=pr,
+            allow_merged_body_drift=True,
+        ) is None:
+            return None
+    return authority_receipt
 
 
 def resolve_post_merge_governing_issue(
@@ -417,6 +479,7 @@ def resolve_verified_merge_phase(
     *,
     authority_receipt: Mapping[str, object],
     pr: Mapping[str, object],
+    allow_merged_body_drift: bool = False,
 ) -> dict[str, object] | None:
     """Resolve the highest continuous, non-conflicting durable merge phase."""
 
@@ -501,7 +564,7 @@ def resolve_verified_merge_phase(
     if current_digest not in {
         authority_receipt.get("body_sha256"),
         authority_receipt.get("neutralized_body_sha256"),
-    }:
+    } and not (allow_merged_body_drift and _complete_merged_identity(pr)):
         return None
     return highest
 

@@ -2842,7 +2842,10 @@ class VerificationConsumer:
                 "verification run is no longer resumable: context_authority_mismatch"
             ) from exc
         phase = resolve_verified_merge_phase(
-            comments, authority_receipt=authority, pr=pr
+            comments,
+            authority_receipt=authority,
+            pr=pr,
+            allow_merged_body_drift=True,
         )
         if phase is None:
             raise ValueError(
@@ -2854,11 +2857,12 @@ class VerificationConsumer:
                 "verification run is no longer resumable: merged_body_missing"
             )
         live_body_digest = hashlib.sha256(live_body.encode("utf-8")).hexdigest()
-        body_state = (
-            "restored"
-            if live_body_digest == authority.get("body_sha256")
-            else "neutralized"
-        )
+        if live_body_digest == authority.get("body_sha256"):
+            body_state = "restored"
+        elif live_body_digest == authority.get("neutralized_body_sha256"):
+            body_state = "neutralized"
+        else:
+            body_state = "raced"
         return {
             **recovered_pack,
             "merge_recovery": {
@@ -2960,6 +2964,34 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=claimed.lease_id or "",
             )
+        terminal = run.terminal_receipt
+        persisted_merge_budget = (
+            terminal.get("merge_authority_repair_budget")
+            if isinstance(terminal, Mapping)
+            else None
+        )
+        if persisted_merge_budget is not None and not isinstance(
+            persisted_merge_budget, Mapping
+        ):
+            try:
+                claimed = self.ledger.claim(run.run_id, self.holder)
+            except (VerificationSubscriptionBusy, VerificationBackoffPending):
+                current = self.ledger.get(run.run_id)
+                assert current is not None
+                return current
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                {"outcome": "invalid_persisted_merge_authority_budget"},
+                reason="invalid_receipt_contract",
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
+        expected_merge_budget = (
+            dict(persisted_merge_budget)
+            if isinstance(persisted_merge_budget, Mapping)
+            else self.ledger.repair_budget_projection(run.run_id)
+        )
         auth = self.auth.check()
         if not auth.ok:
             try:
@@ -2970,6 +3002,7 @@ class VerificationConsumer:
                         "reason": auth.reason,
                         "auth_mode": auth.auth_mode,
                         "pending_terminal_receipt": dict(receipt),
+                        "merge_authority_repair_budget": expected_merge_budget,
                     },
                     _retry_at(),
                 )
@@ -3005,9 +3038,7 @@ class VerificationConsumer:
                 live_checks,
                 {},
                 expected_head_sha=receipt_head,
-                expected_repair_budget=self.ledger.repair_budget_projection(
-                    claimed.run_id
-                ),
+                expected_repair_budget=expected_merge_budget,
             )
             if rejection == "merge_authority_missing":
                 rejection = delivered_live_truth_rejection(
@@ -3016,9 +3047,7 @@ class VerificationConsumer:
                     live_checks,
                     self._read_delivery_evidence(claimed, live_pr),
                     expected_head_sha=receipt_head,
-                    expected_repair_budget=self.ledger.repair_budget_projection(
-                        claimed.run_id
-                    ),
+                    expected_repair_budget=expected_merge_budget,
                 )
         except Exception as exc:
             return self.ledger.backoff(
@@ -3028,6 +3057,7 @@ class VerificationConsumer:
                     "reason": "postlaunch_live_truth_unavailable",
                     "error_type": type(exc).__name__,
                     "pending_terminal_receipt": dict(receipt),
+                    "merge_authority_repair_budget": expected_merge_budget,
                 },
                 _retry_at(),
                 holder=self.holder,
@@ -3041,6 +3071,7 @@ class VerificationConsumer:
                         "outcome": "deferred",
                         "reason": rejection,
                         "pending_terminal_receipt": dict(receipt),
+                        "merge_authority_repair_budget": expected_merge_budget,
                     },
                     _retry_at(),
                     holder=self.holder,
@@ -3559,15 +3590,18 @@ class VerificationConsumer:
         # Receipt acceptance is tied to a fresh authenticated GitHub read. A
         # repair may advance only to the exact current PR head; arbitrary or
         # stale receipt heads never reach the review ledger.
+        expected_merge_repair_budget = None
+        if verdict == "delivered":
+            expected_merge_repair_budget = (
+                merge_authority_repair_budget
+                if merge_authority_repair_budget is not None
+                else self.ledger.repair_budget_projection(claimed.run_id)
+            )
         try:
             live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
             live_checks = self.truth.checks(claimed.repository, receipt_head)
             if verdict == "delivered":
-                expected_merge_repair_budget = (
-                    merge_authority_repair_budget
-                    if merge_authority_repair_budget is not None
-                    else self.ledger.repair_budget_projection(claimed.run_id)
-                )
+                assert expected_merge_repair_budget is not None
                 rejection = delivered_live_truth_rejection(
                     claimed,
                     live_pr,
@@ -3593,14 +3627,19 @@ class VerificationConsumer:
                     expected_head_sha=receipt_head,
                 )
         except Exception as exc:
+            pending_receipt = {
+                "outcome": "blocked",
+                "reason": "postlaunch_live_truth_unavailable",
+                "error_type": type(exc).__name__,
+                "pending_terminal_receipt": dict(receipt),
+            }
+            if expected_merge_repair_budget is not None:
+                pending_receipt["merge_authority_repair_budget"] = dict(
+                    expected_merge_repair_budget
+                )
             return self.ledger.backoff(
                 claimed.run_id,
-                {
-                    "outcome": "blocked",
-                    "reason": "postlaunch_live_truth_unavailable",
-                    "error_type": type(exc).__name__,
-                    "pending_terminal_receipt": dict(receipt),
-                },
+                pending_receipt,
                 _retry_at(),
                 holder=self.holder,
                 lease_id=lease_id,

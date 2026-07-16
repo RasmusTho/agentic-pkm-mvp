@@ -710,6 +710,80 @@ def test_merged_incomplete_run_recovers_idempotently_after_coordinator_crash(
     assert recovered_pack["merge_recovery"]["body_state"] == crash_body_state
 
 
+def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
+    tmp_path,
+) -> None:
+    plan = _merge_plan(HEAD)
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    raced_body = "Governing-Issue: #3603\n\nRefs #3603\nFixes #4999"
+    crashed_pr = merged_pr(body=raced_body)
+
+    class RecoveryTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(crashed_pr, GREEN)
+            self.restored = False
+
+        def pull_request_comments(self, repository, pr_number):
+            if self.restored:
+                return _merge_comments(self._last_pr)
+            return [
+                {
+                    "author_association": "COLLABORATOR",
+                    "body": plan["authority_receipt_comment"],
+                },
+                {
+                    "author_association": "COLLABORATOR",
+                    "body": prepared["phase_receipt_comment"],
+                },
+            ]
+
+    truth = RecoveryTruth()
+
+    class RecoveryLauncher(DeliveredLauncher):
+        def launch(self, context_pack, **kwargs):
+            assert context_pack["merge_recovery"]["phase"] == "prepared"
+            assert context_pack["merge_recovery"]["body_state"] == "raced"
+            truth.pr = merged_pr(body=plan["original_body"])
+            truth._last_pr = truth.pr
+            truth.restored = True
+            return super().launch(context_pack, **kwargs)
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000004",
+        verification_consumer.context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=state.repair_budget_projection(run.run_id),
+        ),
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", running.run_id),
+        )
+        conn.commit()
+
+    completed = VerificationConsumer(
+        state, truth, Auth(), RecoveryLauncher(), "recovery-host"
+    ).recover(run.run_id)
+
+    assert completed.status == "completed"
+    assert completed.verified_head_sha == HEAD
+
+
 def _corrupt_pending_delivered_receipt(state, run_id, mutate) -> None:
     current = state.get(run_id)
     assert current is not None
@@ -1277,7 +1351,7 @@ def test_gh_source_scans_complete_post_merge_closure_attribution() -> None:
     ]
 
 
-def test_merged_recovery_uses_durable_authority_after_rebind_and_budget_advance(
+def test_merged_recovery_pending_replay_uses_durable_authority_budget_after_advance(
     tmp_path,
 ) -> None:
     repaired_head = "c" * 40
@@ -1324,6 +1398,7 @@ def test_merged_recovery_uses_durable_authority_after_rebind_and_budget_advance(
         lease_id=rebound.lease_id or "",
     )
     advanced_budget = state.repair_budget_projection(run.run_id)
+    assert advanced_budget != launch_budget
     plan = _merge_plan(repaired_head, repair_budget=launch_budget)
     crashed_pr = merged_pr(
         body=plan["neutralized_body"],
@@ -1334,6 +1409,13 @@ def test_merged_recovery_uses_durable_authority_after_rebind_and_budget_advance(
         def __init__(self) -> None:
             super().__init__(crashed_pr, green_checks(repaired_head))
             self.phase = "prepared"
+            self.fail_next_pull = False
+
+        def pull_request(self, repository, pr_number):
+            if self.fail_next_pull:
+                self.fail_next_pull = False
+                raise RuntimeError("simulated post-launch GitHub read outage")
+            return super().pull_request(repository, pr_number)
 
         def pull_request_comments(self, repository, pr_number):
             return _merge_comments(
@@ -1352,6 +1434,7 @@ def test_merged_recovery_uses_durable_authority_after_rebind_and_budget_advance(
             truth.pr = merged_pr(head={"ref": "branch", "sha": repaired_head})
             truth._last_pr = truth.pr
             truth.phase = "restored"
+            truth.fail_next_pull = True
             session, receipt = super().launch(context_pack, **kwargs)
             return session, {**receipt, "head_sha": repaired_head}
 
@@ -1362,9 +1445,26 @@ def test_merged_recovery_uses_durable_authority_after_rebind_and_budget_advance(
         )
         conn.commit()
 
-    completed = VerificationConsumer(
+    consumer = VerificationConsumer(
         state, truth, Auth(), RecoveryLauncher(), "recovery-host"
-    ).recover(run.run_id)
+    )
+    pending = consumer.recover(run.run_id)
+
+    assert pending.status == "backoff"
+    assert pending.terminal_receipt["reason"] == "postlaunch_live_truth_unavailable"
+    assert pending.terminal_receipt["pending_terminal_receipt"]["verdict"] == "delivered"
+    assert pending.terminal_receipt["merge_authority_repair_budget"] == launch_budget
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (run.run_id,),
+        )
+        conn.commit()
+
+    completed = consumer.consume(
+        _authenticated_verification_request(request(repaired_head))
+    )
 
     assert completed.status == "completed"
     assert completed.head_sha == repaired_head
@@ -1375,6 +1475,7 @@ def test_merged_recovery_uses_durable_authority_after_rebind_and_budget_advance(
         "review",
         "review",
     ]
+    assert len(consumer.launcher.calls) == 1
     assert state.repair_budget_projection(run.run_id) == advanced_budget
 
 
