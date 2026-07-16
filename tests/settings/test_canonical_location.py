@@ -215,3 +215,26 @@ def test_migration_preserves_unrelated_uppercase_system_files(
     preserved = unrelated if unrelated.exists() else vault / "settings" / "operator-note.txt"
     assert preserved.read_text(encoding="utf-8") == "keep me\n"
     assert not legacy_health.exists()
+
+
+def test_migration_moves_health_from_configured_system_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+    vault = tmp_path / "vault"
+    legacy_system = vault / "_system" / "settings" / "system-settings.yaml"
+    legacy_system.parent.mkdir(parents=True)
+    legacy_system.write_text("paths:\n  system_dir_rel: Meta\n", encoding="utf-8")
+    configured_health = vault / "Meta" / "Settings" / "health.md"
+    configured_health.parent.mkdir(parents=True)
+    configured_health.write_text("# configured health\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    monkeypatch.setattr("app.settings.migration.emit_settings_write_receipt", lambda _receipt: None)
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert (vault / "settings" / "health.md").read_text(encoding="utf-8") == "# configured health\n"
+    assert not configured_health.exists()

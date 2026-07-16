@@ -13,6 +13,7 @@ from app.settings.locations import (
     LEGACY_SYSTEM_SETTINGS,
     canonical_settings_root,
 )
+from app.vault.paths import get_vault_system_dir_rel
 from app.receipts.settings_write import SettingsWriteReceipt, emit_settings_write_receipt
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -49,15 +50,26 @@ def _migration_files(vault_root: Path) -> list[tuple[Path, Path, str | None]]:
             else:
                 mappings.append((source, relative, None))
 
-    legacy_health = vault_root / LEGACY_HEALTH_SETTINGS
-    if legacy_health.is_file():
-        mappings.append((legacy_health, Path("health.md"), None))
+    for legacy_health in _legacy_health_paths(vault_root):
+        if legacy_health.is_file():
+            mappings.append((legacy_health, Path("health.md"), None))
     return mappings
 
 
 def _target_text(source: Path, transform: str | None) -> str:
     raw = source.read_text(encoding="utf-8")
     return _markdown_from_yaml(raw) if transform == "yaml_to_markdown" else raw
+
+
+def _legacy_health_paths(root: Path) -> tuple[Path, ...]:
+    paths = {root / LEGACY_HEALTH_SETTINGS}
+    try:
+        configured_system_dir = Path(get_vault_system_dir_rel(root))
+    except (OSError, ValueError):
+        pass
+    else:
+        paths.add(root / configured_system_dir / "Settings" / "health.md")
+    return tuple(sorted(paths, key=str))
 
 
 def _prepared_mappings(
@@ -98,15 +110,15 @@ def _remove_legacy_sources(root: Path) -> None:
     if legacy_system_root.exists():
         shutil.rmtree(legacy_system_root)
 
-    legacy_health = root / LEGACY_HEALTH_SETTINGS
-    if legacy_health.is_file():
-        legacy_health.unlink()
-    try:
-        legacy_health.parent.rmdir()
-    except OSError:
-        # The compatibility directory may hold unrelated operator files. Only
-        # the named health artifact belongs to this migration.
-        pass
+    for legacy_health in _legacy_health_paths(root):
+        if legacy_health.is_file():
+            legacy_health.unlink()
+        try:
+            legacy_health.parent.rmdir()
+        except OSError:
+            # A compatibility directory may hold unrelated operator files.
+            # Only the named health artifact belongs to this migration.
+            pass
 
 
 def migrate_settings_location(

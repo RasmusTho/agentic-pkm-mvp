@@ -17,7 +17,7 @@ def _runtime_env_base(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
 
 
 def _write_default_provider_settings(vault_root: Path) -> None:
-    settings_dir = vault_root / "@Settings"
+    settings_dir = vault_root / "settings"
     settings_dir.mkdir(parents=True, exist_ok=True)
     (settings_dir / "providers.md").write_text(
         """---

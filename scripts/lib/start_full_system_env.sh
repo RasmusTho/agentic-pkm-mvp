@@ -73,6 +73,13 @@ import os
 import sys
 from pathlib import Path
 
+from app.settings.locations import (
+    LEGACY_COMPILED_DIR,
+    LEGACY_SYSTEM_SETTINGS,
+    read_settings_mapping,
+    resolve_settings_file,
+)
+
 vault_root = Path(sys.argv[1]).expanduser()
 
 resolved: dict[str, str] = {}
@@ -136,9 +143,13 @@ def _layout_candidates(root: Path) -> list[Path]:
 
 
 def _read_system_settings(root: Path) -> dict[str, object]:
-    path = root / "_system" / "settings" / "system-settings.yaml"
+    path = resolve_settings_file(
+        root,
+        "system-settings.md",
+        legacy_paths=(LEGACY_SYSTEM_SETTINGS, LEGACY_COMPILED_DIR / "system-settings.yaml"),
+    )
     try:
-        data = _parse_yaml_subset(path.read_text(encoding="utf-8"))
+        data = read_settings_mapping(path)
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}

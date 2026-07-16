@@ -22,6 +22,8 @@ def _literal_path(node: ast.AST) -> str | None:
         right = _literal_path(node.right)
         if left is not None and right is not None:
             return f"{left.rstrip('/')}/{right.lstrip('/')}"
+        if right is not None:
+            return right
     return None
 
 
@@ -43,4 +45,10 @@ def test_no_new_settings_paths() -> None:
             normalized = value.replace("\\", "/")
             if any(segment in normalized for segment in LEGACY_SEGMENTS):
                 violations.add(f"{relative}:{node.lineno}: {value!r}")
+    for path in sorted((ROOT / "scripts").rglob("*.sh")):
+        relative = path.relative_to(ROOT)
+        normalized = path.read_text(encoding="utf-8").replace("\\", "/")
+        for segment in LEGACY_SEGMENTS:
+            if segment in normalized:
+                violations.add(f"{relative}: shell contains retired settings path {segment!r}")
     assert not violations, "new settings locations are forbidden outside the compat seam:\n" + "\n".join(sorted(violations))
