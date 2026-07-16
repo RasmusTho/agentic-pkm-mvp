@@ -150,6 +150,32 @@ def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
     assert attempt.object_kind == "attempt"
     assert store.get_attempt(envelope.repository, "review-task", "attempt-1")["state"] == "running"
 
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_leases SET expires_at = clock_timestamp() - interval '1 second' "
+            "WHERE repository = %s AND resource_id = %s",
+            (envelope.repository, "review-task"),
+        )
+    _, generic_task_lease = store.claim_lease(
+        envelope=envelope,
+        resource_id="review-task",
+        holder="generic-worker",
+        idempotency_key="attempt-generic-lease",
+        request={"command": "claim-lease"},
+    )
+    attempt_before = store.authority_counts(envelope.repository)
+    with pytest.raises(LeaseRequired, match="lease provenance"):
+        store.commit_attempt(
+            envelope=envelope,
+            task_id="review-task",
+            attempt_id="forged-attempt-after-reassignment",
+            state="running",
+            payload={},
+            idempotency_key="forged-attempt-after-reassignment",
+            lease=generic_task_lease,
+        )
+    assert store.authority_counts(envelope.repository) == attempt_before
+
     promotion = store.commit_promotion(
         envelope=envelope,
         promotion_id="promotion-1",

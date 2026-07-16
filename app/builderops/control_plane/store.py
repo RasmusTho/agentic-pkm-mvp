@@ -210,6 +210,7 @@ class PostgresBuilderOpsStore:
                     )
                 if lease is not None:
                     self._assert_lease(conn, envelope.repository, task_id, lease)
+                    self._assert_task_lease_provenance(conn, envelope.repository, task_id, lease)
                 previous = conn.execute(
                     "SELECT state FROM builderops_tasks WHERE repository = %s AND task_id = %s FOR UPDATE",
                     (envelope.repository, task_id),
@@ -625,6 +626,11 @@ class PostgresBuilderOpsStore:
                     if lease is None:
                         raise LeaseRequired(f"{object_kind} mutation requires a fenced lease")
                     self._assert_lease(conn, envelope.repository, lease_resource_id, lease)
+                    if object_kind == "attempt":
+                        assert primary_id is not None
+                        self._assert_task_lease_provenance(
+                            conn, envelope.repository, primary_id, lease
+                        )
                 self._write_authority_object(
                     conn,
                     envelope=envelope,
@@ -1334,6 +1340,22 @@ class PostgresBuilderOpsStore:
             or row["expires_at"] <= effective_now
         ):
             raise StaleFencingToken("lease expired or fencing token is stale")
+
+    @staticmethod
+    def _assert_task_lease_provenance(
+        conn: psycopg.Connection[dict[str, Any]],
+        repository: str,
+        task_id: str,
+        lease: Lease,
+    ) -> None:
+        receipt = conn.execute(
+            "SELECT 1 FROM builderops_receipts "
+            "WHERE repository = %s AND task_id = %s AND event_type = 'task.claimed' "
+            "AND lease_holder = %s AND lease_fencing_token = %s LIMIT 1",
+            (repository, task_id, lease.holder, lease.fencing_token),
+        ).fetchone()
+        if receipt is None:
+            raise LeaseRequired("task mutation requires lease provenance from an atomic task claim")
 
     def claim_outbox(
         self,

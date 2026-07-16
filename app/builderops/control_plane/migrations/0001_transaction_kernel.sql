@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS builderops_receipts (
     CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
+CREATE INDEX IF NOT EXISTS idx_builderops_receipts_task_claim_provenance
+    ON builderops_receipts(repository, task_id, lease_holder, lease_fencing_token)
+    WHERE event_type = 'task.claimed';
+
 CREATE TABLE IF NOT EXISTS builderops_idempotency (
     repository text NOT NULL,
     idempotency_key text NOT NULL,

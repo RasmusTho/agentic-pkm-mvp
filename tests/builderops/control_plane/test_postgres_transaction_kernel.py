@@ -198,6 +198,93 @@ def test_new_claimed_task_requires_atomic_fenced_ownership(control_plane_store, 
     assert control_plane_store.authority_counts(envelope.repository) == existing_before
 
 
+def test_generic_leases_cannot_authorize_task_effects(control_plane_store, envelope) -> None:
+    store = control_plane_store
+
+    store.commit_transition(
+        envelope=envelope,
+        task_id="generic-existing-task",
+        to_state="ready",
+        idempotency_key="generic-existing-task-create",
+        request={"command": "create"},
+    )
+    _, existing_lease = store.claim_lease(
+        envelope=envelope,
+        resource_id="generic-existing-task",
+        holder="generic-worker",
+        idempotency_key="generic-existing-task-lease",
+        request={"command": "claim-lease"},
+    )
+    existing_before = store.authority_counts(envelope.repository)
+    with pytest.raises(LeaseRequired, match="lease provenance"):
+        _commit(
+            store,
+            envelope,
+            lease=existing_lease,
+            key="generic-existing-task-effect",
+            task_id="generic-existing-task",
+        )
+    assert store.authority_counts(envelope.repository) == existing_before
+
+    _, nonexistent_lease = store.claim_lease(
+        envelope=envelope,
+        resource_id="generic-nonexistent-task",
+        holder="generic-worker",
+        idempotency_key="generic-nonexistent-task-lease",
+        request={"command": "claim-lease"},
+    )
+    nonexistent_before = store.authority_counts(envelope.repository)
+    with pytest.raises(LeaseRequired, match="lease provenance"):
+        _commit(
+            store,
+            envelope,
+            lease=nonexistent_lease,
+            key="generic-nonexistent-task-effect",
+            task_id="generic-nonexistent-task",
+        )
+    assert store.authority_counts(envelope.repository) == nonexistent_before
+
+    task_id = "generic-reassigned-task"
+    store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="ready",
+        idempotency_key=f"{task_id}-create",
+        request={"command": "create"},
+    )
+    _, claimed_lease = store.claim_task(
+        envelope=envelope,
+        task_id=task_id,
+        holder="task-worker",
+        idempotency_key=f"{task_id}-claim",
+        request={"command": "claim"},
+    )
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_leases SET expires_at = clock_timestamp() - interval '1 second' "
+            "WHERE repository = %s AND resource_id = %s",
+            (envelope.repository, task_id),
+        )
+    _, reassigned_lease = store.claim_lease(
+        envelope=envelope,
+        resource_id=task_id,
+        holder="generic-worker",
+        idempotency_key=f"{task_id}-generic-lease",
+        request={"command": "claim-lease"},
+    )
+    assert reassigned_lease.fencing_token > claimed_lease.fencing_token
+    reassigned_before = store.authority_counts(envelope.repository)
+    with pytest.raises(LeaseRequired, match="lease provenance"):
+        _commit(
+            store,
+            envelope,
+            lease=reassigned_lease,
+            key=f"{task_id}-effect",
+            task_id=task_id,
+        )
+    assert store.authority_counts(envelope.repository) == reassigned_before
+
+
 def test_transaction_result_binds_receipt_sequence_and_recovery_lsn(
     control_plane_store, envelope
 ) -> None:
