@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, runtime_checkable
 
 
 class ControlPlaneError(RuntimeError):
@@ -26,6 +26,10 @@ class LeaseUnavailable(ControlPlaneError):
 
 class LeaseRequired(ControlPlaneError):
     """Raised when an existing authority row is mutated without a lease."""
+
+
+class StateConflict(ControlPlaneError):
+    """Raised when a guarded transition observes an unexpected prior state."""
 
 
 class StaleFencingToken(ControlPlaneError):
@@ -167,6 +171,7 @@ class RecoveryWatermark:
         )
 
 
+@runtime_checkable
 class StorePort(Protocol):
     """Domain-neutral service boundary implemented by the PostgreSQL authority."""
 
@@ -182,5 +187,73 @@ class StorePort(Protocol):
         request: Mapping[str, Any],
         outbox: Mapping[str, Any] | None = None,
         lease: Lease | None = None,
+        claim_holder: str | None = None,
+        claim_ttl_seconds: int = 5400,
+        release_on_commit: bool = False,
+        lease_now: datetime | None = None,
+        expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult: ...
+
+    def claim_task(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        task_id: str,
+        holder: str,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        ttl_seconds: int = 5400,
+        now: datetime | None = None,
+        fault_at: str | None = None,
+    ) -> tuple[TransactionResult, Lease]: ...
+
+    def heartbeat_lease(
+        self, lease: Lease, *, ttl_seconds: int, now: datetime | None = None
+    ) -> Lease: ...
+
+    def release_task(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        now: datetime | None = None,
+        fault_at: str | None = None,
+    ) -> TransactionResult: ...
+
+    def complete_task(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        now: datetime | None = None,
+        fault_at: str | None = None,
+    ) -> TransactionResult: ...
+
+    def claim_outbox(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        operation_key: str | None,
+        worker_id: str,
+        watermark: RecoveryWatermark,
+        claim_ttl_seconds: int = 300,
+        now: datetime | None = None,
+        fault_at: str | None = None,
+    ) -> OutboxClaim: ...
+
+    def effect_eligible(
+        self,
+        claim: OutboxClaim,
+        *,
+        watermark: RecoveryWatermark,
+        now: datetime | None = None,
+    ) -> bool: ...
+
+    def reconcile_outbox(
+        self, claim: OutboxClaim, *, observed_applied: bool, evidence: Mapping[str, Any]
+    ) -> None: ...

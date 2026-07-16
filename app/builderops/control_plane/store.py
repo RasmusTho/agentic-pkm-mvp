@@ -22,6 +22,7 @@ from app.builderops.control_plane.models import (
     LeaseUnavailable,
     OutboxClaim,
     RecoveryWatermark,
+    StateConflict,
     StaleFencingToken,
     TransactionResult,
     UnknownEffectNeedsReconciliation,
@@ -105,15 +106,27 @@ class PostgresBuilderOpsStore:
         request: Mapping[str, Any],
         outbox: Mapping[str, Any] | None = None,
         lease: Lease | None = None,
+        claim_holder: str | None = None,
+        claim_ttl_seconds: int = 5400,
+        release_on_commit: bool = False,
+        lease_now: datetime | None = None,
+        expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult:
         if not task_id or not to_state or not idempotency_key:
             raise ValueError("task_id, to_state, and idempotency_key are mandatory")
+        if claim_holder is not None and lease is not None:
+            raise ValueError("claim_holder and an existing lease are mutually exclusive")
+        if release_on_commit and lease is None:
+            raise ValueError("release_on_commit requires an existing fenced lease")
         request_document = {
             "task_id": task_id,
             "to_state": to_state,
             "request": dict(request),
             "outbox": dict(outbox) if outbox else None,
+            "claim_holder": claim_holder,
+            "release_on_commit": release_on_commit,
+            "expected_states": list(expected_states) if expected_states is not None else None,
         }
         request_hash = _hash(request_document)
         envelope_json = Jsonb(envelope.as_json())
@@ -145,13 +158,27 @@ class PostgresBuilderOpsStore:
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (f"task:{envelope.repository}:{task_id}",),
                 )
+                if claim_holder is not None:
+                    self._claim_lease_in_tx(
+                        conn,
+                        envelope=envelope,
+                        resource_id=task_id,
+                        holder=claim_holder,
+                        ttl_seconds=claim_ttl_seconds,
+                        now=lease_now,
+                    )
                 if lease is not None:
                     self._assert_lease(conn, envelope.repository, task_id, lease)
                 previous = conn.execute(
                     "SELECT state FROM builderops_tasks WHERE repository = %s AND task_id = %s FOR UPDATE",
                     (envelope.repository, task_id),
                 ).fetchone()
-                if previous is not None and lease is None:
+                previous_state = str(previous["state"]) if previous is not None else None
+                if expected_states is not None and previous_state not in expected_states:
+                    raise StateConflict(
+                        f"expected task state in {expected_states!r}, observed {previous_state!r}"
+                    )
+                if previous is not None and lease is None and claim_holder is None:
                     raise LeaseRequired("an existing task mutation requires a fenced lease")
                 conn.execute(
                     "INSERT INTO builderops_tasks(repository, task_id, state, payload, authority_envelope) "
@@ -167,7 +194,7 @@ class PostgresBuilderOpsStore:
                     (
                         envelope.repository,
                         task_id,
-                        previous["state"] if previous else None,
+                        previous_state,
                         to_state,
                         envelope_json,
                     ),
@@ -220,6 +247,9 @@ class PostgresBuilderOpsStore:
                     "UPDATE builderops_idempotency SET result = %s WHERE repository = %s AND idempotency_key = %s",
                     (Jsonb(self._result_json(provisional)), envelope.repository, idempotency_key),
                 )
+                if release_on_commit:
+                    assert lease is not None
+                    self._release_lease_in_tx(conn, lease, now=lease_now)
                 self._fault(fault_at, "after_outbox")
         self._fault(fault_at, "after_commit")
         recovery_lsn = self._flushed_lsn()
@@ -329,6 +359,95 @@ class PostgresBuilderOpsStore:
         result = self._result(row["result"], replayed=True)
         return result if watermark.covers_transition(result) else None
 
+    def claim_task(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        task_id: str,
+        holder: str,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        ttl_seconds: int = 5400,
+        now: datetime | None = None,
+        fault_at: str | None = None,
+    ) -> tuple[TransactionResult, Lease]:
+        """Atomically bind task state, receipt, idempotency, and fenced ownership."""
+        result = self.commit_transition(
+            envelope=envelope,
+            task_id=task_id,
+            to_state="claimed",
+            idempotency_key=idempotency_key,
+            request=request,
+            claim_holder=holder,
+            claim_ttl_seconds=ttl_seconds,
+            lease_now=now,
+            expected_states=("ready", "claimed"),
+            fault_at=fault_at,
+        )
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT holder, fencing_token, expires_at FROM builderops_leases "
+                "WHERE repository = %s AND resource_id = %s",
+                (envelope.repository, task_id),
+            ).fetchone()
+        if row is None or row["holder"] != holder:
+            raise StaleFencingToken("claimed task ownership is no longer current")
+        return result, Lease(
+            envelope.repository,
+            task_id,
+            holder,
+            int(row["fencing_token"]),
+            row["expires_at"],
+        )
+
+    def release_task(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        now: datetime | None = None,
+        fault_at: str | None = None,
+    ) -> TransactionResult:
+        """Atomically return task state and terminate the exact fenced ownership."""
+        return self.commit_transition(
+            envelope=envelope,
+            task_id=lease.resource_id,
+            to_state="ready",
+            idempotency_key=idempotency_key,
+            request=request,
+            lease=lease,
+            release_on_commit=True,
+            lease_now=now,
+            expected_states=("claimed",),
+            fault_at=fault_at,
+        )
+
+    def complete_task(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        lease: Lease,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        now: datetime | None = None,
+        fault_at: str | None = None,
+    ) -> TransactionResult:
+        """Atomically record terminal state/receipt and terminate ownership."""
+        return self.commit_transition(
+            envelope=envelope,
+            task_id=lease.resource_id,
+            to_state="completed",
+            idempotency_key=idempotency_key,
+            request=request,
+            lease=lease,
+            release_on_commit=True,
+            lease_now=now,
+            expected_states=("claimed",),
+            fault_at=fault_at,
+        )
+
     def claim_lease(
         self,
         *,
@@ -340,35 +459,62 @@ class PostgresBuilderOpsStore:
     ) -> Lease:
         if not resource_id or not holder or ttl_seconds <= 0:
             raise ValueError("resource_id, holder, and positive ttl_seconds are mandatory")
+        with self._connect() as conn:
+            return self._claim_lease_in_tx(
+                conn,
+                envelope=envelope,
+                resource_id=resource_id,
+                holder=holder,
+                ttl_seconds=ttl_seconds,
+                now=now,
+            )
+
+    @staticmethod
+    def _claim_lease_in_tx(
+        conn: psycopg.Connection[dict[str, Any]],
+        *,
+        envelope: AuthorityEnvelope,
+        resource_id: str,
+        holder: str,
+        ttl_seconds: int,
+        now: datetime | None,
+    ) -> Lease:
         effective_now = now or datetime.now(timezone.utc)
         expires_at = effective_now + timedelta(seconds=ttl_seconds)
-        with self._connect() as conn:
-            conn.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"lease:{envelope.repository}:{resource_id}",),
-            )
-            row = conn.execute(
-                "SELECT holder, fencing_token, expires_at FROM builderops_leases "
-                "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-                (envelope.repository, resource_id),
-            ).fetchone()
-            if row is not None and row["expires_at"] > effective_now and row["holder"] != holder:
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"lease:{envelope.repository}:{resource_id}",),
+        )
+        row = conn.execute(
+            "SELECT holder, fencing_token, expires_at FROM builderops_leases "
+            "WHERE repository = %s AND resource_id = %s FOR UPDATE",
+            (envelope.repository, resource_id),
+        ).fetchone()
+        if row is not None and row["expires_at"] > effective_now:
+            if row["holder"] != holder:
                 raise LeaseUnavailable(f"active lease belongs to {row['holder']}")
-            token = int(row["fencing_token"]) + 1 if row else 1
-            conn.execute(
-                "INSERT INTO builderops_leases(repository, resource_id, holder, fencing_token, expires_at, authority_envelope) "
-                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (repository, resource_id) DO UPDATE SET "
-                "holder = EXCLUDED.holder, fencing_token = EXCLUDED.fencing_token, expires_at = EXCLUDED.expires_at, "
-                "authority_envelope = EXCLUDED.authority_envelope, updated_at = clock_timestamp()",
-                (
-                    envelope.repository,
-                    resource_id,
-                    holder,
-                    token,
-                    expires_at,
-                    Jsonb(envelope.as_json()),
-                ),
+            return Lease(
+                envelope.repository,
+                resource_id,
+                holder,
+                int(row["fencing_token"]),
+                row["expires_at"],
             )
+        token = int(row["fencing_token"]) + 1 if row else 1
+        conn.execute(
+            "INSERT INTO builderops_leases(repository, resource_id, holder, fencing_token, expires_at, authority_envelope) "
+            "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (repository, resource_id) DO UPDATE SET "
+            "holder = EXCLUDED.holder, fencing_token = EXCLUDED.fencing_token, expires_at = EXCLUDED.expires_at, "
+            "authority_envelope = EXCLUDED.authority_envelope, updated_at = clock_timestamp()",
+            (
+                envelope.repository,
+                resource_id,
+                holder,
+                token,
+                expires_at,
+                Jsonb(envelope.as_json()),
+            ),
+        )
         return Lease(envelope.repository, resource_id, holder, token, expires_at)
 
     def heartbeat_lease(
@@ -395,6 +541,32 @@ class PostgresBuilderOpsStore:
         return Lease(
             lease.repository, lease.resource_id, lease.holder, lease.fencing_token, expires_at
         )
+
+    def release_lease(self, lease: Lease, *, now: datetime | None = None) -> None:
+        """Release a generic lease while preserving its monotonic fencing row."""
+        with self._connect() as conn:
+            self._release_lease_in_tx(conn, lease, now=now)
+
+    @staticmethod
+    def _release_lease_in_tx(
+        conn: psycopg.Connection[dict[str, Any]], lease: Lease, *, now: datetime | None
+    ) -> None:
+        effective_now = now or datetime.now(timezone.utc)
+        row = conn.execute(
+            "UPDATE builderops_leases SET expires_at = %s, updated_at = clock_timestamp() "
+            "WHERE repository = %s AND resource_id = %s AND holder = %s AND fencing_token = %s "
+            "AND expires_at > %s RETURNING resource_id",
+            (
+                effective_now,
+                lease.repository,
+                lease.resource_id,
+                lease.holder,
+                lease.fencing_token,
+                effective_now,
+            ),
+        ).fetchone()
+        if row is None:
+            raise StaleFencingToken("lease expired, was released, or was reassigned")
 
     @staticmethod
     def _assert_lease(
