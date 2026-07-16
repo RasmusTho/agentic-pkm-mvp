@@ -422,6 +422,45 @@ def validate_verification_closer_receipt(
             )
 
 
+def _normalize_v1_review_event(event: Mapping[str, object]) -> dict[str, object]:
+    """Normalize one policy-v1 review event before validation.
+
+    Policy-v1 pending receipts predate the policy-v2 binding contract: the
+    legacy schema allowed ``finding_id``/``failure_domain``/``mechanism_id``
+    on every review event, and the legacy application ignored those fields
+    on a clean review. Fill in missing binding keys as ``None`` so schema
+    validation sees the key, and scrub a clean review's binding fields to
+    ``None`` so a stale legacy value is never treated as authoritative
+    failure-domain or mechanism data, nor carried into durable state.
+    """
+
+    normalized: dict[str, object] = {
+        **dict(event),
+        "failure_domain": event.get("failure_domain"),
+        "mechanism_id": event.get("mechanism_id"),
+    }
+    if event.get("kind") == "review" and event.get("outcome") == "clean":
+        normalized["finding_id"] = None
+        normalized["failure_domain"] = None
+        normalized["mechanism_id"] = None
+    return normalized
+
+
+def _v1_compatible_receipt_candidate(
+    receipt: Mapping[str, object],
+) -> dict[str, object]:
+    """Project one receipt onto its policy-v1 compatible validation shape."""
+
+    candidate = dict(receipt)
+    events = candidate.get("review_events")
+    if isinstance(events, list):
+        candidate["review_events"] = [
+            _normalize_v1_review_event(event) if isinstance(event, Mapping) else event
+            for event in events
+        ]
+    return candidate
+
+
 def load_and_validate_verification_closer_receipt(
     receipt: object,
     schema_path: Path,
@@ -448,20 +487,11 @@ def load_and_validate_verification_closer_receipt(
         raise ReceiptContractError("verification closer receipt schema is invalid") from exc
     if not isinstance(receipt, Mapping):
         raise ReceiptContractError("verification closer receipt must be an object")
-    candidate = dict(receipt)
-    if repair_budget_policy == "v1" and isinstance(
-        candidate.get("review_events"), list
-    ):
-        candidate["review_events"] = [
-            {
-                **dict(event),
-                "failure_domain": event.get("failure_domain"),
-                "mechanism_id": event.get("mechanism_id"),
-            }
-            if isinstance(event, Mapping)
-            else event
-            for event in candidate["review_events"]
-        ]
+    candidate = (
+        _v1_compatible_receipt_candidate(receipt)
+        if repair_budget_policy == "v1"
+        else dict(receipt)
+    )
     allow_legacy = repair_budget_policy == "v1"
     try:
         validate_verification_closer_receipt(
@@ -1999,7 +2029,8 @@ class CodexExecLauncher:
             lines = result.stdout.splitlines()
             stderr_chunks = [str(getattr(result, "stderr", "") or "")[-16_384:]]
         thread_id: str | None = resume_session_id
-        terminal: dict[str, object] | None = None
+        terminal_strict: dict[str, object] | None = None
+        terminal_fallback: dict[str, object] | None = None
         terminal_error: str | None = None
         terminal_rate_limited = False
         try:
@@ -2041,10 +2072,41 @@ class CodexExecLauncher:
                         if isinstance(text, str):
                             try:
                                 candidate = json.loads(text)
-                                validate_verification_closer_receipt(candidate, schema)
-                            except (json.JSONDecodeError, jsonschema.ValidationError):
+                            except json.JSONDecodeError:
                                 continue
-                            terminal = candidate
+                            try:
+                                validate_verification_closer_receipt(candidate, schema)
+                            except jsonschema.ValidationError:
+                                # A resumed policy-v1 coordinator may emit a
+                                # receipt in the legacy shape (missing binding
+                                # keys, or a clean review carrying stale
+                                # binding fields) that the strict contract
+                                # rejects. This stream filter only selects the
+                                # terminal candidate; the consumer re-validates
+                                # it through
+                                # load_and_validate_verification_closer_receipt
+                                # with the run's actual repair_budget_policy,
+                                # so a policy-v2 run still fails closed there
+                                # (with the accurate invalid_receipt_contract
+                                # reason) instead of being misclassified as a
+                                # launcher contract failure here. A fallback
+                                # match is ranked below every strict match: a
+                                # trailing legacy-shaped message must never
+                                # clobber a strictly-valid final receipt the
+                                # stream already produced.
+                                if not isinstance(candidate, Mapping):
+                                    continue
+                                try:
+                                    validate_verification_closer_receipt(
+                                        _v1_compatible_receipt_candidate(candidate),
+                                        schema,
+                                        allow_legacy_unbound_repairs=True,
+                                    )
+                                except jsonschema.ValidationError:
+                                    continue
+                                terminal_fallback = dict(candidate)
+                            else:
+                                terminal_strict = candidate
         except Exception:
             stop_heartbeat.set()
             terminate_and_reap_child()
@@ -2125,6 +2187,10 @@ class CodexExecLauncher:
             )
         if not thread_id:
             raise RuntimeError("codex exec produced no thread identity")
+        # The latest strictly-valid receipt always outranks any legacy-shaped
+        # fallback candidate; the fallback is used only when the whole stream
+        # produced no strict match.
+        terminal = terminal_strict if terminal_strict is not None else terminal_fallback
         if terminal is None:
             raise RuntimeError("codex exec produced no schema-valid final agent receipt")
         return thread_id, terminal
