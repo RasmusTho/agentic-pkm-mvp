@@ -131,8 +131,9 @@ and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns dist
 - versioned migration lineage and migration gate;
 - immutable release pin and deployment/rollback receipt;
 - `/healthz`, `/readyz`, structured status/metrics, and alert/probe path;
-- *(amended by A1, 2026-07-16: asynchronous backup/WAL-archive regime and a restore-from-backup
-  drill replace the synchronous/acknowledged-LSN items in this bullet)* scheduled full backup plus
+- *(amended by A1, 2026-07-16: an asynchronous backup/WAL-archive regime and a restore-from-backup
+  drill replace every synchronous/acknowledged-LSN item in this bullet, including the
+  "restore-through-acknowledged-LSN drill" at its end)* scheduled full backup plus
   continuous encrypted WAL/recovery durability in a target that survives
   loss of Demerzel's primary host/storage failure domain, independently recoverable key/KMS custody,
   retention, restore tooling, and a proved restore-through-acknowledged-LSN drill with Demerzel's
@@ -184,13 +185,16 @@ events, artifact identities, and receipts are imported only under deterministic 
 conflict rules. A pre-import backup, dry run, production import receipt, and post-import count/hash
 reconciliation are required.
 
+> **Amended by A1 (2026-07-16):** the acknowledged-LSN/watermark recovery language in the paragraph
+> below is superseded — post-activation recovery restores the latest archived point, reconciles
+> external effects against GitHub, and starts a new fencing epoch before writes reopen. See
+> `## Amendments`.
+
 The cutover gate proves authenticated API clients and the Demerzel executor against PostgreSQL
 before disabling every legacy writer. It then removes Product Runtime BuilderOps routes/startup,
 archives the legacy sources read-only under an explicit retention policy, and verifies that no
 production command can recreate SQLite authority. Before authority activation, rollback may restore
-the pre-import PostgreSQL backup. After activation, rollback is forward-only *(amended by A1,
-2026-07-16: recovery restores the latest archived point, reconciles against GitHub, and starts a new
-fencing epoch — see `## Amendments`)*: a compatible prior
+the pre-import PostgreSQL backup. After activation, rollback is forward-only: a compatible prior
 service image may run against the current database, or a proved point-in-time recovery must restore
 the full backup and continuous WAL through the recorded highest acknowledged LSN/receipt sequence.
 Writes reopen only after independently recovering the decryption capability, restoring through the
