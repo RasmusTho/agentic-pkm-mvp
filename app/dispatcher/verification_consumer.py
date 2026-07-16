@@ -414,11 +414,8 @@ def validate_verification_closer_receipt(
                 f"review event {index} requires a stable finding, failure domain, "
                 "and mechanism binding"
             )
-        if (
-            event.get("kind") == "review"
-            and event.get("outcome") == "clean"
-            and not allow_legacy_unbound_repairs
-            and any(value is not None for value in binding)
+        if event.get("kind") == "review" and event.get("outcome") == "clean" and any(
+            value is not None for value in binding
         ):
             raise jsonschema.ValidationError(
                 f"clean review event {index} cannot carry a failure binding"
@@ -449,6 +446,21 @@ def _normalize_v1_review_event(event: Mapping[str, object]) -> dict[str, object]
     return normalized
 
 
+def _v1_compatible_receipt_candidate(
+    receipt: Mapping[str, object],
+) -> dict[str, object]:
+    """Project one receipt onto its policy-v1 compatible validation shape."""
+
+    candidate = dict(receipt)
+    events = candidate.get("review_events")
+    if isinstance(events, list):
+        candidate["review_events"] = [
+            _normalize_v1_review_event(event) if isinstance(event, Mapping) else event
+            for event in events
+        ]
+    return candidate
+
+
 def load_and_validate_verification_closer_receipt(
     receipt: object,
     schema_path: Path,
@@ -475,16 +487,11 @@ def load_and_validate_verification_closer_receipt(
         raise ReceiptContractError("verification closer receipt schema is invalid") from exc
     if not isinstance(receipt, Mapping):
         raise ReceiptContractError("verification closer receipt must be an object")
-    candidate = dict(receipt)
-    if repair_budget_policy == "v1" and isinstance(
-        candidate.get("review_events"), list
-    ):
-        candidate["review_events"] = [
-            _normalize_v1_review_event(event)
-            if isinstance(event, Mapping)
-            else event
-            for event in candidate["review_events"]
-        ]
+    candidate = (
+        _v1_compatible_receipt_candidate(receipt)
+        if repair_budget_policy == "v1"
+        else dict(receipt)
+    )
     allow_legacy = repair_budget_policy == "v1"
     try:
         validate_verification_closer_receipt(
@@ -2064,9 +2071,34 @@ class CodexExecLauncher:
                         if isinstance(text, str):
                             try:
                                 candidate = json.loads(text)
-                                validate_verification_closer_receipt(candidate, schema)
-                            except (json.JSONDecodeError, jsonschema.ValidationError):
+                            except json.JSONDecodeError:
                                 continue
+                            try:
+                                validate_verification_closer_receipt(candidate, schema)
+                            except jsonschema.ValidationError:
+                                # A resumed policy-v1 coordinator may emit a
+                                # receipt in the legacy shape (missing binding
+                                # keys, or a clean review carrying stale
+                                # binding fields) that the strict contract
+                                # rejects. This stream filter only selects the
+                                # terminal candidate; the consumer re-validates
+                                # it through
+                                # load_and_validate_verification_closer_receipt
+                                # with the run's actual repair_budget_policy,
+                                # so a policy-v2 run still fails closed there
+                                # (with the accurate invalid_receipt_contract
+                                # reason) instead of being misclassified as a
+                                # launcher contract failure here.
+                                if not isinstance(candidate, Mapping):
+                                    continue
+                                try:
+                                    validate_verification_closer_receipt(
+                                        _v1_compatible_receipt_candidate(candidate),
+                                        schema,
+                                        allow_legacy_unbound_repairs=True,
+                                    )
+                                except jsonschema.ValidationError:
+                                    continue
                             terminal = candidate
         except Exception:
             stop_heartbeat.set()

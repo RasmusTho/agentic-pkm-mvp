@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from app.dispatcher.config import load_paths
 from app.dispatcher.store import SqliteStore
 from app.dispatcher.verification_agent_loop import VerificationAgentLoop
 from app.dispatcher.verification_consumer import (
+    CodexExecLauncher,
     ReceiptContractError,
     VerificationConsumer,
     context_pack,
@@ -489,7 +491,15 @@ def test_v1_pending_receipt_replay_accepts_legacy_unbound_event_shape(
     assert attempts[0]["mechanism_id"] is None
 
 
-def test_resumed_v1_launcher_accepts_legacy_repair_receipt(tmp_path) -> None:
+def _v1_backoff_run(tmp_path):
+    """Park one pending policy-v1 run in backoff with a stored session.
+
+    Mirrors the production migration outage shape: the run row carries
+    ``repair_budget_policy='v1'``, a first launch rate-limited into backoff
+    (persisting a coordinator session id to resume), and the retry window is
+    already open.
+    """
+
     state = ledger(tmp_path)
     run = state.ingest(request())
     with state.store._connect() as conn:
@@ -515,6 +525,11 @@ def test_resumed_v1_launcher_accepts_legacy_repair_receipt(tmp_path) -> None:
             (run.run_id,),
         )
         conn.commit()
+    return state, run, truth, first
+
+
+def test_resumed_v1_launcher_accepts_legacy_repair_receipt(tmp_path) -> None:
+    state, run, truth, first = _v1_backoff_run(tmp_path)
 
     class LegacyRepairLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
@@ -565,31 +580,7 @@ def test_v1_pending_clean_review_receipt_ignores_legacy_binding_fields(
     clean outcome). Replay must not terminalize the run as an invalid
     persisted receipt, and the legacy binding must never become durable."""
 
-    state = ledger(tmp_path)
-    run = state.ingest(request())
-    with state.store._connect() as conn:
-        conn.execute(
-            "UPDATE verification_runs SET repair_budget_policy='v1' WHERE run_id=?",
-            (run.run_id,),
-        )
-        conn.commit()
-    truth = Truth(eligible_pr(), GREEN)
-    first = VerificationConsumer(
-        state,
-        truth,
-        Auth(),
-        RateLimitedLauncher(),
-        "host",
-    ).consume(request())
-    assert first.status == "backoff"
-    assert first.coordinator_session_id is not None
-    with state.store._connect() as conn:
-        conn.execute(
-            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
-            "WHERE run_id=?",
-            (run.run_id,),
-        )
-        conn.commit()
+    state, run, truth, first = _v1_backoff_run(tmp_path)
 
     class LegacyCleanReviewLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
@@ -688,6 +679,111 @@ def test_v2_clean_review_rejects_failure_binding_fields(tmp_path) -> None:
             trusted_repository="RasmusTho/agentic-pkm-mvp",
             trusted_evidence_urls=frozenset(),
         )
+
+
+def test_v1_real_launcher_stream_filter_accepts_legacy_clean_review_receipt(
+    tmp_path,
+) -> None:
+    """The CodexExecLauncher raw JSONL stream pre-filter must not swallow a
+    policy-v1 legacy clean-review terminal message: doing so leaves the
+    launcher with no schema-valid terminal receipt and misclassifies the run
+    as a launcher contract failure before
+    ``load_and_validate_verification_closer_receipt`` ever sees the receipt.
+    The stub-launcher tests above bypass this filter, so this test drives the
+    real launcher with a fake process runner."""
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET repair_budget_policy='v1' WHERE run_id=?",
+            (run.run_id,),
+        )
+        conn.commit()
+
+    legacy_receipt = {
+        "verdict": "blocked",
+        "head_sha": HEAD,
+        "summary": "legacy clean review carries stale binding",
+        "receipt_ids": ["review-v1-stream"],
+        "retry_after": None,
+        "review_events": [
+            {
+                "kind": "review",
+                "session_id": "review-v1-stream",
+                "capability": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+                "outcome": "clean",
+                "finding_id": "F1",
+                "failure_domain": CODE,
+                "mechanism_id": "parser",
+                "strongest": None,
+            }
+        ],
+        "human_exception": None,
+    }
+    stdout = (
+        json.dumps(
+            {
+                "type": "thread.started",
+                "thread_id": "01900000-0000-7000-8000-000000000042",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "text": json.dumps(legacy_receipt),
+                },
+            }
+        )
+        + "\n"
+    )
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    Result.stdout = stdout
+
+    def runner(command, **kwargs):
+        return Result()
+
+    repo_root = Path(__file__).resolve().parents[2]
+    launcher = CodexExecLauncher(
+        tmp_path,
+        repo_root / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=repo_root / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        launcher,
+        "host",
+    ).consume(request())
+
+    # A blocked verdict terminates as failed; the legacy binding must be
+    # neither a launcher-contract misclassification nor a receipt-contract
+    # rejection, and it must never become durable.
+    assert result.status == "failed"
+    assert result.stop_reason != "invalid_receipt_contract"
+    assert isinstance(result.terminal_receipt, dict)
+    assert result.terminal_receipt.get("outcome") != "launcher_contract_failed"
+    reviews = [
+        attempt
+        for attempt in state.attempts(run.run_id)
+        if attempt["kind"] == "review"
+    ]
+    assert len(reviews) == 1
+    assert reviews[0]["outcome"] == "clean"
+    assert reviews[0]["finding_id"] is None
+    assert reviews[0]["failure_domain"] is None
+    assert reviews[0]["mechanism_id"] is None
 
 
 def test_declared_v4_missing_budget_identity_fails_closed_without_repair(
