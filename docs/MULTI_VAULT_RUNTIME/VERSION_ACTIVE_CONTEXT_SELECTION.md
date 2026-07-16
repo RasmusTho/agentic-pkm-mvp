@@ -112,7 +112,10 @@ generation unknown. A process-global mutable manager cannot safely represent con
   registry/binding revisions, authorization epoch/fingerprint, workspace/no-workspace, principal,
   cognitive scope,
   sphere memberships, situated identity, a non-reversible selection-capability digest,
-  dimension/filter, and binding set; never by binding plus generation alone. Action/write class and
+  dimension/filter, binding set, and the effective per-binding/request-wide settings bundle
+  revision/digest; never by binding plus generation alone. A Settings Spine reload that changes any
+  behavior-shaping setting atomically invalidates matching cache entries or rotates the affected
+  context generation before a later lookup. Action/write class and
   permission remain separate GOV inputs/receipt fields rather than being written into WSP scope.
   Raw bearer IDs are never logged, receipted, or embedded in cache keys.
 - Enforce GOV authorization independently for every resolved binding.
@@ -245,6 +248,10 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   and the typed principal field stays in the key for future
   authenticated-principal expansion.
   - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_cache_keys_include_full_context_identity`
+- [ ] An in-session Settings Spine hot reload that changes model, reranking, threshold, or another
+  behavior-shaping effective setting advances the cache settings revision/digest and invalidates or
+  rotates before the next lookup, so no result computed under the old bundle is reused.
+  - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_settings_reload_changes_cache_identity_before_next_lookup`
 - [ ] A changed binding revision or still-authorizing authority verdict makes the MVR-03 selection
   resolver rotate to a new immutable generation plus cache-invalidation descriptor before the next
   snapshot is issued. A deny verdict instead invalidates the selection and returns an explicit

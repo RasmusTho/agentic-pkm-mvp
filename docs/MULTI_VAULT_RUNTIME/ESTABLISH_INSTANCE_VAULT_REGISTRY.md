@@ -141,7 +141,10 @@ This slice promotes the existing seed without changing content-vault authority.
   mode `0600` in private host app-data outside per-channel volumes, retain a protected recovery copy,
   and mount it read-only into every channel/native consumer. Preflight rejects missing, ephemeral,
   channel-specific, mismatched, or permissive key state. Rotation holds the global fence, drains all
-  owners, re-fingerprints every canonical root, and atomically advances key plus ledger generation;
+  owners, and atomically re-fingerprints every fingerprint-bearing live registration, removal
+  tombstone, predecessor/successor lineage record, rollback export, and recovery snapshot while
+  advancing key plus ledger generation. No successful rotation may make an
+  uninitialized or removed root unmatchable merely because its marker lacks registry identity;
   crash recovery selects one complete generation and never resumes with mixed-key comparisons.
 - Make the first ledger rollout a host-global legacy-owner bootstrap. Under one deployment/bootstrap
   fence, block legacy selection and registry ingress; enumerate every dev/test/prod Compose
@@ -422,8 +425,11 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed`
 - [ ] **MVR-01B:** Every channel/native consumer uses the same durable private host-global ledger HMAC key across
   restart; unsafe/mismatched key state blocks claims, and fenced rotation/crash recovery advances all
-  fingerprints and the ledger atomically without mixed-key ownership comparisons.
+  live and tombstoned/lineage fingerprints and the ledger atomically without mixed-key ownership
+  comparisons. A removed uninitialized root presented after rotation still matches its tombstone and
+  cannot mint around predecessor lineage.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically`
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_key_rotation_preserves_removed_root_tombstone_match_on_reregistration`
 - [ ] **MVR-01A:** Registry, lock/temporary files, validated snapshots, and rollback exports remain mode `0600`
   under permissive host umasks; parent directories are `0700` and unsafe mode/ownership fails loud.
   - Verify: `tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private`
@@ -497,6 +503,7 @@ family-wide command that requires a later sealed slice.
 ### MVR-01B validation
 
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_transfer_mints_destination_binding_and_preserves_lineage_atomically tests/integration/test_vault_registry_channel_isolation.py::test_transfer_preserves_local_clone_identity_across_channel_binding_change tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_is_dormant_until_all_consumer_floors tests/integration/test_vault_registry_channel_isolation.py::test_removed_binding_reregistration_preserves_tombstone_lineage tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_second_registration_is_sealed_across_all_producers_until_01c tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_registry_override_cannot_become_content_owned tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_channel_isolation.py::test_key_rotation_preserves_removed_root_tombstone_match_on_reregistration`
 - Verify the 01B PR diff contains its mapped owner-doc targets in
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`,
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`.

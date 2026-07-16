@@ -443,9 +443,13 @@ migration, preflight, and fail-loud gate merge together.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_direct_filesystem_write_during_removal_is_receipted_before_tombstone`
 - [ ] **MVR-06C:** After every foreground and background consumer uses the shared-effect lock order,
   the production relocation command activates and takes the ownership fence plus exclusive binding
-  lease; it waits for prior authorized effects, commits the new root/revision, and no later effect can
-  touch the old root.
+  lease; it waits for prior authorized effects and proves the target's durable vault marker identity
+  matches the existing logical vault/local instance, or validates explicit governed relocation
+  lineage from that binding, before committing the new root/revision. A different initialized vault,
+  missing/ambiguous identity, or conflicting lineage fails before mutation. No later effect can touch
+  the old root.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases`
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_rejects_different_initialized_vault_identity_before_commit`
 - [ ] **MVR-06C:** Once activated, production relocation racing after request resolution or lifecycle
   validation cannot cross any foreground read, governed-write, or background effect window: the
   exclusive relocation waits for an authorized shared effect or advances the locator revision before
@@ -588,7 +592,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06C validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation tests/integration/test_multi_vault_request_isolation.py::test_binding_revision_rotates_context_and_cache_before_next_request tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate tests/integration/test_multi_vault_background_lifecycle.py::test_mvr06c_dormant_supervisor_isolates_two_internal_bindings`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_rejects_different_initialized_vault_identity_before_commit tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation tests/integration/test_multi_vault_request_isolation.py::test_binding_revision_rotates_context_and_cache_before_next_request tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate tests/integration/test_multi_vault_background_lifecycle.py::test_mvr06c_dormant_supervisor_isolates_two_internal_bindings`
 - Verify the 06C PR diff contains its mapped `docs/ENVIRONMENTS.md` and `docs/HEALTH.md` dormant-
   supervisor writebacks.
 

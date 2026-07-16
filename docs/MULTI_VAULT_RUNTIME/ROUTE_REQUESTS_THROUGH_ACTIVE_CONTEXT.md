@@ -31,7 +31,13 @@ not background lifecycles.
   their current client state—not the
   deferred #2566 visual switcher—to create or replace a scoped selection, retain the returned
   `context_selection_id` for that client session, and send it as
-  `X-Active-Context-Session` on vault-bound **read** requests in MVR-05B. Until MVR-05C activates
+  `X-Active-Context-Session` on vault-bound **read** requests in MVR-05B. Migrated reads use a
+  distinct authenticated scoped-read route whose route identity remains visible independently of
+  that bearer. The scoped route always requires a
+  valid session/override carrier; absent, malformed, expired, or intermediary-stripped carriers fail
+  reselection-required and can never downgrade into the carrier-free compatibility read/default.
+  Truly legacy reads remain on their separately identified one-vault route, which the migrated
+  client never calls. Until MVR-05C activates
   governed scoped writes, the server also returns an opaque, authenticated
   `X-Compatibility-Write-Precondition` bound to that client's intended stable binding and exact
   compatibility revision. The migrated client sends this value—not its context bearer—on every
@@ -341,6 +347,10 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - [ ] **MVR-05B:** Two production API sessions read different vaults concurrently without cross-talk or global
   mutation.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk`
+- [ ] **MVR-05B:** A migrated scoped-read request remains server-identifiable when an intermediary
+  strips its selection carrier and fails reselection-required before default/no-vault resolution;
+  it cannot retry or downgrade through the separately identified legacy read route.
+  - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_migrated_scoped_read_rejects_stripped_carrier_without_default_downgrade`
 - [ ] **MVR-05B:** Production retrieval over several bindings preserves source vault and context generation on
   every result and cache lookup.
   - Verify: `tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance`
@@ -634,7 +644,7 @@ maps directly to that child ID; an early child never runs a later slice's accept
 ### MVR-05B validation
 
 - `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_nested_effect_boundary.py::test_parent_authority_cannot_read_registered_child_vault tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_interim_default_mutation_rebinds_before_foreground_commit tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
-- `pytest -q tests/integration/test_multi_vault_partial_delivery.py::test_migrated_client_write_precondition_prevents_cross_client_compatibility_redirect tests/integration/test_multi_vault_partial_delivery.py::test_migrated_write_route_rejects_stripped_precondition_without_legacy_downgrade tests/integration/test_multi_vault_picker_context.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
+- `pytest -q tests/integration/test_multi_vault_partial_delivery.py::test_migrated_client_write_precondition_prevents_cross_client_compatibility_redirect tests/integration/test_multi_vault_partial_delivery.py::test_migrated_write_route_rejects_stripped_precondition_without_legacy_downgrade tests/api/test_multi_vault_request_fail_closed.py::test_migrated_scoped_read_rejects_stripped_carrier_without_default_downgrade tests/integration/test_multi_vault_picker_context.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
 - `pytest -q tests/integration/test_multi_vault_picker_context.py::test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic`
 - Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks.
 

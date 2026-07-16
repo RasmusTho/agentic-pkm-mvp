@@ -164,8 +164,12 @@ snapshot; later work sees the new generation. Caches, retrieval results, and set
 keyed by `context_id` plus generation and every context-affecting input (workspace/no-workspace,
 server-derived principal,
 cognitive operational scope, sphere memberships, situated identity, non-reversible selection-
-capability digest, dimension/filter, and binding set); receipts and writes
-record that identity and their target binding. In the current single-user runtime the opaque
+capability digest, dimension/filter, binding set, and the effective per-binding/request-wide settings
+bundle revision or digest). A Settings
+Spine hot reload atomically invalidates affected entries or rotates the context generation before a
+later lookup; model, reranking, threshold, or other behavior-sensitive results can never reuse a
+pre-reload cache identity. Receipts and writes record that identity and their target binding. In the
+current single-user runtime the opaque
   selection ID is an expiring bearer capability used in addition to #2223 authentication, while the
   server resolves a human or delegated operator-role principal from the auth/GOV boundary and owns
   action, write class, and required permission per request. The selection record binds principal/
