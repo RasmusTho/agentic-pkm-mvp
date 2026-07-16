@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
 import shutil
 import tempfile
-import fcntl
 from hashlib import sha256
 from pathlib import Path
 
@@ -258,7 +258,10 @@ def _owned_transactions(root: Path) -> list[Path]:
         except (OSError, json.JSONDecodeError):
             owned.append(candidate)
             continue
-        if not isinstance(payload, dict) or payload.get("state") != "committed":
+        if not isinstance(payload, dict) or payload.get("state") not in {
+            "committed",
+            "rolled_back",
+        }:
             owned.append(candidate)
     return owned
 
@@ -351,39 +354,76 @@ def _recover_interrupted_transaction(
             "interrupted settings migration has both canonical and backup trees; "
             "operator recovery is required to preserve concurrent writes"
         )
+    recovery_receipt = SettingsWriteReceipt(
+        key=str(marker.get("receipt_key") or "settings.location"),
+        value=marker.get("receipt_value"),
+        old_value=marker.get("receipt_old_value"),
+        file=str(canonical),
+        surface="migration",
+        actor="operator",
+        timestamp=str(marker.get("receipt_timestamp")),
+        is_runtime_gating=False,
+    )
+    if state == "published" and canonical.exists():
+        _quarantine_published_tree(
+            root,
+            canonical,
+            transaction,
+            expected_manifest=published_manifest,
+        )
     if backup.exists():
         if canonical.exists():
-            if (
-                state == "published"
-                and _canonical_manifest(root, canonical) != published_manifest
-            ):
-                raise RuntimeError(
-                    "published settings changed before recovery; operator recovery "
-                    "is required to preserve concurrent writes"
-                )
-            shutil.rmtree(canonical)
+            raise RuntimeError(
+                "canonical settings reappeared during recovery; operator recovery required"
+            )
         os.replace(backup, canonical)
         _fsync_directory(root)
+        _fsync_directory(transaction)
     elif not had_canonical and canonical.exists():
-        if (
-            state == "published"
-            and _canonical_manifest(root, canonical) == published_manifest
-        ):
-            shutil.rmtree(canonical)
-        else:
-            raise RuntimeError(
-                "interrupted settings migration found concurrent canonical data; "
-                "operator recovery is required"
-            )
-    shutil.rmtree(transaction)
-    _fsync_directory(root)
+        raise RuntimeError(
+            "interrupted settings migration found concurrent canonical data; "
+            "operator recovery is required"
+        )
+    _write_transaction_state(
+        transaction,
+        "rolled_back",
+        had_canonical=had_canonical,
+        receipt=recovery_receipt,
+        published_manifest=published_manifest,
+    )
     return None
+
+
+def _quarantine_published_tree(
+    root: Path,
+    canonical: Path,
+    transaction: Path,
+    *,
+    expected_manifest: dict[Path, tuple[int, int, int, str]],
+) -> Path:
+    quarantine = transaction / "published-rollback"
+    if quarantine.exists():
+        raise RuntimeError("published rollback quarantine already exists")
+    os.replace(canonical, quarantine)
+    _fsync_directory(root)
+    _fsync_directory(transaction)
+    if _canonical_manifest(root, quarantine) != expected_manifest:
+        raise RuntimeError(
+            "published settings changed during rollback; operator recovery required"
+        )
+    if canonical.exists():
+        raise RuntimeError(
+            "canonical settings reappeared during rollback; operator recovery required"
+        )
+    return quarantine
 
 
 def _quarantine_legacy_sources(root: Path, transaction: Path) -> None:
     quarantine = transaction / "legacy-recovery"
     quarantine.mkdir(parents=True, exist_ok=True)
     _fsync_directory(transaction)
+
+
     _fsync_directory(quarantine)
     compiled = _legacy_root(root, LEGACY_COMPILED_DIR)
     if compiled.exists():
@@ -412,6 +452,14 @@ def _quarantine_legacy_sources(root: Path, transaction: Path) -> None:
             pass
     _fsync_tree(quarantine)
     _fsync_directory(transaction)
+
+
+def _retired_legacy_roots_exist(root: Path) -> bool:
+    return (
+        _legacy_root(root, LEGACY_COMPILED_DIR).exists()
+        or _legacy_root(root, LEGACY_SYSTEM_SETTINGS.parent).exists()
+        or any(path.is_file() for path in _legacy_health_paths(root))
+    )
 
 
 def migrate_settings_location(
@@ -499,9 +547,19 @@ def migrate_settings_location(
         raise RuntimeError("settings changed before migration lock; retry required")
 
     if not prepared:
+        retired_roots_exist = _retired_legacy_roots_exist(root)
+        transaction = (
+            Path(tempfile.mkdtemp(prefix=_TRANSACTION_PREFIX, dir=canonical.parent))
+            if retired_roots_exist
+            else None
+        )
         receipt = SettingsWriteReceipt(
             key="settings.location",
-            value={"canonical": "settings", "migrated_files": 0},
+            value={
+                "canonical": "settings",
+                "migrated_files": 0,
+                **({"recovery": transaction.name} if transaction else {}),
+            },
             old_value={
                 "canonical": "settings" if had_canonical else None,
                 "legacy_files": 0,
@@ -512,7 +570,40 @@ def migrate_settings_location(
             is_runtime_gating=False,
         )
         try:
+            if transaction is not None:
+                _write_transaction_state(
+                    transaction,
+                    "prepared",
+                    had_canonical=had_canonical,
+                    receipt=receipt,
+                )
             emit_settings_write_receipt(receipt, require_durable=True)
+            if transaction is not None:
+                try:
+                    _write_transaction_state(
+                        transaction,
+                        "committed",
+                        had_canonical=had_canonical,
+                        receipt=receipt,
+                        published_manifest=canonical_fingerprints,
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "settings cleanup committed but transaction marker update failed: %s",
+                        exc,
+                    )
+                try:
+                    _quarantine_legacy_sources(root, transaction)
+                except (OSError, ValueError) as exc:
+                    logger.warning(
+                        "settings cleanup committed but legacy cleanup was incomplete: %s",
+                        exc,
+                    )
+        except Exception:
+            if transaction is not None:
+                shutil.rmtree(transaction, ignore_errors=True)
+                _fsync_directory(root)
+            raise
         finally:
             fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
             os.close(lock_descriptor)
@@ -622,18 +713,27 @@ def migrate_settings_location(
                 not published and backup.exists() and canonical.exists()
             )
             if published and canonical.exists():
-                if _canonical_manifest(root, canonical) == staged_manifest:
-                    shutil.rmtree(canonical)
-                    _fsync_directory(root)
-                else:
+                try:
+                    _quarantine_published_tree(
+                        root,
+                        canonical,
+                        transaction,
+                        expected_manifest=staged_manifest,
+                    )
+                except RuntimeError:
                     recovery_collision = True
             if backup.exists() and not canonical.exists():
                 os.replace(backup, canonical)
                 _fsync_directory(root)
                 _fsync_directory(transaction)
             if transaction.exists() and not recovery_collision:
-                shutil.rmtree(transaction, ignore_errors=True)
-                _fsync_directory(root)
+                _write_transaction_state(
+                    transaction,
+                    "rolled_back",
+                    had_canonical=had_canonical,
+                    receipt=receipt,
+                    published_manifest=staged_manifest if published else None,
+                )
         fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
         os.close(lock_descriptor)
         raise

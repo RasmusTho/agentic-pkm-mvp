@@ -93,19 +93,29 @@ def emit_settings_write_receipt(
 
         outbox_path = get_index_outbox_path()
         outbox_path.parent.mkdir(parents=True, exist_ok=True)
-        with outbox_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False))
-            handle.write("\n")
-            if require_durable:
-                handle.flush()
-                os.fsync(handle.fileno())
+        serialized = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
         if require_durable:
+            descriptor = os.open(
+                outbox_path,
+                os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+                0o600,
+            )
+            try:
+                written = os.write(descriptor, serialized)
+                if written != len(serialized):
+                    raise OSError("partial durable settings receipt append")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
             try:
                 _fsync_parent(outbox_path)
             except OSError as exc:
                 raise ReceiptDurabilityUncertainError(
                     "settings receipt is visible but parent fsync failed"
                 ) from exc
+        else:
+            with outbox_path.open("ab") as handle:
+                handle.write(serialized)
     except ReceiptDurabilityUncertainError:
         raise
     except Exception as exc:

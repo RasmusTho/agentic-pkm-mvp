@@ -16,6 +16,7 @@ This test asserts:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from textwrap import dedent
 
@@ -137,6 +138,35 @@ def test_required_receipt_fsyncs_before_return(tmp_path: Path, monkeypatch) -> N
     assert outbox_path.read_text(encoding="utf-8").endswith("\n")
 
 
+def test_required_receipt_appends_each_record_with_one_os_write(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    real_write = os.write
+    writes: list[bytes] = []
+
+    def _record_write(descriptor: int, payload: bytes) -> int:
+        writes.append(payload)
+        return real_write(descriptor, payload)
+
+    monkeypatch.setattr("app.receipts.settings_write.os.write", _record_write)
+
+    emit_settings_write_receipt(
+        SettingsWriteReceipt(
+            key="settings.location",
+            value={"canonical": "settings"},
+            surface="migration",
+            actor="operator",
+        ),
+        require_durable=True,
+    )
+
+    assert len(writes) == 1
+    assert writes[0].endswith(b"\n")
+
+
 def test_non_runtime_gating_write_also_durable(tmp_path: Path, monkeypatch) -> None:
     """Durability is unconditional on every governed write, not only runtime-gating keys
     (mirrors the existing in-memory receipt behavior)."""
@@ -162,7 +192,7 @@ def _write_settings_source(path: Path, body: str) -> None:
 
 def test_autoheal_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
     outbox_path = tmp_path / "outbox.jsonl"
-    settings_dir = tmp_path / "vault" / "@Settings"
+    settings_dir = tmp_path / "vault" / "settings"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
@@ -192,7 +222,7 @@ def test_autoheal_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
 
 def test_autoheal_reference_only_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
     outbox_path = tmp_path / "outbox.jsonl"
-    settings_dir = tmp_path / "vault" / "@Settings"
+    settings_dir = tmp_path / "vault" / "settings"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")

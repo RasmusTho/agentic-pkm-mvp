@@ -1535,7 +1535,8 @@ def settings_explain_alias(as_json: bool, compact: bool) -> None:
 @click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
 def settings_compile(auto_heal: bool) -> None:
     try:
-        bundle = compile_all(auto_heal=auto_heal)
+        vault_root = resolve_optional_vault_root() or Path("vault")
+        bundle = compile_all(auto_heal=auto_heal, vault_root=vault_root)
     except WritesBlockedError as exc:
         raise click.ClickException(f"settings compile blocked: {exc}") from exc
     click.echo(f"compiled {len(bundle.agents)} agents")
@@ -1583,10 +1584,16 @@ def settings_watch(watch_path: Path, auto_heal: bool) -> None:
         raise click.ClickException(
             f"settings watch path must be the canonical root: {canonical_watch_path}"
         )
-    watch_paths = [canonical_watch_path]
+    watch_paths: list[Path] = []
+    if canonical_watch_path.is_dir():
+        watch_paths.append(canonical_watch_path)
     legacy_watch_path = vault_root / LEGACY_COMPILED_DIR
     if legacy_watch_path.is_dir() and not legacy_watch_path.is_symlink():
         watch_paths.append(legacy_watch_path)
+    if not watch_paths:
+        raise click.ClickException(
+            f"no canonical or compatibility settings root exists under {vault_root}"
+        )
 
     compile_all(auto_heal=auto_heal, vault_root=vault_root)
     click.echo(f"watching {watch_path}")

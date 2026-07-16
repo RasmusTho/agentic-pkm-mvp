@@ -93,6 +93,43 @@ def test_missing_file_returns_defaults(
     assert result.errors == []
 
 
+def test_canonical_health_load_does_not_require_legacy_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "health.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text(_VALID_FRONTMATTER, encoding="utf-8")
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "../invalid-legacy-layout")
+
+    result = _load(vault)
+
+    assert result.status == "ok"
+    assert result.source.path == str(canonical)
+
+
+def test_canonical_health_logs_shadowed_legacy_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "health.md"
+    legacy = vault / "_system" / "Settings" / "health.md"
+    canonical.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    canonical.write_text(_VALID_FRONTMATTER, encoding="utf-8")
+    legacy.write_text(_MISSING_THRESHOLD_FRONTMATTER, encoding="utf-8")
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "_system")
+
+    result = _load(vault)
+
+    assert result.status == "ok"
+    assert result.source.path == str(canonical)
+    assert caplog.text.count("shadowed legacy settings") == 1
+    assert str(legacy) in caplog.text
+
+
 @pytest.mark.parametrize("escape_kind", ["parent", "absolute"])
 def test_configured_legacy_health_path_must_remain_inside_vault(
     tmp_path: Path,
@@ -108,7 +145,7 @@ def test_configured_legacy_health_path_must_remain_inside_vault(
     configured_dir = "../outside" if escape_kind == "parent" else str(outside)
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", configured_dir)
 
-    with pytest.raises(ValueError, match="escapes vault root"):
+    with pytest.raises(ValueError, match="escapes vault root|symlink"):
         _load(vault)
     assert outside_health.read_text(encoding="utf-8") == _VALID_FRONTMATTER
 
@@ -126,9 +163,25 @@ def test_configured_legacy_health_symlink_must_remain_inside_vault(
     (vault / "linked-system").symlink_to(outside, target_is_directory=True)
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "linked-system")
 
-    with pytest.raises(ValueError, match="escapes vault root"):
+    with pytest.raises(ValueError, match="escapes vault root|symlink"):
         _load(vault)
     assert outside_health.read_text(encoding="utf-8") == _VALID_FRONTMATTER
+
+
+def test_configured_legacy_health_in_vault_symlink_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    actual = vault / "Actual"
+    vault.mkdir()
+    health = actual / "Settings" / "health.md"
+    health.parent.mkdir(parents=True)
+    health.write_text(_VALID_FRONTMATTER, encoding="utf-8")
+    (vault / "Meta").symlink_to(actual, target_is_directory=True)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "Meta")
+
+    with pytest.raises(ValueError, match="symlink"):
+        _load(vault)
 
 
 def test_valid_thresholds_load_ok(
@@ -147,6 +200,24 @@ def test_valid_thresholds_load_ok(
     assert t.outbox_recover_oldest_age_s == 8.0
     assert t.degrade_samples == 4
     assert t.recover_samples == 12
+
+
+def test_default_legacy_health_path_warns_once_without_self_shadow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "_system" / "Settings" / "health.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(_VALID_FRONTMATTER, encoding="utf-8")
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "_system")
+
+    result = _load(vault)
+
+    assert result.status == "ok"
+    assert caplog.text.count("deprecated settings location") == 1
+    assert "shadowed legacy settings" not in caplog.text
 
 
 def test_missing_threshold_key_returns_fail(

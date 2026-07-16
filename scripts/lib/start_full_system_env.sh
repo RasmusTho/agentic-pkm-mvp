@@ -74,7 +74,7 @@ import sys
 from pathlib import Path
 
 _operator_provider = os.environ.get("LLM_PROVIDER")
-if not _operator_provider:
+if not (_operator_provider or "").strip():
     os.environ["LLM_PROVIDER"] = "mock"
 try:
     from app.settings.locations import (

@@ -30,6 +30,18 @@ def contained_settings_path(root: Path, candidate: Path) -> Path:
     """Resolve one settings path and reject authority outside the vault."""
 
     resolved_root = root.expanduser().resolve()
+    lexical_candidate = candidate.expanduser()
+    try:
+        relative = lexical_candidate.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(f"settings path escapes vault root: {lexical_candidate}") from exc
+    if ".." in relative.parts:
+        raise ValueError(f"settings path escapes vault root: {lexical_candidate}")
+    cursor = resolved_root
+    for part in relative.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            raise ValueError(f"settings path must not traverse a symlink: {cursor}")
     resolved_candidate = candidate.expanduser().resolve()
     if not resolved_candidate.is_relative_to(resolved_root):
         raise ValueError(f"settings path escapes vault root: {resolved_candidate}")
@@ -52,8 +64,19 @@ def resolve_settings_file(
 
     root = Path(vault_root).expanduser().resolve()
     relative = Path(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"settings artifact path must be canonical-relative: {relative}")
     canonical = contained_settings_path(root, canonical_settings_root(root) / relative)
-    resolved_legacy = [contained_settings_path(root, root / path) for path in legacy_paths]
+    resolved_legacy: list[Path] = []
+    for legacy_path in legacy_paths:
+        legacy = Path(legacy_path)
+        if legacy.is_absolute() or ".." in legacy.parts:
+            raise ValueError(
+                f"legacy settings path must be vault-relative: {legacy}"
+            )
+        resolved = contained_settings_path(root, root / legacy)
+        if resolved not in resolved_legacy:
+            resolved_legacy.append(resolved)
     existing_legacy = [path for path in resolved_legacy if path.exists()]
 
     if canonical.exists():
