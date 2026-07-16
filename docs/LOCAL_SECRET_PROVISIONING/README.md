@@ -41,6 +41,14 @@ ingress transport only; it is never a secret store or raw-audio archive.
 5. **No cloud secret service now.** 1Password Developer/CLI is a future migration option only when
    sharing/rotation across hosts or CI makes it worthwhile. It is not a prerequisite for v1.
 
+### Initial identifier contract
+
+The only initial logical identifier is `heimdal.raw-store-key`. It is declared separately for the
+`dev`, `test`, and `prod` `heimdal-capture-watch` consumers in
+`config/secrets/host_secret_contract.json`; no value, host path, or Keychain account identifier is
+stored in that file. The Keychain service name is a stable non-secret namespace. HSP-02 is the only
+future component permitted to resolve that declaration into a process-local environment variable.
+
 ## Task order
 
 | Order | Task | ID | Prerequisite | Outcome |
