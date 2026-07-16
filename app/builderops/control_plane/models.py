@@ -94,6 +94,17 @@ class TransactionResult:
 
 
 @dataclass(frozen=True)
+class AuthorityObjectResult:
+    repository: str
+    object_kind: str
+    object_id: str
+    state: str
+    receipt_sequence: int
+    recovery_lsn: str
+    replayed: bool = field(default=False, compare=False)
+
+
+@dataclass(frozen=True)
 class Lease:
     repository: str
     resource_id: str
@@ -157,7 +168,7 @@ class RecoveryWatermark:
     def stalled(cls) -> RecoveryWatermark:
         return cls(recovered_through="0/0")
 
-    def covers_transition(self, result: TransactionResult) -> bool:
+    def covers_transition(self, result: TransactionResult | AuthorityObjectResult) -> bool:
         return bool(
             _lsn_value(self.recovered_through) >= _lsn_value(result.recovery_lsn)
             and (result.repository, result.receipt_sequence, result.recovery_lsn)
@@ -258,13 +269,71 @@ class StorePort(Protocol):
         fault_at: str | None = None,
     ) -> TransactionResult: ...
 
+    def claim_lease(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        resource_id: str,
+        holder: str,
+        ttl_seconds: int = 5400,
+    ) -> Lease: ...
+
+    def release_lease(self, lease: Lease) -> None: ...
+
+    def commit_record(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        record_id: str,
+        record_type: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        lease: Lease | None = None,
+        expected_states: tuple[str, ...] | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult: ...
+
+    def commit_attempt(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        task_id: str,
+        attempt_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        lease: Lease,
+        expected_states: tuple[str, ...] | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult: ...
+
+    def commit_promotion(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        promotion_id: str,
+        status: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        lease: Lease | None = None,
+        expected_states: tuple[str, ...] | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult: ...
+
+    def get_record(self, repository: str, record_id: str) -> Mapping[str, Any]: ...
+
+    def get_attempt(self, repository: str, task_id: str, attempt_id: str) -> Mapping[str, Any]: ...
+
+    def get_promotion(self, repository: str, promotion_id: str) -> Mapping[str, Any]: ...
+
     def replay(
         self,
         repository: str,
         idempotency_key: str,
         *,
         watermark: RecoveryWatermark,
-    ) -> TransactionResult | None: ...
+    ) -> TransactionResult | AuthorityObjectResult | None: ...
 
     def claim_outbox(
         self,

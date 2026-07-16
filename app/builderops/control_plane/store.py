@@ -15,6 +15,7 @@ from psycopg.types.json import Jsonb
 from app.builderops.control_plane.migrations import AUTHORITY_EPOCH, MIGRATIONS, SCHEMA_VERSION
 from app.builderops.control_plane.models import (
     AuthorityEnvelope,
+    AuthorityObjectResult,
     DurabilityPending,
     IdempotencyConflict,
     Lease,
@@ -378,6 +379,18 @@ class PostgresBuilderOpsStore:
         }
 
     @staticmethod
+    def _authority_result_json(result: AuthorityObjectResult) -> dict[str, Any]:
+        return {
+            "result_type": "authority_object",
+            "repository": result.repository,
+            "object_kind": result.object_kind,
+            "object_id": result.object_id,
+            "state": result.state,
+            "receipt_sequence": result.receipt_sequence,
+            "recovery_lsn": result.recovery_lsn,
+        }
+
+    @staticmethod
     def _lease_json(lease: Lease) -> dict[str, Any]:
         return {
             "repository": lease.repository,
@@ -418,9 +431,443 @@ class PostgresBuilderOpsStore:
             replayed=replayed,
         )
 
+    @staticmethod
+    def _authority_result(value: Mapping[str, Any], *, replayed: bool) -> AuthorityObjectResult:
+        return AuthorityObjectResult(
+            repository=str(value["repository"]),
+            object_kind=str(value["object_kind"]),
+            object_id=str(value["object_id"]),
+            state=str(value["state"]),
+            receipt_sequence=int(value["receipt_sequence"]),
+            recovery_lsn=str(value["recovery_lsn"]),
+            replayed=replayed,
+        )
+
+    def commit_record(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        record_id: str,
+        record_type: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        lease: Lease | None = None,
+        expected_states: tuple[str, ...] | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult:
+        return self._commit_authority_object(
+            envelope=envelope,
+            object_kind="record",
+            object_id=record_id,
+            state=state,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            secondary_id=record_type,
+            lease=lease,
+            lease_resource_id=f"record:{record_id}",
+            expected_states=expected_states,
+            fault_at=fault_at,
+        )
+
+    def commit_attempt(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        task_id: str,
+        attempt_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        lease: Lease,
+        expected_states: tuple[str, ...] | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult:
+        return self._commit_authority_object(
+            envelope=envelope,
+            object_kind="attempt",
+            object_id=f"{task_id}:{attempt_id}",
+            state=state,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            primary_id=task_id,
+            secondary_id=attempt_id,
+            lease=lease,
+            lease_resource_id=task_id,
+            require_lease_on_create=True,
+            expected_states=expected_states,
+            fault_at=fault_at,
+        )
+
+    def commit_promotion(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        promotion_id: str,
+        status: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        lease: Lease | None = None,
+        expected_states: tuple[str, ...] | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult:
+        return self._commit_authority_object(
+            envelope=envelope,
+            object_kind="promotion",
+            object_id=promotion_id,
+            state=status,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            lease=lease,
+            lease_resource_id=f"promotion:{promotion_id}",
+            expected_states=expected_states,
+            fault_at=fault_at,
+        )
+
+    def _commit_authority_object(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        object_kind: str,
+        object_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        primary_id: str | None = None,
+        secondary_id: str | None = None,
+        lease: Lease | None = None,
+        lease_resource_id: str,
+        require_lease_on_create: bool = False,
+        expected_states: tuple[str, ...] | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult:
+        if not object_id or not state or not idempotency_key:
+            raise ValueError("object identity, state, and idempotency_key are mandatory")
+        request_hash = _hash(
+            {
+                "authority_envelope": envelope.as_json(),
+                "object_kind": object_kind,
+                "object_id": object_id,
+                "state": state,
+                "payload": dict(payload),
+                "primary_id": primary_id,
+                "secondary_id": secondary_id,
+                "lease_identity": self._lease_identity_json(lease) if lease else None,
+                "expected_states": list(expected_states) if expected_states else None,
+            }
+        )
+        envelope_json = Jsonb(envelope.as_json())
+        replayed = False
+        with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"idempotency:{envelope.repository}:{idempotency_key}",),
+            )
+            existing = conn.execute(
+                "SELECT request_hash, result FROM builderops_idempotency "
+                "WHERE repository = %s AND idempotency_key = %s FOR UPDATE",
+                (envelope.repository, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_hash"] != request_hash:
+                    raise IdempotencyConflict(
+                        "idempotency key was already committed for another authority object"
+                    )
+                provisional = self._authority_result(existing["result"], replayed=True)
+                if provisional.recovery_lsn != "0/0":
+                    return provisional
+                receipt_sequence = provisional.receipt_sequence
+                replayed = True
+            else:
+                conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"authority:{envelope.repository}:{object_kind}:{object_id}",),
+                )
+                if object_kind == "attempt":
+                    task = conn.execute(
+                        "SELECT state FROM builderops_tasks WHERE repository = %s "
+                        "AND task_id = %s FOR UPDATE",
+                        (envelope.repository, primary_id),
+                    ).fetchone()
+                    if task is None or task["state"] != "claimed":
+                        raise StateConflict("attempt writes require an existing claimed task")
+                previous = self._authority_object_row(
+                    conn,
+                    object_kind=object_kind,
+                    repository=envelope.repository,
+                    object_id=object_id,
+                    primary_id=primary_id,
+                    secondary_id=secondary_id,
+                    for_update=True,
+                )
+                previous_state = str(previous["state"]) if previous is not None else None
+                if expected_states is not None and previous_state not in expected_states:
+                    raise StateConflict(
+                        f"expected {object_kind} state in {expected_states!r}, "
+                        f"observed {previous_state!r}"
+                    )
+                if previous is not None and object_kind == "record":
+                    assert secondary_id is not None
+                    if previous["record_type"] != secondary_id:
+                        raise StateConflict("record type is immutable")
+                if previous is not None or require_lease_on_create:
+                    if lease is None:
+                        raise LeaseRequired(f"{object_kind} mutation requires a fenced lease")
+                    self._assert_lease(conn, envelope.repository, lease_resource_id, lease)
+                self._write_authority_object(
+                    conn,
+                    envelope=envelope,
+                    object_kind=object_kind,
+                    object_id=object_id,
+                    state=state,
+                    payload=payload,
+                    primary_id=primary_id,
+                    secondary_id=secondary_id,
+                )
+                self._fault(fault_at, "after_authority_object")
+                receipt_task_id = primary_id or object_id
+                receipt = conn.execute(
+                    "INSERT INTO builderops_receipts(repository, task_id, event_type, "
+                    "idempotency_key, lease_holder, lease_fencing_token, authority_envelope) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING receipt_sequence",
+                    (
+                        envelope.repository,
+                        receipt_task_id,
+                        f"{object_kind}.{state}",
+                        idempotency_key,
+                        lease.holder if lease else None,
+                        lease.fencing_token if lease else None,
+                        envelope_json,
+                    ),
+                ).fetchone()
+                assert receipt is not None
+                receipt_sequence = int(receipt["receipt_sequence"])
+                self._fault(fault_at, "after_authority_receipt")
+                provisional = AuthorityObjectResult(
+                    repository=envelope.repository,
+                    object_kind=object_kind,
+                    object_id=object_id,
+                    state=state,
+                    receipt_sequence=receipt_sequence,
+                    recovery_lsn="0/0",
+                )
+                conn.execute(
+                    "INSERT INTO builderops_idempotency(repository, idempotency_key, request_hash, "
+                    "result, authority_envelope) VALUES (%s, %s, %s, %s, %s)",
+                    (
+                        envelope.repository,
+                        idempotency_key,
+                        request_hash,
+                        Jsonb(self._authority_result_json(provisional)),
+                        envelope_json,
+                    ),
+                )
+                self._fault(fault_at, "after_authority_idempotency")
+        self._fault(fault_at, "after_authority_commit")
+        recovery_lsn = self._flushed_lsn()
+        return self._finalize_authority_object(
+            envelope.repository,
+            idempotency_key,
+            receipt_sequence,
+            recovery_lsn,
+            replayed=replayed,
+        )
+
+    @staticmethod
+    def _authority_object_row(
+        conn: psycopg.Connection[dict[str, Any]],
+        *,
+        object_kind: str,
+        repository: str,
+        object_id: str,
+        primary_id: str | None,
+        secondary_id: str | None,
+        for_update: bool,
+    ) -> Mapping[str, Any] | None:
+        lock = " FOR UPDATE" if for_update else ""
+        if object_kind == "record":
+            return conn.execute(
+                "SELECT state, record_type, payload, authority_envelope FROM builderops_records "
+                f"WHERE repository = %s AND record_id = %s{lock}",
+                (repository, object_id),
+            ).fetchone()
+        if object_kind == "attempt":
+            return conn.execute(
+                "SELECT state, payload, authority_envelope FROM builderops_attempts "
+                f"WHERE repository = %s AND task_id = %s AND attempt_id = %s{lock}",
+                (repository, primary_id, secondary_id),
+            ).fetchone()
+        if object_kind == "promotion":
+            return conn.execute(
+                "SELECT status AS state, payload, authority_envelope FROM builderops_promotions "
+                f"WHERE repository = %s AND promotion_id = %s{lock}",
+                (repository, object_id),
+            ).fetchone()
+        raise ValueError(f"unsupported authority object kind: {object_kind}")
+
+    @staticmethod
+    def _write_authority_object(
+        conn: psycopg.Connection[dict[str, Any]],
+        *,
+        envelope: AuthorityEnvelope,
+        object_kind: str,
+        object_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        primary_id: str | None,
+        secondary_id: str | None,
+    ) -> None:
+        envelope_json = Jsonb(envelope.as_json())
+        if object_kind == "record":
+            assert secondary_id is not None
+            conn.execute(
+                "INSERT INTO builderops_records(repository, record_id, record_type, state, payload, "
+                "authority_envelope) VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (repository, record_id) DO UPDATE SET state = EXCLUDED.state, "
+                "payload = EXCLUDED.payload, authority_envelope = EXCLUDED.authority_envelope",
+                (
+                    envelope.repository,
+                    object_id,
+                    secondary_id,
+                    state,
+                    Jsonb(dict(payload)),
+                    envelope_json,
+                ),
+            )
+            return
+        if object_kind == "attempt":
+            conn.execute(
+                "INSERT INTO builderops_attempts(repository, task_id, attempt_id, state, payload, "
+                "authority_envelope) VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (repository, task_id, attempt_id) DO UPDATE SET state = EXCLUDED.state, "
+                "payload = EXCLUDED.payload, authority_envelope = EXCLUDED.authority_envelope, "
+                "updated_at = clock_timestamp()",
+                (
+                    envelope.repository,
+                    primary_id,
+                    secondary_id,
+                    state,
+                    Jsonb(dict(payload)),
+                    envelope_json,
+                ),
+            )
+            return
+        if object_kind == "promotion":
+            conn.execute(
+                "INSERT INTO builderops_promotions(repository, promotion_id, status, payload, "
+                "authority_envelope) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (repository, promotion_id) DO UPDATE SET status = EXCLUDED.status, "
+                "payload = EXCLUDED.payload, authority_envelope = EXCLUDED.authority_envelope, "
+                "updated_at = clock_timestamp()",
+                (
+                    envelope.repository,
+                    object_id,
+                    state,
+                    Jsonb(dict(payload)),
+                    envelope_json,
+                ),
+            )
+            return
+        raise ValueError(f"unsupported authority object kind: {object_kind}")
+
+    def _finalize_authority_object(
+        self,
+        repository: str,
+        idempotency_key: str,
+        receipt_sequence: int,
+        recovery_lsn: str,
+        *,
+        replayed: bool,
+    ) -> AuthorityObjectResult:
+        with self._connect() as conn:
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"idempotency:{repository}:{idempotency_key}",),
+            )
+            row = conn.execute(
+                "SELECT result FROM builderops_idempotency WHERE repository = %s "
+                "AND idempotency_key = %s FOR UPDATE",
+                (repository, idempotency_key),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("committed authority-object idempotency record disappeared")
+            provisional = self._authority_result(row["result"], replayed=replayed)
+            if provisional.recovery_lsn != "0/0":
+                return provisional
+            result = AuthorityObjectResult(
+                repository=provisional.repository,
+                object_kind=provisional.object_kind,
+                object_id=provisional.object_id,
+                state=provisional.state,
+                receipt_sequence=receipt_sequence,
+                recovery_lsn=recovery_lsn,
+                replayed=replayed,
+            )
+            conn.execute(
+                "UPDATE builderops_receipts SET recovery_lsn = %s WHERE receipt_sequence = %s",
+                (recovery_lsn, receipt_sequence),
+            )
+            conn.execute(
+                "UPDATE builderops_idempotency SET result = %s, recovery_lsn = %s "
+                "WHERE repository = %s AND idempotency_key = %s",
+                (
+                    Jsonb(self._authority_result_json(result)),
+                    recovery_lsn,
+                    repository,
+                    idempotency_key,
+                ),
+            )
+        return result
+
+    def get_record(self, repository: str, record_id: str) -> Mapping[str, Any]:
+        with self._connect() as conn:
+            row = self._authority_object_row(
+                conn,
+                object_kind="record",
+                repository=repository,
+                object_id=record_id,
+                primary_id=None,
+                secondary_id=None,
+                for_update=False,
+            )
+        if row is None:
+            raise KeyError(record_id)
+        return dict(row)
+
+    def get_attempt(self, repository: str, task_id: str, attempt_id: str) -> Mapping[str, Any]:
+        with self._connect() as conn:
+            row = self._authority_object_row(
+                conn,
+                object_kind="attempt",
+                repository=repository,
+                object_id=f"{task_id}:{attempt_id}",
+                primary_id=task_id,
+                secondary_id=attempt_id,
+                for_update=False,
+            )
+        if row is None:
+            raise KeyError(attempt_id)
+        return dict(row)
+
+    def get_promotion(self, repository: str, promotion_id: str) -> Mapping[str, Any]:
+        with self._connect() as conn:
+            row = self._authority_object_row(
+                conn,
+                object_kind="promotion",
+                repository=repository,
+                object_id=promotion_id,
+                primary_id=None,
+                secondary_id=None,
+                for_update=False,
+            )
+        if row is None:
+            raise KeyError(promotion_id)
+        return dict(row)
+
     def replay(
         self, repository: str, idempotency_key: str, *, watermark: RecoveryWatermark
-    ) -> TransactionResult | None:
+    ) -> TransactionResult | AuthorityObjectResult | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT result, recovery_lsn::text AS recovery_lsn FROM builderops_idempotency "
@@ -429,7 +876,12 @@ class PostgresBuilderOpsStore:
             ).fetchone()
         if row is None or row["result"] is None:
             return None
-        result = self._result(row["result"], replayed=True)
+        if row["result"].get("result_type") == "authority_object":
+            result: TransactionResult | AuthorityObjectResult = self._authority_result(
+                row["result"], replayed=True
+            )
+        else:
+            result = self._result(row["result"], replayed=True)
         return result if watermark.covers_transition(result) else None
 
     def claim_task(
@@ -1148,6 +1600,9 @@ class PostgresBuilderOpsStore:
     def authority_counts(self, repository: str) -> dict[str, int]:
         tables = {
             "tasks": "builderops_tasks",
+            "attempts": "builderops_attempts",
+            "records": "builderops_records",
+            "promotions": "builderops_promotions",
             "receipts": "builderops_receipts",
             "idempotency": "builderops_idempotency",
             "outbox": "builderops_outbox",

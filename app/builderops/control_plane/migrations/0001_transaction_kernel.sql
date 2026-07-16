@@ -11,6 +11,41 @@ CREATE TABLE IF NOT EXISTS builderops_authority_metadata (
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+CREATE OR REPLACE FUNCTION builderops_valid_authority_envelope(
+    envelope jsonb, expected_repository text
+) RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+STRICT
+AS $$
+    SELECT
+        jsonb_typeof(envelope) = 'object'
+        AND expected_repository ~ '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+        AND split_part(expected_repository, '/', 1) NOT IN ('.', '..')
+        AND split_part(expected_repository, '/', 2) NOT IN ('.', '..')
+        AND jsonb_typeof(envelope->'repository') = 'string'
+        AND jsonb_typeof(envelope->'scope') = 'string'
+        AND jsonb_typeof(envelope->'stack') = 'string'
+        AND jsonb_typeof(envelope->'actor') = 'string'
+        AND envelope->>'repository' = expected_repository
+        AND COALESCE(envelope->>'scope', '') ~ '[^[:space:]]'
+        AND COALESCE(envelope->>'stack', '') ~ '[^[:space:]]'
+        AND COALESCE(envelope->>'actor', '') ~ '[^[:space:]]'
+        AND CASE
+            WHEN jsonb_typeof(envelope->'source_refs') = 'array'
+            THEN jsonb_array_length(envelope->'source_refs') > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(envelope->'source_refs') AS source_ref
+                    WHERE jsonb_typeof(source_ref) <> 'string'
+                        OR NOT COALESCE(source_ref #>> '{}', '') ~ '[^[:space:]]'
+                )
+            ELSE false
+        END
+        AND jsonb_typeof(envelope->'schema_version') = 'number'
+        AND COALESCE((envelope->>'schema_version') ~ '^[1-9][0-9]*$', false)
+$$;
+
 CREATE TABLE IF NOT EXISTS builderops_tasks (
     repository text NOT NULL,
     task_id text NOT NULL,
@@ -21,7 +56,7 @@ CREATE TABLE IF NOT EXISTS builderops_tasks (
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, task_id),
     CHECK (repository <> '' AND task_id <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_attempts (
@@ -30,16 +65,16 @@ CREATE TABLE IF NOT EXISTS builderops_attempts (
     authority_envelope jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, task_id, attempt_id),
     CHECK (repository <> '' AND task_id <> '' AND attempt_id <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_records (
     repository text NOT NULL, record_id text NOT NULL, record_type text NOT NULL,
-    payload jsonb NOT NULL, authority_envelope jsonb NOT NULL,
+    state text NOT NULL, payload jsonb NOT NULL, authority_envelope jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, record_id),
-    CHECK (repository <> '' AND record_id <> '' AND record_type <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (repository <> '' AND record_id <> '' AND record_type <> '' AND state <> ''),
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_transitions (
@@ -47,7 +82,7 @@ CREATE TABLE IF NOT EXISTS builderops_transitions (
     from_state text, to_state text NOT NULL, authority_envelope jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CHECK (repository <> '' AND task_id <> '' AND to_state <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_promotions (
@@ -56,7 +91,7 @@ CREATE TABLE IF NOT EXISTS builderops_promotions (
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, promotion_id),
     CHECK (repository <> '' AND promotion_id <> '' AND status <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE SEQUENCE IF NOT EXISTS builderops_receipt_sequence;
@@ -73,7 +108,7 @@ CREATE TABLE IF NOT EXISTS builderops_receipts (
     recovery_lsn pg_lsn,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CHECK (repository <> '' AND task_id <> '' AND idempotency_key <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_idempotency (
@@ -86,7 +121,7 @@ CREATE TABLE IF NOT EXISTS builderops_idempotency (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, idempotency_key),
     CHECK (repository <> '' AND idempotency_key <> '' AND request_hash <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_leases (
@@ -99,7 +134,7 @@ CREATE TABLE IF NOT EXISTS builderops_leases (
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, resource_id),
     CHECK (repository <> '' AND resource_id <> '' AND holder <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_outbox (
@@ -125,7 +160,7 @@ CREATE TABLE IF NOT EXISTS builderops_outbox (
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, operation_key),
     CHECK (repository <> '' AND operation_key <> '' AND task_id <> '' AND effect_type <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE INDEX IF NOT EXISTS builderops_outbox_pending_idx
@@ -151,7 +186,7 @@ CREATE TABLE IF NOT EXISTS builderops_outbox_reconciliations (
     PRIMARY KEY (repository, operation_key, claim_fencing_token),
     CHECK (repository <> '' AND operation_key <> '' AND task_id <> '' AND worker_id <> ''),
     CHECK (request_hash <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );
 
 CREATE TABLE IF NOT EXISTS builderops_dead_letters (
@@ -159,5 +194,5 @@ CREATE TABLE IF NOT EXISTS builderops_dead_letters (
     authority_envelope jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (repository, operation_key),
     CHECK (repository <> '' AND operation_key <> ''),
-    CHECK (authority_envelope ?& ARRAY['repository','scope','stack','actor','source_refs','schema_version'])
+    CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );

@@ -2,6 +2,7 @@
 
 from app.builderops.control_plane.models import (
     AuthorityEnvelope,
+    AuthorityObjectResult,
     ControlPlaneError,
     DurabilityPending,
     EnvelopeValidationError,
@@ -23,6 +24,7 @@ from app.builderops.control_plane.store import PostgresBuilderOpsStore
 
 __all__ = [
     "AuthorityEnvelope",
+    "AuthorityObjectResult",
     "ControlPlaneError",
     "DurabilityPending",
     "EnvelopeValidationError",

@@ -34,6 +34,9 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
             _commit(store, envelope, key=f"fault-{fault_at}", fault_at=fault_at)
     assert store.authority_counts(envelope.repository) == {
         "tasks": 0,
+        "attempts": 0,
+        "records": 0,
+        "promotions": 0,
         "receipts": 0,
         "idempotency": 0,
         "outbox": 0,
@@ -44,6 +47,9 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
     assert store.readiness() == {"authority_epoch": 1, "schema_version": 1}
     assert store.authority_counts(envelope.repository) == {
         "tasks": 1,
+        "attempts": 0,
+        "records": 0,
+        "promotions": 0,
         "receipts": 1,
         "idempotency": 1,
         "outbox": 1,
