@@ -1,8 +1,15 @@
+# VCS / local env
 .git
 .venv
+# Root-level patterns only cover the repo root in .dockerignore matching; the
+# **/ variants keep NESTED host bytecode (app/__pycache__, ...) out of the
+# runtime-stage COPYs too.
 __pycache__
 *.pyc
+**/__pycache__
+**/*.pyc
 
+# Logs and scratch
 logs
 logs/**
 tmp
@@ -10,7 +17,39 @@ tmp/**
 *.log
 *.jsonl
 
+# Local data / backups
 data
 data/**
 backups
 backups/**
+
+# Dev-only surfaces (builder-ops-stability spec Issue 7): never part of the
+# runtime image (the Dockerfile runtime stage copies an explicit asset list),
+# and excluded here so they cannot leak back in and do not bloat the context.
+tests
+docs
+# docs/ is dev-only EXCEPT docs/settings/**: those files are read at RUNTIME
+# relative to /app — the model/tool/agent/graph/event/prompt registries
+# (app/components/settings/*_loader.py defaults, consumed by the LLM router
+# and MCP tool provider), the flow/agent fallbacks (app/settings/flows.py,
+# app/settings/agents.py, app/config/paths.py), and panel-action wiring
+# (app/agents/panel_agent/wiring.py). Re-include so the runtime COPY sees it.
+!docs/settings
+ops
+*.md
+.github
+.codex
+.claude
+.vscode
+.pytest_cache
+.ruff_cache
+golden
+tools
+claude-skills
+
+# scripts/ is dev tooling EXCEPT the two entrypoints docker-compose.yaml
+# executes inside containers (migrate -> run_migrations.sh, api/CMD ->
+# start_api.sh); re-include only those so the runtime COPY can see them.
+scripts
+!scripts/start_api.sh
+!scripts/run_migrations.sh
