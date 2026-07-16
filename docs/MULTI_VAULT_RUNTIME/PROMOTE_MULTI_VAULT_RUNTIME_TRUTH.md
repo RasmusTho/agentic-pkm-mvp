@@ -121,6 +121,7 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/INTEGRATION_FABRIC_CONTRACT.md :: Reading rules` + doc writeback at
   `docs/EMERGENT_FEATURES_MODEL.md :: Reading rules` + doc writeback at
   `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md :: Relationship to current shipped behavior` + doc writeback at
+  `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Single-origin API proxy` + doc writeback at
   `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection` + doc writeback at
   `docs/DOCS_INDEX.md :: v6.0 Capability Specifications`
 - [ ] This capability's own lifecycle surfaces no longer claim future/blocked runtime state: README

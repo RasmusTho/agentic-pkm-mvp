@@ -385,7 +385,8 @@ Partial delivery remains fail-closed:
   and governed-write paths without global mutation or cross-talk; a one-request override outranks
   its retained session without mutating it.
   Verify: `tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk` +
-  `tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it`
+  `tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it` +
+  `tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance`
 - [ ] A fresh process resolves an explicit default, while request/session selection overrides it
   without mutating it; invalid explicit selection fails closed.
   Verify: `tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`

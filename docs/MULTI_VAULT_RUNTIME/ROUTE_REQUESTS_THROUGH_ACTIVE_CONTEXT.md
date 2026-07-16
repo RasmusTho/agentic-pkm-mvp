@@ -183,8 +183,13 @@ not background lifecycles.
   effect lease. While both are held, require an active ownership lease for the current `(channel,
   vault_binding_id, canonical-root fingerprint)`, compare current binding revision/root and auth epoch
   with the request snapshot, and re-authorize the principal/scope/operation. Canonicalize the requested
-  locator and resolve its nearest enclosing initialized vault boundary before I/O; that boundary must
-  be the exact root of the declared target binding. A parent binding cannot read through an initialized
+  locator and resolve its nearest enclosing initialized vault boundary before I/O. For an initialized
+  binding, that boundary must be the exact root of the declared target. A provisional `uninitialized`
+  binding instead permits read-only access inside its canonical registered root when no initialized
+  boundary encloses the requested locator; it still holds the same ownership/revision/auth/effect
+  fences and can never write. If an initialized nested boundary is encountered beneath that
+  provisional root, the request fails closed unless that child is separately selected and authorized.
+  A parent binding cannot read through an initialized
   nested child boundary, even when the child is registered on the same instance; the caller must
   select and independently authorize the child binding. An unregistered nested boundary fails closed.
   Release the global fence
@@ -328,7 +333,8 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - New or changed contract: request-context propagation and explicit multi-binding write target
 - Owner-doc impact: each owning child updates in its PR: 05A `docs/DB_SCHEMA.md`, the durable envelope
   and worker-compatibility portions of `docs/EVENTS.md`, deployment, and release channels; 05B
-  `docs/ARCHITECTURE.md` and `docs/SETTINGS.md`; 05C
+  `docs/ARCHITECTURE.md`, `docs/SETTINGS.md`, and
+  `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`; 05C
   `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`; 05D completes `docs/EVENTS.md` with the later producer,
   delivery, and idempotency behavior
 - Transition debt impact: reduces D1 and request-side D13 global-binding debt
@@ -347,6 +353,10 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - [ ] **MVR-05B:** Two production API sessions read different vaults concurrently without cross-talk or global
   mutation.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk`
+- [ ] **MVR-05B:** A provisional uninitialized binding preserves the production read-before-initialize
+  journey within its registered root while remaining write-sealed; an initialized nested child is a
+  hard boundary and cannot be read through the provisional parent.
+  - Verify: `tests/integration/test_multi_vault_nested_effect_boundary.py::test_provisional_uninitialized_parent_reads_stop_at_initialized_child`
 - [ ] **MVR-05B:** A migrated scoped-read request remains server-identifiable when an intermediary
   strips its selection carrier and fails reselection-required before default/no-vault resolution;
   it cannot retry or downgrade through the separately identified legacy read route.
@@ -612,6 +622,10 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - [ ] **MVR-05B:** The settings owner document describes the shipped instance versus request/binding
   scope and no longer presents global `VAULT_ROOT` or compiled-vault state as request authority.
   - Verify: doc writeback at `docs/SETTINGS.md :: Runtime settings (compiled)`
+- [ ] **MVR-05B:** The Companion runtime-boundary owner describes the shipped authenticated scoped-read
+  route, explicit selection-header forwarding, and fail-closed no-downgrade behavior through the
+  single-origin proxy in the same PR.
+  - Verify: doc writeback at `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Single-origin API proxy`
 - [ ] **MVR-05C:** The governed-write owner contract describes the shipped expanded DecisionToken/
   AuthorityReceipt fields and immediately-before-write validation.
   - Verify: doc writeback at `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: GovernedWriteProtocol`
@@ -643,10 +657,11 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05B validation
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_nested_effect_boundary.py::test_parent_authority_cannot_read_registered_child_vault tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_interim_default_mutation_rebinds_before_foreground_commit tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_nested_effect_boundary.py::test_parent_authority_cannot_read_registered_child_vault tests/integration/test_multi_vault_nested_effect_boundary.py::test_provisional_uninitialized_parent_reads_stop_at_initialized_child tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_interim_default_mutation_rebinds_before_foreground_commit tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
 - `pytest -q tests/integration/test_multi_vault_partial_delivery.py::test_migrated_client_write_precondition_prevents_cross_client_compatibility_redirect tests/integration/test_multi_vault_partial_delivery.py::test_migrated_write_route_rejects_stripped_precondition_without_legacy_downgrade tests/api/test_multi_vault_request_fail_closed.py::test_migrated_scoped_read_rejects_stripped_carrier_without_default_downgrade tests/integration/test_multi_vault_picker_context.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
 - `pytest -q tests/integration/test_multi_vault_picker_context.py::test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic`
-- Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks.
+- Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md`, `docs/SETTINGS.md`, and
+  `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` writebacks.
 
 ### MVR-05C validation
 
