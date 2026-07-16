@@ -8,6 +8,12 @@ info:
     published client-surface contract and must not be read as complete API coverage. See
     docs/contracts/MIMER_CLIENT_CONTRACT.md sections 4 and 9 (F4) for the current callable-surface
     pointers and the separately governed API-versioning and OpenAPI follow-up.
+servers:
+  - url: http://localhost:8000
+    description: Local development runtime (alpha; served without authentication)
+# The alpha runtime exposes these routes without authentication; declare that
+# explicitly at the root so the security posture is a documented decision.
+security: []
 paths:
   /ingest:
     post:

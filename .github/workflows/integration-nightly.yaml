@@ -245,3 +245,95 @@ jobs:
         with:
           name: nightly-pg-contracts-log
           path: tmp/nightly-pg-contracts.log
+
+  k6-search:
+    # Moved from the retired-by-strip architecture-ci.yaml (#3892): the k6
+    # search load check is nightly-only by design — too heavy for the PR
+    # path, still valuable as a scheduled regression probe.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r dev-requirements.txt
+      - name: Bootstrap database
+        run: |
+          python - <<'PY'
+          from app.services.outbox import bootstrap
+          bootstrap()
+          PY
+      - name: Seed search fixture
+        run: |
+          python - <<'PY'
+          import os
+          import psycopg
+          from app.services.embedding import deterministic_embedding
+
+          dsn = os.environ['DATABASE_URL']
+          sample_id = '11111111-1111-1111-1111-111111111111'
+          payload = 'smoke content for k6 search'
+          with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+              cur.execute(
+                  "insert into objects(uuid,title,review_state,content,path) values(%s,%s,%s,%s,%s) on conflict (uuid) do update set title=excluded.title, review_state=excluded.review_state, content=excluded.content, path=excluded.path",
+                  (sample_id, 'Smoke note', 'inbox', payload, 'Notes/smoke.md'),
+              )
+              vec = deterministic_embedding(payload)
+              cur.execute(
+                  "insert into objects_embeddings(uuid, dim, vector) values(%s,%s,%s) on conflict (uuid) do update set dim=excluded.dim, vector=excluded.vector",
+                  (sample_id, len(vec), vec),
+              )
+          PY
+      - name: Start API
+        run: nohup python -m uvicorn app.api.app:app --host 0.0.0.0 --port 8000 >/tmp/api.log 2>&1 &
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+      - name: Wait for API readiness
+        run: |
+          deadline=$((SECONDS+90))
+          while [ $SECONDS -lt $deadline ]; do
+            if curl -fsS http://localhost:8000/docs >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become ready"
+          cat /tmp/api.log || true
+          exit 1
+      - name: Warm up search endpoint
+        run: |
+          curl -fsS -H "x-trace-id: warmup-k6" "http://localhost:8000/search?q=smoke"
+      - name: Install k6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gpg
+          curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+      - name: Run k6 smoke
+        run: |
+          export BASE_URL="http://localhost:8000"
+          k6 run scripts/k6_search.js
