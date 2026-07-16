@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.builderops.control_plane import (
@@ -83,6 +85,12 @@ def test_unknown_external_effect_requires_readback_before_retry(
         )
         is False
     )
+    with pytest.raises(StaleFencingToken):
+        restarted_store.reconcile_outbox(
+            replace(orphaned_claim, worker_id="wrong-holder"),
+            observed_applied=False,
+            evidence={"readback": "forged"},
+        )
     restarted_store.reconcile_outbox(
         orphaned_claim, observed_applied=False, evidence={"readback": "not-found"}
     )

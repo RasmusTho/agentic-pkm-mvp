@@ -539,8 +539,6 @@ class PostgresBuilderOpsStore:
     ) -> Lease:
         if not resource_id or not holder or ttl_seconds <= 0:
             raise ValueError("resource_id, holder, and positive ttl_seconds are mandatory")
-        effective_now = PostgresBuilderOpsStore._database_now(conn)
-        expires_at = effective_now + timedelta(seconds=ttl_seconds)
         conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"lease:{envelope.repository}:{resource_id}",),
@@ -550,6 +548,8 @@ class PostgresBuilderOpsStore:
             "WHERE repository = %s AND resource_id = %s FOR UPDATE",
             (envelope.repository, resource_id),
         ).fetchone()
+        effective_now = PostgresBuilderOpsStore._database_now(conn)
+        expires_at = effective_now + timedelta(seconds=ttl_seconds)
         if row is not None and row["expires_at"] > effective_now:
             if row["holder"] != holder:
                 raise LeaseUnavailable(f"active lease belongs to {row['holder']}")
@@ -581,8 +581,20 @@ class PostgresBuilderOpsStore:
         if ttl_seconds <= 0:
             raise ValueError("positive ttl_seconds is mandatory")
         with self._connect() as conn:
+            current = conn.execute(
+                "SELECT holder, fencing_token, expires_at FROM builderops_leases "
+                "WHERE repository = %s AND resource_id = %s FOR UPDATE",
+                (lease.repository, lease.resource_id),
+            ).fetchone()
             effective_now = self._database_now(conn)
             expires_at = effective_now + timedelta(seconds=ttl_seconds)
+            if (
+                current is None
+                or current["holder"] != lease.holder
+                or int(current["fencing_token"]) != lease.fencing_token
+                or current["expires_at"] <= effective_now
+            ):
+                raise StaleFencingToken("lease expired or was reassigned")
             updated = conn.execute(
                 "UPDATE builderops_leases SET expires_at = %s, updated_at = clock_timestamp() "
                 "WHERE repository = %s AND resource_id = %s AND holder = %s AND fencing_token = %s "
@@ -609,7 +621,19 @@ class PostgresBuilderOpsStore:
 
     @staticmethod
     def _release_lease_in_tx(conn: psycopg.Connection[dict[str, Any]], lease: Lease) -> None:
+        current = conn.execute(
+            "SELECT holder, fencing_token, expires_at FROM builderops_leases "
+            "WHERE repository = %s AND resource_id = %s FOR UPDATE",
+            (lease.repository, lease.resource_id),
+        ).fetchone()
         effective_now = PostgresBuilderOpsStore._database_now(conn)
+        if (
+            current is None
+            or current["holder"] != lease.holder
+            or int(current["fencing_token"]) != lease.fencing_token
+            or current["expires_at"] <= effective_now
+        ):
+            raise StaleFencingToken("lease expired, was released, or was reassigned")
         row = conn.execute(
             "UPDATE builderops_leases SET expires_at = %s, updated_at = clock_timestamp() "
             "WHERE repository = %s AND resource_id = %s AND holder = %s AND fencing_token = %s "
@@ -633,12 +657,12 @@ class PostgresBuilderOpsStore:
         resource_id: str,
         lease: Lease,
     ) -> None:
-        effective_now = PostgresBuilderOpsStore._database_now(conn)
         row = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
             "WHERE repository = %s AND resource_id = %s FOR UPDATE",
             (repository, resource_id),
         ).fetchone()
+        effective_now = PostgresBuilderOpsStore._database_now(conn)
         if (
             row is None
             or lease.repository != repository
@@ -850,13 +874,17 @@ class PostgresBuilderOpsStore:
                 "UPDATE builderops_outbox SET status = %s, reconciliation_evidence = %s, "
                 "worker_id = NULL, claim_expires_at = NULL, updated_at = clock_timestamp() "
                 "WHERE repository = %s AND operation_key = %s AND status = 'unknown' "
-                "AND claim_fencing_token = %s RETURNING operation_key",
+                "AND worker_id = %s AND claim_fencing_token = %s AND claim_receipt_sequence = %s "
+                "AND COALESCE(claim_lsn::text, '0/0') = %s RETURNING operation_key",
                 (
                     status,
                     Jsonb(dict(evidence)),
                     claim.repository,
                     claim.operation_key,
+                    claim.worker_id,
                     claim.fencing_token,
+                    claim.receipt_sequence,
+                    claim.claim_lsn,
                 ),
             ).fetchone()
             if row is None:

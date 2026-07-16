@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
 from threading import Barrier
+from time import sleep
 
 import pytest
 
@@ -26,6 +27,29 @@ def _expire_lease(store, lease: Lease) -> None:
             "WHERE repository = %s AND resource_id = %s AND fencing_token = %s",
             (lease.repository, lease.resource_id, lease.fencing_token),
         )
+
+
+def test_lock_wait_past_expiry_cannot_resurrect_lease(control_plane_store, envelope) -> None:
+    store = control_plane_store
+    lease = store.claim_lease(
+        envelope=envelope,
+        resource_id="lock-wait-expiry",
+        holder="worker-a",
+        ttl_seconds=1,
+    )
+    pool = ThreadPoolExecutor(max_workers=1)
+    with store._connect() as blocker:
+        blocker.execute(
+            "SELECT 1 FROM builderops_leases WHERE repository = %s AND resource_id = %s FOR UPDATE",
+            (lease.repository, lease.resource_id),
+        )
+        future = pool.submit(store.heartbeat_lease, lease, ttl_seconds=30)
+        sleep(1.5)
+    try:
+        with pytest.raises(StaleFencingToken):
+            future.result(timeout=5)
+    finally:
+        pool.shutdown(wait=True)
 
 
 def test_stale_fencing_token_cannot_mutate_after_reassignment(
