@@ -16,6 +16,7 @@ from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
 from app.dispatcher.store import SqliteStore
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 from tests.dispatcher.verification_helpers import (
+    b4e2310_pre_trust_request,
     downgrade_verification_schema_to_v3,
     pre_trust_request,
     request as verification_request,
@@ -94,12 +95,17 @@ def _write_pre_repair_v3_state(tmp_path: Path):
     return paths, run
 
 
-def _write_pre_trust_v3_state(tmp_path: Path):
-    """Create the exact deployed verification state from before trust closure."""
+def _write_pre_trust_v3_state(tmp_path: Path, legacy_request: dict | None = None):
+    """Create the exact deployed verification state from before trust closure.
+
+    ``legacy_request`` selects which historical producer shape is stamped into
+    the row; it defaults to the original pre-trust shape.
+    """
     store, paths = _store(tmp_path)
     store.upsert_task(_task())
     run = VerificationDispatchLedger(store).ingest(verification_request())
-    legacy_request = pre_trust_request()
+    if legacy_request is None:
+        legacy_request = pre_trust_request()
     with sqlite3.connect(paths.db_path) as conn:
         conn.execute(
             """
@@ -314,6 +320,92 @@ def test_unrecognized_pre_trust_verification_row_rolls_back_migration(
             ),
         )
         conn.commit()
+    before = paths.db_path.read_bytes()
+
+    with pytest.raises(ValueError, match="supporting authority is malformed"):
+        SqliteStore(paths.db_path).get_meta("schema_version")
+
+    assert paths.db_path.read_bytes() == before
+    with sqlite3.connect(paths.db_path) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+    assert "supporting_authority_json" not in columns
+
+
+def test_pre_trust_artifact_provenance_row_migrates_to_inert_audit_state(
+    tmp_path: Path,
+) -> None:
+    legacy_request = b4e2310_pre_trust_request()
+    assert "artifact_provenance" in legacy_request
+    assert "supporting_issues" not in legacy_request
+    paths, original, stamped = _write_pre_trust_v3_state(tmp_path, legacy_request)
+    assert stamped == legacy_request
+
+    migrated_store = SqliteStore(paths.db_path)
+    migrated = VerificationDispatchLedger(migrated_store).get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.authority_state == "legacy_untrusted"
+    assert migrated.request == legacy_request
+    assert migrated.supporting_authority == ()
+    assert migrated.claimed_by is None
+    assert migrated.lease_id is None
+    assert migrated.lease_expires_at is None
+    assert migrated.coordinator_session_id is None
+    assert migrated.context_pack is None
+    assert migrated.retry_after is None
+    assert migrated.verified_head_sha is None
+    assert migrated.terminal_receipt == {"legacy": "terminal"}
+    assert migrated.stop_reason == "legacy_failure"
+    compact = _compact_verification_run(migrated)
+    assert compact["authority_state"] == "legacy_untrusted"
+    assert "request" not in compact
+    assert "artifact_provenance" not in json.dumps(compact, sort_keys=True)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        durable = conn.execute(
+            "SELECT * FROM verification_runs WHERE run_id=?", (original.run_id,)
+        ).fetchone()
+        attempt = conn.execute(
+            "SELECT attempt_id, run_id, receipt_json FROM verification_attempts"
+        ).fetchone()
+        exception = conn.execute(
+            "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
+        ).fetchone()
+    assert durable is not None
+    # The historical request evidence, including artifact_provenance, is
+    # preserved verbatim; only the authority projection is neutralized.
+    assert json.loads(durable["request_json"]) == legacy_request
+    assert json.loads(durable["request_json"])["artifact_provenance"] == (
+        legacy_request["artifact_provenance"]
+    )
+    assert json.loads(durable["supporting_authority_json"]) == []
+    assert durable["last_heartbeat_at"] is None
+    assert durable["context_pack_json"] is None
+    assert tuple(attempt) == ("attempt-pre-trust", original.run_id, '{"legacy":true}')
+    assert tuple(exception) == (
+        "exception-pre-trust",
+        original.run_id,
+        '{"legacy":true}',
+    )
+    assert [
+        run.run_id for run in VerificationDispatchLedger(migrated_store).list()
+    ] == [original.run_id]
+    assert control_plane.health(paths)["ok"] is True
+
+
+def test_unrecognized_artifact_provenance_pre_trust_row_rolls_back_migration(
+    tmp_path: Path,
+) -> None:
+    legacy_request = b4e2310_pre_trust_request()
+    # An extra key inside artifact_provenance is not an exact b4e2310 shape and
+    # must not be recognized for inert quarantine.
+    provenance = legacy_request["artifact_provenance"]
+    assert isinstance(provenance, dict)
+    provenance["unexpected"] = "must-not-be-recognized"
+    paths, original, _ = _write_pre_trust_v3_state(tmp_path, legacy_request)
     before = paths.db_path.read_bytes()
 
     with pytest.raises(ValueError, match="supporting authority is malformed"):
