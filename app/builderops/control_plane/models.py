@@ -111,6 +111,11 @@ class Lease:
     holder: str
     fencing_token: int
     expires_at: datetime
+    lease_kind: str = "task"
+
+    def __post_init__(self) -> None:
+        if self.lease_kind not in {"task", "generic"}:
+            raise ValueError("lease_kind must be task or generic")
 
 
 @dataclass(frozen=True)

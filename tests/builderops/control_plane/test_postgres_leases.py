@@ -26,8 +26,9 @@ def _expire_lease(store, lease: Lease) -> None:
     with store._connect() as conn:
         conn.execute(
             "UPDATE builderops_leases SET expires_at = clock_timestamp() - interval '1 second' "
-            "WHERE repository = %s AND resource_id = %s AND fencing_token = %s",
-            (lease.repository, lease.resource_id, lease.fencing_token),
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s "
+            "AND fencing_token = %s",
+            (lease.repository, lease.lease_kind, lease.resource_id, lease.fencing_token),
         )
 
 
@@ -158,8 +159,9 @@ def test_lock_wait_past_expiry_cannot_resurrect_lease(control_plane_store, envel
     pool = ThreadPoolExecutor(max_workers=1)
     with store._connect() as blocker:
         blocker.execute(
-            "SELECT 1 FROM builderops_leases WHERE repository = %s AND resource_id = %s FOR UPDATE",
-            (lease.repository, lease.resource_id),
+            "SELECT 1 FROM builderops_leases WHERE repository = %s AND lease_kind = %s "
+            "AND resource_id = %s FOR UPDATE",
+            (lease.repository, lease.lease_kind, lease.resource_id),
         )
         future = pool.submit(
             _heartbeat,
@@ -257,6 +259,70 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
     with ThreadPoolExecutor(max_workers=2) as pool:
         create_outcomes = list(pool.map(concurrent_unleased_create, ("creator-a", "creator-b")))
     assert sum(isinstance(outcome, LeaseRequired) for outcome in create_outcomes) == 1
+
+
+def test_generic_and_task_leases_use_disjoint_ownership_domains(
+    control_plane_store, envelope
+) -> None:
+    store = control_plane_store
+    for task_id in ("cross-holder-domain", "same-holder-domain"):
+        store.commit_transition(
+            envelope=envelope,
+            task_id=task_id,
+            to_state="ready",
+            idempotency_key=f"{task_id}-create",
+            request={"command": "create"},
+        )
+
+    _, cross_holder_generic = _claim_generic_lease(
+        store,
+        envelope,
+        resource_id="cross-holder-domain",
+        holder="generic-worker",
+        key="cross-holder-generic",
+    )
+    cross_claim, cross_holder_task = store.claim_task(
+        envelope=envelope,
+        task_id="cross-holder-domain",
+        holder="task-worker",
+        idempotency_key="cross-holder-task-claim",
+        request={"command": "claim"},
+    )
+    assert cross_holder_generic.lease_kind == "generic"
+    assert cross_holder_task.lease_kind == "task"
+    assert cross_claim.state == "claimed"
+
+    _, same_holder_generic = _claim_generic_lease(
+        store,
+        envelope,
+        resource_id="same-holder-domain",
+        holder="shared-worker",
+        key="same-holder-generic",
+    )
+    same_claim, same_holder_task = store.claim_task(
+        envelope=envelope,
+        task_id="same-holder-domain",
+        holder="shared-worker",
+        idempotency_key="same-holder-task-claim",
+        request={"command": "claim"},
+    )
+    assert same_holder_generic.lease_kind == "generic"
+    assert same_holder_task.lease_kind == "task"
+    assert same_claim.state == "claimed"
+
+    with store._connect() as conn:
+        rows = conn.execute(
+            "SELECT lease_kind, holder, fencing_token FROM builderops_leases "
+            "WHERE repository = %s AND resource_id IN (%s, %s) "
+            "ORDER BY resource_id, lease_kind",
+            (envelope.repository, "cross-holder-domain", "same-holder-domain"),
+        ).fetchall()
+    assert [(row["lease_kind"], row["holder"]) for row in rows] == [
+        ("generic", "generic-worker"),
+        ("task", "task-worker"),
+        ("generic", "shared-worker"),
+        ("task", "shared-worker"),
+    ]
 
     store.commit_transition(
         envelope=envelope,
@@ -458,4 +524,6 @@ def test_task_claim_release_and_complete_are_atomic_and_fenced(
         key="lifecycle-successor-claim",
         ttl_seconds=30,
     )
-    assert successor.fencing_token > second.fencing_token
+    assert second.lease_kind == "task"
+    assert successor.lease_kind == "generic"
+    assert successor.fencing_token == 1

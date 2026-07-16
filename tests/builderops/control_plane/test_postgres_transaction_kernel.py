@@ -262,7 +262,7 @@ def test_generic_leases_cannot_authorize_task_effects(control_plane_store, envel
     with store._connect() as conn:
         conn.execute(
             "UPDATE builderops_leases SET expires_at = clock_timestamp() - interval '1 second' "
-            "WHERE repository = %s AND resource_id = %s",
+            "WHERE repository = %s AND lease_kind = 'task' AND resource_id = %s",
             (envelope.repository, task_id),
         )
     _, reassigned_lease = store.claim_lease(
@@ -272,7 +272,8 @@ def test_generic_leases_cannot_authorize_task_effects(control_plane_store, envel
         idempotency_key=f"{task_id}-generic-lease",
         request={"command": "claim-lease"},
     )
-    assert reassigned_lease.fencing_token > claimed_lease.fencing_token
+    assert claimed_lease.lease_kind == "task"
+    assert reassigned_lease.lease_kind == "generic"
     reassigned_before = store.authority_counts(envelope.repository)
     with pytest.raises(LeaseRequired, match="lease provenance"):
         _commit(

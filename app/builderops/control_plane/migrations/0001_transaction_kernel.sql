@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS builderops_schema_migrations (
     version integer PRIMARY KEY,
     name text NOT NULL,
+    checksum text NOT NULL,
     applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
@@ -131,13 +132,14 @@ CREATE TABLE IF NOT EXISTS builderops_idempotency (
 
 CREATE TABLE IF NOT EXISTS builderops_leases (
     repository text NOT NULL,
+    lease_kind text NOT NULL CHECK (lease_kind IN ('task', 'generic')),
     resource_id text NOT NULL,
     holder text NOT NULL,
     fencing_token bigint NOT NULL CHECK (fencing_token > 0),
     expires_at timestamptz NOT NULL,
     authority_envelope jsonb NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    PRIMARY KEY (repository, resource_id),
+    PRIMARY KEY (repository, lease_kind, resource_id),
     CHECK (repository <> '' AND resource_id <> '' AND holder <> ''),
     CHECK (builderops_valid_authority_envelope(authority_envelope, repository))
 );

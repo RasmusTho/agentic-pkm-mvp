@@ -153,7 +153,7 @@ def test_record_attempt_and_promotion_use_atomic_idempotent_store_port(
     with store._connect() as conn:
         conn.execute(
             "UPDATE builderops_leases SET expires_at = clock_timestamp() - interval '1 second' "
-            "WHERE repository = %s AND resource_id = %s",
+            "WHERE repository = %s AND lease_kind = 'task' AND resource_id = %s",
             (envelope.repository, "review-task"),
         )
     _, generic_task_lease = store.claim_lease(

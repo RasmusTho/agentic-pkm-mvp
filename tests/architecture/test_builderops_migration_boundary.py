@@ -19,6 +19,8 @@ def test_builderops_migrations_do_not_use_product_lineage() -> None:
     sql = "\n".join(path.read_text(encoding="utf-8") for path in MIGRATIONS)
     assert "alembic_version" not in sql
     assert "builderops_schema_migrations" in sql
+    assert "checksum text NOT NULL" in sql
+    assert "PRIMARY KEY (repository, lease_kind, resource_id)" in sql
     packaging = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     package_data = packaging["tool"]["setuptools"]["package-data"]
     assert package_data["app.builderops.control_plane.migrations"] == ["*.sql"]

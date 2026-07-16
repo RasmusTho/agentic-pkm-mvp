@@ -65,33 +65,76 @@ class PostgresBuilderOpsStore:
 
     def initialize(self) -> None:
         with self._connect() as conn:
-            for version, path in enumerate(MIGRATIONS, start=1):
-                already = conn.execute(
-                    "SELECT to_regclass('builderops_schema_migrations') AS relation"
+            migration_rows: dict[int, Mapping[str, Any]] = {}
+            migration_relation = conn.execute(
+                "SELECT to_regclass('builderops_schema_migrations') AS relation"
+            ).fetchone()
+            if migration_relation and migration_relation["relation"] is not None:
+                columns = {
+                    str(row["column_name"])
+                    for row in conn.execute(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name = 'builderops_schema_migrations'"
+                    ).fetchall()
+                }
+                if "checksum" not in columns:
+                    raise RuntimeError("BuilderOps migration ledger predates checksum enforcement")
+                migration_rows = {
+                    int(row["version"]): row
+                    for row in conn.execute(
+                        "SELECT version, name, checksum FROM builderops_schema_migrations "
+                        "ORDER BY version"
+                    ).fetchall()
+                }
+                for version, row in migration_rows.items():
+                    if version < 1 or version > SCHEMA_VERSION:
+                        raise RuntimeError(
+                            "BuilderOps database has a newer or unknown migration version"
+                        )
+                    path = MIGRATIONS[version - 1]
+                    expected_checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+                    if row["name"] != path.name or row["checksum"] != expected_checksum:
+                        raise RuntimeError(
+                            f"BuilderOps migration {version} does not match this release lineage"
+                        )
+
+            metadata_relation = conn.execute(
+                "SELECT to_regclass('builderops_authority_metadata') AS relation"
+            ).fetchone()
+            if metadata_relation and metadata_relation["relation"] is not None:
+                metadata = conn.execute(
+                    "SELECT authority_epoch, schema_version "
+                    "FROM builderops_authority_metadata WHERE singleton FOR UPDATE"
                 ).fetchone()
-                applied = False
-                if already and already["relation"] is not None:
-                    applied = (
-                        conn.execute(
-                            "SELECT 1 FROM builderops_schema_migrations WHERE version = %s",
-                            (version,),
-                        ).fetchone()
-                        is not None
-                    )
-                if not applied:
+                if metadata is not None:
+                    if int(metadata["schema_version"]) > SCHEMA_VERSION:
+                        raise RuntimeError("BuilderOps database schema is newer than this release")
+                    if int(metadata["authority_epoch"]) > AUTHORITY_EPOCH:
+                        raise RuntimeError("BuilderOps authority epoch is newer than this release")
+
+            for version, path in enumerate(MIGRATIONS, start=1):
+                if version not in migration_rows:
+                    checksum = hashlib.sha256(path.read_bytes()).hexdigest()
                     conn.execute(path.read_text(encoding="utf-8"))
                     conn.execute(
-                        "INSERT INTO builderops_schema_migrations(version, name) VALUES (%s, %s) "
+                        "INSERT INTO builderops_schema_migrations(version, name, checksum) "
+                        "VALUES (%s, %s, %s) "
                         "ON CONFLICT (version) DO NOTHING",
-                        (version, path.name),
+                        (version, path.name, checksum),
                     )
-            conn.execute(
+            metadata = conn.execute(
                 "INSERT INTO builderops_authority_metadata(singleton, authority_epoch, schema_version) "
                 "VALUES (true, %s, %s) ON CONFLICT (singleton) DO UPDATE SET "
                 "authority_epoch = EXCLUDED.authority_epoch, schema_version = EXCLUDED.schema_version, "
-                "updated_at = clock_timestamp()",
+                "updated_at = clock_timestamp() "
+                "WHERE builderops_authority_metadata.authority_epoch <= EXCLUDED.authority_epoch "
+                "AND builderops_authority_metadata.schema_version <= EXCLUDED.schema_version "
+                "RETURNING authority_epoch, schema_version",
                 (AUTHORITY_EPOCH, SCHEMA_VERSION),
-            )
+            ).fetchone()
+            if metadata is None:
+                raise RuntimeError("BuilderOps authority metadata refused a downgrade")
 
     def readiness(self) -> dict[str, int]:
         with self._connect() as conn:
@@ -404,6 +447,7 @@ class PostgresBuilderOpsStore:
             "holder": lease.holder,
             "fencing_token": lease.fencing_token,
             "expires_at": lease.expires_at.isoformat(),
+            "lease_kind": lease.lease_kind,
         }
 
     @staticmethod
@@ -413,6 +457,7 @@ class PostgresBuilderOpsStore:
             "resource_id": lease.resource_id,
             "holder": lease.holder,
             "fencing_token": lease.fencing_token,
+            "lease_kind": lease.lease_kind,
         }
 
     @staticmethod
@@ -423,6 +468,7 @@ class PostgresBuilderOpsStore:
             holder=str(value["holder"]),
             fencing_token=int(value["fencing_token"]),
             expires_at=datetime.fromisoformat(str(value["expires_at"])),
+            lease_kind=str(value["lease_kind"]),
         )
 
     @staticmethod
@@ -625,7 +671,13 @@ class PostgresBuilderOpsStore:
                 if previous is not None or require_lease_on_create:
                     if lease is None:
                         raise LeaseRequired(f"{object_kind} mutation requires a fenced lease")
-                    self._assert_lease(conn, envelope.repository, lease_resource_id, lease)
+                    self._assert_lease(
+                        conn,
+                        envelope.repository,
+                        lease_resource_id,
+                        lease,
+                        lease_kind="task" if object_kind == "attempt" else "generic",
+                    )
                     if object_kind == "attempt":
                         assert primary_id is not None
                         self._assert_task_lease_provenance(
@@ -932,7 +984,11 @@ class PostgresBuilderOpsStore:
         if row is None or row["result"].get("lease") is None:
             raise RuntimeError("claimed task result is missing its fenced lease binding")
         persisted_lease = self._lease(row["result"]["lease"])
-        if persisted_lease.holder != holder or persisted_lease.resource_id != task_id:
+        if (
+            persisted_lease.holder != holder
+            or persisted_lease.resource_id != task_id
+            or persisted_lease.lease_kind != "task"
+        ):
             raise IdempotencyConflict("claim result belongs to another holder or task")
         return result, persisted_lease
 
@@ -1033,6 +1089,8 @@ class PostgresBuilderOpsStore:
         request: Mapping[str, Any],
         fault_at: str | None = None,
     ) -> TransactionResult:
+        if lease.lease_kind != "generic":
+            raise ValueError("generic release cannot terminate task ownership")
         result, _ = self._commit_lease_operation(
             envelope=envelope,
             operation="released",
@@ -1122,6 +1180,7 @@ class PostgresBuilderOpsStore:
                         resource_id=resource_id,
                         holder=holder,
                         ttl_seconds=ttl_seconds,
+                        lease_kind="generic",
                     )
                 elif operation == "heartbeat":
                     assert lease is not None and ttl_seconds is not None
@@ -1195,17 +1254,20 @@ class PostgresBuilderOpsStore:
         resource_id: str,
         holder: str,
         ttl_seconds: int,
+        lease_kind: str = "task",
     ) -> Lease:
         if not resource_id or not holder or ttl_seconds <= 0:
             raise ValueError("resource_id, holder, and positive ttl_seconds are mandatory")
+        if lease_kind not in {"task", "generic"}:
+            raise ValueError("lease_kind must be task or generic")
         conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"lease:{envelope.repository}:{resource_id}",),
+            (f"lease:{envelope.repository}:{lease_kind}:{resource_id}",),
         )
         row = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
-            "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-            (envelope.repository, resource_id),
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s FOR UPDATE",
+            (envelope.repository, lease_kind, resource_id),
         ).fetchone()
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         expires_at = effective_now + timedelta(seconds=ttl_seconds)
@@ -1218,15 +1280,18 @@ class PostgresBuilderOpsStore:
                 holder,
                 int(row["fencing_token"]),
                 row["expires_at"],
+                lease_kind,
             )
         token = int(row["fencing_token"]) + 1 if row else 1
         conn.execute(
-            "INSERT INTO builderops_leases(repository, resource_id, holder, fencing_token, expires_at, authority_envelope) "
-            "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (repository, resource_id) DO UPDATE SET "
+            "INSERT INTO builderops_leases(repository, lease_kind, resource_id, holder, fencing_token, "
+            "expires_at, authority_envelope) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (repository, lease_kind, resource_id) DO UPDATE SET "
             "holder = EXCLUDED.holder, fencing_token = EXCLUDED.fencing_token, expires_at = EXCLUDED.expires_at, "
             "authority_envelope = EXCLUDED.authority_envelope, updated_at = clock_timestamp()",
             (
                 envelope.repository,
+                lease_kind,
                 resource_id,
                 holder,
                 token,
@@ -1234,7 +1299,7 @@ class PostgresBuilderOpsStore:
                 Jsonb(envelope.as_json()),
             ),
         )
-        return Lease(envelope.repository, resource_id, holder, token, expires_at)
+        return Lease(envelope.repository, resource_id, holder, token, expires_at, lease_kind)
 
     @staticmethod
     def _heartbeat_lease_in_tx(
@@ -1252,8 +1317,8 @@ class PostgresBuilderOpsStore:
             )
         current = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
-            "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-            (repository, lease.resource_id),
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s FOR UPDATE",
+            (repository, lease.lease_kind, lease.resource_id),
         ).fetchone()
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         expires_at = effective_now + timedelta(seconds=ttl_seconds)
@@ -1266,11 +1331,13 @@ class PostgresBuilderOpsStore:
             raise StaleFencingToken("lease expired or was reassigned")
         updated = conn.execute(
             "UPDATE builderops_leases SET expires_at = %s, updated_at = clock_timestamp() "
-            "WHERE repository = %s AND resource_id = %s AND holder = %s AND fencing_token = %s "
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s "
+            "AND holder = %s AND fencing_token = %s "
             "AND expires_at > %s RETURNING resource_id",
             (
                 expires_at,
                 repository,
+                lease.lease_kind,
                 lease.resource_id,
                 lease.holder,
                 lease.fencing_token,
@@ -1279,7 +1346,14 @@ class PostgresBuilderOpsStore:
         ).fetchone()
         if updated is None:
             raise StaleFencingToken("lease expired or was reassigned")
-        return Lease(repository, lease.resource_id, lease.holder, lease.fencing_token, expires_at)
+        return Lease(
+            repository,
+            lease.resource_id,
+            lease.holder,
+            lease.fencing_token,
+            expires_at,
+            lease.lease_kind,
+        )
 
     @staticmethod
     def _release_lease_in_tx(
@@ -1291,8 +1365,8 @@ class PostgresBuilderOpsStore:
             )
         current = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
-            "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-            (repository, lease.resource_id),
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s FOR UPDATE",
+            (repository, lease.lease_kind, lease.resource_id),
         ).fetchone()
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         if (
@@ -1304,11 +1378,13 @@ class PostgresBuilderOpsStore:
             raise StaleFencingToken("lease expired, was released, or was reassigned")
         row = conn.execute(
             "UPDATE builderops_leases SET expires_at = %s, updated_at = clock_timestamp() "
-            "WHERE repository = %s AND resource_id = %s AND holder = %s AND fencing_token = %s "
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s "
+            "AND holder = %s AND fencing_token = %s "
             "AND expires_at > %s RETURNING resource_id",
             (
                 effective_now,
                 repository,
+                lease.lease_kind,
                 lease.resource_id,
                 lease.holder,
                 lease.fencing_token,
@@ -1324,11 +1400,14 @@ class PostgresBuilderOpsStore:
         repository: str,
         resource_id: str,
         lease: Lease,
+        lease_kind: str = "task",
     ) -> None:
+        if lease.lease_kind != lease_kind:
+            raise LeaseRequired(f"{lease_kind} mutation requires matching lease provenance")
         row = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
-            "WHERE repository = %s AND resource_id = %s FOR UPDATE",
-            (repository, resource_id),
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s FOR UPDATE",
+            (repository, lease_kind, resource_id),
         ).fetchone()
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         if (

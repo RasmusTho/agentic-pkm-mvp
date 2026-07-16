@@ -114,8 +114,8 @@ def test_cross_repo_lease_heartbeat_and_release_have_no_authority_side_effects(
     with control_plane_store._connect() as conn:
         persisted = conn.execute(
             "SELECT holder, fencing_token, expires_at FROM builderops_leases "
-            "WHERE repository = %s AND resource_id = %s",
-            (envelope.repository, lease_a.resource_id),
+            "WHERE repository = %s AND lease_kind = %s AND resource_id = %s",
+            (envelope.repository, lease_a.lease_kind, lease_a.resource_id),
         ).fetchone()
     assert persisted is not None
     assert persisted["holder"] == lease_a.holder
@@ -138,8 +138,8 @@ _AUTHORITY_INSERTS = (
     "authority_envelope) VALUES (%s, 'bad-task', 'bad.event', 'bad-receipt', %s)",
     "INSERT INTO builderops_idempotency(repository, idempotency_key, request_hash, "
     "authority_envelope) VALUES (%s, 'bad-key', 'bad-hash', %s)",
-    "INSERT INTO builderops_leases(repository, resource_id, holder, fencing_token, expires_at, "
-    "authority_envelope) VALUES (%s, 'bad-resource', 'bad-holder', 1, "
+    "INSERT INTO builderops_leases(repository, lease_kind, resource_id, holder, fencing_token, "
+    "expires_at, authority_envelope) VALUES (%s, 'generic', 'bad-resource', 'bad-holder', 1, "
     "clock_timestamp() + interval '1 minute', %s)",
     "INSERT INTO builderops_outbox(repository, operation_key, task_id, effect_type, payload, "
     "intent_receipt_sequence, authority_envelope) VALUES "
