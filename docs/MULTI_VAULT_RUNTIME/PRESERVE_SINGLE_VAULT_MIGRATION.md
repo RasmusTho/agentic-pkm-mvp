@@ -105,8 +105,11 @@ producer and consumer has a replacement and proves reversibility to the single-v
   same order. No cross-channel registry lock or authority is introduced. The coordinator never directly deletes
   a registration or bypasses MVR-06B lineage rules. A crash after preparing any strict subset leaves
   every source active and the target incomplete/unselectable; a crash after the single commit rolls
-  forward all ownership releases. Governed abort before commit removes copied artifacts and restores
-  ordinary source effects only after revalidation.
+  forward all ownership releases. Governed abort before commit is itself journaled and idempotent: it
+  removes only reduction-owned copied artifacts, then authority/revision-revalidates the target and
+  every source and restores their exact pre-prepare claim/producer gates, selectability, and ordinary
+  effect posture. A failed revalidation remains visibly gated/degraded rather than partially reopening;
+  restart resumes abort recovery before another reduction or ordinary effect may begin.
 
 ## Concretely
 
@@ -237,6 +240,12 @@ can break startup or strand durable state. Both failures are latent outages rath
   receipted before target proof; an ambiguous target effect blocks publish rather than allowing a
   complete manifest/receipt with missing target lineage.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_target_effect_pending_before_target_proof`
+- [ ] Governed pre-commit abort removes only reduction-owned target copies and symmetrically restores
+  the target and every source to their exact pre-prepare queue gates, producer posture, selectability,
+  and effects after authority/revision revalidation. Crash during abort resumes idempotently; a target
+  that was selectable before prepare accepts ordinary effects again, while failed revalidation stays
+  explicitly degraded rather than stranding a silent closed gate.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_precommit_abort_restores_target_and_source_gates`
 - [ ] Any retained compatibility adapter is named in transition debt with owner, removal condition,
   and production guard; otherwise the old app-local import path is removed.
   - Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`
@@ -261,6 +270,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_effect_pending_before_retirement_commit`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_drains_valid_pending_no_effect_before_exclusive_leases`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_reconciles_target_effect_pending_before_target_proof`
+- `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_precommit_abort_restores_target_and_source_gates`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
