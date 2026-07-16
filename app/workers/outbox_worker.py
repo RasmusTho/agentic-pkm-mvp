@@ -39,6 +39,11 @@ from app.indexer.consumer import process_event as process_indexer_event
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
+from app.workers.metrics import (
+    WORKER_LAST_TICK_TIMESTAMP,
+    WORKER_PROCESSED,
+    maybe_start_worker_metrics_server,
+)
 from app.services.indexer import handle_ingest_object_created, purge_object_vectors
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
@@ -1562,6 +1567,10 @@ def run(
 ) -> None:
     _ensure_logging_configured()
 
+    # Opt-in Prometheus endpoint (builder-ops-stability Issue 6): no-op unless
+    # WORKER_METRICS_PORT is set to a positive port.
+    maybe_start_worker_metrics_server()
+
     for attempt in range(startup_retries):
         try:
             bootstrap()
@@ -1625,6 +1634,7 @@ def run(
     # (heartbeats, logging, sleep, and stop-after-ticks below still run).
     while True:
         ticks_total += 1
+        WORKER_LAST_TICK_TIMESTAMP.set(time.time())
         no_vault_idle = _resolve_optional_vault_root(None) is None
         if no_vault_idle:
             # No-vault idle guard (#2407): match run_once's runtime decision. With
@@ -1637,6 +1647,7 @@ def run(
             message = None if no_vault_idle else poll_outbox_one()
             if message:
                 processed_total += 1
+                WORKER_PROCESSED.inc()
                 topic = message.get("topic")
                 event_ts = time.time()
                 if topic:

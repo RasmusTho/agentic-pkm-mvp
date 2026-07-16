@@ -109,16 +109,27 @@ export METRICS_ENABLED=1
 uvicorn app.main:app --reload --port 18000
 ```
 
-Start Prometheus + Grafana:
+Optional worker metrics: the outbox worker exposes a Prometheus `/metrics` endpoint (via `prometheus_client`) only when `WORKER_METRICS_PORT` is set to a positive port; it stays off by default. The Prometheus scrape config expects port `9101`:
+
+```bash
+WORKER_METRICS_PORT=9101 python -m app.workers.outbox_worker
+```
+
+The main compose file passes `WORKER_METRICS_PORT` through to the `worker` service (default empty = off); scraping a containerized worker additionally requires publishing that port from the container, so the host-run worker above is the simple path.
+
+Start Prometheus + Alertmanager + Grafana:
 
 ```bash
 docker compose -f ops/observability/docker-compose.yaml up
 ```
 
 - Prometheus UI: `http://localhost:9090`
+- Alertmanager UI: `http://localhost:9093`
 - Grafana UI: `http://localhost:3000`
 
 Grafana should use Prometheus at `http://prometheus:9090` as a data source.
+
+Alerting: `ops/observability/alerts.yml` ships basic rules (scrape target down for 5m, API 5xx rate > 5% over 15m from the instrumentator's `http_requests_total`, worker poll loop stalled via `pkm_worker_last_tick_timestamp_seconds`). Alertmanager runs with a log/UI-only null receiver — no external notification channels.
 
 When finished:
 

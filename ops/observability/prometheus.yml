@@ -2,8 +2,27 @@
 global:
   scrape_interval: 15s
 
+rule_files:
+  - "alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
+  # FastAPI app on the host (uvicorn with METRICS_ENABLED=1), exposed via
+  # prometheus-fastapi-instrumentator at /metrics.
   - job_name: "fastapi"
     metrics_path: "/metrics"
     static_configs:
       - targets: ["host.docker.internal:18000"]
+
+  # Outbox worker /metrics (opt-in, builder-ops-stability Issue 6): only
+  # serves when the worker runs with WORKER_METRICS_PORT=9101 (default off).
+  # Run the worker on the host, or publish the port from the worker
+  # container, for this target to be reachable.
+  - job_name: "worker"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["host.docker.internal:9101"]

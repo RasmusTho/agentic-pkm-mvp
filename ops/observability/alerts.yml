@@ -1,0 +1,53 @@
+---
+# Basic alert rules for the local observability stack
+# (builder-ops-stability spec Issue 6). Every rule is based on a signal that
+# actually exists today:
+# - `up` from Prometheus itself for each scrape job,
+# - `http_requests_total{status=...}` from prometheus-fastapi-instrumentator
+#   (status codes grouped, e.g. "5xx"),
+# - `pkm_worker_last_tick_timestamp_seconds` from app/workers/metrics.py
+#   (only present when the worker runs with WORKER_METRICS_PORT set).
+groups:
+  - name: pkm-availability
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target {{ $labels.job }} is down"
+          description: >-
+            Prometheus has failed to scrape {{ $labels.job }}
+            ({{ $labels.instance }}) for 5 minutes. Note: the worker target is
+            opt-in (WORKER_METRICS_PORT), so this fires for the worker only
+            once it has been enabled and then disappears.
+
+      - alert: ApiHigh5xxErrorRate
+        expr: >-
+          (
+            sum(rate(http_requests_total{job="fastapi", status="5xx"}[15m]))
+            /
+            sum(rate(http_requests_total{job="fastapi"}[15m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx error rate above 5%"
+          description: >-
+            More than 5% of FastAPI requests returned 5xx over the last 15
+            minutes (prometheus-fastapi-instrumentator http_requests_total).
+
+      - alert: WorkerTickStalled
+        expr: >-
+          (time() - pkm_worker_last_tick_timestamp_seconds{job="worker"}) > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox worker poll loop stalled"
+          description: >-
+            The outbox worker /metrics endpoint is still up but its poll loop
+            has not ticked for more than 2 minutes; the worker is likely
+            wedged (heartbeats normally advance every tick).
