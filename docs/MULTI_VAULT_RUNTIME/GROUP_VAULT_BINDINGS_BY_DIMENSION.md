@@ -22,6 +22,13 @@ non-authoritative registry grouping.
 - Add versioned `dimension_id`, display metadata, and ordered membership over registered
   `vault_binding_id` values to the instance registry.
 - Provide add/remove/list/filter operations and resolve a dimension into explicit source bindings.
+- Extend MVR-03's existing selection create/replace endpoints to accept one `dimension_id` as
+  selection intent only after this slice's durable registry is authoritative. The server resolves
+  that ID through the locked dimension service, rejects unknown/stale/unauthorized members as a whole,
+  and writes only the validated explicit binding set plus dimension revision into the immutable
+  ActiveContextSet. Workspace, scope, sphere memberships, situated identity, principal, action, and
+  permission remain server-derived from WSP/auth/GOV/endpoint contracts exactly as in MVR-03; clients
+  cannot supply any of them or an arbitrary dimension projection.
 - Provide authenticated Companion API and headless CLI create/rename/set-members/delete/list/resolve
   commands through the same locked registry service. Additions/replacements validate every proposed
   binding and content authority; instance-authorized remove-member/delete may clear stale or
@@ -95,6 +102,10 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] Resolving a dimension returns explicit per-vault bindings and performs independent production
   authorization for every member.
   - Verify: `tests/api/test_dimension_context_resolution.py::test_dimension_resolution_authorizes_each_binding`
+- [ ] Production selection create/replace accepts a stored `dimension_id` only through the MVR-04
+  registry resolver, derives the complete cognitive/authority context server-side, and persists the
+  validated binding set plus dimension revision without allowing client-authored context fields.
+  - Verify: `tests/api/test_dimension_context_resolution.py::test_selection_endpoint_resolves_dimension_and_derives_context_server_side`
 - [ ] An unauthorized/unknown/stale member fails the entire production resolution without exposing
   an authorized partial set, conferring authority, or triggering fallback.
   - Verify: `tests/api/test_dimension_context_resolution.py::test_dimension_never_upgrades_authority_or_falls_back`

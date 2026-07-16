@@ -65,12 +65,24 @@ producer and consumer has a replacement and proves reversibility to the single-v
   attached package), preserving original `vault_binding_id`, vault-relative path, artifact identity,
   source provenance, receipt/outbox lineage, settings scope, and content checksums. It never silently
   merges or overwrites conflicting paths or identities.
+- Authorize reduction through GOV as an explicit multi-binding content-migration intent. Before any
+  copy, GOV independently authorizes read/export on every source, governed HKA creation on the target,
+  and later source retirement; the reducer mints binding/revision/purpose-bound write tokens for each
+  target artifact and records source/target attribution in every receipt. A deny, stale revision, or
+  authority change fails before the affected write and cannot be converted into partial success.
 - Commit the reduction manifest, copied content, lineage map, and complete projection rebuild as one
   recoverable transition. Failure before commit leaves the original topology authoritative; recovery
   after commit rolls forward until the single target exposes all material and derived projections are
   healthy. Only then may source registrations be deactivated. The manifest supports lossless
   re-expansion/reattachment to the original binding boundaries, so receipts and provenance continue to
   name their original sources even while the runtime operates with one active content vault.
+- Retire each source only through MVR-06B's authoritative removal transaction: mutation gate, final
+  scan/buffer drain, exclusive binding-effect lease, dimension/default/background-intent reference
+  repair, immutable removal tombstone, and ownership release. The reduction journal supplies the
+  target/lineage successor to that transaction; it never directly deletes a registration or bypasses
+  the tombstone. If any retirement cannot commit, unreduced sources remain registered and the target
+  package remains explicitly incomplete/unselectable until recovery rolls forward or governed abort
+  removes its copied artifacts.
 
 ## Concretely
 
@@ -93,9 +105,10 @@ can break startup or strand durable state. Both failures are latent outages rath
 ## SBS Impact
 
 - Primary subsystem: WSP
-- Secondary subsystem(s): EBF, HIX, OEF, SFC, PDM
-- Write class: none new; compatibility migration over existing writes
-- Authority impact: no change
+- Secondary subsystem(s): GOV, HKA, EBF, HIX, OEF, SFC, PDM
+- Write class: governed HKA content-copy/reduction writes plus mechanical migration metadata
+- Authority impact: GOV independently authorizes every source export, target write, and source
+  retirement; reduction cannot confer access or bypass MVR-06 removal authority
 - Persistence impact: validates migrated registry/settings producers and rollback-read compatibility
 - Derived/rebuildable impact: validates caches/indexes rebuild per binding
 - Human knowledge impact: deterministic reduction may copy material into a human-openable target
@@ -120,6 +133,9 @@ can break startup or strand durable state. Both failures are latent outages rath
 - Topology reduction is a governed, quiesced, collision-safe copy plus lineage transition. It cannot
   deactivate a source until checksums, provenance, receipts, projections, and reversible
   reattachment have all been verified.
+- Every target artifact write uses a binding/revision/purpose-bound governed token and every source
+  deactivation composes MVR-06B removal/tombstone/reference repair; direct registry deletion is
+  forbidden.
 
 ## Acceptance Criteria
 
@@ -162,6 +178,14 @@ can break startup or strand durable state. Both failures are latent outages rath
   projection before healthy reads, and source registrations remain active until the complete
   reduction receipt is durable.
   - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
+- [ ] Reduction independently GOV-authorizes every source read/export, target governed HKA write,
+  and source retirement; binding/revision/purpose-bound tokens and receipts preserve source/target
+  attribution, while deny or authority-revision races fail before the affected artifact or retirement.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_authorizes_each_source_target_write_and_retirement`
+- [ ] Source deactivation runs only through the MVR-06B removal journal and atomically repairs
+  dimension, default, background-intent, projection, ownership, and tombstone lineage references;
+  injected failure cannot leave a directly deleted registration or a selectable incomplete target.
+  - Verify: `tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
 - [ ] Any retained compatibility adapter is named in transition debt with owner, removal condition,
   and production guard; otherwise the old app-local import path is removed.
   - Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`
@@ -180,6 +204,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py::test_real_vault_manager_context_accessor_cannot_escape_inventory`
 - `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_two_distinct_vaults_reduce_to_one_without_losing_content_provenance_or_receipts tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_is_collision_safe_atomic_and_reversible`
+- `pytest -q tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_authorizes_each_source_target_write_and_retirement tests/integration/test_multi_vault_single_topology_reduction.py::test_reduction_retires_sources_through_mvr06_removal_transaction`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
@@ -201,6 +226,7 @@ retained adapter is durable transition debt with a removal condition, not hidden
 
 ## Related GitHub Issues
 
-Create one child under #2143 after MVR-04/05/06. Terra/high can execute the explicit inventory and
-compatibility ledger; escalate to Sol/high for schema rollback or producer/preflight ambiguity.
+Create one child under #2143 after MVR-04/05/06. Use Sol/xhigh for the governed topology reduction,
+authority, data migration, and rollback design; mechanically isolated inventory/compatibility work
+may de-escalate to Terra/high only after those contracts are frozen.
 Apply the invariant→producers and no-silent-fallback learnings from #1991/#2003/#2311.

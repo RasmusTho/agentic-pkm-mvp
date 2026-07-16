@@ -238,7 +238,7 @@ member binding independently. Removing a dimension does not remove its vault reg
 | 06B | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | #3163 compatibility bridge handoff and settings rebind | 06A, #3163 | Sol/xhigh |
 | 06C | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | isolated zero/one/many lifecycle supervision | 06B | Sol/xhigh |
 | 06D | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | queued-work convergence and aggregate proof | 06C | Sol/xhigh |
-| 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md) | compatibility adapters and migration fitness | 04, 05A–05D, 06A–06D | Terra/high |
+| 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md) | compatibility adapters, governed topology reduction, and migration fitness | 04, 05A–05D, 06A–06D | Sol/xhigh; Terra/high only for isolated inventory |
 | 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01A–01C, 02–04, 05A–05D, 06A–06D, 07 | Terra/high review; Sol/high if residual architecture risk |
 
 Execution is serial through issue 06D: task 04 and the 05/06 families evolve shared registry,
