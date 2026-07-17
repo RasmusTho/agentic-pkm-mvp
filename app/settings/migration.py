@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import fcntl
 import json
 import logging
@@ -10,6 +11,8 @@ import shutil
 import tempfile
 from hashlib import sha256
 from pathlib import Path
+
+import yaml
 
 from app.settings.locations import (
     LEGACY_COMPILED_DIR,
@@ -33,8 +36,56 @@ _TRANSACTION_MARKER = "transaction.json"
 logger = logging.getLogger(__name__)
 
 
+def _path_present(path: Path) -> bool:
+    """Return true for real paths and symlinks, including dangling symlinks."""
+
+    return path.exists() or path.is_symlink()
+
+
+def _atomic_exchange_directories(left: Path, right: Path) -> None:
+    """Exchange two same-filesystem directories in one kernel operation."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    left_bytes = os.fsencode(left)
+    right_bytes = os.fsencode(right)
+    if hasattr(libc, "renameatx_np"):
+        rename = libc.renameatx_np
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(-2, left_bytes, -2, right_bytes, 0x00000002)
+    elif hasattr(libc, "renameat2"):
+        rename = libc.renameat2
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(-100, left_bytes, -100, right_bytes, 0x00000002)
+    else:
+        raise RuntimeError(
+            "atomic settings publication requires renameatx_np or renameat2"
+        )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), str(left), str(right))
+
+
 def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
     try:
         os.fsync(descriptor)
     finally:
@@ -44,10 +95,12 @@ def _fsync_directory(path: Path) -> None:
 def _fsync_tree(root: Path) -> None:
     directories: list[Path] = []
     for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"settings durability tree must not contain symlinks: {path}")
         if path.is_dir():
             directories.append(path)
             continue
-        descriptor = os.open(path, os.O_RDONLY)
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             os.fsync(descriptor)
         finally:
@@ -58,7 +111,18 @@ def _fsync_tree(root: Path) -> None:
 
 
 def _markdown_from_yaml(raw: str) -> str:
-    return f"---\n{raw.rstrip()}\n---\n\n# System settings\n"
+    payload = yaml.safe_load(raw)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError("legacy system settings YAML must contain a mapping")
+    normalized = yaml.safe_dump(
+        payload,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+    ).rstrip()
+    return f"---\n{normalized}\n---\n\n# System settings\n"
 
 
 def _reject_symlinked_source(root: Path, source: Path) -> Path:
@@ -202,7 +266,10 @@ def _canonical_manifest(
     root: Path, canonical: Path
 ) -> dict[Path, tuple[int, int, int, str]]:
     files: list[tuple[Path, Path, str | None]] = []
-    if canonical.exists():
+    if _path_present(canonical):
+        _reject_symlinked_source(root, canonical)
+        if not canonical.is_dir():
+            raise ValueError(f"canonical settings root must be a directory: {canonical}")
         for path in sorted(canonical.rglob("*")):
             _reject_symlinked_source(root, path)
             if path.is_file():
@@ -214,25 +281,72 @@ def _canonical_manifest(
     }
 
 
+def _decode_transaction_manifest(
+    marker: dict[str, object], key: str
+) -> dict[Path, tuple[int, int, int, str]]:
+    raw = marker.get(key)
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"settings migration transaction lacks trusted {key}")
+    decoded: dict[Path, tuple[int, int, int, str]] = {}
+    for path, value in raw.items():
+        if (
+            not isinstance(path, str)
+            or not isinstance(value, list)
+            or len(value) != 4
+            or not all(isinstance(item, int) for item in value[:3])
+            or not isinstance(value[3], str)
+        ):
+            raise RuntimeError(f"settings migration transaction has invalid {key}")
+        relative = Path(path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"settings migration transaction has unsafe {key}")
+        decoded[relative] = (value[0], value[1], value[2], value[3])
+    return decoded
+
+
+def _assert_trusted_tree(
+    root: Path,
+    tree: Path,
+    expected: dict[Path, tuple[int, int, int, str]],
+    *,
+    label: str,
+) -> None:
+    if not _path_present(tree):
+        raise RuntimeError(f"trusted settings {label} is missing")
+    if tree.is_symlink() or not tree.is_dir():
+        raise RuntimeError(f"trusted settings {label} must be a real directory")
+    try:
+        manifest = _canonical_manifest(root, tree)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"trusted settings {label} failed containment checks") from exc
+    if manifest != expected:
+        raise RuntimeError(f"trusted settings {label} does not match its manifest")
+
+
 def _write_transaction_state(
     transaction: Path,
     state: str,
     *,
     had_canonical: bool,
     receipt: SettingsWriteReceipt,
+    backup_manifest: dict[Path, tuple[int, int, int, str]] | None = None,
     published_manifest: dict[Path, tuple[int, int, int, str]] | None = None,
 ) -> None:
     marker = transaction / _TRANSACTION_MARKER
     pending = transaction / f"{_TRANSACTION_MARKER}.tmp"
     payload = json.dumps(
         {
-            "version": 1,
+            "version": 2,
             "state": state,
             "had_canonical": had_canonical,
             "receipt_key": receipt.key,
             "receipt_timestamp": receipt.timestamp,
             "receipt_value": receipt.value,
             "receipt_old_value": receipt.old_value,
+            "backup_manifest": {
+                str(path): list(fingerprint)
+                for path, fingerprint in (backup_manifest or {}).items()
+            },
             "published_manifest": {
                 str(path): list(fingerprint)
                 for path, fingerprint in (published_manifest or {}).items()
@@ -304,30 +418,26 @@ def _recover_interrupted_transaction(
         raise RuntimeError("multiple interrupted settings migrations require operator recovery")
     transaction = transactions[0]
     marker = json.loads((transaction / _TRANSACTION_MARKER).read_text(encoding="utf-8"))
-    state = marker.get("state") if isinstance(marker, dict) else None
-    had_canonical = bool(marker.get("had_canonical")) if isinstance(marker, dict) else False
-    raw_manifest = marker.get("published_manifest") if isinstance(marker, dict) else None
-    published_manifest = (
-        {
-            Path(path): tuple(value)  # type: ignore[misc]
-            for path, value in raw_manifest.items()
-            if isinstance(path, str) and isinstance(value, list) and len(value) == 4
-        }
-        if isinstance(raw_manifest, dict)
-        else {}
-    )
+    if not isinstance(marker, dict):
+        raise RuntimeError("invalid interrupted settings migration marker")
+    state = marker.get("state")
+    had_canonical = bool(marker.get("had_canonical"))
+    backup_manifest = _decode_transaction_manifest(marker, "backup_manifest")
+    published_manifest = _decode_transaction_manifest(marker, "published_manifest")
     backup = transaction / "canonical-before"
+    staged = transaction / "canonical-next"
     if state == "committed":
-        if not canonical.exists():
-            raise RuntimeError("committed settings migration is missing its canonical tree")
+        _assert_trusted_tree(
+            root, canonical, published_manifest, label="committed canonical tree"
+        )
         return None
     if (
         state == "published"
-        and isinstance(marker, dict)
         and _transaction_receipt_is_durable(marker)
     ):
-        if not canonical.exists():
-            raise RuntimeError("committed settings migration is missing its canonical tree")
+        _assert_trusted_tree(
+            root, canonical, published_manifest, label="published canonical tree"
+        )
         _quarantine_legacy_sources(root, transaction)
         marker["state"] = "committed"
         pending = transaction / f"{_TRANSACTION_MARKER}.tmp"
@@ -349,11 +459,6 @@ def _recover_interrupted_transaction(
         )
     if state not in {"prepared", "published"}:
         raise RuntimeError("unknown interrupted settings migration state")
-    if backup.exists() and canonical.exists() and state == "prepared":
-        raise RuntimeError(
-            "interrupted settings migration has both canonical and backup trees; "
-            "operator recovery is required to preserve concurrent writes"
-        )
     recovery_receipt = SettingsWriteReceipt(
         key=str(marker.get("receipt_key") or "settings.location"),
         value=marker.get("receipt_value"),
@@ -364,31 +469,72 @@ def _recover_interrupted_transaction(
         timestamp=str(marker.get("receipt_timestamp")),
         is_runtime_gating=False,
     )
-    if state == "published" and canonical.exists():
+
+    if had_canonical:
+        if not _path_present(canonical):
+            # Atomic exchange never removes the canonical name. An absent tree
+            # therefore comes from an obsolete/tampered transaction and must
+            # never trigger restoration of an untrusted backup path.
+            raise RuntimeError(
+                "interrupted settings migration is missing its canonical tree"
+            )
+        try:
+            canonical_manifest = _canonical_manifest(root, canonical)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                "interrupted canonical settings failed containment checks"
+            ) from exc
+        if canonical_manifest == backup_manifest:
+            # Publication had not happened. A completed staged tree is checked
+            # when its manifest was durably recorded; a partial real directory
+            # is a valid pre-publication crash artifact.
+            if _path_present(staged):
+                if staged.is_symlink() or not staged.is_dir():
+                    raise RuntimeError("staged settings recovery tree is untrusted")
+                if published_manifest:
+                    _assert_trusted_tree(
+                        root,
+                        staged,
+                        published_manifest,
+                        label="staged canonical tree",
+                    )
+        elif canonical_manifest == published_manifest:
+            if _path_present(staged) and _path_present(backup):
+                raise RuntimeError("multiple settings backup trees require operator recovery")
+            prior = staged if _path_present(staged) else backup
+            _assert_trusted_tree(
+                root, prior, backup_manifest, label="recovery backup tree"
+            )
+            if prior == staged:
+                os.replace(staged, backup)
+                _fsync_directory(transaction)
+            _quarantine_published_tree(
+                root,
+                canonical,
+                transaction,
+                expected_manifest=published_manifest,
+                backup_manifest=backup_manifest,
+                had_canonical=True,
+            )
+        else:
+            raise RuntimeError(
+                "interrupted canonical settings does not match a trusted manifest"
+            )
+    elif _path_present(canonical):
         _quarantine_published_tree(
             root,
             canonical,
             transaction,
             expected_manifest=published_manifest,
-        )
-    if backup.exists():
-        if canonical.exists():
-            raise RuntimeError(
-                "canonical settings reappeared during recovery; operator recovery required"
-            )
-        os.replace(backup, canonical)
-        _fsync_directory(root)
-        _fsync_directory(transaction)
-    elif not had_canonical and canonical.exists():
-        raise RuntimeError(
-            "interrupted settings migration found concurrent canonical data; "
-            "operator recovery is required"
+            backup_manifest=backup_manifest,
+            had_canonical=False,
         )
     _write_transaction_state(
         transaction,
         "rolled_back",
         had_canonical=had_canonical,
         receipt=recovery_receipt,
+        backup_manifest=backup_manifest,
         published_manifest=published_manifest,
     )
     return None
@@ -400,18 +546,35 @@ def _quarantine_published_tree(
     transaction: Path,
     *,
     expected_manifest: dict[Path, tuple[int, int, int, str]],
+    backup_manifest: dict[Path, tuple[int, int, int, str]],
+    had_canonical: bool,
 ) -> Path:
     quarantine = transaction / "published-rollback"
-    if quarantine.exists():
+    if _path_present(quarantine):
         raise RuntimeError("published rollback quarantine already exists")
-    os.replace(canonical, quarantine)
-    _fsync_directory(root)
-    _fsync_directory(transaction)
+    backup = transaction / "canonical-before"
+    if had_canonical:
+        _assert_trusted_tree(
+            root, backup, backup_manifest, label="recovery backup tree"
+        )
+        _atomic_exchange_directories(canonical, backup)
+        _fsync_directory(root)
+        _fsync_directory(transaction)
+        os.replace(backup, quarantine)
+        _fsync_directory(transaction)
+    else:
+        os.replace(canonical, quarantine)
+        _fsync_directory(root)
+        _fsync_directory(transaction)
     if _canonical_manifest(root, quarantine) != expected_manifest:
         raise RuntimeError(
             "published settings changed during rollback; operator recovery required"
         )
-    if canonical.exists():
+    if had_canonical:
+        _assert_trusted_tree(
+            root, canonical, backup_manifest, label="restored canonical tree"
+        )
+    elif _path_present(canonical):
         raise RuntimeError(
             "canonical settings reappeared during rollback; operator recovery required"
         )
@@ -576,6 +739,8 @@ def migrate_settings_location(
                     "prepared",
                     had_canonical=had_canonical,
                     receipt=receipt,
+                    backup_manifest=canonical_fingerprints,
+                    published_manifest=canonical_fingerprints,
                 )
             emit_settings_write_receipt(receipt, require_durable=True)
             if transaction is not None:
@@ -585,6 +750,7 @@ def migrate_settings_location(
                         "committed",
                         had_canonical=had_canonical,
                         receipt=receipt,
+                        backup_manifest=canonical_fingerprints,
                         published_manifest=canonical_fingerprints,
                     )
                 except OSError as exc:
@@ -610,10 +776,11 @@ def migrate_settings_location(
         return receipt
 
     canonical.parent.mkdir(parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(prefix=".settings-migrate-", dir=canonical.parent))
     transaction = Path(
         tempfile.mkdtemp(prefix=_TRANSACTION_PREFIX, dir=canonical.parent)
     )
+    staged = transaction / "canonical-next"
+    staged.mkdir()
     receipt = SettingsWriteReceipt(
         key="settings.location",
         value={
@@ -634,15 +801,19 @@ def migrate_settings_location(
     published = False
     committed = False
     receipt_durability_uncertain = False
+    process_interrupted = False
+    rollback_incomplete = False
+    staged_manifest: dict[Path, tuple[int, int, int, str]] = {}
     try:
         _write_transaction_state(
             transaction,
             "prepared",
             had_canonical=had_canonical,
             receipt=receipt,
+            backup_manifest=canonical_fingerprints,
         )
         if canonical.exists():
-            shutil.copytree(canonical, staged, dirs_exist_ok=True)
+            shutil.copytree(canonical, staged, dirs_exist_ok=True, symlinks=True)
         for _source, relative, text in prepared:
             target = staged / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -654,29 +825,40 @@ def migrate_settings_location(
         ):
             raise RuntimeError("settings changed during migration preparation; retry required")
 
-        _fsync_tree(staged)
         staged_manifest = _canonical_manifest(root, staged)
+        _fsync_tree(staged)
+        if _canonical_manifest(root, staged) != staged_manifest:
+            raise RuntimeError("staged settings changed during durability sync; retry required")
+        _write_transaction_state(
+            transaction,
+            "prepared",
+            had_canonical=had_canonical,
+            receipt=receipt,
+            backup_manifest=canonical_fingerprints,
+            published_manifest=staged_manifest,
+        )
 
         if canonical.exists():
-            os.replace(canonical, backup)
+            _atomic_exchange_directories(canonical, staged)
+            published = True
             _fsync_directory(root)
+            _fsync_directory(transaction)
+            os.replace(staged, backup)
             _fsync_directory(transaction)
             if _canonical_manifest(root, backup) != canonical_fingerprints:
                 raise RuntimeError(
-                    "canonical settings changed during rename; recovery preserved"
+                    "canonical settings changed during exchange; recovery preserved"
                 )
-        if canonical.exists():
-            raise RuntimeError(
-                "canonical settings reappeared during migration; recovery preserved"
-            )
-        os.replace(staged, canonical)
-        _fsync_directory(root)
-        published = True
+        else:
+            os.replace(staged, canonical)
+            published = True
+            _fsync_directory(root)
         _write_transaction_state(
             transaction,
             "published",
             had_canonical=had_canonical,
             receipt=receipt,
+            backup_manifest=canonical_fingerprints,
             published_manifest=staged_manifest,
         )
 
@@ -700,6 +882,7 @@ def migrate_settings_location(
                     "committed",
                     had_canonical=had_canonical,
                     receipt=receipt,
+                    backup_manifest=canonical_fingerprints,
                     published_manifest=staged_manifest,
                 )
             except OSError as exc:
@@ -709,29 +892,40 @@ def migrate_settings_location(
                 )
     except Exception:
         if not committed:
-            recovery_collision = (
-                not published and backup.exists() and canonical.exists()
-            )
+            recovery_collision = False
             if published and canonical.exists():
                 try:
+                    if (
+                        had_canonical
+                        and not _path_present(backup)
+                        and _path_present(staged)
+                    ):
+                        _assert_trusted_tree(
+                            root,
+                            staged,
+                            canonical_fingerprints,
+                            label="post-exchange backup tree",
+                        )
+                        os.replace(staged, backup)
+                        _fsync_directory(transaction)
                     _quarantine_published_tree(
                         root,
                         canonical,
                         transaction,
                         expected_manifest=staged_manifest,
+                        backup_manifest=canonical_fingerprints,
+                        had_canonical=had_canonical,
                     )
-                except RuntimeError:
+                except Exception:
                     recovery_collision = True
-            if backup.exists() and not canonical.exists():
-                os.replace(backup, canonical)
-                _fsync_directory(root)
-                _fsync_directory(transaction)
+                    rollback_incomplete = True
             if transaction.exists() and not recovery_collision:
                 _write_transaction_state(
                     transaction,
                     "rolled_back",
                     had_canonical=had_canonical,
                     receipt=receipt,
+                    backup_manifest=canonical_fingerprints,
                     published_manifest=staged_manifest if published else None,
                 )
         fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
@@ -741,11 +935,17 @@ def migrate_settings_location(
         # Process-level interruption leaves the durable transaction for the
         # next governed run, while the kernel lock must still be released in
         # in-process crash simulations and cooperative cancellation.
+        process_interrupted = True
         fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
         os.close(lock_descriptor)
         raise
     finally:
-        if staged.exists():
+        if (
+            not process_interrupted
+            and not rollback_incomplete
+            and staged.exists()
+            and not staged.is_symlink()
+        ):
             shutil.rmtree(staged, ignore_errors=True)
 
     if receipt_durability_uncertain:

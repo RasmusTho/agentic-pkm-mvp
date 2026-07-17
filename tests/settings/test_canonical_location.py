@@ -14,6 +14,7 @@ import app.settings.migration as migration_module
 from app.settings.health_settings import load_health_settings
 from app.settings.locations import (
     contained_settings_path,
+    read_settings_mapping,
     resolve_compiled_sources,
     resolve_settings_file,
 )
@@ -672,7 +673,7 @@ def test_migration_rejects_new_canonical_file_created_during_staging(
     assert legacy.exists()
 
 
-def test_migration_preserves_canonical_write_that_races_after_backup_rename(
+def test_migration_atomically_swaps_complete_canonical_trees_for_live_readers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault = tmp_path / "vault"
@@ -682,36 +683,106 @@ def test_migration_preserves_canonical_write_that_races_after_backup_rename(
     legacy = vault / "@Settings" / "global.md"
     legacy.parent.mkdir(parents=True)
     legacy.write_text("# legacy\n", encoding="utf-8")
-    real_manifest = migration_module._canonical_manifest
-    injected = False
+    real_exchange = migration_module._atomic_exchange_directories
+    snapshots: list[dict[str, str]] = []
 
     class AllowGuard:
         def assert_writes_allowed(self, action: str) -> None:
             assert action == "settings.location.migrate"
 
-    def _inject_after_backup(root: Path, candidate: Path):
-        nonlocal injected
-        result = real_manifest(root, candidate)
-        if candidate.name == "canonical-before" and not injected:
-            injected = True
-            (vault / "settings").mkdir()
-            (vault / "settings" / "late.md").write_text("late\n", encoding="utf-8")
-        return result
+    def _snapshot_then_exchange(left: Path, right: Path) -> None:
+        snapshots.append(
+            {
+                str(relative): str(source.relative_to(vault))
+                for relative, source in resolve_compiled_sources(vault).items()
+            }
+        )
+        assert (vault / "settings").is_dir()
+        real_exchange(left, right)
+        assert (vault / "settings").is_dir()
+        snapshots.append(
+            {
+                str(relative): str(source.relative_to(vault))
+                for relative, source in resolve_compiled_sources(vault).items()
+            }
+        )
 
-    monkeypatch.setattr("app.settings.migration._canonical_manifest", _inject_after_backup)
+    monkeypatch.setattr(
+        "app.settings.migration._atomic_exchange_directories",
+        _snapshot_then_exchange,
+    )
     monkeypatch.setattr(
         "app.settings.migration.emit_settings_write_receipt",
         lambda _receipt, **_kwargs: None,
     )
 
-    with pytest.raises(RuntimeError, match="reappeared"):
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert snapshots == [
+        {
+            "global.md": "@Settings/global.md",
+            "watchers.md": "settings/watchers.md",
+        },
+        {
+            "global.md": "settings/global.md",
+            "watchers.md": "settings/watchers.md",
+        },
+    ]
+    assert not legacy.exists()
+
+
+def test_migration_preserves_rollback_tree_when_fsync_fails_after_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    real_exchange = migration_module._atomic_exchange_directories
+    real_fsync_directory = migration_module._fsync_directory
+    exchanged = False
+    failed = False
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _exchange(left: Path, right: Path) -> None:
+        nonlocal exchanged
+        real_exchange(left, right)
+        exchanged = True
+
+    def _fail_first_root_fsync_after_exchange(path: Path) -> None:
+        nonlocal failed
+        if exchanged and path == vault and not failed:
+            failed = True
+            raise OSError("post-exchange fsync failed")
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(
+        "app.settings.migration._atomic_exchange_directories", _exchange
+    )
+    monkeypatch.setattr(
+        "app.settings.migration._fsync_directory",
+        _fail_first_root_fsync_after_exchange,
+    )
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+
+    with pytest.raises(OSError, match="post-exchange fsync failed"):
         migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
 
-    assert (vault / "settings" / "late.md").read_text(encoding="utf-8") == "late\n"
+    assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
+    assert not (vault / "settings" / "global.md").exists()
     transaction = next(vault.glob(".settings-migration-*"))
-    assert (transaction / "canonical-before" / "watchers.md").read_text(
+    assert (transaction / "published-rollback" / "global.md").read_text(
         encoding="utf-8"
-    ) == "# existing canonical\n"
+    ) == "# legacy\n"
     assert legacy.exists()
 
 
@@ -842,7 +913,7 @@ def test_committed_marker_failure_preserves_owned_recovery(
     assert (transaction / "legacy-recovery" / "compiled" / "global.md").exists()
 
 
-def test_migration_recovers_crash_between_canonical_renames(
+def test_migration_recovers_crash_after_atomic_canonical_exchange(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault = tmp_path / "vault"
@@ -861,30 +932,28 @@ def test_migration_recovers_crash_between_canonical_renames(
         "app.settings.migration.emit_settings_write_receipt",
         lambda _receipt, **_kwargs: None,
     )
-    real_replace = os.replace
+    real_exchange = migration_module._atomic_exchange_directories
     crashed = False
 
-    def _crash_before_publish(source: Path | str, target: Path | str) -> None:
+    def _crash_after_exchange(left: Path, right: Path) -> None:
         nonlocal crashed
-        source_path = Path(source)
-        target_path = Path(target)
-        if (
-            not crashed
-            and source_path.name.startswith(".settings-migrate-")
-            and target_path == vault / "settings"
-        ):
+        real_exchange(left, right)
+        if not crashed:
             crashed = True
-            raise SystemExit("simulated process crash")
-        real_replace(source, target)
+            raise SystemExit("simulated process crash after atomic exchange")
 
-    monkeypatch.setattr("app.settings.migration.os.replace", _crash_before_publish)
+    monkeypatch.setattr(
+        "app.settings.migration._atomic_exchange_directories", _crash_after_exchange
+    )
     with pytest.raises(SystemExit, match="simulated process crash"):
         migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
 
-    assert not (vault / "settings").exists()
+    assert (vault / "settings" / "global.md").exists()
     assert len(list(vault.glob(".settings-migration-*"))) == 1
 
-    monkeypatch.setattr("app.settings.migration.os.replace", real_replace)
+    monkeypatch.setattr(
+        "app.settings.migration._atomic_exchange_directories", real_exchange
+    )
     migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
 
     assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
@@ -936,6 +1005,42 @@ def test_migration_recovers_published_tree_without_durable_receipt(
     marker = json.loads((transaction / "transaction.json").read_text(encoding="utf-8"))
     assert marker["state"] == "rolled_back"
     assert (transaction / "published-rollback" / "global.md").exists()
+
+
+def test_recovery_rejects_symlinked_backup_before_restoring_it(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings"
+    canonical.mkdir(parents=True)
+    (canonical / "global.md").write_text("# published\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "watchers.md").write_text("# prior\n", encoding="utf-8")
+    transaction = vault / ".settings-migration-forged"
+    transaction.mkdir()
+    (transaction / "canonical-before").symlink_to(outside, target_is_directory=True)
+    receipt = migration_module.SettingsWriteReceipt(
+        key="settings.location",
+        value={"canonical": "settings", "migrated_files": 1},
+        surface="migration",
+        actor="operator",
+    )
+    migration_module._write_transaction_state(
+        transaction,
+        "published",
+        had_canonical=True,
+        receipt=receipt,
+        backup_manifest=migration_module._canonical_manifest(tmp_path, outside),
+        published_manifest=migration_module._canonical_manifest(vault, canonical),
+    )
+
+    with pytest.raises(RuntimeError, match="real directory"):
+        migration_module._recover_interrupted_transaction(vault, canonical)
+
+    assert (canonical / "global.md").read_text(encoding="utf-8") == "# published\n"
+    assert (outside / "watchers.md").read_text(encoding="utf-8") == "# prior\n"
+    assert (transaction / "canonical-before").is_symlink()
 
 
 def test_recovery_preserves_concurrent_canonical_write_when_no_prior_tree(
@@ -996,6 +1101,7 @@ def test_migration_recovery_keeps_published_tree_after_durable_receipt(
         *,
         had_canonical: bool,
         receipt: object,
+        backup_manifest: object = None,
         published_manifest: object = None,
     ) -> None:
         if state == "committed":
@@ -1005,6 +1111,7 @@ def test_migration_recovery_keeps_published_tree_after_durable_receipt(
             state,
             had_canonical=had_canonical,
             receipt=receipt,  # type: ignore[arg-type]
+            backup_manifest=backup_manifest,  # type: ignore[arg-type]
             published_manifest=published_manifest,  # type: ignore[arg-type]
         )
 
@@ -1075,6 +1182,30 @@ def test_migration_converts_compiled_legacy_system_yaml(
     target = vault / "settings" / "system-settings.md"
     assert target.read_text(encoding="utf-8").startswith("---\nsync:\n")
     assert not (vault / "settings" / "system-settings.yaml").exists()
+
+
+def test_migration_normalizes_legacy_yaml_document_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "_system" / "settings" / "system-settings.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("---\nsync:\n  debounce_ms: 99\n", encoding="utf-8")
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt",
+        lambda _receipt, **_kwargs: None,
+    )
+    migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    target = vault / "settings" / "system-settings.md"
+    assert read_settings_mapping(target)["sync"] == {"debounce_ms": 99}
+    assert target.read_text(encoding="utf-8").count("---") == 2
+    assert not legacy.exists()
 
 
 @pytest.mark.parametrize("legacy_kind", ["empty_compiled", "system_gitkeep"])

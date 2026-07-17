@@ -39,6 +39,7 @@ SETTINGS_ARTIFACT_NAMES = {
     "routing.md",
     "standards.md",
     "system-settings.md",
+    "system-settings.yaml",
     "watchers.md",
     "classifier.md",
     "companion-ui.md",
@@ -161,6 +162,7 @@ def test_settings_artifact_path_shapes() -> None:
         "vault/rogue/agents/summarizer.md",
         "rogue/embeddings.md",
         "rogue/workflow.md",
+        "rogue/system-settings.yaml",
     ):
         assert not _is_sanctioned_artifact_path(Path(forbidden)), forbidden
 
@@ -168,12 +170,14 @@ def test_settings_artifact_path_shapes() -> None:
         'path: "other/llm_routing.md"\nflow: other/flows.settings.yaml\n'
         "agent: vault/rogue/agents/summarizer.md\n"
         "embed: rogue/embeddings.md\n"
+        "legacy: rogue/system-settings.yaml\n"
     )
     assert set(mentions) == {
         "other/llm_routing.md",
         "other/flows.settings.yaml",
         "vault/rogue/agents/summarizer.md",
         "rogue/embeddings.md",
+        "rogue/system-settings.yaml",
     }
 
 
