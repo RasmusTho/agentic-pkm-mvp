@@ -98,19 +98,32 @@ def write_builderops_sqlite(
 
 def _write_ckm_rows(path: Path) -> dict[str, str]:
     """Apply the real CKM DDL into the same file and insert a capability +
-    artifact (authority-bearing CEG rows)."""
+    artifact (authority-bearing CEG rows).
 
+    public_id is derived via the real stable_public_id contract (mirrors
+    app/builderops/ckm/store.py's own capability/artifact write paths) rather
+    than a fixture-local literal, so the fixture's rows are indistinguishable
+    from what the real CKM store writes.
+    """
+
+    from app.builderops.ckm.contracts import stable_public_id
     from app.builderops.ckm.schema import CKM_DDL_STATEMENTS
+
+    capability_identity_key = "legacy-authority-migration"
+    artifact_source_ref = "docs/BUILDEROPS_CONTROL_PLANE/README.md"
 
     conn = sqlite3.connect(path)
     try:
         for statement in CKM_DDL_STATEMENTS:
             conn.execute(statement)
         conn.execute(
-            "INSERT INTO ckm_capability (id, name, definition, parent_id, lifecycle, "
-            "existence_provenance, boundary_ref, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ckm_capability (id, public_id, identity_key, name, definition, "
+            "parent_id, lifecycle, existence_provenance, boundary_ref, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "cap_bcp03",
+                stable_public_id("capability", capability_identity_key),
+                capability_identity_key,
                 "legacy-authority-migration",
                 "CKM capability fixture",
                 None,
@@ -122,15 +135,16 @@ def _write_ckm_rows(path: Path) -> dict[str, str]:
             ),
         )
         conn.execute(
-            "INSERT INTO ckm_artifact (id, source_ref, artifact_kind, source, watermark, "
-            "provenance, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO ckm_artifact (id, public_id, source_ref, artifact_kind, source, "
+            "watermark, provenance, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 "art_bcp03",
-                "docs/BUILDEROPS_CONTROL_PLANE/README.md",
+                stable_public_id("artifact", artifact_source_ref),
+                artifact_source_ref,
                 "doc",
                 "docs",
                 "wm-1",
-                json.dumps({"source_ref": "docs/BUILDEROPS_CONTROL_PLANE/README.md"}),
+                json.dumps({"source_ref": artifact_source_ref}),
                 iso_now(),
                 iso_now(),
             ),
@@ -145,17 +159,23 @@ def add_ckm_schema_growth_row(path: Path) -> str:
     """Simulate a CKM schema addition after spec acceptance: add a column to
     ckm_capability and insert a row using it, proving generic import coverage."""
 
+    from app.builderops.ckm.contracts import stable_public_id
+
+    grown_identity_key = "post-freeze-capability"
+
     conn = sqlite3.connect(path)
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(ckm_capability)")}
         if "confidence_note" not in columns:
             conn.execute("ALTER TABLE ckm_capability ADD COLUMN confidence_note TEXT")
         conn.execute(
-            "INSERT INTO ckm_capability (id, name, definition, parent_id, lifecycle, "
-            "existence_provenance, boundary_ref, created_at, updated_at, confidence_note) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ckm_capability (id, public_id, identity_key, name, definition, "
+            "parent_id, lifecycle, existence_provenance, boundary_ref, created_at, updated_at, "
+            "confidence_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "cap_bcp03_grown",
+                stable_public_id("capability", grown_identity_key),
+                grown_identity_key,
                 "post-freeze-capability",
                 "added after spec acceptance",
                 "cap_bcp03",
