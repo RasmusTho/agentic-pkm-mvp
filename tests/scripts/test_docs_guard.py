@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -59,27 +61,24 @@ def test_mixed_runtime_and_governance_change_still_requires_temporal_owner_doc(
     assert "temporal code/config changed" in result.stdout
 
 
-def test_governance_enforcement_with_development_writeback_passes(tmp_path: Path) -> None:
-    repo = _guard_repo(tmp_path)
-    (repo / "scripts/git_hygiene.py").write_text("# governance\n", encoding="utf-8")
-    (repo / "docs/development/WORKFLOW.md").write_text("governance writeback\n", encoding="utf-8")
-    _run(["git", "add", "."], repo)
-    _run(["git", "commit", "-m", "governance"], repo)
-
-    result = _guard_result(repo)
-
-    assert result.returncode == 0
-    assert "Docs guard: OK" in result.stdout
-
-
-def test_select_pr_tests_governance_enforcement_with_development_writeback_passes(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("script_path", "doc_path"),
+    [
+        pytest.param("scripts/git_hygiene.py", "docs/development/WORKFLOW.md", id="unassigned-script-any-doc"),
+        pytest.param(
+            "scripts/select_pr_tests.py",
+            "docs/development/TEST_STRATEGY_HOT_PATH.md",
+            id="select_pr_tests-paired-doc",
+        ),
+    ],
+)
+def test_governance_enforcement_with_development_writeback_passes(
+    tmp_path: Path, script_path: str, doc_path: str
 ) -> None:
     repo = _guard_repo(tmp_path)
-    (repo / "scripts/select_pr_tests.py").write_text("# governance\n", encoding="utf-8")
-    (repo / "docs/development/TEST_STRATEGY_HOT_PATH.md").write_text(
-        "governance writeback\n", encoding="utf-8"
-    )
+    (repo / script_path).write_text("# governance\n", encoding="utf-8")
+    (repo / doc_path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / doc_path).write_text("governance writeback\n", encoding="utf-8")
     _run(["git", "add", "."], repo)
     _run(["git", "commit", "-m", "governance"], repo)
 
@@ -87,3 +86,16 @@ def test_select_pr_tests_governance_enforcement_with_development_writeback_passe
 
     assert result.returncode == 0
     assert "Docs guard: OK" in result.stdout
+
+
+def test_select_pr_tests_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/select_pr_tests.py").write_text("# governance\n", encoding="utf-8")
+    (repo / "docs/development/UNRELATED.md").write_text("unrelated\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "governance"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == 1
+    assert "temporal code/config changed" in result.stdout
