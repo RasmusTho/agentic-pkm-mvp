@@ -193,7 +193,21 @@ def test_doctor_uses_rebuild_text_precedence_for_content_hash(tmp_path, monkeypa
     base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
     reset_diagnose_cache()
     try:
-        canonical_content = "producer-selected content"
+        canonical_content = "\n".join(
+            (
+                "producer-selected content",
+                "%% AI:Start %%",
+                "fenced panel text",
+                "%% AI:End %%",
+                "## AI-instruktion",
+                "legacy panel text",
+                "## Retained section",
+                "retained content",
+            )
+        )
+        expected_canonical = "\n".join(
+            ("producer-selected content", "## Retained section", "retained content")
+        )
         oid = uuid4()
         get_object_store().put(
             oid,
@@ -219,10 +233,10 @@ def test_doctor_uses_rebuild_text_precedence_for_content_hash(tmp_path, monkeypa
                 )
                 vector_row = cur.fetchone()
 
-        assert vector_row["payload"]["content"] == canonical_content
-        assert vector_row["payload"]["text"] == canonical_content
+        assert vector_row["payload"]["content"] == expected_canonical
+        assert vector_row["payload"]["text"] == expected_canonical
         assert vector_row["payload"]["provenance"]["content_hash"] == compute_content_hash(
-            canonical_content
+            expected_canonical
         )
 
         reset_diagnose_cache()
