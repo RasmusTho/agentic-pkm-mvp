@@ -14,7 +14,7 @@ TEST_PG_IDENTITY = EmbeddingIdentity(provider="test", model="pg-test", dim=4)
 
 BACKENDS = [
     pytest.param("memory", id="memory"),
-    pytest.param("pg", id="pg"),
+    pytest.param("pg", id="pg", marks=pytest.mark.pg),
 ]
 
 
@@ -118,6 +118,7 @@ def test_relation_memberships_are_optional_and_empty_by_default(monkeypatch, bac
     assert rel.memberships(uuid4(), rel="sphere_membership") == []
 
 
+@pytest.mark.pg
 def test_pg_vector_index_query_dim_mismatch(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")
@@ -132,6 +133,7 @@ def test_pg_vector_index_query_dim_mismatch(monkeypatch):
         idx.search([0.5, 0.5, 0.5], k=1, identity=TEST_PG_IDENTITY)
 
 
+@pytest.mark.pg
 def test_pg_vector_index_detects_mixed_dims(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")
@@ -151,6 +153,7 @@ def test_pg_vector_index_detects_mixed_dims(monkeypatch):
         idx.search([1, 0, 0, 0], k=1, identity=TEST_PG_IDENTITY)
 
 
+@pytest.mark.pg
 def test_pg_vector_index_identity_mismatch(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")
