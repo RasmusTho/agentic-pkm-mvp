@@ -280,6 +280,7 @@ class CkmStore:
         ).fetchall()
         latest_by_capability: dict[str, str] = {}
         latest_order_by_capability: dict[str, tuple[str, int]] = {}
+        assessment_identity_owners: dict[str, str] = {}
         for row in assessment_rows:
             capability_id = str(row["capability_id"])
             row_order = (
@@ -301,17 +302,18 @@ class CkmStore:
             identity_row: Mapping[str, Any] = row
             if is_historical_pre_v5:
                 historical_row = dict(row)
-                # The old producer fingerprint covered the complete edge
-                # domain, including formula-unselected evidence that citations
-                # cannot reconstruct. Preserve that immutable assertion-level
-                # distinction in the public identity before storing the row as
-                # an explicitly non-current legacy snapshot.
-                historical_row["legacy_producer_fingerprint"] = fingerprint
                 historical_row["edge_fingerprint"] = "legacy"
                 identity_row = historical_row
             public_id = str(row["public_id"] or "") or CkmStore._assessment_public_id(
                 conn, identity_row
             )
+            prior_owner = assessment_identity_owners.get(public_id)
+            if prior_owner is not None and prior_owner != str(row["id"]):
+                raise CkmValidationError(
+                    "unsupported legacy assessment history cannot derive distinct "
+                    "rebuild-stable public identities"
+                )
+            assessment_identity_owners[public_id] = str(row["id"])
             normalized_fingerprint = (
                 None
                 if is_historical_pre_v5
@@ -659,11 +661,6 @@ class CkmStore:
             evidence[dimension] = canonical_digest(stable_evidence(citations))
         identity = {
             "capability": capability_public_id,
-            "legacy_producer_fingerprint": (
-                row["legacy_producer_fingerprint"]
-                if "legacy_producer_fingerprint" in row.keys()
-                else ""
-            ),
             "evidence": evidence,
             "scores": {dimension: row[dimension] for dimension in MATURITY_DIMENSIONS},
             "candidate_shares": row["candidate_shares"],

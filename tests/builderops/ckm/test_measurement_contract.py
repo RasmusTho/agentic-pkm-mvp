@@ -651,24 +651,6 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
             "SELECT * FROM ckm_assessment WHERE id = ?", (current_assessment.id,)
         ).fetchone()
         assert current_row is not None
-        same_measured_history = dict(zip(columns, current_row, strict=True))
-        same_measured_history.update(
-            {
-                "id": "assess_pre_v5_same_measured_history",
-                "public_id": "legacy-same-measured-placeholder",
-                # Pre-v5 producers included formula-unselected edges in this
-                # fingerprint even though citations and scores omitted them.
-                "edge_fingerprint": hashlib.sha256(
-                    b"distinct-unselected-historical-domain"
-                ).hexdigest(),
-                "valid_from": "2026-07-14T00:00:00Z",
-                "asserted_at": "2026-07-14T00:00:00Z",
-            }
-        )
-        conn.execute(
-            f"INSERT INTO ckm_assessment ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
-            [same_measured_history[column] for column in columns],
-        )
         historical = dict(zip(columns, current_row, strict=True))
         historical.update(
             {
@@ -784,6 +766,64 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         conn.execute("ALTER TABLE ckm_finding DROP COLUMN public_id")
         conn.commit()
 
+    ambiguous_path = tmp_path / "ambiguous-legacy.sqlite3"
+    with sqlite3.connect(db_path) as source, sqlite3.connect(ambiguous_path) as target:
+        source.backup(target)
+    with sqlite3.connect(ambiguous_path) as conn:
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(ckm_assessment)")]
+        source_row = conn.execute(
+            "SELECT * FROM ckm_assessment WHERE id = ?", (current_assessment.id,)
+        ).fetchone()
+        assert source_row is not None
+        ambiguous_history = dict(zip(columns, source_row, strict=True))
+        ambiguous_history.update(
+            {
+                "id": "assess_pre_v5_ambiguous_history",
+                # This valid old-producer distinction covered formula-unselected
+                # edges through internal row IDs. Retained citations cannot
+                # reconstruct it into a rebuild-stable public identity.
+                "edge_fingerprint": hashlib.sha256(
+                    b"distinct-unselected-historical-domain"
+                ).hexdigest(),
+                "valid_from": "2026-07-14T00:00:00Z",
+                "asserted_at": "2026-07-14T00:00:00Z",
+            }
+        )
+        conn.execute(
+            f"INSERT INTO ckm_assessment ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+            [ambiguous_history[column] for column in columns],
+        )
+        conn.commit()
+
+    def ckm_storage_snapshot(path: Path) -> tuple[object, ...]:
+        with sqlite3.connect(path) as conn:
+            schema = tuple(
+                conn.execute(
+                    "SELECT type, name, sql FROM sqlite_master "
+                    "WHERE name LIKE 'ckm_%' ORDER BY type, name"
+                ).fetchall()
+            )
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'table' AND name LIKE 'ckm_%' ORDER BY name"
+                ).fetchall()
+            ]
+            rows = tuple(
+                (table, tuple(conn.execute(f'SELECT * FROM "{table}" ORDER BY rowid')))
+                for table in tables
+            )
+            return schema, rows
+
+    before_unsupported_migration = ckm_storage_snapshot(ambiguous_path)
+    with pytest.raises(
+        CkmValidationError,
+        match="unsupported legacy assessment history.*rebuild-stable",
+    ):
+        CkmStore(ambiguous_path).ensure_schema()
+    assert ckm_storage_snapshot(ambiguous_path) == before_unsupported_migration
+
     legacy.ensure_schema()
     migrated_state = legacy.state_identity()
     migrated_inferred = legacy.get_capability(inferred_capability.id)
@@ -796,15 +836,10 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert all(item.public_id for item in legacy.list_evidence_edges())
     assessments = legacy.list_assessments_for_capability(capability.id)
     assert all(item.public_id for item in assessments)
-    assert len(assessments) == 3
-    historical_assessments = assessments[:2]
-    migrated_current_assessment = assessments[2]
-    assert all(item.edge_fingerprint == "legacy" for item in historical_assessments)
-    assert len({item.public_id for item in historical_assessments}) == 2
-    assert all(
-        item.public_id != migrated_current_assessment.public_id
-        for item in historical_assessments
-    )
+    assert len(assessments) == 2
+    historical_assessment, migrated_current_assessment = assessments
+    assert historical_assessment.edge_fingerprint == "legacy"
+    assert historical_assessment.public_id != migrated_current_assessment.public_id
     migrated_assessment_public_id = migrated_current_assessment.public_id
     assert migrated_current_assessment.edge_fingerprint.startswith("v2:")
     zero_assessment = legacy.latest_assessment_for_capability(zero_capability.id)
