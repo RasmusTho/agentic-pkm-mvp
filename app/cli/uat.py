@@ -160,6 +160,26 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _ensure_durable_directory(path: Path, *, mode: int = 0o755) -> None:
+    """Create a directory chain and durably link every newly created entry."""
+
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    if not cursor.is_dir():
+        raise NotADirectoryError(cursor)
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=mode)
+        except FileExistsError:
+            if not directory.is_dir():
+                raise
+        _fsync_directory(directory)
+        _fsync_directory(directory.parent)
+
+
 @contextmanager
 def _settings_directory_lock(path: Path) -> Iterator[None]:
     """Serialize repo-supported UAT settings writers without a lock artifact."""
@@ -214,7 +234,7 @@ def _transaction_paths(path: Path) -> tuple[Path, Path]:
 
 
 def _write_transaction_marker(marker: Path, payload: dict[str, Any]) -> None:
-    marker.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    _ensure_durable_directory(marker.parent, mode=0o700)
     os.chmod(marker.parent, 0o700)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=marker.parent, prefix=f".{marker.name}.", suffix=".tmp"
@@ -362,6 +382,8 @@ def _reconcile_pending_transaction(path: Path) -> bool:
     receipts = tuple(_receipt_from_payload(item) for item in raw_receipts)
     state = transaction.get("state")
     if state == "prepared" and stage.exists():
+        transaction["state"] = "aborted"
+        _write_transaction_marker(marker, transaction)
         _cleanup_transaction(marker, stage=stage, witness=witness)
         return False
     if state == "prepared":
@@ -375,7 +397,13 @@ def _reconcile_pending_transaction(path: Path) -> bool:
             _reconcile_receipts(marker, transaction, receipts)
         except Exception as exc:
             raise RuntimeError("UAT settings publication is receipt_pending") from exc
-    elif state != "committed":
+    elif state == "committed":
+        if not all(durable_settings_write_receipt_exists(item) for item in receipts):
+            raise RuntimeError("committed UAT settings transaction lacks durable receipt")
+    elif state == "aborted":
+        _cleanup_transaction(marker, stage=stage, witness=witness)
+        return False
+    else:
         raise RuntimeError("UAT settings transaction has invalid state")
     _cleanup_transaction(marker, stage=stage, witness=witness)
     return True
@@ -397,9 +425,9 @@ def _write_ingest_override(
     if path.exists() and path.read_text(encoding="utf-8") == serialized:
         return
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_durable_directory(path.parent)
     transaction_dir, marker = _transaction_paths(path)
-    transaction_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+    _ensure_durable_directory(transaction_dir, mode=0o700)
     os.chmod(transaction_dir, 0o700)
     if marker.exists():
         raise RuntimeError("pending UAT settings transaction must be reconciled first")
@@ -441,6 +469,8 @@ def _write_ingest_override(
                 _atomic_rename_noreplace(stage, path)
         except Exception:
             if stage.exists():
+                transaction["state"] = "aborted"
+                _write_transaction_marker(marker, transaction)
                 _cleanup_transaction(marker, stage=stage, witness=witness)
             raise
         _fsync_directory(path.parent)
@@ -464,7 +494,7 @@ def _write_ingest_override(
 
 def _ensure_uat_ingest_scope(vault_root: Path, *, target_subdir: str) -> None:
     read_path, canonical_path = _ingest_override_paths(vault_root)
-    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_durable_directory(canonical_path.parent)
     with _settings_directory_lock(canonical_path.parent):
         if _reconcile_pending_transaction(canonical_path):
             return

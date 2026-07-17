@@ -151,6 +151,7 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
     from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
 
     outbox_path = get_index_outbox_path()
+    operation_id_collision = False
     try:
         with outbox_path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -165,7 +166,7 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
                     continue
                 if payload.get("operation_id") != receipt.operation_id:
                     continue
-                return all(
+                exact_match = all(
                     payload.get(key) == expected
                     for key, expected in {
                         "key": receipt.key,
@@ -175,10 +176,17 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
                         "file": receipt.file,
                         "surface": receipt.surface,
                         "actor": receipt.actor,
+                        "timestamp": receipt.timestamp,
+                        "is_runtime_gating": receipt.is_runtime_gating,
                     }.items()
                 )
+                if exact_match:
+                    return True
+                operation_id_collision = True
     except FileNotFoundError:
         return False
+    if operation_id_collision:
+        raise RuntimeError("settings receipt operation_id collision")
     return False
 
 

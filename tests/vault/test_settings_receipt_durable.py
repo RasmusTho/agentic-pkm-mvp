@@ -20,6 +20,8 @@ import os
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
+
 from app.events.types import SETTINGS_WRITE_RECEIPT
 from app.receipts.settings_receipts import (
     SettingsReceiptQuery,
@@ -201,7 +203,23 @@ def test_operation_scoped_receipt_has_exact_durable_readback(
         actor=receipt.actor,
         operation_id=receipt.operation_id,
     )
-    assert durable_settings_write_receipt_exists(different_payload) is False
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(different_payload)
+
+    different_metadata = SettingsWriteReceipt(
+        key=receipt.key,
+        value=receipt.value,
+        old_value=receipt.old_value,
+        new_value=receipt.new_value,
+        file=receipt.file,
+        surface=receipt.surface,
+        actor=receipt.actor,
+        operation_id=receipt.operation_id,
+        timestamp="2099-01-01T00:00:00+00:00",
+        is_runtime_gating=True,
+    )
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(different_metadata)
 
 
 def test_durable_receipt_readback_requires_operation_identity(tmp_path: Path, monkeypatch) -> None:

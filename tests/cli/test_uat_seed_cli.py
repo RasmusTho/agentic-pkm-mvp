@@ -425,6 +425,102 @@ def test_uat_seed_discards_unpublished_prepared_stage_after_crash(
     assert not _uat_transaction_marker(tmp_path).exists()
 
 
+@pytest.mark.parametrize("removed_count", [1, 2])
+def test_uat_seed_aborted_cleanup_crash_never_reconciles_receipt(
+    tmp_path: Path, removed_count: int
+) -> None:
+    canonical = tmp_path / "settings" / "ingest.override.md"
+
+    def crash_during_cleanup(marker, *, stage=None, witness=None):
+        candidates = [stage, witness]
+        for candidate in candidates[:removed_count]:
+            assert candidate is not None
+            candidate.unlink(missing_ok=True)
+        raise SystemExit("cleanup interrupted")
+
+    with (
+        patch(
+            "app.cli.uat._atomic_rename_noreplace",
+            side_effect=OSError("publication failed"),
+        ),
+        patch("app.cli.uat._cleanup_transaction", side_effect=crash_during_cleanup),
+        pytest.raises(SystemExit, match="cleanup interrupted"),
+    ):
+        uat_module._write_ingest_override(
+            canonical,
+            {"include_folders": [DEFAULT_TARGET_SUBDIR]},
+            previous={},
+            source_path=canonical,
+        )
+
+    marker = _uat_transaction_marker(tmp_path)
+    transaction = json.loads(marker.read_text(encoding="utf-8"))
+    assert transaction["state"] == "aborted"
+    assert not canonical.exists()
+
+    with patch("app.cli.uat.emit_settings_write_receipt") as emit_receipt:
+        reconciled = uat_module._reconcile_pending_transaction(canonical)
+
+    assert reconciled is False
+    emit_receipt.assert_not_called()
+    assert not marker.exists()
+
+
+def test_uat_transaction_directory_creation_fsyncs_each_new_parent(
+    tmp_path: Path,
+) -> None:
+    transaction_dir = tmp_path / ".agentic-pkm" / "uat-settings-transactions"
+    fsynced: list[Path] = []
+
+    with patch(
+        "app.cli.uat._fsync_directory", side_effect=lambda path: fsynced.append(path)
+    ):
+        uat_module._ensure_durable_directory(transaction_dir, mode=0o700)
+
+    assert fsynced == [
+        tmp_path / ".agentic-pkm",
+        tmp_path,
+        transaction_dir,
+        tmp_path / ".agentic-pkm",
+    ]
+
+
+def test_uat_seed_committed_marker_without_exact_receipt_fails_loud(
+    tmp_path: Path,
+) -> None:
+    with patch(
+        "app.cli.uat.emit_settings_write_receipt",
+        side_effect=RuntimeError("receipt unavailable"),
+    ):
+        first = CliRunner().invoke(
+            cli,
+            ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+            env={
+                "STORE_BACKEND": "memory",
+                "INDEX_OUTBOX_PATH": str(tmp_path / "outbox.jsonl"),
+            },
+        )
+
+    assert first.exit_code != 0
+    marker = _uat_transaction_marker(tmp_path)
+    transaction = json.loads(marker.read_text(encoding="utf-8"))
+    transaction["state"] = "committed"
+    uat_module._write_transaction_marker(marker, transaction)
+
+    recovered = CliRunner().invoke(
+        cli,
+        ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+        env={
+            "STORE_BACKEND": "memory",
+            "INDEX_OUTBOX_PATH": str(tmp_path / "outbox.jsonl"),
+        },
+    )
+
+    assert recovered.exit_code != 0
+    assert "lacks durable receipt" in str(recovered.exception)
+    assert marker.exists()
+
+
 def test_uat_seed_receipt_durability_uncertainty_reconciles_visible_receipt(
     tmp_path: Path,
 ) -> None:
