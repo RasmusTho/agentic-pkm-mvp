@@ -166,6 +166,87 @@ def test_youtube_master_switch_file_delta_is_guarded_and_receipted(
     assert row.new_value is True
 
 
+def test_local_file_cannot_override_youtube_master_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cross-file gate is ignored loudly and produces no success receipt."""
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    _write_local_settings(vault_root, {"youtubeSync.enabled": True})
+    result = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_LOCAL_REL,
+        previous_values=None,
+    )
+
+    assert result.values is not None
+    assert "youtubeSync.enabled" not in result.values
+    assert result.receipts == ()
+    assert result.errors and "owned by youtube.md" in result.errors[0]
+    resolution = SettingsService().resolve(VaultManager().validate_vault(vault_root))
+    assert resolution.settings["youtubeSync.enabled"].value is False
+    assert not [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+
+
+def test_first_seen_youtube_activation_is_guarded_and_receipted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing watcher state cannot turn an on-disk true into trusted state."""
+    import app.write_guard as _wg_module
+
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance window"},
+    ):
+        blocked = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values=None,
+        )
+
+    assert blocked.values == {"youtubeSync.enabled": False}
+    assert blocked.receipts == ()
+    assert blocked.errors and "blocked" in blocked.errors[0]
+    assert not [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        allowed = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values=None,
+        )
+
+    assert allowed.errors == ()
+    assert allowed.values == {"youtubeSync.enabled": True}
+    assert len(allowed.receipts) == 1
+    assert allowed.receipts[0].old_value is False
+    assert allowed.receipts[0].new_value is True
+
+
 def test_multiple_watcher_specs_emit_one_settings_receipt_per_delta(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

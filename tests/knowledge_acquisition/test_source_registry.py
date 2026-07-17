@@ -20,9 +20,11 @@ import pytest
 from app.knowledge_acquisition.source_registry import SourceRegistry, reset_memory_source_registry
 from tests.knowledge_acquisition._source_registry_contract import (
     assert_account_binding_nullability_by_kind,
+    assert_account_binding_uuid_contract,
     assert_duplicate_binding_refused,
     assert_invalid_interval_and_policy_fail_loud,
     assert_memory_json_isolation,
+    assert_provenance_is_strict_portable_json,
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
     assert_title_rename_preserves_binding,
@@ -63,6 +65,10 @@ def test_account_binding_nullability_matches_collection_kind() -> None:
     assert_account_binding_nullability_by_kind(_make_registry)
 
 
+def test_account_binding_uuid_contract_memory() -> None:
+    assert_account_binding_uuid_contract(_make_registry)
+
+
 def test_watch_later_and_history_refused_unsupported() -> None:
     assert_watch_later_and_history_refused(_make_registry)
 
@@ -77,3 +83,7 @@ def test_invalid_interval_and_policy_fail_loud() -> None:
 
 def test_memory_json_isolation_matches_postgres_contract() -> None:
     assert_memory_json_isolation(_make_registry)
+
+
+def test_provenance_is_strict_portable_json_memory() -> None:
+    assert_provenance_is_strict_portable_json(_make_registry)

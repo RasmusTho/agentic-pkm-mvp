@@ -166,23 +166,49 @@ def handle_settings_local_delta(
         for key in sorted(gating_keys)
         if key in document.frontmatter
     }
+    service = settings_service or SettingsService(markdown_store=store)
     if previous_values is None:
-        return SettingsDeltaResult(values=current_values)
+        # A lost/empty watcher state is not evidence that an on-disk gate was
+        # previously accepted. Treat each present value as a transition from
+        # its registered safe/default baseline so activation still requires
+        # WriteGuard and a durable receipt.
+        accepted_previous_values = {
+            key: definition.default_value
+            for key in current_values
+            if (definition := service.registry.get(key)) is not None
+        }
+    else:
+        # State created by older releases may contain cross-file gating keys.
+        # Discard those values rather than carrying an invalid authority source
+        # forward after the ownership rule is tightened.
+        accepted_previous_values = {
+            key: value for key, value in previous_values.items() if key in gating_keys
+        }
 
     manager = VaultManager(markdown_store=store)
     context = manager.validate_vault(vault_root)
     if context.status != "selected":
         detail = f": {context.validation_error}" if context.validation_error else ""
         return SettingsDeltaResult(
-            values=current_values,
+            values=accepted_previous_values,
             errors=(
                 f"{rel_path.as_posix()} delta requires selected vault; "
                 f"status={context.status}{detail}",
             ),
         )
 
-    service = settings_service or SettingsService(markdown_store=store)
     resolution = service.resolve(context)
+    errors = []
+    for error in resolution.validation_errors:
+        definition = service.registry.get(error.key) if error.key else None
+        if (
+            error.source_file == str(path)
+            and definition is not None
+            and definition.key in RUNTIME_GATING_SETTINGS
+            and definition.file != rel_path.name
+        ):
+            errors.append(error.message)
+    previous_values = accepted_previous_values
     previous_keys = set(previous_values)
     current_keys = set(current_values)
     changed_keys = []
@@ -195,10 +221,9 @@ def handle_settings_local_delta(
         if current_present and previous_values.get(key) != current_values[key]:
             changed_keys.append(key)
     if not changed_keys:
-        return SettingsDeltaResult(values=current_values)
+        return SettingsDeltaResult(values=current_values, errors=tuple(errors))
 
     receipts: list[SettingsWriteReceipt] = []
-    errors: list[str] = []
     accepted_values = dict(current_values)
     for key in changed_keys:
         try:

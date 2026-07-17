@@ -673,22 +673,38 @@ class SettingsService:
         for definition in self.registry.definitions:
             if not _source_can_set_definition(source_scope, definition):
                 continue
+            found = _value_for_definition(source_values, definition)
+            if not found[0]:
+                continue
             # Bind each vault file-backed definition to its declared
             # ``definition.file`` only within its own scope class: a vault-shared
             # file must not override a vault-shared key owned by another shared
             # file (e.g. companion-ui.md setting handoffFolder, owned by
-            # paths.md). This must NOT block the documented cross-scope override
-            # where a vault-local file (local.md) overrides a vault-shared key —
-            # that legitimate precedence path keeps working.
+            # paths.md). Non-gating vault-local overrides of vault-shared values
+            # remain supported, but authority-bearing runtime gates are accepted
+            # only from their registered owner file so they cannot bypass the
+            # file-delta WriteGuard/receipt seam.
             if (
                 source_filename is not None
                 and definition.file is not None
-                and source_scope == definition.scope
+                and (
+                    source_scope == definition.scope
+                    or definition.key in RUNTIME_GATING_SETTINGS
+                )
                 and definition.file != source_filename
             ):
-                continue
-            found = _value_for_definition(source_values, definition)
-            if not found[0]:
+                if definition.key in RUNTIME_GATING_SETTINGS:
+                    errors.append(
+                        SettingsValidationError(
+                            message=(
+                                f"runtime-gating setting {definition.key} is owned by "
+                                f"{definition.file} and cannot be set by {source_filename}"
+                            ),
+                            source_file=source_file,
+                            scope=source_scope,
+                            key=definition.key,
+                        )
+                    )
                 continue
             value = found[1]
             valid, message = _validate_value(definition, value)

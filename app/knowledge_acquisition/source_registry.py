@@ -84,6 +84,7 @@ VALID_ACQUISITION_MODES: frozenset[str] = frozenset(
     {"discover_only", "candidate_metadata_only", "acquire_transcript", "acquire_if_filter_matches"}
 )
 VALID_PROVENANCE_ORIGINS: frozenset[str] = frozenset({"user_pick", "takeout_import", "manual_add"})
+_PROVENANCE_KEYS: frozenset[str] = frozenset({"origin", "at", "detail"})
 
 _PLAYLIST_SHAPED_KINDS: frozenset[str] = frozenset(
     {"inbox_playlist", "owned_playlist", "liked_videos", "public_playlist"}
@@ -323,11 +324,55 @@ def _build_acquisition_policy(collection_kind: str, override: dict[str, Any] | N
     return merged
 
 
+def _portable_json_copy(value: Any, *, field: str) -> Any:
+    """Reject Python-only/non-finite values and return a detached JSON value."""
+
+    def _validate(item: Any, path: str, active: set[int]) -> None:
+        if item is None or isinstance(item, str | bool | int):
+            return
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise SourceRegistryValidationError(f"{path} must contain only finite JSON numbers")
+            return
+        if isinstance(item, list):
+            identity = id(item)
+            if identity in active:
+                raise SourceRegistryValidationError(f"{path} must not contain circular JSON values")
+            active.add(identity)
+            for index, child in enumerate(item):
+                _validate(child, f"{path}[{index}]", active)
+            active.remove(identity)
+            return
+        if isinstance(item, dict):
+            identity = id(item)
+            if identity in active:
+                raise SourceRegistryValidationError(f"{path} must not contain circular JSON values")
+            active.add(identity)
+            for key, child in item.items():
+                if not isinstance(key, str):
+                    raise SourceRegistryValidationError(f"{path} object keys must be strings")
+                _validate(child, f"{path}.{key}", active)
+            active.remove(identity)
+            return
+        raise SourceRegistryValidationError(
+            f"{path} contains unsupported non-JSON value {item!r}"
+        )
+
+    _validate(value, field, set())
+    try:
+        return json.loads(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SourceRegistryValidationError(f"{field} must be portable JSON: {exc}") from exc
+
+
 def _build_provenance(now: str, override: dict[str, Any] | None) -> dict[str, Any]:
     if override is None:
         return {"origin": "manual_add", "at": now, "detail": {}}
     if not isinstance(override, dict):
         raise SourceRegistryValidationError(f"provenance must be an object, got {override!r}")
+    unknown = set(override) - _PROVENANCE_KEYS
+    if unknown:
+        raise SourceRegistryValidationError(f"provenance has unsupported keys: {sorted(unknown)}")
     origin = override.get("origin", "manual_add")
     if origin not in VALID_PROVENANCE_ORIGINS:
         raise SourceRegistryValidationError(
@@ -337,7 +382,15 @@ def _build_provenance(now: str, override: dict[str, Any] | None) -> dict[str, An
     if not isinstance(detail, dict):
         raise SourceRegistryValidationError("provenance.detail must be an object")
     at = override.get("at", now)
-    return {"origin": origin, "at": at, "detail": detail}
+    if not isinstance(at, str) or not at.strip():
+        raise SourceRegistryValidationError("provenance.at must be a non-empty string")
+    portable = _portable_json_copy(
+        {"origin": origin, "at": at, "detail": detail},
+        field="provenance",
+    )
+    if not isinstance(portable, dict):  # pragma: no cover - fixed object above
+        raise SourceRegistryValidationError("provenance must be a JSON object")
+    return portable
 
 
 # --- Backend resolution (mirrors app.heimdal._backend.resolve_heimdal_backend,

@@ -446,6 +446,32 @@ def assert_memory_json_isolation(make_registry: RegistryFactory) -> None:
     assert final.provenance["detail"]["reason"] == "test"
 
 
+def assert_provenance_is_strict_portable_json(make_registry: RegistryFactory) -> None:
+    """Provenance validation is identical before memory/Postgres selection."""
+    reg = make_registry()
+    acct = _acct()
+    before_ids = {binding.binding_id for binding in reg.list_all()}
+    invalid_provenance = (
+        {"origin": "manual_add", "detail": {"bad": object()}},
+        {"origin": "manual_add", "detail": {"bad": float("nan")}},
+        {"origin": "manual_add", "detail": {"bad": [float("inf")]}},
+        {"origin": "manual_add", "detail": {"bad": ("tuple",)}},
+        {"origin": "manual_add", "detail": {1: "non-string key"}},
+        {"origin": "manual_add", "unexpected": True},
+        {"origin": "manual_add", "at": object()},
+    )
+    for index, provenance in enumerate(invalid_provenance):
+        with pytest.raises(SourceRegistryValidationError, match="provenance"):
+            reg.register(
+                collection_kind="owned_playlist",
+                collection_ref=f"PLfixtureBADPROVENANCE{index}",
+                account_binding_id=acct,
+                title="Invalid provenance",
+                provenance=provenance,
+            )
+    assert {binding.binding_id for binding in reg.list_all()} == before_ids
+
+
 ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
@@ -455,5 +481,6 @@ ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_watch_later_and_history_refused,
     assert_title_rename_preserves_binding,
     assert_invalid_interval_and_policy_fail_loud,
+    assert_provenance_is_strict_portable_json,
     assert_memory_json_isolation,
 )

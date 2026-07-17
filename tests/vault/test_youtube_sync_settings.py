@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.knowledge_acquisition.source_registry import VALID_ACQUISITION_MODES
 from app.vault.manager import VaultContext
 from app.vault.settings_service import RUNTIME_GATING_SETTINGS, SettingsService, SettingsWriteError
 
@@ -64,6 +65,13 @@ _EXPECTED_DEFAULTS: dict[str, object] = {
     "youtubeSync.mediaDownloadEnabled": False,
     "youtubeSync.runnerEnabled": False,
 }
+
+
+def test_subscription_default_policy_matches_registry_contract() -> None:
+    """Settings and registry share one pinned acquisition-mode vocabulary."""
+    definition = SettingsService().registry.get("youtubeSync.subscriptionDefaultPolicy")
+    assert definition is not None
+    assert frozenset(definition.allowed_values) == VALID_ACQUISITION_MODES
 
 
 def test_defaults_scopes_provenance_and_gated_writes(tmp_path: Path) -> None:
