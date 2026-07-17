@@ -11,6 +11,7 @@ from app.config.database import default_database_name
 from app.config.environment import ENV_DEV, ENV_TEST, active_environment
 from app.health_contract import DEFAULT_CONTRACT
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
+from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 from app.settings.runtime import get_settings_bundle
 
@@ -78,7 +79,11 @@ def build_settings_explain_payload() -> dict[str, Any]:
     except Exception:
         pass
     if settings_provider is None and settings_model is None and settings_base_url is None:
-        providers_md = Path(os.getenv("VAULT_ROOT", "vault")) / "@Settings" / "providers.md"
+        providers_md = resolve_settings_file(
+            Path(os.getenv("VAULT_ROOT", "vault")),
+            "providers.md",
+            legacy_paths=(LEGACY_COMPILED_DIR / "providers.md",),
+        )
         if providers_md.exists():
             text = providers_md.read_text(encoding="utf-8")
             m = re.search(r"```yaml settings\s*(.*?)```", text, re.S)

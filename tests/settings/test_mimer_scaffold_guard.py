@@ -103,9 +103,9 @@ def test_bootstrap_escape_provisions_under_health_block(
     # Full module + Mimer layout provisioned despite the health block.
     for module in MODULES:
         assert (root / module).is_dir(), f"missing module {module}"
-    settings_dir = root / "Mimer" / "@Settings"
+    settings_dir = root / "Mimer" / "settings"
     assert (settings_dir / "global.md").is_file()
-    assert (settings_dir / "system-settings.yaml").is_file()
+    assert (settings_dir / "system-settings.md").is_file()
     assert (root / "Mimer" / "⚙️ System" / "vault.layout.md").exists()
 
 

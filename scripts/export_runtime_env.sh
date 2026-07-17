@@ -134,17 +134,32 @@ import os
 import re
 from pathlib import Path
 
+_operator_provider = os.environ.get("LLM_PROVIDER")
+if not (_operator_provider or "").strip():
+    # Importing app.* enforces the runtime provider contract. This short-lived
+    # exporter process must inspect settings before it can derive that value.
+    os.environ["LLM_PROVIDER"] = "mock"
 try:
+    from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
     from app.settings.compiler import compile_file, merge
     from app.settings.models import Providers
 except Exception:
     compile_file = None
     merge = None
     Providers = None
+finally:
+    if _operator_provider is None:
+        os.environ.pop("LLM_PROVIDER", None)
+    else:
+        os.environ["LLM_PROVIDER"] = _operator_provider
 
 
 def _load_providers(vault_root: Path) -> object | None:
-    path = vault_root / "@Settings" / "providers.md"
+    path = resolve_settings_file(
+        vault_root,
+        "providers.md",
+        legacy_paths=(LEGACY_COMPILED_DIR / "providers.md",),
+    )
     if not path.exists():
         return None
     if compile_file is not None and merge is not None and Providers is not None:
@@ -333,13 +348,22 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+_operator_provider = os.environ.get("LLM_PROVIDER")
+if not (_operator_provider or "").strip():
+    os.environ["LLM_PROVIDER"] = "mock"
 try:
+    from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
     from app.settings.compiler import compile_file, merge
     from app.settings.models import Providers
 except Exception:
     compile_file = None
     merge = None
     Providers = None
+finally:
+    if _operator_provider is None:
+        os.environ.pop("LLM_PROVIDER", None)
+    else:
+        os.environ["LLM_PROVIDER"] = _operator_provider
 
 
 def _strip_v1(url: str) -> str:
@@ -350,7 +374,11 @@ def _strip_v1(url: str) -> str:
 
 
 def _load_providers(vault_root: Path) -> object | None:
-    path = vault_root / "@Settings" / "providers.md"
+    path = resolve_settings_file(
+        vault_root,
+        "providers.md",
+        legacy_paths=(LEGACY_COMPILED_DIR / "providers.md",),
+    )
     if not path.exists():
         return None
     if compile_file is not None and merge is not None and Providers is not None:

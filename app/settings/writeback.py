@@ -7,6 +7,7 @@ import yaml
 
 from app.knowledge.write_ops import write_note_from_absolute
 from app.receipts.settings_write import emit_settings_write_receipts_for_changes
+from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 
 from .loader import read_text
 
@@ -16,7 +17,7 @@ FENCE_END = "```"
 
 def _infer_vault_root(path: Path) -> Path:
     for parent in path.parents:
-        if parent.name == "@Settings":
+        if parent.name in {CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR.name}:
             return parent.parent
     return path.parent
 

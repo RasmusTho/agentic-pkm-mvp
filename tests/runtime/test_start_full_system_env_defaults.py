@@ -146,6 +146,42 @@ def test_apply_start_full_system_vault_defaults_does_not_override_explicit_value
     assert lines == ["CustomSystem", "CustomInbox", "CustomDesk"]
 
 
+def test_apply_start_full_system_vault_defaults_bootstraps_provider_enforced_imports() -> None:
+    out = _bash(
+        "set -euo pipefail; "
+        "vault_root=$(mktemp -d); "
+        "mkdir -p \"$vault_root/settings\"; "
+        "cat > \"$vault_root/settings/system-settings.md\" <<'EOF'\n"
+        "---\n"
+        "paths:\n"
+        "  system_dir_rel: config\n"
+        "---\n"
+        "EOF\n"
+        "source scripts/lib/start_full_system_env.sh; "
+        "export LLM_PROVIDER_ENFORCE=1; "
+        "unset LLM_PROVIDER VAULT_SYSTEM_DIR_REL VAULT_INBOX_DIR_REL VAULT_DESK_DIR_REL; "
+        "apply_start_full_system_vault_defaults \"$vault_root\"; "
+        "printf '%s|%s' \"${VAULT_SYSTEM_DIR_REL-}\" \"${LLM_PROVIDER-unset}\""
+    )
+    assert out == "config|unset"
+
+
+def test_provider_bootstrap_restores_whitespace_only_operator_value() -> None:
+    out = _bash(
+        "set -euo pipefail; "
+        "vault_root=$(mktemp -d); "
+        "mkdir -p \"$vault_root/settings\"; "
+        "cat > \"$vault_root/settings/system-settings.md\" <<'EOF'\n"
+        "---\npaths:\n  system_dir_rel: config\n---\nEOF\n"
+        "source scripts/lib/start_full_system_env.sh; "
+        "export LLM_PROVIDER_ENFORCE=1 LLM_PROVIDER='   '; "
+        "unset VAULT_SYSTEM_DIR_REL VAULT_INBOX_DIR_REL VAULT_DESK_DIR_REL; "
+        "apply_start_full_system_vault_defaults \"$vault_root\"; "
+        "printf '<%s>|%s' \"$LLM_PROVIDER\" \"${VAULT_SYSTEM_DIR_REL-}\""
+    )
+    assert out == "<   >|config"
+
+
 def test_derive_start_full_system_scope_glob_uses_inferred_inbox_dir() -> None:
     out = _bash(
         "set -euo pipefail; "

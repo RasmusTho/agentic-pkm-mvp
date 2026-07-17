@@ -22,8 +22,8 @@ def test_scaffolder_writes_placeholder_via_knowledge_port(tmp_path: Path, monkey
 
     result = MimerScaffolder(root=tmp_path).scaffold()
 
-    assert (mimer_root / "@Settings" / "global.md").exists()
-    assert (mimer_root / "@Settings" / "system-settings.yaml").exists()
-    assert "@Settings/global.md" in writes
-    assert "@Settings/system-settings.yaml" in writes
+    assert (mimer_root / "settings" / "global.md").exists()
+    assert (mimer_root / "settings" / "system-settings.md").exists()
+    assert "settings/global.md" in writes
+    assert "settings/system-settings.md" in writes
     assert result["created"]

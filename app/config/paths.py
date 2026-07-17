@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from app.config.environment import active_environment
+from app.settings.locations import (
+    LEGACY_COMPILED_DIR,
+    LEGACY_SYSTEM_SETTINGS,
+    LEGACY_SYSTEM_SETTINGS_DIR,
+    canonical_settings_root,
+    resolve_settings_file,
+)
 
 
 @dataclass(frozen=True)
@@ -182,11 +189,22 @@ def resolve_yggdrasil_root() -> Optional[Path]:
 def _candidate_settings_paths(vault_root: Path | None, yggdrasil_root: Path | None) -> list[Path]:
     candidates: list[Path] = []
     if vault_root is not None:
-        candidates.append(vault_root / "_system" / "settings" / "system-settings.yaml")
-        candidates.append(vault_root / "@Settings" / "system-settings.yaml")
+        candidates.append(
+            resolve_settings_file(
+                vault_root,
+                "system-settings.md",
+                legacy_paths=(LEGACY_SYSTEM_SETTINGS, LEGACY_COMPILED_DIR / "system-settings.yaml"),
+            )
+        )
     if yggdrasil_root is not None:
         mimer_root = yggdrasil_root / "Mimer"
-        candidates.append(mimer_root / "@Settings" / "system-settings.yaml")
+        candidates.append(
+            resolve_settings_file(
+                mimer_root,
+                "system-settings.md",
+                legacy_paths=(LEGACY_COMPILED_DIR / "system-settings.yaml",),
+            )
+        )
     return candidates
 
 
@@ -213,7 +231,7 @@ def resolve_system_settings_path(
 
     if vault is None:
         return None
-    return vault / "_system" / "settings" / "system-settings.yaml"
+    return canonical_settings_root(vault) / "system-settings.md"
 
 
 def resolve_flow_settings_path(path: Path | None = None, vault_root: Path | None = None) -> Optional[Path]:
@@ -227,7 +245,11 @@ def resolve_flow_settings_path(path: Path | None = None, vault_root: Path | None
     if vault is None:
         fallback = Path("docs/settings/flows.settings.yaml")
         return fallback if fallback.exists() else None
-    default_path = vault / "_system" / "settings" / "flows.settings.yaml"
+    default_path = resolve_settings_file(
+        vault,
+        "flows.settings.yaml",
+        legacy_paths=(LEGACY_SYSTEM_SETTINGS_DIR / "flows.settings.yaml",),
+    )
     if default_path.exists():
         return default_path
     fallback = Path("docs/settings/flows.settings.yaml")

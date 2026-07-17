@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[2]
 VAULT = ROOT / "vault"
 INBOX_BASE = VAULT / get_vault_inbox_dir_rel(VAULT) / "Samples"
 EVENT_LOG = VAULT / "_system" / "events" / "ingest.log.jsonl"
-SETTINGS = ROOT / "vault" / "_system" / "settings" / "system-settings.yaml"
 
 @dataclass
 class IngestResult:
@@ -116,7 +115,6 @@ def main():
         print(f"Samples path not found: {samples_root}", file=sys.stderr)
         sys.exit(2)
 
-    _settings = yaml.safe_load(SETTINGS.read_text(encoding="utf-8"))
     trace_id = uuid.uuid4().hex
     count = 0
     for src in samples_root.rglob("*"):

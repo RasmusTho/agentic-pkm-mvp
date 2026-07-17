@@ -29,11 +29,16 @@ from typing import Any
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.settings import compiler
+from app.settings.locations import (
+    CANONICAL_SETTINGS_DIR_NAME,
+    canonical_settings_root,
+    resolve_compiled_sources,
+)
 from app.settings.reload_signal import publish_reload_signal, read_reload_signal
 from app.settings.runtime import reload_settings_bundle
 
 # Vault-relative settings-source directory (compiled into the effective bundle).
-SETTINGS_SOURCE_DIR_NAME = "@Settings"
+SETTINGS_SOURCE_DIR_NAME = CANONICAL_SETTINGS_DIR_NAME
 
 # Ingestion states surfaced on the health contract.
 STATE_OK = "ok"
@@ -73,7 +78,7 @@ def _has_settings_sources(vault_settings_dir: Path) -> bool:
 
 
 def _selected_settings_source_dir() -> Path | None:
-    """The ``@Settings`` dir of the *selected* vault, or None when no vault is bound.
+    """The canonical settings dir of the selected vault, or None when unbound.
 
     Ingestion is scoped to a genuinely selected vault (spec: settings take effect
     "when a vault with settings sources is selected"). A set-but-missing vault root
@@ -85,7 +90,7 @@ def _selected_settings_source_dir() -> Path | None:
         return None
     if vault_root is None:
         return None
-    return vault_root / SETTINGS_SOURCE_DIR_NAME
+    return canonical_settings_root(vault_root)
 
 
 def get_settings_ingestion_state() -> SettingsIngestionState:
@@ -134,6 +139,7 @@ def ingest_settings(
     *,
     reason: str,
     vault_settings_dir: Path | None = None,
+    vault_root: Path | None = None,
     publish_signal: bool = False,
 ) -> SettingsIngestionState:
     """Resolve vault-authored settings into the effective bundle.
@@ -145,16 +151,22 @@ def ingest_settings(
     ``reason`` is a free-text provenance tag for observability; it does not change
     behavior.
     """
-    # Ingest the *selected* vault's @Settings, not the packaged compiler.VAULT
+    # Ingest the selected vault's canonical settings (plus bounded compatibility), not compiler.VAULT
     # convention — so a test/boot with no selected settings sources stays on typed
     # defaults instead of silently compiling the repo fixture into the live bundle.
-    sources_dir = (
-        vault_settings_dir if vault_settings_dir is not None else _selected_settings_source_dir()
-    )
+    if vault_settings_dir is not None and vault_root is not None:
+        raise ValueError("pass vault_settings_dir or vault_root, not both")
+    sources_dir = vault_settings_dir if vault_settings_dir is not None else _selected_settings_source_dir()
+    selected_root = Path(vault_root) if vault_root is not None else (sources_dir.parent if sources_dir else None)
     prior = _get_local_ingestion_state()
     had_valid = prior.state in _VALID_PRIOR_STATES
 
-    if sources_dir is None or not _has_settings_sources(sources_dir):
+    has_sources = False
+    if selected_root is not None:
+        has_sources = bool(resolve_compiled_sources(selected_root))
+    elif sources_dir is not None:
+        has_sources = _has_settings_sources(sources_dir)
+    if not has_sources:
         # No-vault boot is unchanged: the bundle builds from typed defaults, no
         # error, no ./vault fallback. Only assert no_vault on a genuine cold boot;
         # do not clobber a previously-loaded valid bundle on a transient empty read.
@@ -178,7 +190,10 @@ def ingest_settings(
         # explicitly (the same existing loader the bus path uses — not a second
         # one) so ingestion never depends on the global subscription still being
         # registered to actually take effect.
-        compiler.compile_all(auto_heal=False, vault_dir=sources_dir)
+        if selected_root is not None:
+            compiler.compile_all(auto_heal=False, vault_root=selected_root)
+        else:
+            compiler.compile_all(auto_heal=False, vault_dir=sources_dir)
         reload_settings_bundle()
     except Exception as exc:
         if had_valid:

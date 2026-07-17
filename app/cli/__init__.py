@@ -71,6 +71,8 @@ from app.observability.log import with_trace_id
 from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
+from app.settings.locations import LEGACY_COMPILED_DIR, canonical_settings_root
+from app.settings.migration import migrate_settings_location
 from app.settings.tiering import require_lab_profile
 from app.write_guard import WritesBlockedError
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
@@ -1529,14 +1531,45 @@ def settings_explain_alias(as_json: bool, compact: bool) -> None:
     emit_settings_explain(payload, pretty=not compact)
 
 
-@settings.command("compile", help="Compile vault/@Settings into runtime/settings.")
+@settings.command("compile", help="Compile vault/settings into runtime/settings.")
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    help="Vault whose canonical settings root should be compiled.",
+)
 @click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
-def settings_compile(auto_heal: bool) -> None:
+def settings_compile(vault_root: Path | None, auto_heal: bool) -> None:
     try:
-        bundle = compile_all(auto_heal=auto_heal)
+        resolved_vault = _require_vault_root_path(vault_root, purpose="settings compile")
+        bundle = compile_all(auto_heal=auto_heal, vault_root=resolved_vault)
     except WritesBlockedError as exc:
         raise click.ClickException(f"settings compile blocked: {exc}") from exc
     click.echo(f"compiled {len(bundle.agents)} agents")
+
+
+@settings.command("migrate-location", help="Explicitly migrate one vault to <vault>/settings/.")
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    required=True,
+    help="Non-production vault root to migrate after operator review.",
+)
+def settings_migrate_location(vault_root: Path) -> None:
+    try:
+        receipt = migrate_settings_location(vault_root)
+    except (WritesBlockedError, FileExistsError) as exc:
+        raise click.ClickException(f"settings location migration blocked: {exc}") from exc
+    click.echo(
+        json.dumps(
+            {
+                "status": "migrated",
+                "canonical": "settings",
+                "migrated_files": receipt.value["migrated_files"],
+                "receipt_timestamp": receipt.timestamp,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @settings.command("validate", help="Validate settings registries and cross-references.")
@@ -1547,18 +1580,35 @@ def settings_validate(as_json: bool) -> None:
 
 
 @settings.command("watch", help="Watch vault settings markdown and recompile deterministically.")
-@click.option("--path", "watch_path", default="vault/@Settings", type=click.Path(path_type=Path))
+@click.option("--path", "watch_path", default="vault/settings", type=click.Path(path_type=Path))
 @click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
 def settings_watch(watch_path: Path, auto_heal: bool) -> None:
-    compile_all(auto_heal=auto_heal)
+    vault_root = watch_path.expanduser().parent.resolve()
+    canonical_watch_path = canonical_settings_root(vault_root)
+    if watch_path.expanduser().resolve() != canonical_watch_path:
+        raise click.ClickException(
+            f"settings watch path must be the canonical root: {canonical_watch_path}"
+        )
+    watch_paths: list[Path] = []
+    if canonical_watch_path.is_dir():
+        watch_paths.append(canonical_watch_path)
+    legacy_watch_path = vault_root / LEGACY_COMPILED_DIR
+    if legacy_watch_path.is_dir() and not legacy_watch_path.is_symlink():
+        watch_paths.append(legacy_watch_path)
+    if not watch_paths:
+        raise click.ClickException(
+            f"no canonical or compatibility settings root exists under {vault_root}"
+        )
+
+    compile_all(auto_heal=auto_heal, vault_root=vault_root)
     click.echo(f"watching {watch_path}")
     last = 0.0
     try:
-        for changes in watch(str(watch_path), recursive=True):
+        for changes in watch(*(str(path) for path in watch_paths), recursive=True):
             now = time.time()
             if now - last < 0.5:
                 continue
-            compile_all(auto_heal=auto_heal)
+            compile_all(auto_heal=auto_heal, vault_root=vault_root)
             changed = ", ".join(str(Path(path).name) for _, path in changes)
             click.echo(f"settings updated: {changed}")
             last = now

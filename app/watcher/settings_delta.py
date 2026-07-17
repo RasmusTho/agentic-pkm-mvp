@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from app.vault.manager import VaultManager
 from app.receipts.settings_write import settings_receipt_old_value
+from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 from app.vault.settings_service import (
     RUNTIME_GATING_SETTINGS,
@@ -16,11 +17,25 @@ from app.vault.settings_service import (
 
 SETTINGS_LOCAL_REL = Path("settings/local.md")
 
-# Settings *source* files compile into the effective bundle (compiler.VAULT =
-# vault/@Settings). A change to one must re-ingest so the running services honor
+# Settings source files compile into the effective bundle. A change to one must
+# re-ingest so the running services honor
 # the edit (SETTINGS-01 / F1) — distinct from the settings/local.md governed-write
 # path above.
-SETTINGS_SOURCE_DIR_NAME = "@Settings"
+SETTINGS_SOURCE_DIR_NAME = CANONICAL_SETTINGS_DIR_NAME
+
+# These files belong to the scoped Markdown SettingsService. They share the
+# canonical directory with compiler inputs, but remain governed file deltas
+# rather than full-bundle compiler sources.
+SCOPED_SETTINGS_FILENAMES = frozenset(
+    {
+        "vault.md",
+        "paths.md",
+        "workflow.md",
+        "design-handoff.md",
+        "companion-ui.md",
+        "local.md",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -39,16 +54,47 @@ class SettingsSourceDeltaResult:
 
 
 def is_settings_source_path(rel_path: Path) -> bool:
-    """True for a settings source markdown file (``@Settings/*.md``, incl. agents)."""
+    """True for canonical or one-release compatibility source Markdown."""
+    if rel_path.suffix != ".md" or not rel_path.parts:
+        return False
+    if rel_path.parts[0] == LEGACY_COMPILED_DIR.name:
+        return True
     return (
-        rel_path.suffix == ".md"
-        and bool(rel_path.parts)
-        and rel_path.parts[0] == SETTINGS_SOURCE_DIR_NAME
+        rel_path.parts[0] == SETTINGS_SOURCE_DIR_NAME
+        and not (
+            len(rel_path.parts) == 2
+            and rel_path.name in SCOPED_SETTINGS_FILENAMES
+        )
     )
 
 
+def is_settings_control_path(
+    rel_path: Path, *, configured_system_dir: Path | str | None = None
+) -> bool:
+    """True for canonical and compatibility control-plane Markdown."""
+
+    if rel_path.suffix != ".md" or not rel_path.parts:
+        return False
+    if rel_path.parts[0] in {SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name}:
+        return True
+    if configured_system_dir is not None:
+        configured_root = Path(configured_system_dir)
+        if any(
+            rel_path == root or rel_path.is_relative_to(root)
+            for root in (
+                configured_root / "settings",
+                configured_root / "Settings",
+            )
+        ):
+            return True
+    return rel_path.parts[:2] in {
+        ("_system", "settings"),
+        ("_system", "Settings"),
+    }
+
+
 def handle_settings_source_delta(
-    *, rel_path: Path, vault_settings_dir: Path | None = None
+    *, rel_path: Path, vault_settings_dir: Path | None = None, vault_root: Path | None = None
 ) -> SettingsSourceDeltaResult:
     """Re-ingest effective settings when a settings source file changes.
 
@@ -64,6 +110,7 @@ def handle_settings_source_delta(
     state = ingest_settings(
         reason="watcher_source_delta",
         vault_settings_dir=vault_settings_dir,
+        vault_root=vault_root,
         publish_signal=True,
     )
     errors = (state.error,) if state.error else ()
@@ -165,4 +212,5 @@ __all__ = [
     "handle_settings_local_delta",
     "handle_settings_source_delta",
     "is_settings_source_path",
+    "is_settings_control_path",
 ]

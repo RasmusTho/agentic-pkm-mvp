@@ -16,7 +16,7 @@ def _write_md(path: Path, body: str) -> None:
 
 
 def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
-    vault = tmp_path / "vault" / "@Settings"
+    vault = tmp_path / "vault" / "settings"
     runtime_dir = tmp_path / "runtime" / "settings"
 
     _write_md(
@@ -89,7 +89,7 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
 
 
 def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> None:
-    vault = tmp_path / "vault" / "@Settings"
+    vault = tmp_path / "vault" / "settings"
     runtime_dir = tmp_path / "runtime" / "settings"
 
     _write_md(
@@ -148,7 +148,7 @@ def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> 
 
     compiler.compile_all(auto_heal=True)
 
-    assert "@Settings/global.md" in writes
+    assert "settings/global.md" in writes
 
 
 def test_compile_all_writes_llm_routing_runtime_file(tmp_path, monkeypatch) -> None:
