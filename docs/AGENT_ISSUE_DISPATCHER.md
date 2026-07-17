@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-07-16
-Last verified against: #3821, PR #3822 exact head `30e30830ea533a971fc7a39fb6fc2e4eded903d8`, `app/dispatcher/schema.py`, `app/dispatcher/verification_dispatch.py`, `app/dispatcher/verification_consumer.py`, `app/dispatcher/verified_merge.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
+Last reviewed: 2026-07-17
+Last verified against: #3821, PR #3949 delivery diff, `app/dispatcher/schema.py`, `app/dispatcher/verification_dispatch.py`, `app/dispatcher/verification_consumer.py`, `app/dispatcher/verified_merge.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -102,7 +102,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   terminal, restart and replay of the authenticated exact current-head identity returns the same
   terminal canonical run without changing the immutable original request/idempotency audit or creating
   another chain; governing or cumulative-authority drift still fails closed. The live observation
-  becomes mutation authority only for a different-head takeover.
+  becomes mutation authority only for a different-head takeover. An authenticated current-head
+  replay through a new idempotency identity, whether the chain is active or terminal, returns the
+  durable run only when the fresh observation and artifact exactly match its governing, cumulative
+  supporting, and closing authority; drift fails closed without ledger mutation.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;

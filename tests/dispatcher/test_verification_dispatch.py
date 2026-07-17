@@ -529,6 +529,95 @@ def test_promoted_legacy_v2_identical_replay_is_idempotent(tmp_path) -> None:
     assert _verification_state_snapshot(state) == terminal_snapshot
 
 
+@pytest.mark.parametrize("terminal", [False, True], ids=["active", "terminal"])
+@pytest.mark.parametrize("authority", ["supporting", "closing"])
+def test_post_rebind_promoted_legacy_current_head_replay_rejects_authority_drift(
+    tmp_path,
+    terminal: bool,
+    authority: str,
+) -> None:
+    promoted_head = "b" * 40
+    rebound_head = "c" * 40
+    initial = ledger(tmp_path)
+    run_id, _legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[3626]
+    )
+    with sqlite3.connect(initial.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, status='backoff', "
+            "terminal_receipt_json=?, retry_after=? WHERE run_id=?",
+            (
+                promoted_head,
+                json.dumps(
+                    {
+                        "outcome": "deferred",
+                        "reason": "checks_not_green",
+                        "head_sha": promoted_head,
+                    },
+                    sort_keys=True,
+                ),
+                "2030-01-01T00:00:00+00:00",
+                run_id,
+            ),
+        )
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    state = ledger(tmp_path)
+    promoted_request = request(promoted_head)
+    promoted_request["supporting_issues"] = [3626]
+    recovered = state.ingest(_live_observed_request(state, promoted_request))
+    claimed = state.claim(recovered.run_id, "repair-host")
+    running = state.start(
+        recovered.run_id,
+        "repair-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000053",
+        {"head_sha": promoted_head},
+    )
+    rebound = state.rebind_head(
+        recovered.run_id,
+        rebound_head,
+        expected_head_sha=promoted_head,
+        observed_repository=recovered.repository,
+        observed_pr_number=recovered.pr_number,
+        observed_head_sha=rebound_head,
+        holder="repair-host",
+        lease_id=running.lease_id or "",
+    )
+    if terminal:
+        state.terminal(
+            recovered.run_id,
+            "failed",
+            {"outcome": "blocked", "head_sha": rebound_head},
+            holder="repair-host",
+            lease_id=rebound.lease_id or "",
+        )
+
+    conflicting_request = request(rebound_head)
+    conflicting_request["supporting_issues"] = [3626]
+    if authority == "supporting":
+        conflicting_request["supporting_issues"] = [3626, 4999]
+    else:
+        conflicting_request["closing_issues"] = [3626]
+    assert conflicting_request["idempotency_key"] != promoted_request["idempotency_key"]
+    before = _verification_state_snapshot(state)
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+
+    with pytest.raises(ValueError, match="replay authority does not match"):
+        state.ingest(_live_observed_request(state, conflicting_request))
+
+    assert _verification_state_snapshot(state) == before
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+
+
 def test_migrated_repaired_head_v1_recovers_only_on_preserved_current_head(
     tmp_path,
 ) -> None:
