@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -784,6 +786,62 @@ def test_migration_preserves_rollback_tree_when_fsync_fails_after_exchange(
         encoding="utf-8"
     ) == "# legacy\n"
     assert legacy.exists()
+
+
+def test_migration_releases_lock_when_rollback_marker_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    canonical = vault / "settings" / "watchers.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("# existing canonical\n", encoding="utf-8")
+    legacy = vault / "@Settings" / "global.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# legacy\n", encoding="utf-8")
+    real_write_state = migration_module._write_transaction_state
+
+    class AllowGuard:
+        def assert_writes_allowed(self, action: str) -> None:
+            assert action == "settings.location.migrate"
+
+    def _fail_receipt(_receipt: object, **_kwargs: object) -> None:
+        raise OSError("receipt persistence failed")
+
+    def _fail_rolled_back_marker(
+        transaction: Path, state: str, **kwargs: object
+    ) -> None:
+        if state == "rolled_back":
+            raise OSError("rollback marker persistence failed")
+        real_write_state(transaction, state, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "app.settings.migration.emit_settings_write_receipt", _fail_receipt
+    )
+    monkeypatch.setattr(
+        "app.settings.migration._write_transaction_state", _fail_rolled_back_marker
+    )
+
+    with pytest.raises(OSError, match="rollback marker persistence failed"):
+        migrate_settings_location(vault, write_guard=AllowGuard())  # type: ignore[arg-type]
+
+    assert canonical.read_text(encoding="utf-8") == "# existing canonical\n"
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl, os, sys; "
+                "fd = os.open(sys.argv[1], os.O_RDONLY); "
+                "fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); "
+                "fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)"
+            ),
+            str(vault),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_migration_quarantine_preserves_legacy_write_after_atomic_rename(

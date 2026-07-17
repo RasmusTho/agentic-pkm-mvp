@@ -42,6 +42,15 @@ def _path_present(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
+def _release_lock(descriptor: int) -> None:
+    """Release a flock and always close its descriptor."""
+
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_exchange_directories(left: Path, right: Path) -> None:
     """Exchange two same-filesystem directories in one kernel operation."""
 
@@ -677,8 +686,7 @@ def migrate_settings_location(
         if _owned_transactions(root):
             recovered_receipt = _recover_interrupted_transaction(root, canonical)
             if recovered_receipt is not None:
-                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-                os.close(lock_descriptor)
+                _release_lock(lock_descriptor)
                 return recovered_receipt
             mappings = _migration_files(root)
             prepared = _prepared_mappings(canonical, mappings)
@@ -686,8 +694,7 @@ def migrate_settings_location(
             canonical_fingerprints = _canonical_manifest(root, canonical)
             had_canonical = canonical.exists()
     except Exception:
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        os.close(lock_descriptor)
+        _release_lock(lock_descriptor)
         raise
 
     # The manifest was built before the guard so conflicts remain fail-before-
@@ -701,12 +708,10 @@ def migrate_settings_location(
             or locked_prepared != prepared
         )
     except Exception:
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        os.close(lock_descriptor)
+        _release_lock(lock_descriptor)
         raise
     if locked_changed:
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        os.close(lock_descriptor)
+        _release_lock(lock_descriptor)
         raise RuntimeError("settings changed before migration lock; retry required")
 
     if not prepared:
@@ -771,8 +776,7 @@ def migrate_settings_location(
                 _fsync_directory(root)
             raise
         finally:
-            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-            os.close(lock_descriptor)
+            _release_lock(lock_descriptor)
         return receipt
 
     canonical.parent.mkdir(parents=True, exist_ok=True)
@@ -891,53 +895,53 @@ def migrate_settings_location(
                     exc,
                 )
     except Exception:
-        if not committed:
-            recovery_collision = False
-            if published and canonical.exists():
-                try:
-                    if (
-                        had_canonical
-                        and not _path_present(backup)
-                        and _path_present(staged)
-                    ):
-                        _assert_trusted_tree(
+        try:
+            if not committed:
+                recovery_collision = False
+                if published and canonical.exists():
+                    try:
+                        if (
+                            had_canonical
+                            and not _path_present(backup)
+                            and _path_present(staged)
+                        ):
+                            _assert_trusted_tree(
+                                root,
+                                staged,
+                                canonical_fingerprints,
+                                label="post-exchange backup tree",
+                            )
+                            os.replace(staged, backup)
+                            _fsync_directory(transaction)
+                        _quarantine_published_tree(
                             root,
-                            staged,
-                            canonical_fingerprints,
-                            label="post-exchange backup tree",
+                            canonical,
+                            transaction,
+                            expected_manifest=staged_manifest,
+                            backup_manifest=canonical_fingerprints,
+                            had_canonical=had_canonical,
                         )
-                        os.replace(staged, backup)
-                        _fsync_directory(transaction)
-                    _quarantine_published_tree(
-                        root,
-                        canonical,
+                    except Exception:
+                        recovery_collision = True
+                        rollback_incomplete = True
+                if transaction.exists() and not recovery_collision:
+                    _write_transaction_state(
                         transaction,
-                        expected_manifest=staged_manifest,
-                        backup_manifest=canonical_fingerprints,
+                        "rolled_back",
                         had_canonical=had_canonical,
+                        receipt=receipt,
+                        backup_manifest=canonical_fingerprints,
+                        published_manifest=staged_manifest if published else None,
                     )
-                except Exception:
-                    recovery_collision = True
-                    rollback_incomplete = True
-            if transaction.exists() and not recovery_collision:
-                _write_transaction_state(
-                    transaction,
-                    "rolled_back",
-                    had_canonical=had_canonical,
-                    receipt=receipt,
-                    backup_manifest=canonical_fingerprints,
-                    published_manifest=staged_manifest if published else None,
-                )
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        os.close(lock_descriptor)
+        finally:
+            _release_lock(lock_descriptor)
         raise
     except BaseException:
         # Process-level interruption leaves the durable transaction for the
         # next governed run, while the kernel lock must still be released in
         # in-process crash simulations and cooperative cancellation.
         process_interrupted = True
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        os.close(lock_descriptor)
+        _release_lock(lock_descriptor)
         raise
     finally:
         if (
@@ -949,8 +953,7 @@ def migrate_settings_location(
             shutil.rmtree(staged, ignore_errors=True)
 
     if receipt_durability_uncertain:
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        os.close(lock_descriptor)
+        _release_lock(lock_descriptor)
         return receipt
 
     try:
@@ -969,8 +972,7 @@ def migrate_settings_location(
     # roots are removed atomically into this quarantine, never recursively
     # deleted after a racy check. Committed markers are ignored by automatic
     # crash recovery and can be pruned later by an explicit retention policy.
-    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-    os.close(lock_descriptor)
+    _release_lock(lock_descriptor)
     return receipt
 
 
