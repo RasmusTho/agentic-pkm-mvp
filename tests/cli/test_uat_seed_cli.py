@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -141,3 +142,77 @@ def test_uat_seed_canonical_override_shadows_legacy(tmp_path: Path) -> None:
     payload = yaml.safe_load(canonical.read_text(encoding="utf-8").split("---", 2)[1])
     assert payload["include_folders"] == ["Canonical", DEFAULT_TARGET_SUBDIR]
     assert "Legacy" not in payload["include_folders"]
+
+
+def test_uat_seed_idempotent_canonical_rerun_does_not_rewrite(tmp_path: Path) -> None:
+    runner = CliRunner()
+    env = {
+        "STORE_BACKEND": "memory",
+        "INDEX_OUTBOX_PATH": str(tmp_path / "outbox.jsonl"),
+    }
+    first = runner.invoke(
+        cli, ["uat-seed-vault-test", "--vault-root", str(tmp_path)], env=env
+    )
+    assert first.exit_code == 0, first.output
+    canonical = tmp_path / "settings" / "ingest.override.md"
+    first_mtime = canonical.stat().st_mtime_ns
+    outbox = tmp_path / "outbox.jsonl"
+    first_receipts = outbox.read_text(encoding="utf-8").splitlines()
+
+    second = runner.invoke(
+        cli, ["uat-seed-vault-test", "--vault-root", str(tmp_path)], env=env
+    )
+
+    assert second.exit_code == 0, second.output
+    assert canonical.stat().st_mtime_ns == first_mtime
+    assert outbox.read_text(encoding="utf-8").splitlines() == first_receipts
+
+
+def test_uat_seed_legacy_only_materialization_is_durably_receipted(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "Meta" / "settings" / "ingest.override.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("---\ninclude_folders: [Test]\n---\n", encoding="utf-8")
+    (tmp_path / "Meta" / "vault.layout.md").write_text(
+        "---\nsystem_folder: Meta\ninbox_folder: Inbox\ndesk_folder: Desk\n---\n",
+        encoding="utf-8",
+    )
+    outbox = tmp_path / "outbox.jsonl"
+
+    result = CliRunner().invoke(
+        cli,
+        ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+        env={"STORE_BACKEND": "memory", "INDEX_OUTBOX_PATH": str(outbox)},
+    )
+
+    assert result.exit_code == 0, result.output
+    records = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines()]
+    receipt = next(
+        record
+        for record in records
+        if record.get("payload", {}).get("key")
+        == "ingest.override.__materialization__"
+    )
+    assert receipt["payload"]["old_value"] == str(legacy)
+    assert receipt["payload"]["new_value"] == str(
+        tmp_path / "settings" / "ingest.override.md"
+    )
+
+
+def test_uat_seed_receipt_failure_leaves_canonical_settings_unchanged(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "settings" / "ingest.override.md"
+    with patch(
+        "app.cli.uat.emit_settings_write_receipts_for_changes",
+        side_effect=RuntimeError("receipt unavailable"),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+            env={"STORE_BACKEND": "memory"},
+        )
+
+    assert result.exit_code != 0
+    assert not canonical.exists()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Tuple
@@ -8,7 +9,11 @@ from typing import Any, Dict, Literal, Tuple
 import yaml
 
 from app.promotion.consumer import consume_promotion_intents
-from app.receipts.settings_write import emit_settings_write_receipts_for_changes
+from app.receipts.settings_write import (
+    SettingsWriteReceipt,
+    emit_settings_write_receipt,
+    emit_settings_write_receipts_for_changes,
+)
 from app.settings.locations import canonical_settings_root, resolve_settings_file
 from app.testing.runtime_contract import failing_check_names, write_contract_report
 from app.vault.layout import ensure_vault_layout, load_layout, normalize_md_filename
@@ -138,25 +143,62 @@ def _normalize_unique_folders(values: list[object]) -> list[str]:
 
 
 def _write_ingest_override(
-    path: Path, payload: dict[str, Any], *, previous: dict[str, Any]
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    previous: dict[str, Any],
+    source_path: Path,
 ) -> None:
     frontmatter = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True).strip()
     body = (
         "# Ingest Override\n"
         "This file extends the ingest scope used by the repo-supported local test bootstrap.\n"
     )
+    serialized = f"---\n{frontmatter}\n---\n\n{body}"
+    if path.exists() and path.read_text(encoding="utf-8") == serialized:
+        return
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\n{frontmatter}\n---\n\n{body}", encoding="utf-8")
-    emit_settings_write_receipts_for_changes(
-        old_values=previous,
-        new_values=payload,
-        surface="uat-bootstrap",
-        actor="uat-seed",
-        file=path,
-        key_prefix="ingest.override",
-        flatten_nested=True,
-        require_durable=True,
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
     )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        receipts = emit_settings_write_receipts_for_changes(
+            old_values=previous,
+            new_values=payload,
+            surface="uat-bootstrap",
+            actor="uat-seed",
+            file=path,
+            key_prefix="ingest.override",
+            flatten_nested=True,
+            require_durable=True,
+        )
+        if not receipts:
+            emit_settings_write_receipt(
+                SettingsWriteReceipt(
+                    key="ingest.override.__materialization__",
+                    value=str(path),
+                    old_value=str(source_path),
+                    new_value=str(path),
+                    file=str(path),
+                    surface="uat-bootstrap",
+                    actor="uat-seed",
+                ),
+                require_durable=True,
+            )
+        os.replace(temporary_path, path)
+        parent_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _ensure_uat_ingest_scope(vault_root: Path, *, target_subdir: str) -> None:
@@ -172,7 +214,9 @@ def _ensure_uat_ingest_scope(vault_root: Path, *, target_subdir: str) -> None:
 
     payload = dict(existing)
     payload["include_folders"] = merged
-    _write_ingest_override(canonical_path, payload, previous=existing)
+    _write_ingest_override(
+        canonical_path, payload, previous=existing, source_path=read_path
+    )
 
 
 def _default_snapshot_path(scope: Path) -> Path:
