@@ -95,8 +95,8 @@ payload = {
     "source_sha": os.environ["SOURCE_SHA"],
     "image_digest": os.environ["IMAGE_DIGEST"],
     "previous_image_digest": os.environ["PREVIOUS_DIGEST"],
-    "schema_version": ready["schema_version"],
-    "authority_epoch": ready["authority_epoch"],
+    "schema_version": ready["database"]["schema_version"],
+    "authority_epoch": ready["database"]["authority_epoch"],
     "recorded_at": os.environ["RECORDED_AT"],
     "database_restore_performed": False,
 }
@@ -132,17 +132,27 @@ builderops_assert_failure_domain
 builderops_validate_recovery_target "${ROOT}"
 
 placeholder_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000"
-if [ "${action}" = deploy ] && [ "${current_digest}" != "${placeholder_digest}" ]; then
-  cp "${PIN_FILE}" "${PREVIOUS_PIN_FILE}"
-fi
-write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}"
+pin_backup="$(mktemp "${PIN_FILE}.rollback.XXXXXX")"
+cp "${PIN_FILE}" "${pin_backup}"
 
-builderops_compose "${ROOT}" pull db api worker migrate
-builderops_compose "${ROOT}" up -d db
-builderops_compose "${ROOT}" up --abort-on-container-exit --exit-code-from migrate migrate
-builderops_compose "${ROOT}" up -d --force-recreate api worker
-if ! wait_ready; then
-  echo "BuilderOps readiness gate failed; authoritative database was not restored or rewound" >&2
+activate_target() {
+  write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" || return
+  builderops_compose "${ROOT}" pull db api worker migrate || return
+  builderops_compose "${ROOT}" up -d db || return
+  builderops_compose "${ROOT}" up --abort-on-container-exit --exit-code-from migrate migrate || return
+  builderops_compose "${ROOT}" up -d --force-recreate api worker || return
+  wait_ready || return
+}
+
+if ! activate_target; then
+  cp "${pin_backup}" "${PIN_FILE}"
+  rm -f "${pin_backup}"
+  echo "BuilderOps activation gate failed; canonical pin restored and authoritative database was not rewound" >&2
   exit 1
 fi
+
+if [ "${action}" = deploy ] && [ "${current_digest}" != "${placeholder_digest}" ]; then
+  cp "${pin_backup}" "${PREVIOUS_PIN_FILE}"
+fi
+rm -f "${pin_backup}"
 record_receipt "${action}" "${target_sha}" "${target_digest}" "${current_digest}"

@@ -20,6 +20,8 @@
     <string>http://127.0.0.1:18100</string>
     <key>BUILDEROPS_PROBE_TOKEN_FILE</key>
     <string>__PROBE_TOKEN__</string>
+    <key>BUILDEROPS_STATUS_TOKEN_FILE</key>
+    <string>__STATUS_TOKEN__</string>
     <key>BUILDEROPS_PROBE_STATE_FILE</key>
     <string>/Users/Shared/builderops/probe-state.json</string>
   </dict>

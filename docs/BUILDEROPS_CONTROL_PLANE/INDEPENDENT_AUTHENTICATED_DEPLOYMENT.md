@@ -42,7 +42,8 @@ Product ownership.
   references, non-secret fingerprints, scopes, and rotation generations;
 - create a BuilderOps-only Compose project with its own API, outbox worker, migration gate,
   PostgreSQL service/database/role/volume/secrets, and immutable release pin;
-- provide independent deploy/rollback receipts and a host probe;
+- provide independent deploy/rollback receipts and a host probe with separate least-privilege
+  readiness and status credentials;
 - implement `/healthz`, `/readyz`, and secret-safe status/metrics for database/schema, outbox age and
   dead letters, lease conflicts, auth failures, rate limits/credential state, and executor heartbeat;
 - provide scheduled encrypted full backups plus WAL archiving on an operator-chosen cadence to an

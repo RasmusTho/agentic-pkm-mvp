@@ -22,6 +22,7 @@ probe_plist="$launch_agents/com.yggdrasil.builderops-probe.plist"
 sed -e "s#__PYTHON__#$python_bin#g" \
     -e "s#__PROBE__#$HERE/builderops_probe.py#g" \
     -e "s#__PROBE_TOKEN__#$secret_root/probe-token#g" \
+    -e "s#__STATUS_TOKEN__#$secret_root/status-token#g" \
     "$HERE/com.yggdrasil.builderops-probe.plist" >"$probe_plist"
 
 backup_plist="$launch_agents/com.yggdrasil.builderops-backup.plist"

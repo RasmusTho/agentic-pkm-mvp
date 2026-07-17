@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import importlib.util
 import plistlib
 from pathlib import Path
 
@@ -94,6 +95,7 @@ def test_builderops_probe_and_backup_are_independently_scheduled() -> None:
     assert probe["Label"] == "com.yggdrasil.builderops-probe"
     assert probe["StartInterval"] == 60
     assert probe["EnvironmentVariables"]["BUILDEROPS_PROBE_TOKEN_FILE"] == "__PROBE_TOKEN__"
+    assert probe["EnvironmentVariables"]["BUILDEROPS_STATUS_TOKEN_FILE"] == "__STATUS_TOKEN__"
     assert backup["Label"] == "com.yggdrasil.builderops-backup"
     assert backup["StartInterval"] == 21600
 
@@ -103,3 +105,35 @@ def test_builderops_probe_and_backup_are_independently_scheduled() -> None:
     assert "--profile ops run --rm --no-deps backup" in wrapper
     assert "pkm-" not in wrapper
     assert "com.yggdrasil.prod-probe" not in installer
+
+
+def test_builderops_probe_uses_separate_health_and_status_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    probe_path = root / "ops/host-setup/mac-mini/builderops_probe.py"
+    spec = importlib.util.spec_from_file_location("builderops_probe_test", probe_path)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    health_token = tmp_path / "health-token"
+    status_token = tmp_path / "status-token"
+    health_token.write_text("health-only\n", encoding="utf-8")
+    status_token.write_text("status-only\n", encoding="utf-8")
+    monkeypatch.setattr(probe, "TOKEN_FILE", health_token)
+    monkeypatch.setattr(probe, "STATUS_TOKEN_FILE", status_token)
+    monkeypatch.setattr(probe, "STATE_FILE", tmp_path / "probe-state.json")
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_get(path: str, token: str) -> tuple[int, dict[str, object]]:
+        calls.append((path, token))
+        if path == "/readyz":
+            return 200, {"ready": True}
+        return 200, {"recovery_pipeline": {"alerting": False}}
+
+    monkeypatch.setattr(probe, "_get", fake_get)
+
+    assert probe.run_probe() is True
+    assert calls == [("/readyz", "health-only"), ("/status", "status-only")]

@@ -12,6 +12,7 @@ from typing import Protocol
 
 BASE_URL = os.environ.get("BUILDEROPS_PROBE_BASE_URL", "http://127.0.0.1:18100")
 TOKEN_FILE = Path(os.environ.get("BUILDEROPS_PROBE_TOKEN_FILE", ""))
+STATUS_TOKEN_FILE = Path(os.environ.get("BUILDEROPS_STATUS_TOKEN_FILE", ""))
 STATE_FILE = Path(os.environ.get("BUILDEROPS_PROBE_STATE_FILE", "/tmp/builderops-probe.state"))
 
 
@@ -45,12 +46,15 @@ def run_probe(channel: NotificationChannel | None = None) -> bool:
     failures: list[str] = []
     try:
         token = TOKEN_FILE.read_text(encoding="utf-8").strip()
+        status_token = STATUS_TOKEN_FILE.read_text(encoding="utf-8").strip()
         if not token:
-            raise RuntimeError("probe credential is empty")
+            raise RuntimeError("health probe credential is empty")
+        if not status_token:
+            raise RuntimeError("status probe credential is empty")
         status, ready = _get("/readyz", token)
         if status != 200 or ready.get("ready") is not True:
             failures.append("readiness failed")
-        _, control_status = _get("/status", token)
+        _, control_status = _get("/status", status_token)
         recovery = control_status.get("recovery_pipeline", {})
         if isinstance(recovery, dict) and recovery.get("alerting") is True:
             failures.append("backup/WAL recovery pipeline is stalled or lagging")

@@ -72,6 +72,9 @@ BuilderOps independent control-plane contract (#3790):
 - Normal client, executor, probe, and operator scopes are separate. Authentication failure is
   `401`, insufficient scope is `403`, and a per-principal service limiter returns `429` without
   logging the bearer.
+- The host outage probe uses distinct host-secret credentials for `health:read` readiness and
+  `status:read` recovery-state inspection; the narrower health credential is never promoted to a
+  broader scope merely to simplify the probe.
 - Tailnet TLS is the transport boundary, not authentication. Live activation still requires an
   operator-provided separate BuilderOps engine on the configured control-plane host, real immutable
   pins, scoped host secrets, and the later BCP cutover gates; the repo configuration alone does not

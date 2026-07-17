@@ -75,6 +75,10 @@ if [ "${1:-}" = info ]; then
   [ "$context" = builderops ] && printf 'builder-engine\n' || printf 'product-engine\n'
 elif [ "${1:-}" = compose ] && [ "${2:-}" = ls ]; then
   printf '[]\n'
+elif [ "${FAKE_FAIL_PULL:-0}" = 1 ]; then
+  case " $* " in
+    *" pull "*) exit 19 ;;
+  esac
 fi
 """,
     )
@@ -83,7 +87,7 @@ fi
         """#!/usr/bin/env bash
 set -eu
 printf 'curl %s\n' "$*" >> "$FAKE_EVENT_LOG"
-printf '{"ready":true,"schema_version":7,"authority_epoch":3}\n'
+printf '{"ready":true,"database":{"schema_version":7,"authority_epoch":3}}\n'
 """,
     )
 
@@ -155,6 +159,29 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     )
     assert rollback_receipt["action"] == "rollback"
     assert rollback_receipt["database_restore_performed"] is False
+
+
+def test_failed_deploy_restores_canonical_pin_and_preserves_rollback_target(
+    tmp_path: Path,
+) -> None:
+    root, env, source_sha, digest = _harness(tmp_path)
+    pin_path = root / "config/deploy/builderops.env"
+    before = pin_path.read_text(encoding="utf-8")
+    previous_path = root / "config/deploy/builderops.previous.env"
+    env["FAKE_FAIL_PULL"] = "1"
+
+    failed = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "deploy", source_sha, digest],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert failed.returncode != 0
+    assert pin_path.read_text(encoding="utf-8") == before
+    assert not previous_path.exists()
 
 
 def test_deploy_rejects_mutable_image_tag_before_docker(tmp_path: Path) -> None:
