@@ -276,19 +276,18 @@ class CkmStore:
             )
         citations_changed = CkmStore._backfill_serialized_citation_identities(conn)
         assessment_rows = conn.execute(
-            "SELECT * FROM ckm_assessment ORDER BY id"
+            "SELECT rowid AS migration_rowid, * FROM ckm_assessment ORDER BY rowid"
         ).fetchall()
         latest_by_capability: dict[str, str] = {}
-        latest_order_by_capability: dict[str, tuple[str, str, str]] = {}
+        latest_order_by_capability: dict[str, tuple[str, int]] = {}
         for row in assessment_rows:
             capability_id = str(row["capability_id"])
             row_order = (
                 str(row["asserted_at"]),
-                str(row["valid_from"]),
-                str(row["id"]),
+                int(row["migration_rowid"]),
             )
             if row_order > latest_order_by_capability.get(
-                capability_id, ("", "", "")
+                capability_id, ("", -1)
             ):
                 latest_by_capability[capability_id] = str(row["id"])
                 latest_order_by_capability[capability_id] = row_order

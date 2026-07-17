@@ -654,15 +654,17 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         historical = dict(zip(columns, current_row, strict=True))
         historical.update(
             {
-                "id": "assess_pre_v5_history",
+                # Inserted second but lexically before the first row's
+                # generated id: migration must use runtime's rowid tie-break.
+                "id": "000_pre_v5_runtime_latest",
                 "public_id": "legacy-history-placeholder",
                 "functional_completeness": 0.4,
                 "aggregate": 0.4,
                 "edge_fingerprint": hashlib.sha256(
                     b"historical-pre-v5-evidence-domain"
                 ).hexdigest(),
-                "valid_from": "2026-07-14T00:00:00Z",
-                "asserted_at": "2026-07-14T00:00:00Z",
+                "valid_from": "2026-07-15T00:00:00Z",
+                "asserted_at": "2026-07-15T00:00:00Z",
             }
         )
         conn.execute(
