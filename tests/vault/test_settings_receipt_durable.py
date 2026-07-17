@@ -221,6 +221,28 @@ def test_operation_scoped_receipt_has_exact_durable_readback(
     with pytest.raises(RuntimeError, match="operation_id collision"):
         durable_settings_write_receipt_exists(different_metadata)
 
+    emit_settings_write_receipt(different_payload, require_durable=True)
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(receipt)
+
+
+def test_duplicate_exact_operation_receipts_fail_loud(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    receipt = SettingsWriteReceipt(
+        key="ingest.override.include_folders",
+        value=["Test"],
+        surface="uat-bootstrap",
+        actor="uat-seed",
+        operation_id="duplicate-operation:0",
+    )
+
+    emit_settings_write_receipt(receipt, require_durable=True)
+    emit_settings_write_receipt(receipt, require_durable=True)
+
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(receipt)
+
 
 def test_durable_receipt_readback_requires_operation_identity(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))

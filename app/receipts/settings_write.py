@@ -152,6 +152,7 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
 
     outbox_path = get_index_outbox_path()
     operation_id_collision = False
+    exact_match_count = 0
     try:
         with outbox_path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -181,13 +182,14 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
                     }.items()
                 )
                 if exact_match:
-                    return True
-                operation_id_collision = True
+                    exact_match_count += 1
+                else:
+                    operation_id_collision = True
     except FileNotFoundError:
         return False
-    if operation_id_collision:
+    if operation_id_collision or exact_match_count > 1:
         raise RuntimeError("settings receipt operation_id collision")
-    return False
+    return exact_match_count == 1
 
 
 def emit_settings_write_receipts_for_changes(
