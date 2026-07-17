@@ -507,6 +507,20 @@ def test_crashed_turn_reservation_is_visible_and_retryable(tmp_path: Path, monke
         return original(path, payload, label=label)
 
     monkeypatch.setattr(service, "_write_immutable", crash_before_turn)
+
+    # Force a real wall-clock second boundary between the crashed reservation and
+    # the exact retry -- the PR #3822 CI failure mode. utc_now() truncates to
+    # whole seconds, so a retry that mints a fresh timestamp only sometimes lands
+    # on a different second than the original attempt; pinning two distinct
+    # values here makes the crossing happen on every run instead of by luck.
+    reservation_timestamp = "2026-01-01T00:00:00Z"
+    retry_timestamp = "2026-01-01T00:00:05Z"
+    boundary_timestamps = iter([reservation_timestamp, retry_timestamp])
+    monkeypatch.setattr(
+        "app.builderops.model_inquiry.utc_now",
+        lambda: next(boundary_timestamps),
+    )
+
     with pytest.raises(KeyboardInterrupt, match="simulated process loss"):
         service.commit_turn(
             "inq_test_crash_reservation",
@@ -531,6 +545,9 @@ def test_crashed_turn_reservation_is_visible_and_retryable(tmp_path: Path, monke
         source_refs=refs,
     )
     assert service.trace("inq_test_crash_reservation")["turns"] == [recovered]
+    # The retry reproduces the reservation's original identity -- it must not
+    # observe the later timestamp a fresh utc_now() call would have minted.
+    assert recovered["created_at"] == reservation_timestamp
 
 
 def test_turn_transaction_is_serialized_across_service_instances(tmp_path: Path, monkeypatch) -> None:
@@ -589,6 +606,68 @@ def test_turn_transaction_is_serialized_across_service_instances(tmp_path: Path,
     inquiry = Path(env["BUILDEROPS_VAULT_ROOT"]) / "model-inquiries" / "inq_test_serialized"
     assert len(list((inquiry / "turn-ids").glob("*.json"))) == 1
     assert len(first.trace("inq_test_serialized")["turns"]) == 1
+
+    # A distinct service instance retains exactly one committed turn per
+    # identity/sequence even across an orphaned reservation, deterministically
+    # across a forced wall-clock boundary rather than by same-second luck: a
+    # non-exact retry (same turn_id/sequence, different content) against the
+    # other instance's orphaned reservation still fails closed, while an exact
+    # retry from that other instance reproduces the durably reserved artifact.
+    orphan_turn_id = "turn-c"
+    orphan_sequence = 1
+    original_write_immutable = first._write_immutable
+
+    def crash_before_turn(path, payload, *, label):
+        if label == "immutable turn artifact":
+            raise KeyboardInterrupt("simulated process loss")
+        return original_write_immutable(path, payload, label=label)
+
+    monkeypatch.setattr(first, "_write_immutable", crash_before_turn)
+    reservation_timestamp = "2026-02-01T00:00:00Z"
+    boundary_timestamps = iter(
+        [reservation_timestamp, "2026-02-01T00:00:05Z", "2026-02-01T00:00:10Z"]
+    )
+    monkeypatch.setattr(
+        "app.builderops.model_inquiry.utc_now",
+        lambda: next(boundary_timestamps),
+    )
+    with pytest.raises(KeyboardInterrupt, match="simulated process loss"):
+        first.commit_turn(
+            "inq_test_serialized",
+            turn_id=orphan_turn_id,
+            sequence=orphan_sequence,
+            role="reviewer",
+            content="Original candidate",
+            input_artifact_refs=["question"],
+            source_refs=refs,
+        )
+    monkeypatch.setattr(first, "_write_immutable", original_write_immutable)
+
+    with pytest.raises(BuilderOpsConflictError, match="immutable turn id reservation"):
+        second.commit_turn(
+            "inq_test_serialized",
+            turn_id=orphan_turn_id,
+            sequence=orphan_sequence,
+            role="reviewer",
+            content="Different candidate",
+            input_artifact_refs=["question"],
+            source_refs=refs,
+        )
+
+    recovered = second.commit_turn(
+        "inq_test_serialized",
+        turn_id=orphan_turn_id,
+        sequence=orphan_sequence,
+        role="reviewer",
+        content="Original candidate",
+        input_artifact_refs=["question"],
+        source_refs=refs,
+    )
+    assert recovered["turn_id"] == orphan_turn_id
+    assert recovered["created_at"] == reservation_timestamp
+    assert [turn["turn_id"] for turn in second.trace("inq_test_serialized")["turns"]].count(
+        orphan_turn_id
+    ) == 1
 
 
 def test_turn_transaction_is_serialized_across_processes(tmp_path: Path) -> None:
