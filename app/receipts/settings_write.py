@@ -30,11 +30,27 @@ class ReceiptDurabilityUncertainError(RuntimeError):
 
 
 def _fsync_parent(path: Path) -> None:
-    parent_descriptor = os.open(path.parent, os.O_RDONLY)
+    """Durably link the file's full parent chain, including fresh nested dirs."""
+
+    parent = path.parent
+    while True:
+        parent_descriptor = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
+        if parent.parent == parent:
+            break
+        parent = parent.parent
+
+
+def _confirm_file_and_parent_durable(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
     try:
-        os.fsync(parent_descriptor)
+        os.fsync(descriptor)
     finally:
-        os.close(parent_descriptor)
+        os.close(descriptor)
+    _fsync_parent(path)
 
 
 @dataclass(frozen=True)
@@ -189,7 +205,10 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
         return False
     if operation_id_collision or exact_match_count > 1:
         raise RuntimeError("settings receipt operation_id collision")
-    return exact_match_count == 1
+    if exact_match_count == 1:
+        _confirm_file_and_parent_durable(outbox_path)
+        return True
+    return False
 
 
 def emit_settings_write_receipts_for_changes(

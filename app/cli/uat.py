@@ -332,6 +332,13 @@ def _owned_transaction_file(transaction_dir: Path, name: object) -> Path:
     return transaction_dir / name
 
 
+def _same_inode(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samestat(left.stat(), right.stat())
+    except FileNotFoundError:
+        return False
+
+
 def _cleanup_transaction(
     marker: Path, *, stage: Path | None = None, witness: Path | None = None
 ) -> None:
@@ -382,13 +389,25 @@ def _reconcile_pending_transaction(path: Path) -> bool:
     receipts = tuple(_receipt_from_payload(item) for item in raw_receipts)
     state = transaction.get("state")
     if state == "prepared" and stage.exists():
+        if not witness.is_file():
+            raise RuntimeError("UAT settings prepared state lacks inode witness")
+        if _same_inode(path, witness):
+            raise RuntimeError("UAT settings prepared state is ambiguous")
+        if any(durable_settings_write_receipt_exists(item) for item in receipts):
+            raise RuntimeError("unpublished UAT settings transaction has a receipt")
         transaction["state"] = "aborted"
         _write_transaction_marker(marker, transaction)
         _cleanup_transaction(marker, stage=stage, witness=witness)
         return False
     if state == "prepared":
+        raise RuntimeError("UAT settings prepared state is ambiguous")
+    if state == "publishing":
         if not witness.is_file():
+            raise RuntimeError("UAT settings publication lacks inode witness")
+        if not _same_inode(path, witness):
             raise RuntimeError("UAT settings publication state is ambiguous")
+        _fsync_directory(path.parent)
+        _fsync_directory(transaction_dir)
         transaction["state"] = "published_receipt_pending"
         _write_transaction_marker(marker, transaction)
         state = "published_receipt_pending"
@@ -401,6 +420,10 @@ def _reconcile_pending_transaction(path: Path) -> bool:
         if not all(durable_settings_write_receipt_exists(item) for item in receipts):
             raise RuntimeError("committed UAT settings transaction lacks durable receipt")
     elif state == "aborted":
+        if witness.is_file() and _same_inode(path, witness):
+            raise RuntimeError("aborted UAT settings transaction owns canonical inode")
+        if any(durable_settings_write_receipt_exists(item) for item in receipts):
+            raise RuntimeError("aborted UAT settings transaction has a receipt")
         _cleanup_transaction(marker, stage=stage, witness=witness)
         return False
     else:
@@ -462,6 +485,8 @@ def _write_ingest_override(
         _fsync_directory(transaction_dir)
         _write_transaction_marker(marker, transaction)
         had_canonical = path.exists()
+        transaction["state"] = "publishing"
+        _write_transaction_marker(marker, transaction)
         try:
             if had_canonical:
                 os.replace(stage, path)
@@ -485,10 +510,6 @@ def _write_ingest_override(
     except Exception:
         if not marker.exists():
             _cleanup_transaction(marker, stage=stage, witness=witness)
-            raise
-        if not stage.exists():
-            transaction["state"] = "published_receipt_pending"
-            _write_transaction_marker(marker, transaction)
         raise
 
 

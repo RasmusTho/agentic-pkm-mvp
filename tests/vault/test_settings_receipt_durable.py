@@ -172,6 +172,38 @@ def test_required_receipt_appends_each_record_with_one_os_write(
     assert writes[0].endswith(b"\n")
 
 
+def test_required_receipt_fsyncs_full_fresh_parent_chain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "fresh" / "nested" / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    real_open = os.open
+    opened_directories: list[Path] = []
+
+    def record_open(path, flags, *args):
+        candidate = Path(path)
+        if candidate.is_dir():
+            opened_directories.append(candidate)
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr("app.receipts.settings_write.os.open", record_open)
+
+    emit_settings_write_receipt(
+        SettingsWriteReceipt(
+            key="settings.location",
+            value={"canonical": "settings"},
+            surface="migration",
+            actor="operator",
+        ),
+        require_durable=True,
+    )
+
+    assert outbox_path.parent in opened_directories
+    assert outbox_path.parent.parent in opened_directories
+    assert tmp_path in opened_directories
+
+
 def test_operation_scoped_receipt_has_exact_durable_readback(
     tmp_path: Path, monkeypatch
 ) -> None:
