@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
@@ -11,7 +12,7 @@ from app.receipts.settings_write import (
     emit_settings_write_receipt,
     resolve_settings_receipt_old_value,
 )
-from app.vault.manager import VaultContext
+from app.vault.manager import VaultContext, shared_settings_file_seed
 from app.vault.markdown_settings import MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore
 
 
@@ -30,18 +31,28 @@ VAULT_SHARED_SETTING_FILES = (
     "workflow.md",
     "design-handoff.md",
     "companion-ui.md",
+    "youtube.md",
 )
 VAULT_LOCAL_SETTING_FILES = ("local.md",)
 VALID_SOURCE_SCOPES = {"app-local", "vault-shared", "vault-local"}
 
 # Runtime-gating settings: authority-bearing writes that reconfigure whether
-# the watcher/indexing runtime runs (registry.py:734, config.py:92).
+# the watcher/indexing runtime runs (registry.py:734, config.py:92), or
+# whether the YouTube Source Sync capability/runner is active
+# (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Settings model).
 # These must route through the governed write seam (WriteGuard + actor receipt).
 # See docs/COMPANION_UI_PRODUCT_SPEC.md :: Runtime control actions and
 # companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Control-action register.
-RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset({"enableVaultWatcher", "enableAutoIndexing"})
+RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset(
+    {"enableVaultWatcher", "enableAutoIndexing", "youtubeSync.enabled", "youtubeSync.runnerEnabled"}
+)
 
 _SETTINGS_WRITE_ACTION = "settings.runtime_gating.write"
+# Scaffolding a missing settings file is a vault-writing control action of its
+# own kind: it is WriteGuard-gated for every key (unlike ordinary non-gating
+# updates) and must not be conflated with runtime-gating writes in guard
+# errors, audits, or future per-action policy.
+_SETTINGS_SCAFFOLD_ACTION = "settings.scaffold.write"
 
 
 @dataclass(frozen=True)
@@ -59,6 +70,9 @@ class SettingDefinition:
     allowed_machine_roles: tuple[str, ...] = ()
     allowed_values: tuple[Any, ...] = ()
     aliases: tuple[str, ...] = ()
+    min_value: float | None = None
+    max_value: float | None = None
+    require_integer: bool = False
 
 
 @dataclass(frozen=True)
@@ -232,6 +246,148 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
     SettingDefinition("allowWritesToVault", "boolean", True, "Allow local writes to vault project files.", "vault-local", "gitignore", True, True, True, "local.md"),
     SettingDefinition("allowSharedSettingsEdits", "boolean", True, "Allow editing shared settings from this clone.", "vault-local", "gitignore", True, True, True, "local.md"),
     SettingDefinition("allowLocalSettingsEdits", "boolean", True, "Allow editing local settings from this clone.", "vault-local", "gitignore", True, True, True, "local.md"),
+    # youtubeSync.* (YSS-01, #3916): docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Settings model.
+    # Product default posture: visible, overridable. youtubeSync.enabled and
+    # youtubeSync.runnerEnabled are RUNTIME_GATING_SETTINGS (see above).
+    SettingDefinition(
+        "youtubeSync.enabled",
+        "boolean",
+        False,
+        "Master switch for YouTube source sync; flipped by completing setup.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+    ),
+    SettingDefinition(
+        "youtubeSync.inboxPollSeconds",
+        "number",
+        180,
+        "Poll interval for the inbox playlist.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=60,
+        max_value=3600,
+        require_integer=True,
+    ),
+    SettingDefinition(
+        "youtubeSync.playlistPollSeconds",
+        "number",
+        3600,
+        "Poll interval for owned/liked/public playlists.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=300,
+        max_value=86400,
+        require_integer=True,
+    ),
+    SettingDefinition(
+        "youtubeSync.subscriptionsPollSeconds",
+        "number",
+        21600,
+        "Poll interval for subscription-feed RSS reconciliation (6h).",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=3600,
+        max_value=86400,
+        require_integer=True,
+    ),
+    SettingDefinition(
+        "youtubeSync.reconcileIntervalDays",
+        "number",
+        7,
+        "Weekly gap-repair backfill interval, in days.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=1,
+        require_integer=True,
+    ),
+    SettingDefinition(
+        "youtubeSync.maxConcurrentAcquisitions",
+        "number",
+        2,
+        "Bounded fan-out for concurrent acquisitions.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        min_value=1,
+        require_integer=True,
+    ),
+    SettingDefinition(
+        "youtubeSync.subscriptionDefaultPolicy",
+        "enum",
+        "discover_only",
+        "Conservative default acquisition mode for newly discovered subscriptions.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+        allowed_values=(
+            "discover_only",
+            "candidate_metadata_only",
+            "acquire_transcript",
+            "acquire_if_filter_matches",
+        ),
+    ),
+    SettingDefinition(
+        "youtubeSync.captionsEnabled",
+        "boolean",
+        True,
+        "Transcript (captions/ASR) acquisition on.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+    ),
+    SettingDefinition(
+        "youtubeSync.mediaDownloadEnabled",
+        "boolean",
+        False,
+        "Full media (video/audio file) archival; engine-deferred, see SOURCE_SYNC_CONTRACT.md :: Media retention policy.",
+        "vault-shared",
+        "commit",
+        True,
+        True,
+        True,
+        "youtube.md",
+    ),
+    SettingDefinition(
+        "youtubeSync.runnerEnabled",
+        "boolean",
+        False,
+        "Which machine runs the sync loop; the DB lease remains the hard guard.",
+        "vault-local",
+        "gitignore",
+        True,
+        True,
+        True,
+        "local.md",
+    ),
     SettingDefinition("localExportPath", "path", None, "Machine-local export path.", "vault-local", "gitignore", True, True, True, "local.md"),
     SettingDefinition(
         "machineRole",
@@ -282,11 +438,15 @@ class SettingsService:
     ) -> tuple[EffectiveSetting, SettingsWriteReceipt]:
         """Write a single setting and return (effective_setting, receipt).
 
-        Runtime-gating settings (``enableVaultWatcher``, ``enableAutoIndexing``)
+        Runtime-gating settings (the keys in ``RUNTIME_GATING_SETTINGS``)
         are authority-bearing and route through the governed write seam:
         WriteGuard health-gate is asserted first, then an actor-tagged receipt
         is emitted.  Non-runtime-gating settings follow the same path but are
-        not write-guarded.
+        not write-guarded — with one exception: when the target settings file
+        is missing and must be scaffolded from its initializer seed, the
+        scaffold itself is WriteGuard-gated (as ``settings.scaffold.write``)
+        regardless of the key, because creating a settings file is a
+        vault-writing control action (see ``_scaffold_missing_settings_file``).
 
         ``persist=False`` keeps the governed receipt path but skips writing the
         file back. The watcher uses that mode when a runtime-gating key is
@@ -330,7 +490,7 @@ class SettingsService:
         try:
             document = self.markdown_store.read(path)
         except FileNotFoundError as exc:
-            raise SettingsWriteError(f"settings file does not exist: {path}") from exc
+            document = self._scaffold_missing_settings_file(path, definition.file, key=key, cause=exc)
         except (OSError, MarkdownSettingsError) as exc:
             raise SettingsWriteError(str(exc)) from exc
 
@@ -381,6 +541,33 @@ class SettingsService:
         emit_settings_write_receipt(receipt)
 
         return effective, receipt
+
+    def _scaffold_missing_settings_file(
+        self, path: Path, filename: str, *, key: str, cause: FileNotFoundError
+    ) -> MarkdownSettingsDocument:
+        """Seed a static shared settings file missing from an older vault.
+
+        Every static shared-settings scaffold is itself a vault-writing
+        control action. It therefore checks WriteGuard even when the requested
+        key is not normally runtime-gated; an existing non-gating settings file
+        still follows the ordinary non-gated update path. Files with vault- or
+        machine-specific seeds stay absent and fail loudly.
+        """
+        seed = shared_settings_file_seed(filename)
+        if seed is None:
+            raise SettingsWriteError(f"settings file does not exist: {path}") from cause
+        from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError  # noqa: PLC0415
+
+        try:
+            DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION)
+        except WritesBlockedError as exc:
+            raise SettingsWriteError(f"settings scaffold blocked by health gate: {exc}") from exc
+        seed_frontmatter, seed_body = seed
+        try:
+            self.markdown_store.write_frontmatter(path, seed_frontmatter, body=seed_body)
+            return self.markdown_store.read(path)
+        except (OSError, MarkdownSettingsError) as exc:
+            raise SettingsWriteError(str(exc)) from exc
 
     def resolve(self, context: VaultContext) -> SettingsResolution:
         values = {
@@ -495,22 +682,38 @@ class SettingsService:
         for definition in self.registry.definitions:
             if not _source_can_set_definition(source_scope, definition):
                 continue
+            found = _value_for_definition(source_values, definition)
+            if not found[0]:
+                continue
             # Bind each vault file-backed definition to its declared
             # ``definition.file`` only within its own scope class: a vault-shared
             # file must not override a vault-shared key owned by another shared
             # file (e.g. companion-ui.md setting handoffFolder, owned by
-            # paths.md). This must NOT block the documented cross-scope override
-            # where a vault-local file (local.md) overrides a vault-shared key —
-            # that legitimate precedence path keeps working.
+            # paths.md). Non-gating vault-local overrides of vault-shared values
+            # remain supported, but authority-bearing runtime gates are accepted
+            # only from their registered owner file so they cannot bypass the
+            # file-delta WriteGuard/receipt seam.
             if (
                 source_filename is not None
                 and definition.file is not None
-                and source_scope == definition.scope
+                and (
+                    source_scope == definition.scope
+                    or definition.key in RUNTIME_GATING_SETTINGS
+                )
                 and definition.file != source_filename
             ):
-                continue
-            found = _value_for_definition(source_values, definition)
-            if not found[0]:
+                if definition.key in RUNTIME_GATING_SETTINGS:
+                    errors.append(
+                        SettingsValidationError(
+                            message=(
+                                f"runtime-gating setting {definition.key} is owned by "
+                                f"{definition.file} and cannot be set by {source_filename}"
+                            ),
+                            source_file=source_file,
+                            scope=source_scope,
+                            key=definition.key,
+                        )
+                    )
                 continue
             value = found[1]
             valid, message = _validate_value(definition, value)
@@ -566,9 +769,16 @@ def _validate_value(definition: SettingDefinition, value: Any) -> _ValidationRes
             return True, None
         return False, f"{definition.key} must be a boolean"
     if definition.type == "number":
-        if isinstance(value, int | float) and not isinstance(value, bool):
+        if isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value):
+            if definition.require_integer and not isinstance(value, int):
+                return False, f"{definition.key} must be a finite integer"
+            if definition.min_value is not None and value < definition.min_value:
+                return False, f"{definition.key} must be >= {definition.min_value}"
+            if definition.max_value is not None and value > definition.max_value:
+                return False, f"{definition.key} must be <= {definition.max_value}"
             return True, None
-        return False, f"{definition.key} must be a number"
+        suffix = "finite integer" if definition.require_integer else "finite number"
+        return False, f"{definition.key} must be a {suffix}"
     if definition.type == "array":
         if isinstance(value, list):
             return True, None

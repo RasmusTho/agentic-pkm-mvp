@@ -251,14 +251,18 @@ The canonical two-tier classification:
    binding, not vault-scoped governance. The vault is not yet initialized, so this is the human's
    only surface.
 
-2. **Runtime gating (post-init)** — `enableVaultWatcher` / `enableAutoIndexing`. These are
-   authority-bearing: they reconfigure whether the watcher/indexing runtime runs. Writes route
+2. **Runtime gating (post-init)** — `enableVaultWatcher` / `enableAutoIndexing`, plus
+   `youtubeSync.enabled` / `youtubeSync.runnerEnabled` (YSS-01, #3916). These are
+   authority-bearing: the first pair reconfigures whether the watcher/indexing runtime runs; the
+   second pair gates the YouTube Source Sync capability/runner. Writes route
    through the single server-side governed seam: WriteGuard health-gate + actor-tagged
    `SettingsWriteReceipt` (who / surface / when). No human/agent approval loop — a human may
-   already flip these via a direct hand-edit of `settings/local.md` (the file-originated door).
-   The receipt is wired for the **API door only** (caller: `app/api/routes/companion.py:826`); the CLI (`app.cli vault`, init/preflight only) is NOT yet wired.
-   The file-originated door (watcher-detected delta → `surface='file'`) is NOT yet wired; tracked
-   by #2512.
+   already flip these via a direct hand-edit of the owning settings file (the file-originated door),
+   and the watcher routes that delta through the same gate before runtime acceptance. Receipts are
+   wired for the API door and watcher file-originated door (`surface='file'`); the CLI (`app.cli
+   vault`, init/preflight only) is NOT yet wired. The full register (setting key / effect /
+   authority class / seam) lives in
+   `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Control-action register`.
 
 3. **External-boundary enable** — TTS provider enable. EBF applies; not re-decided here
    (`#2086`/`#1699`).

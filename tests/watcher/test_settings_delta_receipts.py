@@ -11,9 +11,13 @@ import yaml
 import app.watcher.registry as registry
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsStore
-from app.vault.settings_service import SettingsService
+from app.vault.settings_service import RUNTIME_GATING_SETTINGS, SettingsService
 from app.receipts.settings_receipts import query_settings_receipts
-from app.watcher.settings_delta import SETTINGS_LOCAL_REL, handle_settings_local_delta
+from app.watcher.settings_delta import (
+    SETTINGS_LOCAL_REL,
+    SETTINGS_YOUTUBE_REL,
+    handle_settings_local_delta,
+)
 from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
@@ -28,7 +32,7 @@ def test_delta_apply_receipted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     previous_values = {
         key: value
         for key, value in _read_frontmatter(vault_root / SETTINGS_LOCAL_REL).items()
-        if key in {"enableVaultWatcher", "enableAutoIndexing"}
+        if key in RUNTIME_GATING_SETTINGS
     }
     _write_local_settings(vault_root, {"enableAutoIndexing": False})
 
@@ -91,6 +95,247 @@ def _write_local_settings(vault_root: Path, updates: dict[str, object]) -> Path:
     return local_md
 
 
+def _write_youtube_settings(vault_root: Path, updates: dict[str, object]) -> Path:
+    store = MarkdownSettingsStore()
+    youtube_md = vault_root / SETTINGS_YOUTUBE_REL
+    document = store.read(youtube_md)
+    frontmatter = dict(document.frontmatter)
+    frontmatter.update(updates)
+    store.write_frontmatter(youtube_md, frontmatter, body=document.body)
+    return youtube_md
+
+
+def test_youtube_master_switch_file_delta_is_guarded_and_receipted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A direct youtube.md edit cannot activate without WriteGuard + receipt."""
+    import app.write_guard as _wg_module
+
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    previous_values = {"youtubeSync.enabled": False}
+
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance window"},
+    ):
+        blocked = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values=previous_values,
+        )
+
+    assert blocked.values == previous_values
+    assert blocked.receipts == ()
+    assert blocked.errors and "blocked" in blocked.errors[0]
+    assert not [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+
+    # Keep-on-disk deny semantics: the human's edit REMAINS in the git-shared
+    # owner file — this seam never rewrites it, because a denial on one
+    # machine must not clobber a value another machine legitimately accepted
+    # and receipted (youtube.md syncs with 'commit' policy). The ACCEPTED
+    # values stay at the last guarded state, so runtime-gating consumers must
+    # consume the seam's accepted values, never raw resolution.
+    store = MarkdownSettingsStore()
+    youtube_md = vault_root / SETTINGS_YOUTUBE_REL
+    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is True
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        allowed = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values=previous_values,
+        )
+
+    assert allowed.errors == ()
+    assert allowed.values == {"youtubeSync.enabled": True}
+    assert len(allowed.receipts) == 1
+    receipt = allowed.receipts[0]
+    assert receipt.key == "youtubeSync.enabled"
+    assert receipt.surface == "file"
+    assert receipt.is_runtime_gating is True
+    row = next(
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    )
+    assert row.old_value is False
+    assert row.new_value is True
+
+    # Reverse direction: deleting the enabling key while blocked is denied the
+    # same way — the accepted True stays in the seam's values, no receipt is
+    # emitted, and the file keeps the human's edit (key absent, not restored).
+    document = store.read(youtube_md)
+    frontmatter = dict(document.frontmatter)
+    del frontmatter["youtubeSync.enabled"]
+    store.write_frontmatter(youtube_md, frontmatter, body=document.body)
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance window"},
+    ):
+        removal_blocked = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values={"youtubeSync.enabled": True},
+        )
+    assert removal_blocked.values == {"youtubeSync.enabled": True}
+    assert removal_blocked.receipts == ()
+    assert removal_blocked.errors
+    assert "youtubeSync.enabled" not in store.read(youtube_md).frontmatter
+
+
+def test_gating_delta_on_unselected_vault_is_deferred_not_marked_seen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gating-file delta on a not-selected vault defers instead of routing.
+
+    The result carries ``deferred=True`` so callers skip recording the file
+    as seen and the edit re-processes once the vault validates — otherwise
+    the unrouted on-disk value would silently become effective through
+    resolution when the vault recovers (round-B review finding).
+    """
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    # Invalidate the vault: the committed marker file is required for
+    # validate_vault to return 'selected'.
+    (vault_root / "settings" / "vault.md").unlink()
+
+    result = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": False},
+    )
+
+    assert result.deferred is True
+    assert result.values == {"youtubeSync.enabled": False}
+    assert result.receipts == ()
+    assert result.errors and "requires selected vault" in result.errors[0]
+
+    # A routable delta is not deferred (control case).
+    (vault_root / "settings" / "vault.md").write_text(
+        "---\nschema: design-handoff.vault.v1\nscope: vault-shared\nvaultId: v1\nvaultName: V\n---\n",
+        encoding="utf-8",
+    )
+    import app.write_guard as _wg_module
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        routable = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values={"youtubeSync.enabled": False},
+        )
+    assert routable.deferred is False
+
+
+def test_local_file_cannot_override_youtube_master_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cross-file gate is ignored loudly and produces no success receipt."""
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    _write_local_settings(vault_root, {"youtubeSync.enabled": True})
+    result = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_LOCAL_REL,
+        previous_values=None,
+    )
+
+    assert result.values is not None
+    assert "youtubeSync.enabled" not in result.values
+    assert result.receipts == ()
+    assert result.errors and "owned by youtube.md" in result.errors[0]
+    resolution = SettingsService().resolve(VaultManager().validate_vault(vault_root))
+    assert resolution.settings["youtubeSync.enabled"].value is False
+    assert not [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+
+
+def test_first_seen_youtube_activation_is_guarded_and_receipted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing watcher state cannot turn an on-disk true into trusted state."""
+    import app.write_guard as _wg_module
+
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance window"},
+    ):
+        blocked = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values=None,
+        )
+
+    assert blocked.values == {"youtubeSync.enabled": False}
+    assert blocked.receipts == ()
+    assert blocked.errors and "blocked" in blocked.errors[0]
+    assert not [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+
+    # Keep-on-disk deny: the untrusted on-disk true stays as human-authored
+    # input (never rewritten by this seam — the file may have arrived via git
+    # from a machine where it WAS legitimately accepted); only the seam's
+    # accepted values guard what the runtime trusts.
+    store = MarkdownSettingsStore()
+    youtube_md = vault_root / SETTINGS_YOUTUBE_REL
+    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is True
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        allowed = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values=None,
+        )
+
+    assert allowed.errors == ()
+    assert allowed.values == {"youtubeSync.enabled": True}
+    assert len(allowed.receipts) == 1
+    assert allowed.receipts[0].old_value is False
+    assert allowed.receipts[0].new_value is True
+
+
 def test_multiple_watcher_specs_emit_one_settings_receipt_per_delta(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -136,7 +381,7 @@ def test_runtime_gating_key_removal_routes_settings_receipt(
     previous_values = {
         key: value
         for key, value in _read_frontmatter(local_md).items()
-        if key in {"enableVaultWatcher", "enableAutoIndexing"}
+        if key in RUNTIME_GATING_SETTINGS
     }
     assert "enableAutoIndexing" in previous_values
     outbox_path = tmp_path / "outbox.jsonl"

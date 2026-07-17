@@ -149,9 +149,18 @@ Vault initialization creates missing files only:
   workflow.md
   design-handoff.md
   companion-ui.md
+  youtube.md
   local.md
   .gitignore
 ```
+
+`youtube.md` (YouTube source-sync shared defaults, YSS-01 — see
+`docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Settings model`) is created at
+initialization but is not a *required* file: validation does not demand it, settings resolution
+falls back to built-in defaults when it is absent, and a `youtubeSync.*` settings write scaffolds
+it from the same initializer seed — so vaults initialized before it existed stay valid and fully
+writable. The same scaffold-on-write applies to every static vault-shared settings file; only
+`vault.md` and `local.md` (per-vault / per-machine seeds) must exist before a write.
 
 `settings/.gitignore` ignores local-only settings:
 

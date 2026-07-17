@@ -10,12 +10,30 @@ from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 from app.vault.settings_service import (
     RUNTIME_GATING_SETTINGS,
+    SETTING_DEFINITIONS,
     SettingsService,
     SettingsWriteError,
     SettingsWriteReceipt,
 )
 
 SETTINGS_LOCAL_REL = Path("settings/local.md")
+SETTINGS_YOUTUBE_REL = Path("settings/youtube.md")
+
+# Derived entirely from SETTING_DEFINITIONS so a future runtime-gating key in
+# a third owner file cannot silently bypass the governed delta path: every
+# gating definition contributes its own file here by construction.
+_RUNTIME_GATING_KEYS_BY_FILE: dict[Path, frozenset[str]] = {
+    rel_path: frozenset(
+        definition.key
+        for definition in SETTING_DEFINITIONS
+        if definition.key in RUNTIME_GATING_SETTINGS and definition.file == rel_path.name
+    )
+    for rel_path in {
+        Path("settings") / definition.file
+        for definition in SETTING_DEFINITIONS
+        if definition.key in RUNTIME_GATING_SETTINGS and definition.file
+    }
+}
 
 # Settings source files compile into the effective bundle. A change to one must
 # re-ingest so the running services honor
@@ -34,6 +52,7 @@ SCOPED_SETTINGS_FILENAMES = frozenset(
         "design-handoff.md",
         "companion-ui.md",
         "local.md",
+        "youtube.md",
     }
 )
 
@@ -43,6 +62,11 @@ class SettingsDeltaResult:
     values: dict[str, Any] | None
     receipts: tuple[SettingsWriteReceipt, ...] = ()
     errors: tuple[str, ...] = ()
+    # True when the delta could not be routed through the governed seam at all
+    # (vault not selected). Callers must NOT record the file as seen: the edit
+    # has to re-process on a later tick once the vault validates, or the
+    # unrouted on-disk value would silently become effective via resolution.
+    deferred: bool = False
 
 
 @dataclass(frozen=True)
@@ -130,9 +154,26 @@ def handle_settings_local_delta(
     settings_service: SettingsService | None = None,
     markdown_store: MarkdownSettingsStore | None = None,
 ) -> SettingsDeltaResult:
-    """Route watcher-detected runtime-gating settings deltas through the governed seam."""
+    """Route watcher-detected runtime-gating file deltas through the governed seam.
 
-    if rel_path != SETTINGS_LOCAL_REL:
+    The historical function name is retained for callers, but the seam covers
+    both the vault-local runtime controls and the vault-shared YouTube master
+    switch. A blocked edit remains on disk as human-authored input (the
+    vault-shared owner file is git-synced across machines, so this seam never
+    rewrites it: a denial on one machine must not clobber a value another
+    machine legitimately accepted and receipted); the returned ACCEPTED
+    values stay at the last guarded state and the denial surfaces via
+    ``errors`` with no success receipt. Because ``SettingsService.resolve``
+    re-reads the owner file directly, runtime-gating consumers MUST consume
+    this seam's accepted values (as the watcher does for
+    ``enableVaultWatcher``), never raw resolution. When the vault is not
+    selected the delta cannot be routed at all and the result is marked
+    ``deferred``: callers skip recording the file as seen so the edit
+    re-processes once the vault validates.
+    """
+
+    gating_keys = _RUNTIME_GATING_KEYS_BY_FILE.get(rel_path)
+    if gating_keys is None:
         return SettingsDeltaResult(values=None)
 
     store = markdown_store or MarkdownSettingsStore()
@@ -144,25 +185,53 @@ def handle_settings_local_delta(
 
     current_values = {
         key: document.frontmatter[key]
-        for key in sorted(RUNTIME_GATING_SETTINGS)
+        for key in sorted(gating_keys)
         if key in document.frontmatter
     }
+    service = settings_service or SettingsService(markdown_store=store)
     if previous_values is None:
-        return SettingsDeltaResult(values=current_values)
+        # A lost/empty watcher state is not evidence that an on-disk gate was
+        # previously accepted. Treat each present value as a transition from
+        # its registered safe/default baseline so activation still requires
+        # WriteGuard and a durable receipt.
+        accepted_previous_values = {
+            key: definition.default_value
+            for key in current_values
+            if (definition := service.registry.get(key)) is not None
+        }
+    else:
+        # State created by older releases may contain cross-file gating keys.
+        # Discard those values rather than carrying an invalid authority source
+        # forward after the ownership rule is tightened.
+        accepted_previous_values = {
+            key: value for key, value in previous_values.items() if key in gating_keys
+        }
 
     manager = VaultManager(markdown_store=store)
     context = manager.validate_vault(vault_root)
     if context.status != "selected":
         detail = f": {context.validation_error}" if context.validation_error else ""
         return SettingsDeltaResult(
-            values=current_values,
+            values=accepted_previous_values,
             errors=(
-                f"settings/local.md delta requires selected vault; status={context.status}{detail}",
+                f"{rel_path.as_posix()} delta requires selected vault; "
+                f"status={context.status}{detail}",
             ),
+            deferred=True,
         )
 
-    service = settings_service or SettingsService(markdown_store=store)
     resolution = service.resolve(context)
+    errors = []
+    for error in resolution.validation_errors:
+        definition = service.registry.get(error.key) if error.key else None
+        if (
+            error.source_file == str(path)
+            and definition is not None
+            and definition.key in RUNTIME_GATING_SETTINGS
+            and definition.file != rel_path.name
+        ):
+            errors.append(error.message)
+    previous_values = accepted_previous_values
     previous_keys = set(previous_values)
     current_keys = set(current_values)
     changed_keys = []
@@ -175,10 +244,10 @@ def handle_settings_local_delta(
         if current_present and previous_values.get(key) != current_values[key]:
             changed_keys.append(key)
     if not changed_keys:
-        return SettingsDeltaResult(values=current_values)
+        return SettingsDeltaResult(values=current_values, errors=tuple(errors))
 
     receipts: list[SettingsWriteReceipt] = []
-    errors: list[str] = []
+    accepted_values = dict(current_values)
     for key in changed_keys:
         try:
             persist = key in current_keys
@@ -194,11 +263,15 @@ def handle_settings_local_delta(
                 )
         except SettingsWriteError as exc:
             errors.append(str(exc))
+            if key in previous_values:
+                accepted_values[key] = previous_values[key]
+            else:
+                accepted_values.pop(key, None)
             continue
         receipts.append(receipt)
 
     return SettingsDeltaResult(
-        values=current_values,
+        values=accepted_values,
         receipts=tuple(receipts),
         errors=tuple(errors),
     )
@@ -206,6 +279,7 @@ def handle_settings_local_delta(
 
 __all__ = [
     "SETTINGS_LOCAL_REL",
+    "SETTINGS_YOUTUBE_REL",
     "SETTINGS_SOURCE_DIR_NAME",
     "SettingsDeltaResult",
     "SettingsSourceDeltaResult",

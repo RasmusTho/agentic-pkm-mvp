@@ -176,9 +176,12 @@ store *path*, local Takeout import path. Candidate posture (`requires_review: tr
 `review_state: draft`) is **not configurable** (INV-YSS-8).
 
 `youtubeSync.enabled` and `youtubeSync.runnerEnabled` join `RUNTIME_GATING_SETTINGS` (writes gated
-by WriteGuard + durable settings receipt). Validation errors degrade to defaults with a
-`SettingsValidationError`, never silently apply. Effective values, scope, and source file are
-shown by the capability doctor (`youtube-sync doctor`) via `EffectiveSetting` provenance.
+by WriteGuard + durable settings receipt). Each runtime-gating key is accepted only from its
+registered owner file (`youtube.md` for the shared master switch, `local.md` for the machine-local
+runner switch); a cross-file override is ignored with a `SettingsValidationError` and no success
+receipt. Validation errors degrade to defaults with a `SettingsValidationError`, never silently
+apply. Effective values, scope, and source file are shown by the capability doctor
+(`youtube-sync doctor`) via `EffectiveSetting` provenance.
 
 ## Secrets and private bindings (YSS-02)
 

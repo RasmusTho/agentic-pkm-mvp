@@ -727,26 +727,14 @@ def get_vault_manager() -> VaultManager:
     return _GLOBAL_MANAGER
 
 
-def _initial_settings_files(
-    *,
-    vault_id: str,
-    vault_name: str,
-    local_instance_id: str,
-    machine_role: MachineRole,
-) -> tuple[tuple[str, dict[str, Any], str], ...]:
+def _static_shared_settings_seeds() -> tuple[tuple[str, dict[str, Any], str], ...]:
+    """Seeds for shared settings files that need no vault-specific values.
+
+    New-vault initialization and existing-vault scaffold-on-write use this
+    one source. Parameterized ``vault.md`` and ``local.md`` intentionally do
+    not appear here and remain fail-loud when missing.
+    """
     return (
-        (
-            "vault.md",
-            {
-                "schema": "design-handoff.vault.v1",
-                "scope": "vault-shared",
-                "vaultId": vault_id,
-                "vaultName": vault_name,
-                "createdBy": "design-handoff",
-                "settingsVersion": 1,
-            },
-            "# Vault Settings\nThis file identifies the logical Design Handoff vault.\nIt may be shared across machines through Git.\n",
-        ),
         (
             "paths.md",
             {
@@ -792,6 +780,56 @@ def _initial_settings_files(
             "# Companion UI Settings\nShared Companion UI defaults for this vault.\nLocal UI preferences may override these in local settings.\n",
         ),
         (
+            "youtube.md",
+            {
+                "schema": "design-handoff.youtube-sync.v1",
+                "scope": "vault-shared",
+                "youtubeSync.enabled": False,
+                "youtubeSync.inboxPollSeconds": 180,
+                "youtubeSync.playlistPollSeconds": 3600,
+                "youtubeSync.subscriptionsPollSeconds": 21600,
+                "youtubeSync.reconcileIntervalDays": 7,
+                "youtubeSync.maxConcurrentAcquisitions": 2,
+                "youtubeSync.subscriptionDefaultPolicy": "discover_only",
+                "youtubeSync.captionsEnabled": True,
+                "youtubeSync.mediaDownloadEnabled": False,
+            },
+            "# YouTube Sync Settings\nSettings for the YouTube source-sync capability (YSS).\n"
+            "See docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md for the full settings model.\n",
+        ),
+    )
+
+
+def shared_settings_file_seed(filename: str) -> tuple[dict[str, Any], str] | None:
+    """Return a static vault-shared initializer seed, if one is safe to seed."""
+    for name, frontmatter, body in _static_shared_settings_seeds():
+        if name == filename:
+            return frontmatter, body
+    return None
+
+
+def _initial_settings_files(
+    *,
+    vault_id: str,
+    vault_name: str,
+    local_instance_id: str,
+    machine_role: MachineRole,
+) -> tuple[tuple[str, dict[str, Any], str], ...]:
+    return (
+        (
+            "vault.md",
+            {
+                "schema": "design-handoff.vault.v1",
+                "scope": "vault-shared",
+                "vaultId": vault_id,
+                "vaultName": vault_name,
+                "createdBy": "design-handoff",
+                "settingsVersion": 1,
+            },
+            "# Vault Settings\nThis file identifies the logical Design Handoff vault.\nIt may be shared across machines through Git.\n",
+        ),
+        *_static_shared_settings_seeds(),
+        (
             "local.md",
             {
                 "schema": "design-handoff.local.v1",
@@ -805,6 +843,7 @@ def _initial_settings_files(
                 "allowSharedSettingsEdits": machine_role in {"primary", "automationNode", "testNode"},
                 "allowLocalSettingsEdits": True,
                 "localExportPath": None,
+                "youtubeSync.runnerEnabled": False,
             },
             "# Local Settings\nSettings for this local clone of the vault.\nThis file should not be committed to Git.\nUse this file for machine-specific paths, satellite behavior, local runtime preferences, and local automation settings.\n",
         ),
