@@ -97,6 +97,44 @@ def upgrade() -> None:
         )
         """
     )
+    # Existing test/bootstrap-created tables predate the CHECK constraints.
+    # Add every migration-owned constraint idempotently so upgrading such a
+    # resource reaches the same fail-loud schema as a fresh migration.
+    for name, check in (
+        (
+            "acquisition_source_registry_kind_chk",
+            "collection_kind IN ('inbox_playlist', 'owned_playlist', 'liked_videos', "
+            "'public_playlist', 'subscription_feed')",
+        ),
+        (
+            "acquisition_source_registry_discovery_mode_chk",
+            "discovery_mode IN ('api_poll', 'rss_poll', 'backfill_only')",
+        ),
+        (
+            "acquisition_source_registry_priority_chk",
+            "priority IN ('high', 'normal')",
+        ),
+        (
+            "acquisition_source_registry_poll_interval_chk",
+            "poll_interval_seconds >= 60 AND poll_interval_seconds <= 604800",
+        ),
+    ):
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = '{name}'
+                      AND conrelid = 'acquisition_source_registry'::regclass
+                ) THEN
+                    ALTER TABLE acquisition_source_registry
+                    ADD CONSTRAINT {name} CHECK ({check});
+                END IF;
+            END $$;
+            """
+        )
     # Unique binding triple, NULL-safe on account_binding_id (see module docstring).
     op.execute(
         f"""

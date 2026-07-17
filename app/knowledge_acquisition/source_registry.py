@@ -530,7 +530,22 @@ def _bootstrap_pg(conn: Any) -> None:
             acquisition_policy JSONB NOT NULL,
             provenance JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT acquisition_source_registry_kind_chk CHECK (
+                collection_kind IN (
+                    'inbox_playlist', 'owned_playlist', 'liked_videos',
+                    'public_playlist', 'subscription_feed'
+                )
+            ),
+            CONSTRAINT acquisition_source_registry_discovery_mode_chk CHECK (
+                discovery_mode IN ('api_poll', 'rss_poll', 'backfill_only')
+            ),
+            CONSTRAINT acquisition_source_registry_priority_chk CHECK (
+                priority IN ('high', 'normal')
+            ),
+            CONSTRAINT acquisition_source_registry_poll_interval_chk CHECK (
+                poll_interval_seconds >= 60 AND poll_interval_seconds <= 604800
+            )
         )
         """
     )
@@ -542,6 +557,10 @@ def _bootstrap_pg(conn: Any) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_single_inbox_uq "
         f"ON {_TABLE} (COALESCE(account_binding_id, '__none__')) "
         "WHERE collection_kind = 'inbox_playlist' AND enabled = true"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS acquisition_source_registry_account_idx "
+        f"ON {_TABLE} (account_binding_id)"
     )
 
 

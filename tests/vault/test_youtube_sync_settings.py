@@ -238,18 +238,32 @@ def test_update_setting_scaffolds_missing_youtube_settings_file(tmp_path: Path) 
     assert resolution.settings["youtubeSync.captionsEnabled"].source_file == str(youtube_md)
 
     youtube_md.unlink()
-    with (
-        patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=blocked_snapshot),
-        pytest.raises(SettingsWriteError),
-    ):
-        service.update_setting(context, "youtubeSync.enabled", True, surface="cli", actor="human")
-    assert not youtube_md.exists()
+    # Every youtubeSync.* scaffold is WriteGuard-gated, including a normally
+    # non-runtime-gated key. Safe mode must leave the missing file absent.
+    for key, value in (("youtubeSync.enabled", True), ("youtubeSync.captionsEnabled", False)):
+        with (
+            patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=blocked_snapshot),
+            pytest.raises(SettingsWriteError, match="blocked"),
+        ):
+            service.update_setting(context, key, value, surface="cli", actor="human")
+        assert not youtube_md.exists()
 
-    effective, receipt = service.update_setting(
-        context, "youtubeSync.captionsEnabled", False, surface="cli", actor="human"
-    )
+    # A healthy guard permits a non-gating youtubeSync.* write to scaffold.
+    with patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=healthy_snapshot):
+        effective, receipt = service.update_setting(
+            context, "youtubeSync.captionsEnabled", False, surface="cli", actor="human"
+        )
     assert youtube_md.exists()
     assert effective.value is False
+    assert receipt.is_runtime_gating is False
+
+    # Existing-file semantics remain unchanged: safe mode does not turn a
+    # normal non-gating setting update into a guarded write.
+    with patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=blocked_snapshot):
+        effective, receipt = service.update_setting(
+            context, "youtubeSync.captionsEnabled", True, surface="cli", actor="human"
+        )
+    assert effective.value is True
     assert receipt.is_runtime_gating is False
 
     local_md = settings_dir / "local.md"

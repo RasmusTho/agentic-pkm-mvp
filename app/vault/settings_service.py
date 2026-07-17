@@ -481,7 +481,7 @@ class SettingsService:
         try:
             document = self.markdown_store.read(path)
         except FileNotFoundError as exc:
-            document = self._scaffold_missing_settings_file(path, definition.file, cause=exc)
+            document = self._scaffold_missing_settings_file(path, definition.file, key=key, cause=exc)
         except (OSError, MarkdownSettingsError) as exc:
             raise SettingsWriteError(str(exc)) from exc
 
@@ -534,16 +534,28 @@ class SettingsService:
         return effective, receipt
 
     def _scaffold_missing_settings_file(
-        self, path: Path, filename: str, *, cause: FileNotFoundError
+        self, path: Path, filename: str, *, key: str, cause: FileNotFoundError
     ) -> MarkdownSettingsDocument:
         """Seed a static shared settings file missing from an older vault.
 
-        This runs only after runtime-gating WriteGuard evaluation. Files with
-        vault- or machine-specific seeds stay absent and fail loudly.
+        Any ``youtubeSync.*`` scaffold is itself a vault-writing control
+        action. It therefore checks WriteGuard even when the requested key is
+        not normally runtime-gated; an existing non-gating setting file still
+        follows the ordinary non-gated update path. Files with vault- or
+        machine-specific seeds stay absent and fail loudly.
         """
         seed = shared_settings_file_seed(filename)
         if seed is None:
             raise SettingsWriteError(f"settings file does not exist: {path}") from cause
+        if key.startswith("youtubeSync."):
+            from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError  # noqa: PLC0415
+
+            try:
+                DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION)
+            except WritesBlockedError as exc:
+                raise SettingsWriteError(
+                    f"settings scaffold blocked by health gate: {exc}"
+                ) from exc
         seed_frontmatter, seed_body = seed
         try:
             self.markdown_store.write_frontmatter(path, seed_frontmatter, body=seed_body)
