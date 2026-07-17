@@ -19,40 +19,32 @@ def _isolated_schema_dsn(dsn: str, schema: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
-def test_initialize_refuses_newer_schema_and_authority_epoch(control_plane_store, envelope) -> None:
+def test_initialize_refuses_newer_schema_and_preserves_runtime_authority_epoch(
+    control_plane_store, envelope
+) -> None:
     store = control_plane_store
     with store._connect() as conn:
         conn.execute(
             "INSERT INTO builderops_schema_migrations(version, name, checksum) "
-            "VALUES (2, '0002_future.sql', 'future')"
+            "VALUES (3, '0003_future.sql', 'future')"
         )
         conn.execute(
             "UPDATE builderops_authority_metadata "
-            "SET authority_epoch = 2, schema_version = 2 WHERE singleton"
+            "SET authority_epoch = 2, schema_version = 3 WHERE singleton"
         )
 
     with pytest.raises(RuntimeError, match="newer or unknown migration version"):
         store.initialize()
+    assert store.readiness() == {"authority_epoch": 2, "schema_version": 3}
+
+    with store._connect() as conn:
+        conn.execute("DELETE FROM builderops_schema_migrations WHERE version = 3")
+        conn.execute(
+            "UPDATE builderops_authority_metadata "
+            "SET authority_epoch = 2, schema_version = 2 WHERE singleton"
+        )
+    store.initialize()
     assert store.readiness() == {"authority_epoch": 2, "schema_version": 2}
-
-    with store._connect() as conn:
-        conn.execute("DELETE FROM builderops_schema_migrations WHERE version = 2")
-        conn.execute(
-            "UPDATE builderops_authority_metadata "
-            "SET authority_epoch = 1, schema_version = 2 WHERE singleton"
-        )
-    with pytest.raises(RuntimeError, match="database schema is newer"):
-        store.initialize()
-    assert store.readiness() == {"authority_epoch": 1, "schema_version": 2}
-
-    with store._connect() as conn:
-        conn.execute(
-            "UPDATE builderops_authority_metadata "
-            "SET authority_epoch = 2, schema_version = 1 WHERE singleton"
-        )
-    with pytest.raises(RuntimeError, match="authority epoch is newer"):
-        store.initialize()
-    assert store.readiness() == {"authority_epoch": 2, "schema_version": 1}
 
 
 @pytest.mark.parametrize(
@@ -74,7 +66,7 @@ def test_initialize_refuses_mismatched_applied_migration_lineage(
 
 def test_initialize_is_idempotent_for_exact_current_lineage(control_plane_store, envelope) -> None:
     control_plane_store.initialize()
-    assert control_plane_store.readiness() == {"authority_epoch": 1, "schema_version": 1}
+    assert control_plane_store.readiness() == {"authority_epoch": 1, "schema_version": 2}
 
 
 @pytest.mark.parametrize(
@@ -110,7 +102,9 @@ def test_initialize_refuses_to_recreate_a_missing_applied_migration_receipt(
     with store._connect() as conn:
         row = conn.execute("SELECT count(*) AS count FROM builderops_schema_migrations").fetchone()
     assert row is not None
-    assert row["count"] == 0
+    # Version 2 remains present; initialize must refuse the non-contiguous
+    # lineage instead of silently recreating the deleted version 1 receipt.
+    assert row["count"] == 1
 
 
 @pytest.mark.parametrize(

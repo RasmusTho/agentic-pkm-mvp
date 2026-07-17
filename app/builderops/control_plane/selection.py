@@ -21,6 +21,26 @@ class ExplicitSqliteAdapter:
         return SqliteBuilderOpsStore(self.path, read_only=True)
 
 
+def database_environment(env: Mapping[str, str]) -> dict[str, str]:
+    """Resolve the BuilderOps DSN from exactly one direct or secret-file source."""
+    resolved = dict(env)
+    direct = env.get("BUILDEROPS_DATABASE_URL", "").strip()
+    secret_file = env.get("BUILDEROPS_DATABASE_URL_FILE", "").strip()
+    if direct and secret_file:
+        raise RuntimeError(
+            "configure exactly one of BUILDEROPS_DATABASE_URL or BUILDEROPS_DATABASE_URL_FILE"
+        )
+    if secret_file:
+        try:
+            direct = Path(secret_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError("BuilderOps database secret is unavailable") from exc
+        if not direct:
+            raise RuntimeError("BuilderOps database secret is empty")
+        resolved["BUILDEROPS_DATABASE_URL"] = direct
+    return resolved
+
+
 def production_store(env: Mapping[str, str]) -> PostgresBuilderOpsStore:
     dsn = env.get("BUILDEROPS_DATABASE_URL", "").strip()
     if not dsn:

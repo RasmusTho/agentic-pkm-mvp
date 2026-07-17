@@ -59,6 +59,44 @@ Operational stance:
   intentional trusted proxy boundary
 - rate limiting should protect public API surfaces without blocking internal trusted automation
 
+BuilderOps independent control-plane contract (#3790):
+- BuilderOps does not inherit Product `API_KEY`, loopback bypass, or Companion proxy trust. Its
+  independent service requires a bearer credential on health, status, metrics, record, and lease
+  routes even when the caller is on the tailnet or loopback.
+- The server-side credential manifest carries scope, revocation/rotation metadata, a non-secret
+  SHA-256 verifier, bounded token length, and references only. Token length permits verifier-only
+  substring scanning without retaining the bearer. Raw values may be supplied through host secret
+  files for compatibility bootstrap but are never returned or stored in BuilderOps PostgreSQL.
+- Complete durable request documents, including identifiers, envelope metadata, idempotency keys,
+  and payloads, fail closed on registered bearer values, credential-shaped keys,
+  credential-bearing database URLs, and known provider-token shapes. Secret references,
+  fingerprints, scopes, credential IDs, and rotation generations remain valid durable metadata.
+- Normal client, executor, probe, and operator scopes are separate. Authentication failure is
+  `401`, insufficient scope is `403`, and a per-principal service limiter returns `429` without
+  logging the bearer.
+- The host outage probe uses distinct host-secret credentials for `health:read` readiness and
+  `status:read` recovery-state inspection; the narrower health credential is never promoted to a
+  broader scope merely to simplify the probe.
+- Tailnet TLS is the transport boundary, not authentication. Live activation still requires an
+  operator-provided separate BuilderOps engine on the configured control-plane host, real immutable
+  pins, scoped host secrets, and the later BCP cutover gates. Deployment rejects active
+  Funnel/public exposure before mutating Tailscale Serve, then configures HTTPS termination to the
+  loopback-only API port and verifies the expected mapping; the repo configuration alone does not
+  claim a running production service.
+- Durable metadata allowlists are shape-checked: fingerprints must be SHA-256 values, secret
+  references must identify a supported host-secret provider, and scope/rotation fields must have
+  their bounded canonical forms. Credential IDs and verifier fingerprints are unique, and malformed
+  manifest metadata fails closed before status is rendered. Credential-like spelling variants such
+  as `APIKey` and credential-shaped values embedded in ordinary text remain denied.
+- Candidate control-plane and PostgreSQL/WAL-G images must pass a real encrypted backup plus
+  archived-WAL restore gate. The gate uses independent recovery-key material, binds verification to
+  the restored PostgreSQL data directory, validates the recovery fence, and scans recovery material
+  and restored state for raw credentials. Main CI then emits and GitHub-attests one candidate-pair
+  receipt binding the source SHA to both exact `linux/amd64` digests; deployment rejects independent
+  digest arguments or an unattested/mismatched receipt. Verification enforces the certificate's
+  `refs/heads/main` source ref and exact receipt source SHA. Only the push-only successor job receives
+  OIDC/attestation permissions, never the pull-request image job.
+
 Remaining gaps:
 - ensure all externally exposed routers apply auth consistently
 - ensure routes that require rate limits actually carry explicit limiter wiring

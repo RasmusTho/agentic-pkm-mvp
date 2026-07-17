@@ -39,7 +39,11 @@ def test_ci_builds_sha_tagged_image() -> None:
     assert "tags: ${{ steps.build-identity.outputs.image }}" in workflow
     assert "if: github.event_name == 'pull_request'" in workflow
     assert "platforms: linux/amd64" in workflow
-    assert "platforms: linux/amd64,linux/arm64" in workflow
+    assert "Publish the exact restore-proved BuilderOps images" in workflow
+    assert 'docker push "${{ steps.images.outputs.control_plane }}"' in workflow
+    assert 'docker push "${{ steps.images.outputs.postgres }}"' in workflow
+    publish = workflow.split("Publish the exact restore-proved BuilderOps images", maxsplit=1)[1]
+    assert "docker build" not in publish
     assert "load: true" in workflow
     assert "push: false" in workflow
 
@@ -75,11 +79,39 @@ def test_built_image_version_reports_build_sha(monkeypatch) -> None:
 
 def test_single_image_artifact_per_commit() -> None:
     workflow = _workflow_text()
+    product_image_job = workflow.split("\n  build-builderops-images:", maxsplit=1)[0]
 
-    assert "strategy:" not in workflow
-    assert workflow.count("uses: docker/build-push-action@") == 2
-    assert workflow.count("if: github.event_name == 'pull_request'") == 2
-    assert workflow.count("if: github.event_name == 'push' && github.ref == 'refs/heads/main'") >= 2
-    assert "matrix:" not in workflow
-    assert "CHANNEL" not in workflow
-    assert "ENVIRONMENT" not in workflow
+    assert "strategy:" not in product_image_job
+    assert product_image_job.count("uses: docker/build-push-action@") == 2
+    assert product_image_job.count("if: github.event_name == 'pull_request'") == 2
+    assert (
+        product_image_job.count("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
+        >= 1
+    )
+    assert "matrix:" not in product_image_job
+    assert "CHANNEL" not in product_image_job
+    assert "ENVIRONMENT" not in product_image_job
+
+
+def test_builderops_publish_reuses_the_restore_proved_images() -> None:
+    builderops_job = _workflow_text().split("\n  build-builderops-images:", maxsplit=1)[1]
+    build_job, attestation_job = builderops_job.split(
+        "\n  attest-builderops-candidate-pair:", maxsplit=1
+    )
+    restore = builderops_job.index("Prove encrypted full-backup plus archived-WAL restore")
+    publish = builderops_job.index("Publish the exact restore-proved BuilderOps images")
+
+    assert restore < publish
+    assert "docker build" not in builderops_job[publish:]
+    assert 'docker push "${{ steps.images.outputs.control_plane }}"' in builderops_job[publish:]
+    assert 'docker push "${{ steps.images.outputs.postgres }}"' in builderops_job[publish:]
+    receipt = build_job.index("Write the restore-proved candidate pair receipt")
+    upload = build_job.index("Upload the restore-proved candidate pair receipt")
+    assert publish < receipt < upload
+    assert "id-token: write" not in build_job
+    assert "attestations: write" not in build_job
+    assert "needs: build-builderops-images" in attestation_job
+    assert "actions/attest-build-provenance@v2" in attestation_job
+    assert "subject-path: builderops-candidate-pair.json" in attestation_job
+    assert "id-token: write" in attestation_job
+    assert "attestations: write" in attestation_job
