@@ -17,9 +17,7 @@ class RecoveryConfigurationError(ValueError):
     """Raised when recovery storage shares the primary failure domain."""
 
 
-_LOCAL_HOSTS = frozenset(
-    {"", "localhost", "host.docker.internal", "demerzel", "127.0.0.1", "::1"}
-)
+_LOCAL_HOSTS = frozenset({"", "localhost", "host.docker.internal", "127.0.0.1", "::1"})
 
 
 @dataclass(frozen=True)
@@ -41,8 +39,8 @@ class RecoveryTarget:
                 "recovery target identity must not embed credentials or query material"
             )
         hostname = (parsed.hostname or "").lower().rstrip(".")
-        if hostname in _LOCAL_HOSTS or hostname.startswith("demerzel."):
-            raise RecoveryConfigurationError("recovery target is co-resident with Demerzel")
+        if hostname in _LOCAL_HOSTS:
+            raise RecoveryConfigurationError("recovery target is co-resident with the primary host")
         try:
             if ipaddress.ip_address(hostname).is_loopback:
                 raise RecoveryConfigurationError("recovery target resolves to loopback")

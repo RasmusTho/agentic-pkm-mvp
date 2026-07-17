@@ -52,7 +52,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str]:
         json.dumps(
             {
                 "url": "s3://offsite.example.invalid/builderops",
-                "primary_failure_domain": "demerzel-primary",
+                "primary_failure_domain": "builder-primary",
                 "recovery_failure_domain": "operator-offsite",
                 "encryption_key_ref": "kms:builderops-recovery",
                 "custody_ref": "operator:independent",

@@ -18,7 +18,7 @@ def test_builder_plane_survives_product_stack_lifecycle_and_alerts_on_stalled_ar
     """A1: archival stalls alert but cannot become an acknowledgement gate."""
     target = RecoveryTarget(
         url="s3://backup.example.invalid/builderops",
-        primary_failure_domain="demerzel-internal-storage",
+        primary_failure_domain="builder-primary-storage",
         recovery_failure_domain="offsite-object-storage",
         encryption_key_ref="secret-ref:builderops-recovery-key",
         custody_ref="custody:offline-operator-copy",
@@ -45,13 +45,13 @@ def test_builder_plane_survives_product_stack_lifecycle_and_alerts_on_stalled_ar
         "file:///Volumes/offsite/builderops",
         "s3://localhost/builderops",
         "s3://host.docker.internal/builderops",
-        "s3://demerzel/builderops",
+        "s3://127.0.0.1/builderops",
     ):
         with pytest.raises(RecoveryConfigurationError):
             RecoveryTarget(
                 url=local_target,
-                primary_failure_domain="demerzel",
-                recovery_failure_domain="demerzel",
+                primary_failure_domain="builder-primary",
+                recovery_failure_domain="builder-primary",
                 encryption_key_ref="secret-ref:key",
                 custody_ref="custody:operator",
             )
@@ -69,7 +69,7 @@ def test_wal_target_must_match_validated_recovery_identity(tmp_path: Path) -> No
     target_file.write_text(
         """{
           "url": "s3://offsite.example.invalid/builderops",
-          "primary_failure_domain": "demerzel-primary",
+          "primary_failure_domain": "builder-primary",
           "recovery_failure_domain": "operator-offsite",
           "encryption_key_ref": "kms:builderops-recovery",
           "custody_ref": "operator:independent"

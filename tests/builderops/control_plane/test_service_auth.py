@@ -95,7 +95,7 @@ def _registry(tmp_path: Path) -> CredentialRegistry:
                     },
                     {
                         "id": "health-probe",
-                        "principal": "probe:demerzel",
+                        "principal": "probe:builder-host",
                         "secret_ref": "host-secret:probe",
                         "secret_file": str(read_secret),
                         "scopes": ["health:read"],

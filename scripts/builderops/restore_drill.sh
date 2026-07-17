@@ -21,8 +21,8 @@ fi
 : "${BUILDEROPS_RESTORE_REPOSITORY:?repository identity is required}"
 : "${BUILDEROPS_RESTORE_SENTINEL_RECORD_ID:?post-backup WAL sentinel identity is required}"
 
-if [[ ${DEMERZEL_SECRET_STORE_AVAILABLE:-0} != 0 ]]; then
-  echo "restore drill must run with Demerzel host secret store unavailable" >&2
+if [[ ${PRIMARY_HOST_SECRET_STORE_AVAILABLE:-0} != 0 ]]; then
+  echo "restore drill must run with the primary host secret store unavailable" >&2
   exit 78
 fi
 if [[ -e "$restore_data" && -n "$(find "$restore_data" -mindepth 1 -print -quit)" ]]; then

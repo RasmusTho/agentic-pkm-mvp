@@ -73,8 +73,9 @@ BuilderOps independent control-plane contract (#3790):
   `401`, insufficient scope is `403`, and a per-principal service limiter returns `429` without
   logging the bearer.
 - Tailnet TLS is the transport boundary, not authentication. Live activation still requires an
-  operator-provided second Demerzel engine, real immutable pins, scoped host secrets, and the later
-  BCP cutover gates; the repo configuration alone does not claim a running production service.
+  operator-provided separate BuilderOps engine on the configured control-plane host, real immutable
+  pins, scoped host secrets, and the later BCP cutover gates; the repo configuration alone does not
+  claim a running production service.
 
 Remaining gaps:
 - ensure all externally exposed routers apply auth consistently

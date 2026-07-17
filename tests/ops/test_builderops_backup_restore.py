@@ -89,12 +89,12 @@ def test_restore_from_backup_without_demerzel_secret_store(tmp_path: Path) -> No
     rejected = subprocess.run(
         ["bash", str(RESTORE), str(tmp_path / "rejected"), "0/1600000"],
         cwd=REPO_ROOT,
-        env={**env, "DEMERZEL_SECRET_STORE_AVAILABLE": "1"},
+        env={**env, "PRIMARY_HOST_SECRET_STORE_AVAILABLE": "1"},
         capture_output=True,
         text=True,
     )
     assert rejected.returncode != 0
-    assert "Demerzel host secret store unavailable" in rejected.stderr
+    assert "primary host secret store unavailable" in rejected.stderr
 
 
 def _schema_dsn(dsn: str, schema: str) -> str:

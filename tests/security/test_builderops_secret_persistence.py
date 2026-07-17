@@ -150,14 +150,14 @@ def test_raw_credentials_never_enter_durable_state_or_restored_backup(tmp_path: 
     with pytest.raises(RecoveryConfigurationError):
         RecoveryTarget(
             url="s3://user:query-secret@offsite.example.invalid/builderops?token=hidden",
-            primary_failure_domain="demerzel",
+            primary_failure_domain="builder-primary",
             recovery_failure_domain="offsite",
             encryption_key_ref="secret-ref:recovery",
             custody_ref="custody:operator",
         )
     target = RecoveryTarget(
         url="s3://offsite.example.invalid/builderops",
-        primary_failure_domain="demerzel",
+        primary_failure_domain="builder-primary",
         recovery_failure_domain="offsite",
         encryption_key_ref="secret-ref:recovery",
         custody_ref="custody:operator",

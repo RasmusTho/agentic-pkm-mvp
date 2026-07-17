@@ -147,7 +147,7 @@ def test_live_provider_validates_recovery_failure_domain_and_shared_worker_heart
         json.dumps(
             {
                 "url": "s3://offsite.example.invalid/builderops",
-                "primary_failure_domain": "demerzel-primary",
+                "primary_failure_domain": "builder-primary",
                 "recovery_failure_domain": "operator-offsite",
                 "encryption_key_ref": "kms:builderops-recovery",
                 "custody_ref": "operator:independent",
@@ -175,7 +175,7 @@ def test_live_provider_validates_recovery_failure_domain_and_shared_worker_heart
     assert snapshot.recovery_pipeline_state == "unknown"
 
     document = json.loads(target.read_text(encoding="utf-8"))
-    document["recovery_failure_domain"] = "demerzel-primary"
+    document["recovery_failure_domain"] = "builder-primary"
     target.write_text(json.dumps(document), encoding="utf-8")
     assert provider.snapshot().recovery_target_independent is False
 
