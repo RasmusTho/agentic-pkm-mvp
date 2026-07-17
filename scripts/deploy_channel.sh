@@ -307,56 +307,24 @@ prod_pending_retry_preflight() {
   # the worker restarted, undetected by every other gate). Never mutates the
   # outbox; deliberately NOT applied to rollback (the prior stable ref must
   # always be recoverable -- docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md).
-  # See scripts/prod_deploy_retry_preflight.py and
+  # DSN sourcing (#3903 round 4): the effective DATABASE_URL/DB_DSN a running
+  # prod service binds to is resolved ENTIRELY inside
+  # scripts/prod_deploy_retry_preflight.py, by asking
+  # app.release_channels.channel_isolation_preflight (the one purpose-built,
+  # tested Compose environment:-vs-env_file: resolver) what docker-compose.prod.yml
+  # actually binds -- not by this wrapper reading pin/runtime-env files and
+  # guessing precedence by hand (rounds 2 and 3 both tried that and were both
+  # wrong: Compose's own `environment:` block always wins over `env_file:` for
+  # the same key, and the prod overlay sets DATABASE_URL/DB_DSN directly in
+  # `environment:`). This wrapper therefore has no DSN of its own to inject;
+  # the preflight subprocess inherits this shell's environment exactly as the
+  # real `docker compose` invocation below does, so an ambient DATABASE_URL/
+  # DB_DSN override behaves identically for both (Compose interpolation
+  # semantics), with nothing printed either way (#3875 redaction posture). See
+  # scripts/prod_deploy_retry_preflight.py and
   # docs/HEALTH.md :: Outbox and dead-letter signals.
-  local receipt_json rc=0 dsn_from_file="" runtime_env_ref="" runtime_env_file=""
-
-  # Resolve the channel's governed runtime env file with EXACTLY the two
-  # steps the shared compose lib (scripts/lib/) itself uses for the same
-  # lookup: (1) the WATCHER_RUNTIME_ENV_FILE ref in the channel pin file,
-  # read via _deploy_channel_env_value; (2) the docker-compose.yaml service
-  # env_file default `./tmp/runtime.env`. Committed pin files carry only
-  # APP_IMAGE_* keys, so on a real host the default in step (2) IS the live
-  # configuration -- stopping at step (1) would make this gate skip on every
-  # real prod deploy (the round-2 D1 gap). Deliberately NO ambient-shell
-  # fallback: the compose lib explicitly `unset WATCHER_RUNTIME_ENV_FILE`
-  # right before invoking `docker compose` whenever the pin file lacks the
-  # key ("so a stale parent shell cannot swap the selected runtime env") --
-  # an earlier revision of this preflight honored an ambient export here,
-  # which reintroduced precisely the contamination that unset exists to
-  # prevent (silently checking a different DSN than the one the real deploy
-  # will target). Do not reintroduce it. The extracted DSN is injected ONLY
-  # into the single preflight subprocess env below -- never exported into
-  # this shell, never passed to Compose, never printed (#3875 redaction
-  # posture). Ambient shell DATABASE_URL/DB_DSN remains the fallback when
-  # the resolved file provides none.
-  runtime_env_ref="$(_deploy_channel_env_value "${pin_file}" WATCHER_RUNTIME_ENV_FILE)"
-  if [ -z "${runtime_env_ref}" ]; then
-    # docker-compose.yaml: `${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}`,
-    # resolved against the compose project directory = ${ROOT} (directory of
-    # the first -f file; the wrapper also cd's there). Keep this literal in
-    # sync with docker-compose.yaml.
-    runtime_env_ref="./tmp/runtime.env"
-  fi
-  if [ -n "${runtime_env_ref}" ]; then
-    case "${runtime_env_ref}" in
-      /*) runtime_env_file="${runtime_env_ref}" ;;
-      ./*) runtime_env_file="${ROOT}/${runtime_env_ref#./}" ;;
-      *) runtime_env_file="${ROOT}/${runtime_env_ref}" ;;
-    esac
-  fi
-  if [ -n "${runtime_env_file}" ] && [ -f "${runtime_env_file}" ]; then
-    dsn_from_file="$(_deploy_channel_env_value "${runtime_env_file}" DATABASE_URL)"
-    if [ -z "${dsn_from_file}" ]; then
-      dsn_from_file="$(_deploy_channel_env_value "${runtime_env_file}" DB_DSN)"
-    fi
-  fi
-
-  if [ -n "${dsn_from_file}" ]; then
-    receipt_json="$(DATABASE_URL="${dsn_from_file}" "${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
-  else
-    receipt_json="$("${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
-  fi
+  local receipt_json rc=0
+  receipt_json="$("${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
 
   # Always emit exactly one status line -- ok / skipped:<reason> / blocked --
   # derived from the receipt's status+reason fields (counts and reason codes

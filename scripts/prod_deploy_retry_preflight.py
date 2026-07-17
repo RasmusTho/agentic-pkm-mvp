@@ -40,37 +40,56 @@ gate (deploy, health, exact-SHA, embedding, live smoke) while eight
 ``panel.scan.requested`` rows already at retry-3 silently dead-lettered the
 moment the worker restarted.
 
-The script prefers the canonical DSN normalizer (``app.db.dsn.resolve_dsn``)
-when the ``app`` package is importable and falls back to inline
-normalization otherwise (the same layered pattern as
-``app/services/outbox.py::_open_conn``); it never imports the worker module
-or any heavy dependency graph at runtime — deploy hosts may run a bare
-``python3``. Constant/behavior parity with the worker is enforced by
-``tests/scripts/test_prod_deploy_retry_preflight_constants_parity.py``. It
-never mutates the outbox (KERNEL-12 read-only invariant) and never prints
-event payloads, note/source paths, DSNs, or credentials -- only aggregate
-counts and topic/classification labels.
+DSN resolution (#3903 round 4): the effective DATABASE_URL/DB_DSN a running
+prod service actually binds to is a Compose layering question, NOT something
+this script may re-derive from pin/env files by hand -- rounds 2 and 3 tried
+exactly that and both were wrong, because Compose's own rule (documented at
+``docker-compose.dev.yml:29`` and ``docs/RELEASE_CHANNELS/README.md``
+:: Compose/env binding invariant) is that a service's ``environment:`` block
+always wins over its ``env_file:`` chain for the same key, and
+``docker-compose.prod.yml`` sets ``DATABASE_URL``/``DB_DSN`` directly in
+``environment:`` for every channel-critical service. This script instead
+calls the one purpose-built, tested resolver for this exact precedence puzzle
+-- ``app.release_channels.channel_isolation_preflight.resolve_effective_dsn``
+-- against the real ``docker-compose.prod.yml`` (+ base ``docker-compose.yaml``),
+asking it "what does the prod worker service actually bind to" rather than
+reconstructing the answer independently. That resolver is read-only, no
+Docker, no network (pure YAML + env_file text), and its own module docstring
+documents the identical environment-vs-env_file precedence this script must
+never re-derive.
+
+The resolved value names the Compose-internal service hostname (``db``) in
+the normal case, which is not reachable from the host this script runs on
+(it runs alongside ``docker compose`` invocations, not inside the Compose
+network). :func:`_host_reachable_dsn` translates ONLY that specific,
+known-stable address to the host-published port
+(``docker-compose.yaml``'s ``db`` service publishes ``15432:5432``, and
+``docker-compose.prod.yml`` does not override it) -- any other resolved host
+(e.g. an explicit ambient ``DATABASE_URL``/``DB_DSN`` override, which Compose
+interpolation also honors and which already names something host-reachable)
+is left untouched. This is a narrow connectivity bridge, not a second attempt
+at precedence resolution.
+
+Retry-budget constant/behavior parity with the worker is enforced by
+``tests/scripts/test_prod_deploy_retry_preflight_constants_parity.py``. This
+script never mutates the outbox (KERNEL-12 read-only invariant) and never
+prints event payloads, note/source paths, DSNs, or credentials -- only
+aggregate counts and topic/classification labels.
 
 Exit codes:
   0  no terminal-boundary pending rows found (this includes every "cannot
-     tell" case -- no DSN configured, the DB unreachable, or the query
+     tell" case -- no DSN resolvable, the DB unreachable, or the query
      itself failing -- which fails OPEN: DB/outbox availability is a
      separate, already-gated concern, not this check's job).
   1  terminal-boundary pending rows found; the caller (scripts/deploy_channel.sh)
      must not proceed to pin write or Compose mutation.
 
 Usage: ``python scripts/prod_deploy_retry_preflight.py`` (no arguments).
-Reads ``DATABASE_URL`` or ``DB_DSN`` from the process environment, same
-precedence as ``app/services/outbox.py::_open_conn``; the production caller
-(``scripts/deploy_channel.sh::prod_pending_retry_preflight``) locates the
-channel's runtime env file with the SAME two steps the shared compose lib
-uses for the same lookup -- the pin-file ``WATCHER_RUNTIME_ENV_FILE``
-reference, or the docker-compose.yaml default ``./tmp/runtime.env`` when
-that key is absent (the committed-pin-file case) -- deliberately with no
-ambient-shell fallback, since the compose lib itself unsets that variable
-before invoking Compose whenever the pin file lacks the key. It then
-extracts the DSN from the resolved file and injects it into THIS
-subprocess only. Prints one JSON receipt object to stdout.
+Resolves DATABASE_URL/DB_DSN via ``channel_isolation_preflight.resolve_effective_dsn``
+against ``docker-compose.prod.yml``, using this process's own environment as
+the Compose interpolation source (matching what the real ``docker compose``
+invocation from the same shell would see). Prints one JSON receipt object to
+stdout.
 """
 
 from __future__ import annotations
@@ -80,6 +99,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 # Mirrors app/workers/outbox_worker.py::_MAX_TRANSIENT_RETRY_ATTEMPTS. Kept as
 # a literal (not imported) so this preflight stays import-light and does not
@@ -124,29 +144,90 @@ def _resolve_max_dispatch_attempts() -> int:
     return value if value >= 1 else DEFAULT_MAX_DISPATCH_ATTEMPTS
 
 
-def _resolve_dsn() -> str | None:
-    """DATABASE_URL/DB_DSN precedence as app/services/outbox.py::_open_conn.
+# The prod service this preflight asks channel_isolation_preflight about.
+# api/worker/watcher/heimdal-capture-watch all carry identical DATABASE_URL/
+# DB_DSN bindings in docker-compose.prod.yml; "worker" is the actual outbox
+# consumer, matching this issue's own framing.
+PROD_DSN_SERVICE = "worker"
 
-    Prefers the canonical normalizer ``app.db.dsn.resolve_dsn`` when the app
-    package is importable (repo checkout present), falling back to the inline
-    prefix strip otherwise -- the same layered pattern ``_open_conn`` uses.
-    The repo root is added to sys.path first because this script is invoked
-    by path (sys.path[0] is scripts/, not the repo root).
+# docker-compose.yaml's `db` service Compose-internal DNS name, and the host
+# port it publishes that container's 5432 to (`ports: ["15432:5432"]`;
+# docker-compose.prod.yml does not override it). See _host_reachable_dsn.
+_COMPOSE_INTERNAL_DB_HOST = "db"
+_PROD_DB_HOST_PUBLISHED_PORT = "15432"
+
+
+def _repo_root() -> Path:
+    # This script is invoked by path (sys.path[0] is scripts/, not the repo
+    # root), so the repo root is added to sys.path explicitly before any
+    # `app.*` import.
+    root = Path(__file__).resolve().parents[1]
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+    return root
+
+
+def _resolve_prod_dsn() -> str | None:
+    """The effective DATABASE_URL/DB_DSN the real prod worker service binds to.
+
+    Delegates entirely to
+    ``app.release_channels.channel_isolation_preflight.resolve_effective_dsn``
+    against the committed ``docker-compose.prod.yml`` (+ base
+    ``docker-compose.yaml``) -- see the module docstring for why this must not
+    be re-derived by hand. Tries ``DATABASE_URL`` then ``DB_DSN``, matching
+    ``app/services/outbox.py::_open_conn``'s own key precedence; both are
+    bound to the identical expression in docker-compose.prod.yml, so this only
+    matters if a future overlay edit ever splits them. Returns ``None`` when
+    neither key is resolvable/verifiable (see resolve_effective_dsn's own
+    docstring for what that covers) or when the compose files/module cannot
+    be loaded at all (e.g. this script copied out of a full repo checkout).
     """
-    url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
-    if not url:
-        return None
     try:
-        repo_root = str(Path(__file__).resolve().parents[1])
-        if repo_root not in sys.path:
-            sys.path.insert(0, repo_root)
-        from app.db.dsn import resolve_dsn
+        repo_root = _repo_root()
+        from app.release_channels.channel_isolation_preflight import (
+            resolve_effective_dsn,
+        )
 
-        return resolve_dsn(url) or None
+        compose_path = repo_root / "docker-compose.prod.yml"
+        if not compose_path.is_file():
+            return None
+        for key in ("DATABASE_URL", "DB_DSN"):
+            value = resolve_effective_dsn(compose_path, PROD_DSN_SERVICE, key)
+            if value:
+                return value
+        return None
     except Exception:
-        if url.startswith("postgresql+psycopg://"):
-            return "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
-        return url
+        return None
+
+
+def _host_reachable_dsn(dsn: str) -> str:
+    """Translate the Compose-internal `db` address to its host-published port.
+
+    This preflight runs on the host invoking `docker compose`, not inside the
+    Compose network, so a resolved DSN naming the internal service hostname
+    `db` is not connectable as-is. Only that specific, known-stable address is
+    rewritten (see the constants above); any other resolved host -- e.g. an
+    explicit ambient DATABASE_URL/DB_DSN override, which Compose interpolation
+    also honors and which already names something host-reachable -- is left
+    untouched. This is a connectivity bridge, not a second precedence
+    resolution: the DSN's value (credentials, dbname, query string) already
+    came from resolve_effective_dsn and is never re-derived here.
+    """
+    try:
+        parts = urlsplit(dsn)
+    except ValueError:
+        return dsn
+    if parts.hostname != _COMPOSE_INTERNAL_DB_HOST:
+        return dsn
+    userinfo = ""
+    if parts.username:
+        userinfo = parts.username
+        if parts.password:
+            userinfo += f":{parts.password}"
+        userinfo += "@"
+    netloc = f"{userinfo}127.0.0.1:{_PROD_DB_HOST_PUBLISHED_PORT}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def _skip(reason: str) -> dict[str, Any]:
@@ -263,11 +344,12 @@ def evaluate(conn: Any, *, max_dispatch_attempts: int) -> dict[str, Any]:
 def main(argv: list[str]) -> int:
     del argv  # no arguments accepted; env-driven like the rest of deploy_channel.sh's gates
 
-    dsn = _resolve_dsn()
+    dsn = _resolve_prod_dsn()
     if not dsn:
         result = _skip("no_dsn")
         print(json.dumps(result, sort_keys=True))
         return 0
+    dsn = _host_reachable_dsn(dsn)
 
     try:
         import psycopg

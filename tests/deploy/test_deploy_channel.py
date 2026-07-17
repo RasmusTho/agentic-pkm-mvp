@@ -202,13 +202,21 @@ def connect(dsn, **kwargs):
 
 
 # Deliberately credential-bearing: the redaction test asserts none of these
-# identity fragments ever reach deploy output, and every other prod test rides
-# the same DSN so any new leak path shows up loudly.
+# identity fragments ever reach deploy output. Used as an ambient
+# DATABASE_URL override -- the ONE legitimate way to steer the resolved DSN
+# in a test, since Compose interpolation itself honors a shell-exported
+# DATABASE_URL/DB_DSN identically for the preflight and the real deploy.
 _FAKE_PROD_DSN = "postgresql://produser:sup3rsecret@prod-db.internal:5432/pkm_prod"
 
-# A second, distinct DSN standing in for a stale/foreign ambient
-# WATCHER_RUNTIME_ENV_FILE export -- never the one the real deploy targets.
-_AMBIENT_CONTAMINATION_DSN = "postgresql://wrong-host-should-never-be-used/contaminated"
+# A DSN standing in for a stale/foreign file (pin-file-referenced runtime env,
+# tmp/runtime.env, or any other env_file layer) that must have NO EFFECT on
+# resolution: docker-compose.prod.yml sets DATABASE_URL/DB_DSN directly in
+# `environment:` for every channel-critical service, and Compose's own rule
+# is that `environment:` always wins over `env_file:` for the same key
+# (#3903 round 4). The fake DB layer refuses to connect to this DSN, so any
+# test that poisons a file with it and still sees a successful connection
+# proves the file was never consulted.
+_ENV_FILE_POISON_DSN = "postgresql://env-file-should-never-be-used/poisoned"
 
 
 def _configure_prod_retry_preflight(
@@ -218,64 +226,65 @@ def _configure_prod_retry_preflight(
     *,
     rows: list[tuple[str, dict, int]] | None = None,
     unreachable: bool = False,
-    no_dsn: bool = False,
-    runtime_env_via: str = "pin_key",
+    dsn_override: str | None = None,
+    compose_files_present: bool = True,
 ) -> None:
-    """Copy the real preflight script into the fixture repo and fake its DB layer.
+    """Copy the real preflight script + real compose files into the fixture
+    repo, and fake the DB connection layer.
 
     ``rows`` is a list of ``(topic, payload, attempts)`` triples standing in
     for pending (``delivered_at is null``) outbox rows. The real
     scripts/prod_deploy_retry_preflight.py runs unmodified against these rows
-    through the fake psycopg module below -- only the DB connection is faked,
+    through the fake psycopg module below -- only the DB connection is faked;
     the classification logic under test is real.
 
-    DSN sourcing mirrors the production mechanics (#3903 D1): the DSN lives in
-    the channel's governed runtime env file -- not in the ambient shell env,
-    which the real prod call chain never provides (both DATABASE_URL/DB_DSN
-    and WATCHER_RUNTIME_ENV_FILE are scrubbed from the shell env in every
-    mode). ``runtime_env_via`` selects which resolution step locates that
-    file:
-
-    - ``"pin_key"``: the channel pin file carries a WATCHER_RUNTIME_ENV_FILE
-      reference to it (governed override).
-    - ``"compose_default"``: the pin file carries NO such key -- the shape
-      every committed pin file actually has -- and the runtime env file sits
-      at the docker-compose.yaml service env_file default ./tmp/runtime.env.
-
-    ``no_dsn=True`` leaves the located runtime env file without any DSN key,
-    exercising the visible skipped:no_dsn path.
+    DSN resolution (#3903 round 4): the preflight no longer reads any pin or
+    runtime-env file directly -- it asks the REAL, unmodified
+    app.release_channels.channel_isolation_preflight module (imported via
+    PYTHONPATH, not copied) what the REAL committed docker-compose.prod.yml's
+    worker service actually binds, exactly as the production code path does.
+    With ``compose_files_present=True`` (default) docker-compose.yaml and
+    docker-compose.prod.yml are copied into the fixture repo so that
+    resolution succeeds against the genuine, current compose definitions --
+    resolving to the real literal default
+    (``postgresql+psycopg://app:app@db:5432/app``, host-translated to
+    ``127.0.0.1:15432`` by the preflight) unless ``dsn_override`` is set.
+    ``dsn_override`` sets an ambient DATABASE_URL, matching the one
+    legitimate way Compose interpolation itself allows overriding the
+    resolved value. ``compose_files_present=False`` omits the compose files
+    entirely, exercising the visible skipped:no_dsn path for "resolution is
+    impossible at all", not "a file was empty".
     """
     shutil.copy2(
         REPO_ROOT / "scripts/prod_deploy_retry_preflight.py",
         root / "scripts/prod_deploy_retry_preflight.py",
     )
+    if compose_files_present:
+        shutil.copy2(REPO_ROOT / "docker-compose.yaml", root / "docker-compose.yaml")
+        shutil.copy2(
+            REPO_ROOT / "docker-compose.prod.yml", root / "docker-compose.prod.yml"
+        )
+
     pylib_dir = tmp_path / "pylib"
     pylib_dir.mkdir(exist_ok=True)
     (pylib_dir / "psycopg.py").write_text(_FAKE_PSYCOPG_MODULE, encoding="utf-8")
+    # `import psycopg` must resolve to the fake; `import app.release_channels...`
+    # must resolve to the REAL, unmodified module. A symlink to just the `app`
+    # package (not the whole REPO_ROOT) on PYTHONPATH: REPO_ROOT itself carries
+    # its own sitecustomize.py (runtime instrumentation, unrelated to this
+    # test), and PYTHONPATH-ing REPO_ROOT directly makes Python's site
+    # machinery import THAT sitecustomize.py instead of Homebrew's own --
+    # which is what actually wires this interpreter's real site-packages
+    # (PyYAML included) onto sys.path, breaking every third-party import
+    # process-wide. Symlinking only `app/` sidesteps that entirely.
+    if not (pylib_dir / "app").exists():
+        (pylib_dir / "app").symlink_to(REPO_ROOT / "app")
     env["PYTHONPATH"] = str(pylib_dir)
 
-    runtime_env_lines = "SOME_OTHER_KEY=untouched\n"
-    if not no_dsn:
-        runtime_env_lines += f"DATABASE_URL={_FAKE_PROD_DSN}\n"
-    if runtime_env_via == "pin_key":
-        (root / "config/deploy/prod.env").write_text(
-            "WATCHER_RUNTIME_ENV_FILE=./runtime-prod.env\n", encoding="utf-8"
-        )
-        (root / "runtime-prod.env").write_text(runtime_env_lines, encoding="utf-8")
-    elif runtime_env_via == "compose_default":
-        # Committed pin files carry only comment + APP_IMAGE_* lines; the
-        # runtime env is found via the compose default ./tmp/runtime.env.
-        (root / "config/deploy/prod.env").write_text(
-            "# deploy pin (no WATCHER_RUNTIME_ENV_FILE key, like every committed pin)\n",
-            encoding="utf-8",
-        )
-        (root / "tmp").mkdir(exist_ok=True)
-        (root / "tmp/runtime.env").write_text(runtime_env_lines, encoding="utf-8")
-    else:  # pragma: no cover - guard against typo'd parametrize ids
-        raise ValueError(f"unknown runtime_env_via: {runtime_env_via!r}")
     env.pop("DATABASE_URL", None)
     env.pop("DB_DSN", None)
-    env.pop("WATCHER_RUNTIME_ENV_FILE", None)
+    if dsn_override is not None:
+        env["DATABASE_URL"] = dsn_override
 
     if unreachable:
         env["FAKE_OUTBOX_DB_UNREACHABLE"] = "1"
@@ -462,19 +471,8 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
     )
 
 
-@pytest.mark.parametrize(
-    "runtime_env_via",
-    [
-        # Governed override: pin file references the runtime env file.
-        "pin_key",
-        # The real committed configuration: pin file has NO such key and the
-        # runtime env sits at the docker-compose.yaml default ./tmp/runtime.env.
-        # The gate must actually RUN (and block) here, not skip on no_dsn.
-        "compose_default",
-    ],
-)
 def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutation(
-    tmp_path: Path, runtime_env_via: str
+    tmp_path: Path,
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
     # Dispatch-attempt mechanism at the corrected terminal boundary: the
@@ -482,12 +480,13 @@ def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutat
     # PENDING row tops out at attempts == max - 1 (4 with the default budget
     # of 5) -- and that IS the state whose next non-transient failure
     # dead-letters. attempts == 5 is only observable in a crash window.
+    # No dsn_override: exercises the real docker-compose.prod.yml literal
+    # default, host-translated -- the normal-case resolution path.
     _configure_prod_retry_preflight(
         root,
         env,
         tmp_path,
         rows=[("panel.scan.requested", {}, 4)],
-        runtime_env_via=runtime_env_via,
     )
 
     result = _run_deploy(root, env, sha, channel="prod")
@@ -495,12 +494,100 @@ def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutat
     assert result.returncode != 0
     assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
     assert "skipped:no_dsn" not in result.stdout
+    assert "skipped:db_unreachable" not in result.stdout
     assert "terminal retry boundary" in result.stderr
-    # The pin file pre-exists (fixture provisioning), so "no pin mutation"
-    # means no APP_IMAGE_* lines were written to it.
-    assert "APP_IMAGE_TAG" not in (root / "config/deploy/prod.env").read_text(encoding="utf-8")
+    # No pin mutation: the pin file is never created/written before the block.
+    assert not (root / "config/deploy/prod.env").exists()
     assert not (root / "config/deploy/prod.previous.env").exists()
     assert not (tmp_path / "docker-called").exists()
+
+
+def test_prod_deploy_pending_retry_preflight_uses_compose_environment_not_env_file(
+    tmp_path: Path,
+) -> None:
+    """Regression test for #3903 round 4: `environment:` always wins over
+    `env_file:` for the same key, and docker-compose.prod.yml sets
+    DATABASE_URL/DB_DSN directly in `environment:` for every channel-critical
+    service. Rounds 2 and 3 read a pin-file-referenced (or compose-default)
+    runtime env file directly for those keys -- but the real containers never
+    actually consult that file for DATABASE_URL/DB_DSN, because the explicit
+    `environment:` binding always supersedes it. A preflight that reads the
+    file anyway can silently evaluate an entirely different database's
+    outbox state.
+
+    Setup: the file at every location earlier rounds would have read (the
+    pin-file-referenced runtime env AND the compose-default ./tmp/runtime.env)
+    carries a DIFFERENT DSN that the fake DB layer refuses to connect to. The
+    deploy must still block using the compose environment:-resolved value
+    (the real literal default, host-translated) -- never touching either
+    file's DSN.
+    """
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[("panel.scan.requested", {}, 4)],
+    )
+
+    # Populate every file location rounds 2/3's bash-level resolution would
+    # have read -- present, DSN-bearing, and must have zero effect now that
+    # resolution goes through channel_isolation_preflight instead.
+    (root / "config/deploy/prod.env").write_text(
+        "WATCHER_RUNTIME_ENV_FILE=./runtime-prod.env\n", encoding="utf-8"
+    )
+    (root / "runtime-prod.env").write_text(
+        f"DATABASE_URL={_ENV_FILE_POISON_DSN}\n", encoding="utf-8"
+    )
+    (root / "tmp").mkdir(exist_ok=True)
+    (root / "tmp/runtime.env").write_text(
+        f"DATABASE_URL={_ENV_FILE_POISON_DSN}\n", encoding="utf-8"
+    )
+    env["FAKE_OUTBOX_POISON_DSN"] = _ENV_FILE_POISON_DSN
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode != 0
+    assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
+    assert "skipped:db_unreachable" not in result.stdout
+    assert "skipped:no_dsn" not in result.stdout
+
+
+def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
+    tmp_path: Path,
+) -> None:
+    """Regression test for #3903 round 3: an earlier revision fell back to an
+    exported shell WATCHER_RUNTIME_ENV_FILE when the pin file lacked the key.
+    The real deploy path never does this -- scripts/lib's compose helper
+    resolves that variable ONLY from the pin file and explicitly `unset`s it
+    before invoking Compose whenever the pin file lacks the key. Round 4
+    removed the whole file-reading mechanism this bug lived in, but an
+    ambient WATCHER_RUNTIME_ENV_FILE pointing at a poisoned DSN must still
+    have no effect -- the current resolution path does not consult that
+    variable at all (docker-compose.prod.yml's explicit `environment:`
+    binding short-circuits before any env_file chain is examined).
+    """
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[("panel.scan.requested", {}, 4)],
+    )
+
+    ambient_env_file = tmp_path / "ambient-foreign-runtime.env"
+    ambient_env_file.write_text(
+        f"DATABASE_URL={_ENV_FILE_POISON_DSN}\n", encoding="utf-8"
+    )
+    env["WATCHER_RUNTIME_ENV_FILE"] = str(ambient_env_file)
+    env["FAKE_OUTBOX_POISON_DSN"] = _ENV_FILE_POISON_DSN
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode != 0
+    assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
+    assert "skipped:db_unreachable" not in result.stdout
+    assert "skipped:no_dsn" not in result.stdout
 
 
 def test_prod_deploy_pending_retry_preflight_is_redacted(tmp_path: Path) -> None:
@@ -508,8 +595,8 @@ def test_prod_deploy_pending_retry_preflight_is_redacted(tmp_path: Path) -> None
     # Worker-retry mechanism, in the REAL writer shape: write_outbox_event
     # stores the Event ENVELOPE, so _worker_retry_count sits nested at
     # payload->'payload' (the #3124 rows looked exactly like this). The
-    # secrets live in the nested payload and the DSN (with credentials) comes
-    # from the governed runtime env file -- none of it may reach output.
+    # secrets live in the nested payload; the DSN (with credentials) comes
+    # from an ambient override -- none of it may reach output.
     _configure_prod_retry_preflight(
         root,
         env,
@@ -530,6 +617,7 @@ def test_prod_deploy_pending_retry_preflight_is_redacted(tmp_path: Path) -> None
                 0,
             )
         ],
+        dsn_override=_FAKE_PROD_DSN,
     )
 
     result = _run_deploy(root, env, sha, channel="prod")
@@ -588,18 +676,15 @@ def test_prod_deploy_pending_retry_preflight_fails_open_when_db_unreachable(
     assert (tmp_path / "docker-called").exists()
 
 
-@pytest.mark.parametrize("runtime_env_via", ["pin_key", "compose_default"])
 def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
-    tmp_path: Path, runtime_env_via: str
+    tmp_path: Path,
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
-    # The resolved runtime env file (via the pin-file reference OR the
-    # compose-default location) carries no DATABASE_URL/DB_DSN and the shell
-    # env is scrubbed: the preflight cannot inspect the outbox and must skip
-    # visibly while the deploy proceeds. The skip is legitimate ONLY once the
-    # default location has also been consulted and found DSN-less.
+    # No compose files at all: resolution is impossible (not merely "a file
+    # was empty"), so the preflight must skip visibly rather than block or
+    # crash.
     _configure_prod_retry_preflight(
-        root, env, tmp_path, no_dsn=True, runtime_env_via=runtime_env_via
+        root, env, tmp_path, compose_files_present=False
     )
 
     result = _run_deploy(root, env, sha, channel="prod")
@@ -607,50 +692,3 @@ def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
     assert result.returncode == 0, result.stdout + result.stderr
     assert "prod pending-retry preflight: skipped:no_dsn" in result.stdout
     assert (tmp_path / "docker-called").exists()
-
-
-def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
-    tmp_path: Path,
-) -> None:
-    """Regression test for #3903 round 3: an earlier revision fell back to an
-    exported shell WATCHER_RUNTIME_ENV_FILE when the pin file lacked the key.
-    The real deploy path never does this -- scripts/lib's compose helper
-    resolves that variable ONLY from the pin file and explicitly `unset`s it
-    before invoking Compose whenever the pin file lacks the key, precisely so
-    a stale parent shell cannot redirect Compose to a different runtime env.
-    A preflight that honors the ambient value instead would silently connect
-    to a different database than the one the real deploy targets -- worse
-    than a visible skip, because it looks like a normal pass/block.
-
-    Setup: pin file omits the key (the committed-pin-file shape), the correct
-    DSN sits at the compose-default location (./tmp/runtime.env), and an
-    ambient WATCHER_RUNTIME_ENV_FILE points at a DIFFERENT file carrying a
-    DIFFERENT ("poison") DSN that the fake DB layer refuses to connect to.
-    If ambient were still honored, the connect would fail and the deploy
-    would show skipped:db_unreachable. It must not: the deploy must reach
-    and classify the compose-default file's rows instead.
-    """
-    root, env, sha = _deploy_harness(tmp_path)
-    _configure_prod_retry_preflight(
-        root,
-        env,
-        tmp_path,
-        rows=[("panel.scan.requested", {}, 4)],
-        runtime_env_via="compose_default",
-    )
-
-    # A foreign runtime env file, reachable only if the ambient export were
-    # (wrongly) honored -- distinct path, distinct ("poison") DSN.
-    ambient_env_file = tmp_path / "ambient-foreign-runtime.env"
-    ambient_env_file.write_text(
-        f"DATABASE_URL={_AMBIENT_CONTAMINATION_DSN}\n", encoding="utf-8"
-    )
-    env["WATCHER_RUNTIME_ENV_FILE"] = str(ambient_env_file)
-    env["FAKE_OUTBOX_POISON_DSN"] = _AMBIENT_CONTAMINATION_DSN
-
-    result = _run_deploy(root, env, sha, channel="prod")
-
-    assert result.returncode != 0
-    assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
-    assert "skipped:db_unreachable" not in result.stdout
-    assert "skipped:no_dsn" not in result.stdout

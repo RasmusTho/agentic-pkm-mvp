@@ -176,17 +176,22 @@ Posture:
 - **Redacted.** The failure output reports aggregate counts only — `terminal_pending_count`, a
   `by_topic` breakdown keyed on the event-type label, and a `by_classification` breakdown by which
   counter is exhausted — never payload content, note/source paths, DSNs, or credentials. The DSN
-  itself is extracted from the channel's runtime env file, located with exactly the two steps the
-  shared compose helper uses for the same lookup: the `WATCHER_RUNTIME_ENV_FILE` reference in the
-  channel pin file when present, otherwise the `docker-compose.yaml` service default
-  `./tmp/runtime.env` (relative to the repo root) — the configuration every committed pin file
-  actually runs with. Deliberately no ambient-shell fallback for this lookup: the compose helper
-  itself unsets that variable before invoking Compose whenever the pin file lacks the key, so a
-  stale parent-shell export can never redirect Compose to a different runtime env — this preflight
-  must not do so either, or it would silently inspect a different database than the one the real
-  deploy targets. The value is injected only into the single preflight subprocess — never exported
-  to the wider shell, never passed to Compose, never printed (the #3875 posture). Ambient shell
-  `DATABASE_URL`/`DB_DSN` is the fallback when the resolved file provides none.
+  itself is resolved by asking `app.release_channels.channel_isolation_preflight` (the one
+  purpose-built resolver for Compose's own precedence rule) what `docker-compose.prod.yml`'s
+  `worker` service actually binds — **not** by reading `./tmp/runtime.env` or any other `env_file`
+  layer directly. Compose's documented rule (`docker-compose.dev.yml`, `docs/RELEASE_CHANNELS/README.md`
+  :: Compose/env binding invariant) is that a service's `environment:` block always wins over its
+  `env_file:` chain for the same key, and the prod overlay sets `DATABASE_URL`/`DB_DSN` directly in
+  `environment:` for every channel-critical service — so in the normal case (no shell override) the
+  effective binding is the overlay's own interpolation default, regardless of what any `env_file`
+  (governed runtime env file included) happens to contain. Nothing is exported to the wider shell,
+  passed to Compose, or printed (the #3875 posture); an ambient `DATABASE_URL`/`DB_DSN` override
+  behaves identically for the preflight and the real `docker compose` invocation, since both read it
+  via the same Compose interpolation semantics from the same shell. In the normal case the resolved
+  value names the Compose-internal `db` service, which the preflight (running on the host, not
+  inside the Compose network) translates to the host-published port — `docker-compose.yaml`'s `db`
+  service publishes container port 5432 on host port 15432 and the prod overlay does not override
+  it; any other resolved host is left untouched.
 - **Never silent.** The deploy log always carries exactly one status line —
   `prod pending-retry preflight: ok`, `... skipped:<reason>`, or
   `... blocked terminal_pending_count=<n>` — so a skipped safety gate can never masquerade as a
