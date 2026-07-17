@@ -23,7 +23,12 @@ from app.builderops.control_plane.client import (
     ClientConfig,
     ControlPlaneClientError,
 )
-from app.builderops.control_plane.routing import RepoRef
+from app.builderops.control_plane.routing import (
+    DeliveryManifestRegistry,
+    RepoRef,
+    RoutePolicy,
+    RoutingError,
+)
 
 ClientFactory = Callable[[ClientConfig], BuilderOpsControlPlaneClient]
 
@@ -32,6 +37,27 @@ ClientFactory = Callable[[ClientConfig], BuilderOpsControlPlaneClient]
 # never degrades to a local store or fabricated lease.
 _FAIL_CLOSED_EXIT = 3
 _CONFIG_EXIT = 2
+
+# Subcommands whose envelope this CLI can resolve a delivery-manifest route
+# for: they carry --repository/--stack (the RepoRef/stack half of the routing
+# key) and a --task-class-scoped mutation. Read-only commands (status, receipt)
+# are not envelope-routed.
+_ROUTABLE_COMMANDS = frozenset(
+    {
+        "record",
+        "inquiry",
+        "task-claim",
+        "task-heartbeat",
+        "task-complete",
+        "lease-claim",
+        "attempt",
+        "promotion",
+    }
+)
+# Commands with a --ttl-seconds argument the resolved route's policy may
+# advise a default for.
+_TTL_COMMANDS = frozenset({"task-claim", "task-heartbeat", "lease-claim"})
+_DEFAULT_TTL_SECONDS = 5400
 
 
 def _default_factory(config: ClientConfig) -> BuilderOpsControlPlaneClient:
@@ -86,6 +112,23 @@ def build_parser() -> argparse.ArgumentParser:
             "No direct database, SQLite, or SSH store mode is exposed."
         ),
     )
+    parser.add_argument(
+        "--delivery-manifest-dir",
+        help=(
+            "Optional directory of per-repository delivery-manifest JSON "
+            "documents (see app.builderops.control_plane.routing). When given, "
+            "the addressed repository's manifest is loaded and routed by "
+            "(RepoRef, stack, task-class) before dispatch; a missing/ambiguous "
+            "manifest or route fails closed. Omit to skip routing entirely — "
+            "no manifest is required by default. This is advisory request "
+            "shaping only, never privileged authority."
+        ),
+    )
+    parser.add_argument(
+        "--task-class",
+        help="Task-class half of the (RepoRef, stack, task-class) routing key. "
+        "Required when --delivery-manifest-dir is given for a routable command.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Read the current authority epoch and schema version.")
@@ -109,13 +152,25 @@ def build_parser() -> argparse.ArgumentParser:
     _add_envelope_arguments(task_claim)
     task_claim.add_argument("--task-id", required=True)
     task_claim.add_argument("--idempotency-key", required=True)
-    task_claim.add_argument("--ttl-seconds", type=int, default=5400)
+    task_claim.add_argument(
+        "--ttl-seconds",
+        type=int,
+        default=None,
+        help=f"Defaults to the resolved delivery-manifest route's policy "
+        f"ttl_seconds if routing is engaged, else {_DEFAULT_TTL_SECONDS}.",
+    )
 
     task_heartbeat = sub.add_parser("task-heartbeat", help="Heartbeat a claimed task lease.")
     _add_envelope_arguments(task_heartbeat)
     task_heartbeat.add_argument("--lease", required=True, help="JSON lease object from claim.")
     task_heartbeat.add_argument("--idempotency-key", required=True)
-    task_heartbeat.add_argument("--ttl-seconds", type=int, default=5400)
+    task_heartbeat.add_argument(
+        "--ttl-seconds",
+        type=int,
+        default=None,
+        help=f"Defaults to the resolved delivery-manifest route's policy "
+        f"ttl_seconds if routing is engaged, else {_DEFAULT_TTL_SECONDS}.",
+    )
 
     task_complete = sub.add_parser("task-complete", help="Complete a claimed task.")
     _add_envelope_arguments(task_complete)
@@ -126,7 +181,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_envelope_arguments(lease_claim)
     lease_claim.add_argument("--resource-id", required=True)
     lease_claim.add_argument("--idempotency-key", required=True)
-    lease_claim.add_argument("--ttl-seconds", type=int, default=5400)
+    lease_claim.add_argument(
+        "--ttl-seconds",
+        type=int,
+        default=None,
+        help=f"Defaults to the resolved delivery-manifest route's policy "
+        f"ttl_seconds if routing is engaged, else {_DEFAULT_TTL_SECONDS}.",
+    )
 
     attempt = sub.add_parser("attempt", help="Commit a fenced attempt authority object.")
     _add_envelope_arguments(attempt)
@@ -233,6 +294,52 @@ def _dispatch(
     raise ValueError(f"unknown command: {command}")
 
 
+def _resolve_route(args: argparse.Namespace) -> RoutePolicy | None:
+    """Resolve the addressed repo's (RepoRef, stack, task-class) route.
+
+    Returns ``None`` when routing was not engaged (no ``--delivery-manifest-dir``
+    given, or the command has no envelope to route). Engaging routing on a
+    routable command is a full commitment to fail-closed behavior: a missing,
+    ambiguous, or cross-repo-reused manifest raises ``RoutingError`` rather than
+    silently skipping. The resolved policy is advisory request-shaping only —
+    never privileged authority; BCP-05 independently re-resolves protected-base
+    policy before any privileged effect.
+    """
+    manifest_dir = getattr(args, "delivery_manifest_dir", None)
+    if manifest_dir is None:
+        return None
+    if args.command not in _ROUTABLE_COMMANDS:
+        return None
+    if not getattr(args, "task_class", None):
+        raise ValueError(
+            "--task-class is required when --delivery-manifest-dir is given "
+            "for a routable command"
+        )
+    repo = RepoRef.parse(args.repository)
+    registry = DeliveryManifestRegistry.from_directory(manifest_dir)
+    return registry.resolve_route(repo, args.stack, args.task_class)
+
+
+def _apply_route_policy(args: argparse.Namespace, route: RoutePolicy | None) -> None:
+    """Apply the resolved route's advisory policy to unset CLI defaults.
+
+    Only fields the caller left unset (``None``) are affected; an explicit
+    ``--ttl-seconds`` always wins over the manifest's advisory default.
+    """
+    if args.command not in _TTL_COMMANDS or getattr(args, "ttl_seconds", None) is not None:
+        return
+    if route is None:
+        args.ttl_seconds = _DEFAULT_TTL_SECONDS
+        return
+    policy_ttl = route.policy.get("ttl_seconds", _DEFAULT_TTL_SECONDS)
+    if type(policy_ttl) is not int or not 1 <= policy_ttl <= 86400:
+        raise ValueError(
+            f"delivery manifest route ({route.repository}, {route.stack}, "
+            f"{route.task_class}) has an invalid ttl_seconds policy value"
+        )
+    args.ttl_seconds = policy_ttl
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -241,6 +348,23 @@ def main(
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        route = _resolve_route(args)
+        _apply_route_policy(args, route)
+    except RoutingError as exc:
+        # Missing/ambiguous manifests and cross-repo prior reuse fail closed.
+        print(f"builderops-control-plane: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return _FAIL_CLOSED_EXIT
+    except ValueError as exc:
+        print(f"builderops-control-plane: invalid request: {exc}", file=sys.stderr)
+        return _CONFIG_EXIT
+    if route is not None:
+        print(
+            f"builderops-control-plane: resolved delivery route "
+            f"({route.repository}, {route.stack}, {route.task_class}): "
+            f"{json.dumps(dict(route.policy), sort_keys=True)}",
+            file=sys.stderr,
+        )
+    try:
         config = ClientConfig.from_env()
     except ControlPlaneClientError as exc:
         print(f"builderops-control-plane: configuration error: {exc}", file=sys.stderr)
@@ -248,7 +372,7 @@ def main(
     client = client_factory(config)
     try:
         result = _dispatch(args, client)
-    except ControlPlaneClientError as exc:
+    except (ControlPlaneClientError, RoutingError) as exc:
         # Fail closed: report the typed error and exit non-zero. No local
         # authority, SQLite database, or fabricated lease is created.
         print(f"builderops-control-plane: {type(exc).__name__}: {exc}", file=sys.stderr)

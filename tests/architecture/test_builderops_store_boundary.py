@@ -18,6 +18,13 @@ outside this allowlist fails this test. This inventory is the completeness proof
 for BCP-04's no-local-authority-fallback guarantee; the legacy
 ``app.dispatcher`` / ``app.builderops`` SQLite writers are a separate concern
 owned by the BCP-06 legacy-writer freeze, not by this control-plane boundary.
+
+A second, separate guard below widens the walk to the rest of ``app/builderops/``
+(the pre-existing Vault record store, outside ``control_plane/``) against an
+explicit, audited allowlist of its known legitimate store-access sites
+(BCP-04 review finding H5). This closes the regression gap for *new* files
+without requiring those pre-existing, still-legacy sites to migrate in this
+slice — their migration is BCP-03/06 territory.
 """
 
 from __future__ import annotations
@@ -27,12 +34,33 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTROL_PLANE = REPO_ROOT / "app" / "builderops" / "control_plane"
+BUILDEROPS_ROOT = REPO_ROOT / "app" / "builderops"
 
 # Relative paths (from REPO_ROOT) permitted to access a store.
 DATA_LAYER_AND_MIGRATION_ALLOWLIST: frozenset[str] = frozenset(
     {
         "app/builderops/control_plane/store.py",  # PostgreSQL data layer
         "app/builderops/control_plane/selection.py",  # selector + migration/test adapter
+    }
+)
+
+# The pre-existing BuilderOps Vault record store (LearningSignal, worklogs,
+# promotion intents, receipts as vault-adjacent artifacts) is a genuinely
+# separate system from the control plane above — see
+# docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md :: Scope and the README's
+# backlog-reconciliation note that BCP-03/06, not BCP-04, migrate this
+# authority. These are its known, audited legitimate store-access sites as of
+# BCP-04 (issue #3791 review finding H5); a NEW file outside this allowlist
+# that touches a store fails this test rather than silently extending the
+# surface. Do not add a new entry here without an accompanying migration/
+# audit — extending this allowlist is never the fix for a failing test.
+VAULT_STORE_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "app/builderops/store.py",  # the Vault record store's own data layer
+        "app/builderops/cli.py",  # legacy Vault CLI (this session's own coordination path)
+        "app/builderops/boundary.py",  # local Vault HTTP/tool boundary (#1503), Product-adjacent
+        "app/builderops/completeness_report.py",  # read-only Vault inventory report
+        "app/builderops/ckm/store.py",  # CKM receipt store built on the Vault store
     }
 )
 
@@ -93,6 +121,15 @@ def _control_plane_files() -> list[Path]:
     return sorted(CONTROL_PLANE.rglob("*.py"))
 
 
+def _vault_files() -> list[Path]:
+    """Every app/builderops/**/*.py file OUTSIDE the control_plane/ subtree."""
+    return sorted(
+        path
+        for path in BUILDEROPS_ROOT.rglob("*.py")
+        if CONTROL_PLANE not in path.parents and path != CONTROL_PLANE
+    )
+
+
 def test_only_control_plane_data_layer_and_migration_adapters_access_stores() -> None:
     assert CONTROL_PLANE.is_dir()
     violations: list[str] = []
@@ -134,5 +171,46 @@ def test_store_boundary_allowlist_is_accurate() -> None:
             stale.append(rel)
     assert not stale, (
         "Stale store-boundary allowlist entries (remove or fix):\n"
+        + "\n".join(f"  {s}" for s in sorted(stale))
+    )
+
+
+def test_no_new_vault_store_access_sites_outside_the_audited_allowlist() -> None:
+    """A NEW app/builderops/**/*.py file (outside control_plane/) that touches
+    a database driver or constructs a Vault store must be explicitly audited
+    and added to VAULT_STORE_ALLOWLIST, not silently introduced.
+
+    This does not require migrating the existing legitimate Vault-record sites
+    (they remain BCP-03/06 territory per the module docstring); it only closes
+    the regression gap the control-plane-scoped guard above cannot see,
+    because those files are outside app/builderops/control_plane/.
+    """
+    assert BUILDEROPS_ROOT.is_dir()
+    violations: list[str] = []
+    for path in _vault_files():
+        rel = str(path.relative_to(REPO_ROOT))
+        if rel in VAULT_STORE_ALLOWLIST:
+            continue
+        if _accesses_store(path):
+            violations.append(rel)
+
+    assert not violations, (
+        "New app/builderops/ store-access sites outside the audited allowlist "
+        "(add to VAULT_STORE_ALLOWLIST only after confirming this is a "
+        "legitimate Vault-record data-layer site, not a new authority-bearing "
+        "caller that should use the control-plane API client instead):\n"
+        + "\n".join(f"  {v}" for v in sorted(violations))
+    )
+
+
+def test_vault_store_allowlist_is_accurate() -> None:
+    """Every VAULT_STORE_ALLOWLIST entry still exists and still accesses a store."""
+    stale: list[str] = []
+    for rel in VAULT_STORE_ALLOWLIST:
+        path = REPO_ROOT / rel
+        if not path.exists() or not _accesses_store(path):
+            stale.append(rel)
+    assert not stale, (
+        "Stale Vault store-boundary allowlist entries (remove or fix):\n"
         + "\n".join(f"  {s}" for s in sorted(stale))
     )

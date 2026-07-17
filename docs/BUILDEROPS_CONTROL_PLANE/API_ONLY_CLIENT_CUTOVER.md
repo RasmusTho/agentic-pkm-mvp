@@ -131,11 +131,23 @@ credential is inlined in the repo, skills, docs, or logs:
 - `BUILDEROPS_API_TOKEN` — the scoped bearer token in the host environment.
 
 Exactly one of `BUILDEROPS_API_TOKEN_FILE` or `BUILDEROPS_API_TOKEN` is set by
-the host. A normal client credential is scoped to its granted repositories and
-cannot call the privileged executor/outbox operations; the Demerzel executor
-holds the only `outbox:write` credential. With the service unavailable or the
+the host. A credential's authority is fail-closed by default: a credential with
+no `repositories` list and no explicit `all_repositories: true` opt-in can
+address NO repository. A normal client credential is scoped to its granted
+repositories and cannot call the privileged executor/outbox operations; the
+executor holds the only credential with the explicit `all_repositories: true`
+opt-in and the only `outbox:write` scope. With the service unavailable or the
 credential rejected, the client and wrapper fail closed with a non-zero exit and
 create no local SQLite/JSONL/JSON authority and no fabricated GitHub lease.
+
+The CLI's optional `--delivery-manifest-dir`/`--task-class` flags engage
+delivery-manifest `(RepoRef, stack, task-class)` routing
+(`app.builderops.control_plane.routing`) for a mutating command: when given,
+the addressed repository's manifest is loaded and its route resolved before
+dispatch (advisory request-shaping only, e.g. a `ttl_seconds` default — never
+privileged authority), and a missing/ambiguous manifest or route fails closed.
+Routing is opt-in; omitting both flags skips it entirely and uses the
+historical hardcoded defaults, matching this slice's non-authoritative scope.
 
 ## How to Verify (Pre-Merge)
 

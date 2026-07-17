@@ -67,6 +67,7 @@ def test_raw_credentials_never_enter_durable_state_or_restored_backup(tmp_path: 
                         "secret_ref": "keychain:builderops/client",
                         "secret_file": str(client_secret),
                         "scopes": ["records:write"],
+                        "repositories": ["RasmusTho/agentic-pkm-mvp"],
                         "rotation_generation": 1,
                     }
                 ]

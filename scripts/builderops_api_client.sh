@@ -13,9 +13,10 @@
 # credential is rejected, the client fails closed (non-zero exit) and never
 # creates local authority.
 #
-# Usage from any automation worktree (cwd is the repo root or any worktree):
+# Usage from any automation worktree (cwd is the repo root or any worktree).
+# Output is always a JSON object on stdout; no --json flag exists or is needed:
 #
-#   scripts/builderops_api_client.sh status --json
+#   scripts/builderops_api_client.sh status
 #   scripts/builderops_api_client.sh record \
 #     --repository RasmusTho/agentic-pkm-mvp --scope issue:3791 \
 #     --stack builderops-control-plane --source-ref github:issue:3791 \

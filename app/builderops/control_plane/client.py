@@ -25,15 +25,18 @@ from typing import Any
 
 import httpx
 
+from app.builderops.control_plane.models import STALE_DETAIL_NAMES
+
 API_VERSION = "v1"
 _EPOCH_HEADER = "X-BuilderOps-Authority-Epoch"
 _DEFAULT_TIMEOUT_SECONDS = 15.0
 _DEFAULT_MAX_RETRIES = 2
 
 # 409 details that mean "your lease/fence/epoch is no longer authoritative".
-_STALE_DETAILS = frozenset(
-    {"StaleFencingToken", "StaleAuthorityEpoch", "LeaseUnavailable", "LeaseRequired"}
-)
+# Shared with the service's HTTP 409 classification via models.py so a
+# server-side exception rename cannot silently desync from this matching
+# (BCP-04 review finding H3).
+_STALE_DETAILS = STALE_DETAIL_NAMES
 
 
 class ControlPlaneClientError(RuntimeError):
@@ -468,15 +471,26 @@ class BuilderOpsControlPlaneClient:
 
     @staticmethod
     def _detail(response: httpx.Response) -> str:
+        """Extract the 409 ``detail`` classification, consistent with ``_decode``.
+
+        A truncated/non-JSON body (e.g. proxy interference) raises
+        ``ControlPlaneProtocolError`` rather than silently returning an empty
+        detail: a caller distinguishing ``StaleLeaseError`` (safe to retry
+        after a lease refresh) from a generic ``ControlPlaneConflictError``
+        must not have that signal silently downgraded by a malformed response.
+        """
         try:
             body = response.json()
-        except (json.JSONDecodeError, ValueError):
-            return ""
-        if isinstance(body, dict):
-            detail = body.get("detail")
-            if isinstance(detail, str):
-                return detail
-        return ""
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ControlPlaneProtocolError(
+                "BuilderOps control plane returned a malformed 409 response"
+            ) from exc
+        if not isinstance(body, dict):
+            raise ControlPlaneProtocolError(
+                "BuilderOps control plane returned an unexpected 409 response shape"
+            )
+        detail = body.get("detail")
+        return detail if isinstance(detail, str) else ""
 
 
 __all__ = [

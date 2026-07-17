@@ -33,6 +33,13 @@ authority. Do not rewrite either file solely to capture high-churn operational s
 
 ## BuilderOps projection regeneration — store selection and fail-loud rule
 
+`generate-projections` is a BuilderOps **Vault record** store operation (LearningSignal/worklog/
+promotion/receipt vault artifacts exported to markdown) — a separate system from the newer
+BuilderOps **control plane** client (`scripts/builderops_api_client.sh`,
+`docs/BUILDEROPS_CONTROL_PLANE/API_ONLY_CLIENT_CUTOVER.md`), which covers task/lease/attempt/
+promotion/receipt coordination authority for the build process and has no `generate-projections`
+equivalent. Stay on `scripts/builderops_cli.sh` for this operation.
+
 When this audit runs a `generate-projections` command to regenerate checked-in projections under
 `docs/generated/builderops/`, it **must** select the intended BuilderOps store explicitly before
 writing. The default store (`runtime/builderops/builderops.sqlite3`) is gitignored, machine-local,

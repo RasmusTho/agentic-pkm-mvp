@@ -19,10 +19,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.builderops.control_plane.auth import CredentialRegistry
+import httpx
+
 from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ClientConfig,
     ControlPlaneAuthError,
+    ControlPlaneProtocolError,
     ControlPlaneUnavailableError,
     StaleLeaseError,
 )
@@ -291,3 +294,23 @@ def test_unreachable_service_is_retried_then_fails_closed(tmp_path: Path) -> Non
         client.status()
     # A 5xx is retried (idempotent) up to the bound, never swapped for a store.
     assert attempts["count"] == 3
+
+
+def test_malformed_409_body_raises_instead_of_silently_downgrading(tmp_path: Path) -> None:
+    """H2: a truncated/non-JSON 409 body (e.g. proxy interference) must raise
+    ControlPlaneProtocolError, matching the 2xx path's malformed-response
+    handling, rather than silently returning an empty detail and downgrading
+    what might have been a StaleLeaseError into a generic conflict."""
+
+    class _MalformedTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(409, content=b"<not json at all>")
+
+    http = httpx.Client(transport=_MalformedTransport(), base_url="http://builderops")
+    client = BuilderOpsControlPlaneClient(
+        ClientConfig(base_url="http://builderops", token="client-token"),
+        http_client=http,
+        max_retries=0,
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        client.status()

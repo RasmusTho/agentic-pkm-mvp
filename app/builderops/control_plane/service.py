@@ -32,6 +32,7 @@ from app.builderops.control_plane.auth import (
 )
 from app.builderops.control_plane.health import HealthService, LiveOperationalStatusProvider
 from app.builderops.control_plane.models import (
+    STALE_AUTHORITY_EPOCH_DETAIL,
     AuthorityEnvelope,
     ControlPlaneError,
     IdempotencyConflict,
@@ -65,9 +66,14 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
 )
 # Structural authority fields whose names collide with the credential-key
 # heuristic (``fencing_token`` ends in ``_token``) but which are never secrets.
-# They are exempt from the forbidden-key match; their values are still scanned,
-# and the request models constrain them to bounded integers.
+# The exemption is scoped to BOTH the exact field path (the immediate parent
+# key) AND a strict int value type — never the bare key name anywhere in the
+# tree. A free-form ``payload``/``request`` field named ``fencing_token`` is
+# NOT exempt: it is not a direct child of a ``lease`` object, and even if an
+# attacker nests a fake ``lease`` key inside free-form content, the value-type
+# gate still rejects a string (a raw secret can never be a Python int).
 _STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
+_STRUCTURAL_SAFE_KEY_PARENTS: dict[str, frozenset[str]] = {"fencing_token": frozenset({"lease"})}
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
     {
         "authorization",
@@ -191,6 +197,7 @@ def _assert_durable_payload_safe(
     registry: CredentialRegistry,
     *,
     key: str = "",
+    _parent_key: str = "",
     _remaining_chars: list[int] | None = None,
     _remaining_nodes: list[int] | None = None,
 ) -> None:
@@ -209,12 +216,26 @@ def _assert_durable_payload_safe(
     if remaining_nodes[0] < 0:
         raise ValueError("durable BuilderOps request exceeds the value node limit")
     normalized_key = _canonical_durable_key(key)
+    normalized_parent_key = _canonical_durable_key(_parent_key)
     if normalized_key in _ALLOWED_SECRET_METADATA_KEYS:
         _assert_secret_metadata_shape(normalized_key, value)
+    # The structural exemption requires the EXACT field path (the immediate
+    # parent key) plus a strict int value type, not just a matching key name
+    # anywhere in the tree. A free-form payload/request field named
+    # "fencing_token" — even one nested under an attacker-supplied "lease" key
+    # — is only exempt if its value is literally an int; a raw secret string
+    # can never satisfy that, so it always falls through to the forbidden-key
+    # check below.
+    is_exempt_structural_field = (
+        normalized_key in _STRUCTURAL_SAFE_KEYS
+        and normalized_parent_key in _STRUCTURAL_SAFE_KEY_PARENTS.get(normalized_key, frozenset())
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+    )
     if (
         normalized_key
         and normalized_key not in _ALLOWED_SECRET_METADATA_KEYS
-        and normalized_key not in _STRUCTURAL_SAFE_KEYS
+        and not is_exempt_structural_field
         and (
             _FORBIDDEN_DURABLE_KEYS.search(normalized_key)
             or normalized_key.replace("_", "") in _FORBIDDEN_COMPACT_DURABLE_KEYS
@@ -236,6 +257,7 @@ def _assert_durable_payload_safe(
                 child,
                 registry,
                 key=durable_key,
+                _parent_key=normalized_key,
                 _remaining_chars=remaining_chars,
                 _remaining_nodes=remaining_nodes,
             )
@@ -250,6 +272,7 @@ def _assert_durable_payload_safe(
                 child,
                 registry,
                 key=child_key,
+                _parent_key=normalized_parent_key,
                 _remaining_chars=remaining_chars,
                 _remaining_nodes=remaining_nodes,
             )
@@ -427,7 +450,7 @@ def create_app(
         if pinned != readiness.get("authority_epoch"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="StaleAuthorityEpoch",
+                detail=STALE_AUTHORITY_EPOCH_DETAIL,
             )
 
     @application.get("/healthz")
