@@ -74,8 +74,9 @@ def test_uat_seed_cli_extends_ingest_scope_with_test_folder(tmp_path: Path) -> N
     )
     assert result.exit_code == 0, result.output
 
-    override_path = tmp_path / "⚙️ System" / "settings" / "ingest.override.md"
+    override_path = tmp_path / "settings" / "ingest.override.md"
     assert override_path.exists()
+    assert not (tmp_path / "⚙️ System" / "settings" / "ingest.override.md").exists()
 
     raw = override_path.read_text(encoding="utf-8")
     parts = raw.split("---", 2)

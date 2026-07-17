@@ -8,6 +8,7 @@ import yaml
 
 from app.config.paths import resolve_system_settings_path
 from app.services import settings as settings_service
+from app.settings.locations import resolve_settings_file
 from app.vault.layout import VaultLayout, load_or_create_layout, normalize_md_filename
 
 DEFAULT_VAULT_ROOT = Path("vault")
@@ -62,7 +63,11 @@ def _load_frontmatter(path: Path) -> dict:
 
 def _override_path(vault_root: Path, system_folder: str) -> Path:
     filename = normalize_md_filename("ingest.override.md")
-    return vault_root / system_folder / "settings" / filename
+    return resolve_settings_file(
+        vault_root,
+        filename,
+        legacy_paths=(Path(system_folder) / "settings" / filename,),
+    )
 
 
 def _resolve_override(vault_root: Path, system_folder: str) -> dict:

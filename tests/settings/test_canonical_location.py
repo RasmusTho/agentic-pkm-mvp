@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.ingest.config import resolve_ingest_config
 from app.services import settings as system_settings
 from app.settings import compiler
 import app.settings.migration as migration_module
@@ -84,6 +85,38 @@ def test_legacy_compat_and_shadowing(tmp_path: Path, caplog: pytest.LogCaptureFi
         loaded = load_watcher_settings(vault)
     assert "canonical.action" in loaded.allowed_actions
     assert "legacy.action" not in loaded.allowed_actions
+    assert "shadowed legacy settings" in caplog.text
+
+
+def test_ingest_override_reads_canonical_root(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    vault = tmp_path / "vault"
+    legacy = vault / "⚙️ System" / "settings" / "ingest.override.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "---\ninclude_folders: [Legacy]\nignore_glob: [Legacy/**]\n---\n",
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.settings.locations"):
+        legacy_config = resolve_ingest_config(vault)
+    assert legacy_config.include_folders == ["Legacy"]
+    assert "deprecated settings location" in caplog.text
+
+    caplog.clear()
+    canonical = vault / "settings" / "ingest.override.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text(
+        "---\ninclude_folders: [Canonical]\nignore_glob: [Canonical/**]\n---\n",
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.settings.locations"):
+        canonical_config = resolve_ingest_config(vault)
+    assert canonical_config.include_folders == ["Canonical"]
+    assert "Canonical/**" in canonical_config.ignore_glob
+    assert "Legacy/**" not in canonical_config.ignore_glob
     assert "shadowed legacy settings" in caplog.text
 
 
@@ -1152,7 +1185,7 @@ def test_migration_moves_health_from_configured_system_directory(
     assert not configured_health.exists()
 
 
-def test_migration_moves_lowercase_legacy_health_on_case_sensitive_filesystem(
+def test_migration_preserves_lowercase_legacy_health(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault = tmp_path / "vault"

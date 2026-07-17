@@ -8,6 +8,7 @@ from typing import Any, Dict, Literal, Tuple
 import yaml
 
 from app.promotion.consumer import consume_promotion_intents
+from app.settings.locations import resolve_settings_file
 from app.testing.runtime_contract import failing_check_names, write_contract_report
 from app.vault.layout import ensure_vault_layout, load_layout, normalize_md_filename
 from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
@@ -101,7 +102,12 @@ def seed_vault_test_notes(
 
 def _ingest_override_path(vault_root: Path) -> Path:
     layout = load_layout(vault_root)
-    return vault_root / layout.system_folder / "settings" / normalize_md_filename("ingest.override.md")
+    filename = normalize_md_filename("ingest.override.md")
+    return resolve_settings_file(
+        vault_root,
+        filename,
+        legacy_paths=(Path(layout.system_folder) / "settings" / filename,),
+    )
 
 
 def _read_existing_override(path: Path) -> dict[str, Any]:

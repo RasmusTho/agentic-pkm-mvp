@@ -83,6 +83,35 @@ try:
         read_settings_mapping,
         resolve_settings_file,
     )
+except ModuleNotFoundError:
+    # Minimal startup/test shells may have only the stdlib interpreter. Keep
+    # layout inference dependency-free while preserving canonical-wins
+    # compatibility for one release.
+    LEGACY_COMPILED_DIR = Path("@" + "Settings")
+    LEGACY_SYSTEM_SETTINGS = Path("_" + "system") / "settings" / "system-settings.yaml"
+
+    def resolve_settings_file(
+        root: Path, relative: str, *, legacy_paths: tuple[Path, ...]
+    ) -> Path:
+        canonical = root / "settings" / relative
+        if canonical.exists():
+            return canonical
+        for legacy in legacy_paths:
+            candidate = root / legacy
+            if candidate.exists():
+                return candidate
+        return canonical
+
+    def read_settings_mapping(path: Path) -> dict[str, object]:
+        raw = path.read_text(encoding="utf-8")
+        if path.suffix.lower() == ".md":
+            if not raw.startswith("---"):
+                return {}
+            parts = raw.split("---", 2)
+            if len(parts) < 3:
+                return {}
+            raw = parts[1]
+        return _parse_yaml_subset(raw)
 finally:
     if _operator_provider is None:
         os.environ.pop("LLM_PROVIDER", None)

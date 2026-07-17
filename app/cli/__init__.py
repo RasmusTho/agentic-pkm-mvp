@@ -1535,7 +1535,7 @@ def settings_explain_alias(as_json: bool, compact: bool) -> None:
 @click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
 def settings_compile(auto_heal: bool) -> None:
     try:
-        vault_root = resolve_optional_vault_root() or Path("vault")
+        vault_root = _require_vault_root_path(None, purpose="settings compile")
         bundle = compile_all(auto_heal=auto_heal, vault_root=vault_root)
     except WritesBlockedError as exc:
         raise click.ClickException(f"settings compile blocked: {exc}") from exc

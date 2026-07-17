@@ -463,7 +463,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "own directly-related-repair convention when #3450 threaded an opt-in "
         "expected_version through write_frontmatter."
     ),
-    ("app/vault/manager.py", 669): (
+    ("app/vault/manager.py", 710): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
