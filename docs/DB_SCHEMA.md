@@ -154,9 +154,15 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
   - **transform provenance stamp (KERNEL-06, #2768):** `payload.provenance` carries `{source_ref,
     content_hash, chunk_policy_version, pipeline_version, embedding_identity}`, written in the same
     upsert statement as the vector (never a separate write). `content_hash` is a `sha256` of the
-    exact embedded text; the index doctor's read-only staleness check compares it against the
-    current `store_objects` text, and `index reconcile` re-embeds only the rows that drifted. A
-    B-tree expression index on `payload->>'content_hash'` (migration `699c97b7c007`) backs that scan.
+    exact embedded text. Canonical source selection is `content` → `text` → `raw_text`; AI panels
+    are stripped before embedding, hashing, and projection into the derived row's `content`/`text`
+    retrieval aliases. The index doctor's read-only missing-vector and staleness checks use that
+    same canonical predicate. `index reconcile` re-embeds only rows that drifted; when a present
+    authoritative `store_objects` row has become canonically non-indexable, explicit reconcile
+    purges only its derived vector row so retrieval cannot serve obsolete bytes. It never mutates
+    the source row, and a genuinely absent source row retains the existing vector-payload fallback.
+    A B-tree expression index on `payload->>'content_hash'` (migration `699c97b7c007`) backs the
+    staleness scan.
 
 ### `store_relations`
 - `src_id` (`uuid`, `NOT NULL`)
