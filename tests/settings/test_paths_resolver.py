@@ -152,7 +152,7 @@ def test_system_settings_default_path_when_missing(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("SETTINGS_PATH", raising=False)
     vault_root = tmp_path / "vault"
     resolved = resolve_system_settings_path(vault_root=vault_root)
-    assert resolved == vault_root / "_system" / "settings" / "system-settings.yaml"
+    assert resolved == vault_root / "settings" / "system-settings.md"
 
 
 def test_flow_settings_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -11,10 +11,10 @@ def test_yggdrasil_init_scaffolds_directories(tmp_path):
 
     mimer_root = tmp_path / "Mimer"
     assert (mimer_root / "Workspace").is_dir()
-    settings_dir = mimer_root / "@Settings"
+    settings_dir = mimer_root / "settings"
     assert settings_dir.is_dir()
     assert any(settings_dir.iterdir())
-    assert (settings_dir / "system-settings.yaml").exists()
+    assert (settings_dir / "system-settings.md").exists()
     assert (mimer_root / "⚙️ System").is_dir()
     assert (mimer_root / "📥 Inbox").is_dir()
     assert (mimer_root / "🛠️ Workbench").is_dir()

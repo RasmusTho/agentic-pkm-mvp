@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from collections.abc import Iterator
@@ -22,6 +23,18 @@ _old_value_override: ContextVar[Any] = ContextVar(
     "settings_receipt_old_value",
     default=_OLD_VALUE_UNSET,
 )
+
+
+class ReceiptDurabilityUncertainError(RuntimeError):
+    """Receipt bytes are fsynced, but creation-directory durability is uncertain."""
+
+
+def _fsync_parent(path: Path) -> None:
+    parent_descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
 
 
 @dataclass(frozen=True)
@@ -43,8 +56,10 @@ class SettingsWriteReceipt:
             object.__setattr__(self, "new_value", self.value)
 
 
-def emit_settings_write_receipt(receipt: SettingsWriteReceipt) -> None:
-    """Append one receipt to both existing sinks without gating the write."""
+def emit_settings_write_receipt(
+    receipt: SettingsWriteReceipt, *, require_durable: bool = False
+) -> None:
+    """Append one receipt to both sinks, optionally requiring the JSONL sink."""
 
     # Deferred to keep the settings compiler import graph acyclic:
     # events.schema -> settings.runtime -> settings.compiler -> settings.writeback.
@@ -67,8 +82,10 @@ def emit_settings_write_receipt(receipt: SettingsWriteReceipt) -> None:
             },
         )
         record = envelope.model_dump(mode="json")
-    except Exception:
+    except Exception as exc:
         logger.warning("settings.write.receipt envelope construction failed", exc_info=True)
+        if require_durable:
+            raise RuntimeError("settings receipt envelope construction failed") from exc
         return
 
     try:
@@ -76,11 +93,35 @@ def emit_settings_write_receipt(receipt: SettingsWriteReceipt) -> None:
 
         outbox_path = get_index_outbox_path()
         outbox_path.parent.mkdir(parents=True, exist_ok=True)
-        with outbox_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False))
-            handle.write("\n")
-    except Exception:
+        serialized = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+        if require_durable:
+            descriptor = os.open(
+                outbox_path,
+                os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+                0o600,
+            )
+            try:
+                written = os.write(descriptor, serialized)
+                if written != len(serialized):
+                    raise OSError("partial durable settings receipt append")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            try:
+                _fsync_parent(outbox_path)
+            except OSError as exc:
+                raise ReceiptDurabilityUncertainError(
+                    "settings receipt is visible but parent fsync failed"
+                ) from exc
+        else:
+            with outbox_path.open("ab") as handle:
+                handle.write(serialized)
+    except ReceiptDurabilityUncertainError:
+        raise
+    except Exception as exc:
         logger.warning("settings.write.receipt jsonl append failed", exc_info=True)
+        if require_durable:
+            raise RuntimeError("durable settings receipt append failed") from exc
 
     try:
         from app.services.outbox import (  # noqa: PLC0415
@@ -108,6 +149,7 @@ def emit_settings_write_receipts_for_changes(
     file: Path | str,
     key_prefix: str | None = None,
     flatten_nested: bool = False,
+    require_durable: bool = False,
 ) -> tuple[SettingsWriteReceipt, ...]:
     """Emit key-scoped receipts for changed leaves in two settings mappings."""
 
@@ -129,7 +171,7 @@ def emit_settings_write_receipts_for_changes(
             surface=surface,
             actor=actor,
         )
-        emit_settings_write_receipt(receipt)
+        emit_settings_write_receipt(receipt, require_durable=require_durable)
         receipts.append(receipt)
     return tuple(receipts)
 

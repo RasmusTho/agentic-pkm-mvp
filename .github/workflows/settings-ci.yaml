@@ -3,14 +3,14 @@ name: settings-ci
 on:
   push:
     paths:
-      - "vault/@Settings/**"
+      - "vault/settings/**"
       - "app/settings/**"
       - "docs/settings/**"
       - "app/events/bus.py"
       - ".github/workflows/settings-ci.yaml"
   pull_request:
     paths:
-      - "vault/@Settings/**"
+      - "vault/settings/**"
       - "app/settings/**"
       - "docs/settings/**"
       - "app/events/bus.py"
@@ -33,7 +33,7 @@ jobs:
           LLM_PROVIDER: mock
           REASONING_PROVIDER: mock
           PLANNER_PROVIDER: mock
-        run: python -m app.cli settings compile
+        run: python -m app.cli settings compile --vault-root vault
       - name: Run settings tests
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
@@ -41,4 +41,9 @@ jobs:
           LLM_PROVIDER: mock
           REASONING_PROVIDER: mock
           PLANNER_PROVIDER: mock
-        run: pytest -q tests/settings/test_compile.py tests/settings/test_prompt_registry.py tests/settings/test_standards_registry.py
+        run: >-
+          pytest -q
+          tests/settings/test_compile.py
+          tests/settings/test_prompt_registry.py
+          tests/settings/test_standards_registry.py
+          tests/architecture/test_settings_single_location.py

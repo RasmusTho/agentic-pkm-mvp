@@ -7,18 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from app.settings.source import SettingsSource, build_source
+from app.settings.locations import (
+    LEGACY_HEALTH_SETTINGS,
+    contained_settings_path,
+    resolve_settings_file,
+)
 from app.settings.tiering import is_lab_profile
 
 import yaml
 
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.vault.paths import get_vault_system_dir_rel
-
-
-def _settings_rel_path(vault_root: Path) -> Path:
-    system_dir_rel = get_vault_system_dir_rel(vault_root)
-    return Path(system_dir_rel) / "Settings" / "health.md"
-
 
 
 @dataclass(frozen=True)
@@ -167,7 +166,48 @@ def load_health_settings(
                 configured_vault_root=None,
             )
 
-    target = vault_root / _settings_rel_path(vault_root)
+    resolved_root = Path(vault_root).expanduser().resolve()
+    canonical_target = resolve_settings_file(resolved_root, "health.md")
+    if canonical_target.exists():
+        legacy_paths = [LEGACY_HEALTH_SETTINGS]
+        try:
+            configured_health = contained_settings_path(
+                resolved_root,
+                resolved_root
+                / Path(get_vault_system_dir_rel(vault_root))
+                / "Settings"
+                / "health.md",
+            )
+        except (OSError, ValueError):
+            # Canonical authority must not depend on a valid retired layout.
+            # The fixed legacy path is still observed so shadowing stays loud.
+            pass
+        else:
+            legacy_paths.insert(0, configured_health.relative_to(resolved_root))
+        target = resolve_settings_file(
+            resolved_root,
+            "health.md",
+            legacy_paths=tuple(legacy_paths),
+        )
+    else:
+        configured_health_lexical = (
+            resolved_root
+            / Path(get_vault_system_dir_rel(vault_root))
+            / "Settings"
+            / "health.md"
+        )
+        configured_health = contained_settings_path(
+            resolved_root, configured_health_lexical
+        )
+
+        target = resolve_settings_file(
+            vault_root,
+            "health.md",
+            legacy_paths=(
+                configured_health.relative_to(resolved_root),
+                LEGACY_HEALTH_SETTINGS,
+            ),
+        )
     source = build_source(target)
     if not target.exists():
         return HealthSettingsLoadResult(

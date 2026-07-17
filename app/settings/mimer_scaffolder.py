@@ -6,6 +6,7 @@ from typing import List
 
 from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.default_vault_layout import load_default_vault_layout
+from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
 from app.vault.layout import ensure_vault_layout_report
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -61,7 +62,7 @@ class MimerScaffolder:
             "Canon",
             "Archive",
             "Machina",
-            "@Settings",
+            CANONICAL_SETTINGS_DIR_NAME,
         ]
         mimer_root = module_paths["Mimer"]
         for subdir in mimer_subdirs:
@@ -72,9 +73,9 @@ class MimerScaffolder:
                 created.append(subdir_path)
             subdir_path.mkdir(parents=True, exist_ok=True)
 
-        settings_dir = mimer_root / "@Settings"
+        settings_dir = mimer_root / CANONICAL_SETTINGS_DIR_NAME
         placeholder = settings_dir / "global.md"
-        system_settings = settings_dir / "system-settings.yaml"
+        system_settings = settings_dir / "system-settings.md"
 
         if not placeholder.exists():
             self._write_settings_placeholder(mimer_root, placeholder)
@@ -139,7 +140,7 @@ class MimerScaffolder:
     def _write_default_system_settings(cls, path: Path) -> None:
         defaults = cls._load_layout_defaults()
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = yaml.safe_dump(defaults, sort_keys=False, allow_unicode=True)
+        payload = "---\n" + yaml.safe_dump(defaults, sort_keys=False, allow_unicode=True).rstrip() + "\n---\n\n# System settings\n"
         # See _write_settings_placeholder above: same bootstrap-escape pass-through.
         write_note_from_absolute(
             path.expanduser().resolve(),

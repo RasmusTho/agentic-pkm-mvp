@@ -11,7 +11,7 @@ Eligibility reasons (ineligible):
   cooldown_active        — note mtime is too recent; retry after next_check_after
 
 Settings precedence:
-  vault settings (@Settings/watchers.md companion: section)
+  vault settings (settings/watchers.md companion: section)
   → env (COMPANION_CREATE_COOLDOWN_SECONDS, COMPANION_RENAME_COOLDOWN_SECONDS)
   → defaults (60s create, 20s rename)
 
@@ -23,6 +23,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -56,7 +57,7 @@ def load_companion_settings(vault_root: Path | None = None) -> CompanionSettings
     Reads vault settings file if vault_root is provided, falls back to env vars,
     then defaults. The vault settings format is::
 
-        # @Settings/watchers.md (frontmatter)
+        # settings/watchers.md (frontmatter)
         companion:
           create_cooldown_seconds: 60
           rename_cooldown_seconds: 20
@@ -65,7 +66,11 @@ def load_companion_settings(vault_root: Path | None = None) -> CompanionSettings
     vault_create: float | None = None
     vault_rename: float | None = None
     if vault_root is not None:
-        settings_path = vault_root / "@Settings" / "watchers.md"
+        settings_path = resolve_settings_file(
+            vault_root,
+            "watchers.md",
+            legacy_paths=(LEGACY_COMPILED_DIR / "watchers.md",),
+        )
         if settings_path.exists():
             try:
                 import yaml

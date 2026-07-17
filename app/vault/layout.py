@@ -8,6 +8,12 @@ from typing import Any, Iterable
 import yaml
 
 from app.settings.default_vault_layout import load_default_vault_layout
+from app.settings.locations import (
+    LEGACY_COMPILED_DIR,
+    LEGACY_SYSTEM_SETTINGS,
+    read_settings_mapping,
+    resolve_settings_file,
+)
 from app.knowledge.write_ops import write_note_from_absolute
 
 
@@ -24,10 +30,6 @@ SYSTEM_NOTE_TITLE = "Vault Structure – Human-First Orientation (Mimer)"
 # moment (vault-layout-ensure CLI, uat seed, ingest-time ensure_vault_layout,
 # the Mimer scaffolder's nested call) route through the writes below.
 LAYOUT_ENSURE_ACTION = "vault.layout_ensure"
-
-_SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
-_ALT_SETTINGS_REL_PATH = Path("@Settings") / "system-settings.yaml"
-
 
 @dataclass(frozen=True)
 class VaultLayout:
@@ -97,15 +99,17 @@ def _coerce_str(value: object | None) -> str:
 
 
 def _read_system_settings(vault_root: Path) -> dict[str, Any]:
-    for path in (vault_root / _SETTINGS_REL_PATH, vault_root / _ALT_SETTINGS_REL_PATH):
-        if not path.exists():
-            continue
-        try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
-    return {}
+    path = resolve_settings_file(
+        vault_root,
+        "system-settings.md",
+        legacy_paths=(LEGACY_SYSTEM_SETTINGS, LEGACY_COMPILED_DIR / "system-settings.yaml"),
+    )
+    if not path.exists():
+        return {}
+    try:
+        return read_settings_mapping(path)
+    except Exception:
+        return {}
 
 
 def _paths_block(settings: dict[str, Any]) -> dict[str, Any]:

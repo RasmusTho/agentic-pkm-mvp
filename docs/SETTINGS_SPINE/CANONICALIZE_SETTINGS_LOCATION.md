@@ -33,6 +33,12 @@ and three owner-adjacent docs each present a different one as canonical.
   Cross-Task Invariants).
 - Adds the CI gate: no code may introduce a settings path outside the canonical root or the
   enumerated legacy compat list.
+- Coalesces watcher observations under the multi-file canonical root into one full-bundle
+  recompile per tick; every observed settings file is state-marked, but a single tick never
+  rebuilds the same bundle once per file.
+- Treats the retired lower-/upper-case system-settings directories as aliases on
+  case-insensitive filesystems: migration enumerates system content once and relocates only the
+  named health artifact from the upper-case compatibility spelling, preventing duplicate moves.
 - Vault init scaffolds `settings/` only on explicit init, never on open (consumes the #2312 / R5
   ruling if made; otherwise this conservative default applies and is stated in the PR).
 

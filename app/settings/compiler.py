@@ -18,6 +18,7 @@ from app.events.bus import emit
 from app.components.settings.models_loader import load_models
 from app.receipts.settings_write import SettingsWriteReceipt, emit_settings_write_receipt
 from app.settings.panel_actions_settings import PanelActionsSettings, load_panel_actions_settings
+from app.settings.locations import canonical_settings_root, resolve_compiled_sources
 from app.settings.watcher_settings import WatcherSettings, load_watcher_settings
 from .constraints import as_bool, clamp_int, enum_or_default
 from .docs import BEGIN, END, inject_reference, render_reference
@@ -38,7 +39,7 @@ from .models import (
 from .parsers import parse_section
 from .writeback import write_markdown_via_knowledge_port, writeback_settings_block
 
-VAULT = Path("vault/@Settings")
+VAULT = Path("vault/settings")
 RUNTIME = Path("runtime/settings")
 
 
@@ -396,46 +397,78 @@ def _update_reference(path: Path, title: str, model: Any, auto_heal: bool, *, va
 
 
 def compile_all(
-    *, auto_heal: bool | None = None, vault_dir: Path | None = None
+    *,
+    auto_heal: bool | None = None,
+    vault_dir: Path | None = None,
+    vault_root: Path | None = None,
 ) -> SettingsBundle:
-    # ``vault_dir`` overrides the settings-source location so ingestion can compile
-    # the *selected* vault's ``@Settings`` (SETTINGS-01) rather than the packaged
-    # ``vault/@Settings`` convention; callers that omit it keep the existing default.
-    settings_dir = vault_dir if vault_dir is not None else VAULT
+    if vault_dir is not None and vault_root is not None:
+        raise ValueError("pass vault_dir or vault_root, not both")
+    settings_dir = (
+        Path(vault_dir)
+        if vault_dir is not None
+        else canonical_settings_root(vault_root) if vault_root is not None else VAULT
+    )
     auto_heal_enabled = _auto_heal_enabled(auto_heal)
-    vault_root = settings_dir.parent
+    resolved_vault_root = Path(vault_root) if vault_root is not None else settings_dir.parent
+    if vault_root is not None:
+        source_paths = resolve_compiled_sources(resolved_vault_root)
+    else:
+        source_paths = {
+            path.relative_to(settings_dir): path
+            for path in settings_dir.rglob("*.md")
+        } if settings_dir.exists() else {}
     file_sections: Dict[str, Dict[str, Any]] = {}
     file_paths: Dict[str, Path] = {}
-    for path in sorted(settings_dir.glob("*.md")):
+    for relative, path in sorted(source_paths.items(), key=lambda item: str(item[0])):
+        if relative.parent != Path("."):
+            continue
         file_sections[path.stem] = compile_file(path)
         file_paths[path.stem] = path
 
     agent_sections: Dict[str, Dict[str, Any]] = {}
     agent_paths: Dict[str, Path] = {}
-    agents_dir = settings_dir / "agents"
-    if agents_dir.exists():
-        for path in sorted(agents_dir.glob("*.md")):
-            agent_sections[path.stem] = compile_file(path)
-            agent_paths[path.stem] = path
+    for relative, path in sorted(source_paths.items(), key=lambda item: str(item[0])):
+        if relative.parent != Path("agents"):
+            continue
+        agent_sections[path.stem] = compile_file(path)
+        agent_paths[path.stem] = path
+
+    canonical_source_root = canonical_settings_root(resolved_vault_root)
+
+    def writeback_allowed(path: Path) -> bool:
+        return auto_heal_enabled and path.resolve().is_relative_to(
+            canonical_source_root
+        )
 
     bundle = SettingsBundle()
     global_payload = _merge_sections(file_sections.get("global", {}))
     global_model, global_canonical, global_fixed = _hydrate_model(payload=global_payload, model_cls=GlobalSettings)
     bundle.global_ = global_model
-    if auto_heal_enabled and global_fixed and "global" in file_paths:
-        writeback_settings_block(file_paths["global"], global_canonical, previous=global_payload, vault_root=vault_root)
+    if global_fixed and "global" in file_paths and writeback_allowed(file_paths["global"]):
+        writeback_settings_block(
+            file_paths["global"],
+            global_canonical,
+            previous=global_payload,
+            vault_root=resolved_vault_root,
+        )
     if "global" in file_paths:
-        _update_reference(file_paths["global"], "Global", bundle.global_, auto_heal_enabled, vault_root=vault_root)
+        _update_reference(file_paths["global"], "Global", bundle.global_, writeback_allowed(file_paths["global"]), vault_root=resolved_vault_root)
 
     provider_payload = _merge_sections(file_sections.get("providers", {}))
     providers_model, providers_canonical, providers_fixed = _hydrate_model(
         payload=provider_payload, model_cls=Providers
     )
     bundle.providers = providers_model
-    if auto_heal_enabled and providers_fixed and "providers" in file_paths:
-        writeback_settings_block(file_paths["providers"], providers_canonical, previous=provider_payload, vault_root=vault_root)
+    if providers_fixed and "providers" in file_paths and writeback_allowed(file_paths["providers"]):
+        writeback_settings_block(
+            file_paths["providers"],
+            providers_canonical,
+            previous=provider_payload,
+            vault_root=resolved_vault_root,
+        )
     if "providers" in file_paths:
-        _update_reference(file_paths["providers"], "Providers", bundle.providers, auto_heal_enabled, vault_root=vault_root)
+        _update_reference(file_paths["providers"], "Providers", bundle.providers, writeback_allowed(file_paths["providers"]), vault_root=resolved_vault_root)
 
     llm_routing_source_payload = _merge_sections(file_sections.get("llm_routing", {}))
     llm_routing_source_model, llm_routing_canonical, llm_routing_fixed = _hydrate_model(
@@ -445,20 +478,30 @@ def compile_all(
         llm_routing_source_model.model_dump(exclude_none=True)
     )
     bundle.llm_routing = LLMRoutingSettings(**resolved_llm_routing_payload)
-    if auto_heal_enabled and llm_routing_fixed and "llm_routing" in file_paths:
-        writeback_settings_block(file_paths["llm_routing"], llm_routing_canonical, previous=llm_routing_source_payload, vault_root=vault_root)
+    if llm_routing_fixed and "llm_routing" in file_paths and writeback_allowed(file_paths["llm_routing"]):
+        writeback_settings_block(
+            file_paths["llm_routing"],
+            llm_routing_canonical,
+            previous=llm_routing_source_payload,
+            vault_root=resolved_vault_root,
+        )
     if "llm_routing" in file_paths:
-        _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, auto_heal_enabled, vault_root=vault_root)
+        _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, writeback_allowed(file_paths["llm_routing"]), vault_root=resolved_vault_root)
 
     embedding_payload = _merge_sections(file_sections.get("embeddings", {}))
     embeddings_model, embeddings_canonical, embeddings_fixed = _hydrate_model(
         payload=embedding_payload, model_cls=EmbeddingProfiles
     )
     bundle.embedding_profiles = embeddings_model
-    if auto_heal_enabled and embeddings_fixed and "embeddings" in file_paths:
-        writeback_settings_block(file_paths["embeddings"], embeddings_canonical, previous=embedding_payload, vault_root=vault_root)
+    if embeddings_fixed and "embeddings" in file_paths and writeback_allowed(file_paths["embeddings"]):
+        writeback_settings_block(
+            file_paths["embeddings"],
+            embeddings_canonical,
+            previous=embedding_payload,
+            vault_root=resolved_vault_root,
+        )
     if "embeddings" in file_paths:
-        _update_reference(file_paths["embeddings"], "Embeddings", bundle.embedding_profiles, auto_heal_enabled, vault_root=vault_root)
+        _update_reference(file_paths["embeddings"], "Embeddings", bundle.embedding_profiles, writeback_allowed(file_paths["embeddings"]), vault_root=resolved_vault_root)
 
     yggdrasil_payload = _merge_sections(file_sections.get("yggdrasil", {}))
     if yggdrasil_payload:
@@ -467,10 +510,15 @@ def compile_all(
             model_cls=YggdrasilPaths,
         )
         bundle.yggdrasil_paths = ygg_model
-        if auto_heal_enabled and ygg_fixed and "yggdrasil" in file_paths:
-            writeback_settings_block(file_paths["yggdrasil"], ygg_canonical, previous=yggdrasil_payload, vault_root=vault_root)
+        if ygg_fixed and "yggdrasil" in file_paths and writeback_allowed(file_paths["yggdrasil"]):
+            writeback_settings_block(
+                file_paths["yggdrasil"],
+                ygg_canonical,
+                previous=yggdrasil_payload,
+                vault_root=resolved_vault_root,
+            )
         if "yggdrasil" in file_paths:
-            _update_reference(file_paths["yggdrasil"], "Yggdrasil", ygg_model, auto_heal_enabled, vault_root=vault_root)
+            _update_reference(file_paths["yggdrasil"], "Yggdrasil", ygg_model, writeback_allowed(file_paths["yggdrasil"]), vault_root=resolved_vault_root)
 
     instance_payload = _merge_sections(file_sections.get("instance", {}))
     bundle.instance = InstanceSettings(**instance_payload) if instance_payload else InstanceSettings()
@@ -486,16 +534,21 @@ def compile_all(
                 payload=merged,
                 model_cls=model_cls,
             )
-            if auto_heal_enabled and normalized and agent_paths.get(agent_name):
-                writeback_settings_block(agent_paths[agent_name], healed_payload, previous=merged, vault_root=vault_root)
+            if normalized and agent_paths.get(agent_name) and writeback_allowed(agent_paths[agent_name]):
+                writeback_settings_block(
+                    agent_paths[agent_name],
+                    healed_payload,
+                    previous=merged,
+                    vault_root=resolved_vault_root,
+                )
             agents_cfg[agent_name] = instance
-            if auto_heal_enabled and agent_paths.get(agent_name):
+            if agent_paths.get(agent_name) and writeback_allowed(agent_paths[agent_name]):
                 _update_reference(
                     agent_paths[agent_name],
                     agent_name.title(),
                     instance,
-                    auto_heal_enabled,
-                    vault_root=vault_root,
+                    writeback_allowed(agent_paths[agent_name]),
+                    vault_root=resolved_vault_root,
                 )
         else:
             agents_cfg[agent_name] = resolve_secret(merged)
@@ -509,7 +562,7 @@ def compile_all(
     # the generic and agent source compilation above.  Otherwise a
     # channel-scoped VAULT_ROOT_DEV/TEST could silently retain its default
     # auto-exec policy while the rest of the bundle came from this vault.
-    watcher_settings = load_watcher_settings(vault_root=vault_root)
+    watcher_settings = load_watcher_settings(vault_root=resolved_vault_root)
 
     staged_runtime = _new_staged_runtime_dir()
     try:

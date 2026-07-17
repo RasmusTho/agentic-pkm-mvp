@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.watcher import registry
+from app.watcher.settings_delta import SettingsSourceDeltaResult
 from app.watcher.state import WatcherState
 
 pytestmark = pytest.mark.watcher_controls
@@ -59,6 +60,76 @@ def _make_cfg(tmp_path: Path) -> tuple[registry.RegistryConfig, registry.Watcher
 
 def _current_state_path(cfg: registry.RegistryConfig, spec: registry.WatcherSpec) -> Path:
     return registry._state_path(cfg.state_dir, spec.name)
+
+
+def test_registry_collect_suppresses_scoped_settings_control(tmp_path: Path) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path)
+    spec.scope_glob = "*.md,**/*.md"
+    scoped = _write_note(vault, "settings/vault.md", "---\nvaultId: test\n---\n")
+    state = WatcherState()
+    summary: dict[str, object] = {
+        "scanned_files": 0,
+        "hashed_files": 0,
+        "bytes_read": 0,
+    }
+
+    changed, scanned = registry._collect_changed_entries(
+        cfg,
+        spec,
+        state,
+        summary,
+        scan_roots=[scoped.parent],
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert [entry.rel_path for entry in changed] == [Path("settings/vault.md")]
+    emitted = registry._emit_changed_entry(
+        cfg=cfg,
+        spec=spec,
+        state=state,
+        summary=summary,
+        entry=changed[0],
+        now=0.0,
+        panel_auto_exec_enabled=True,
+        action_mappings={},
+        process_panel_notes_inline=True,
+    )
+    assert emitted is None
+    assert not cfg.outbox_path.exists()
+    assert scanned == ["settings/vault.md"]
+
+
+def test_registry_deleted_settings_source_reloads_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path)
+    vault.mkdir(parents=True)
+    spec.scope_glob = "*.md,**/*.md"
+    state = WatcherState(
+        files={"settings/global.md": {"mtime": 1.0, "hash": "old"}}
+    )
+    observed: list[Path] = []
+
+    def _reload(*, rel_path: Path, vault_root: Path | None = None):
+        assert vault_root == vault
+        observed.append(rel_path)
+        return SettingsSourceDeltaResult(is_source=True, reloaded=True)
+
+    monkeypatch.setattr(registry, "handle_settings_source_delta", _reload)
+
+    summary = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=0.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert observed == [Path("settings/global.md")]
+    assert summary["settings_source_deletions_in_tick"] == 1
+    assert summary["settings_source_reloads_in_tick"] == 1
 
 
 def test_scoped_daemon_does_not_accumulate_unbounded_tick_state(tmp_path: Path) -> None:

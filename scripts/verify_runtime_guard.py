@@ -90,7 +90,7 @@ def main() -> int:
         Path(".env.example"),
         Path("config/runtime.defaults.env"),
         Path("config/eval.defaults.env"),
-        Path("vault/@Settings/watchers.md"),
+        Path("vault/settings/watchers.md"),
     }
     runtime_patterns = [
         re.compile(r"postgresql://(?:app|postgres):(?:app|postgres)@"),

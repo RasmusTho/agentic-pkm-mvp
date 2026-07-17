@@ -66,6 +66,49 @@ def _symlinked_selected_root(tmp_path: Path) -> tuple[Path, Path]:
     return real_root, selected_root
 
 
+def test_index_walk_always_excludes_canonical_settings(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    _write_note(
+        vault_root / "notes" / "Visible.md",
+        title="Visible",
+        body="knowledge",
+        note_uuid="visible-note",
+    )
+    _write_note(
+        vault_root / "settings" / "providers.md",
+        title="Providers",
+        body="control plane secret",
+        note_uuid="settings-provider",
+    )
+    _write_note(
+        vault_root / "@Settings" / "global.md",
+        title="Legacy settings",
+        body="legacy control plane secret",
+        note_uuid="legacy-settings-global",
+    )
+    _write_note(
+        vault_root / "_system" / "Settings" / "health.md",
+        title="Legacy health settings",
+        body="legacy health control secret",
+        note_uuid="legacy-health-settings",
+    )
+    (vault_root / "notes" / "settings-leak.md").symlink_to(
+        vault_root / "settings" / "providers.md"
+    )
+
+    walked = {
+        path.relative_to(vault_root).as_posix()
+        for path in walk_markdown_files(vault_root, [])
+    }
+
+    assert walked == {"notes/Visible.md"}
+    assert FsVaultAdapter(vault_root).search_notes(
+        "vault", "control plane secret"
+    ) == []
+    evaluated = DeterministicRelevanceEvaluator(vault_root)._read_vault_notes()
+    assert {note.rel_path for note in evaluated} == {"notes/Visible.md"}
+
+
 def test_index_build_excludes_child_vault_notes(
     tmp_path: Path, monkeypatch
 ) -> None:

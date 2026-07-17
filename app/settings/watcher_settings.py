@@ -14,6 +14,7 @@ from app.config.paths import (
     resolve_runtime_artifact_path,
 )
 from app.settings.source import SettingsSource, build_source
+from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 
 DEFAULT_INDEX_OUTBOX = Path("tmp/index-outbox.jsonl")
 DEFAULT_WATCHER_TICK_LOG = Path("tmp/watcher_tick.jsonl")
@@ -37,7 +38,7 @@ def _resolve_vault_root(vault_root: Path | None = None) -> Path | None:
     settings file is not read from a synthesized ``./vault`` and this returns
     ``None`` (defaults are used).
 
-    The watcher settings *file* (``@Settings/watchers.md``) is optional config
+    The watcher settings file (``settings/watchers.md``) is optional config
     that only tunes the watcher; it is not a note read/write surface. A
     set-but-missing ``VAULT_ROOT`` therefore degrades to no-settings here rather
     than raising at import time — the loud set-but-missing contract is enforced
@@ -57,7 +58,11 @@ def _settings_file(vault_root: Path | None = None) -> Path | None:
     root = _resolve_vault_root(vault_root)
     if root is None:
         return None
-    return root / "@Settings" / "watchers.md"
+    return resolve_settings_file(
+        root,
+        "watchers.md",
+        legacy_paths=(LEGACY_COMPILED_DIR / "watchers.md",),
+    )
 
 
 def _read_frontmatter(path: Path | None) -> dict[str, Any]:
