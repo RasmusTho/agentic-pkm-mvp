@@ -48,6 +48,11 @@ RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset(
 )
 
 _SETTINGS_WRITE_ACTION = "settings.runtime_gating.write"
+# Scaffolding a missing settings file is a vault-writing control action of its
+# own kind: it is WriteGuard-gated for every key (unlike ordinary non-gating
+# updates) and must not be conflated with runtime-gating writes in guard
+# errors, audits, or future per-action policy.
+_SETTINGS_SCAFFOLD_ACTION = "settings.scaffold.write"
 
 
 @dataclass(frozen=True)
@@ -433,11 +438,15 @@ class SettingsService:
     ) -> tuple[EffectiveSetting, SettingsWriteReceipt]:
         """Write a single setting and return (effective_setting, receipt).
 
-        Runtime-gating settings (``enableVaultWatcher``, ``enableAutoIndexing``)
+        Runtime-gating settings (the keys in ``RUNTIME_GATING_SETTINGS``)
         are authority-bearing and route through the governed write seam:
         WriteGuard health-gate is asserted first, then an actor-tagged receipt
         is emitted.  Non-runtime-gating settings follow the same path but are
-        not write-guarded.
+        not write-guarded — with one exception: when the target settings file
+        is missing and must be scaffolded from its initializer seed, the
+        scaffold itself is WriteGuard-gated (as ``settings.scaffold.write``)
+        regardless of the key, because creating a settings file is a
+        vault-writing control action (see ``_scaffold_missing_settings_file``).
 
         ``persist=False`` keeps the governed receipt path but skips writing the
         file back. The watcher uses that mode when a runtime-gating key is
@@ -550,7 +559,7 @@ class SettingsService:
         from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError  # noqa: PLC0415
 
         try:
-            DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION)
+            DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION)
         except WritesBlockedError as exc:
             raise SettingsWriteError(f"settings scaffold blocked by health gate: {exc}") from exc
         seed_frontmatter, seed_body = seed

@@ -354,6 +354,12 @@ def run_tick(
             hashed = _hash_file(cfg.vault_path / rel)
             if hashed is not None:
                 digest = hashed[0]
+        if settings_delta.deferred:
+            # The gating delta could not be routed (vault not selected). Do
+            # not record the file as seen: it must re-process on a later tick
+            # once the vault validates, or the unrouted on-disk edit would
+            # silently become effective through resolution.
+            continue
         # A settings source edit re-ingests the effective bundle
         # so the running services honor it within one tick (SETTINGS-01 / F1).
         if is_settings_source_path(rel) and settings_source_processed:

@@ -378,6 +378,64 @@ def assert_invalid_interval_and_policy_fail_loud(make_registry: RegistryFactory)
             title="Zero retention",
             acquisition_policy={"media": {"retention_days": 0}},
         )
+    # Strings PostgreSQL cannot store (NUL in text columns and jsonb,
+    # unpaired surrogates) are refused identically on both backends for every
+    # string field, not only provenance (round-B review finding).
+    with pytest.raises(SourceRegistryValidationError, match="title"):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PLfixtureNULTITLE",
+            account_binding_id=acct,
+            title="a\x00b",
+        )
+    with pytest.raises(SourceRegistryValidationError, match="title"):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PLfixtureSURROGATETITLE",
+            account_binding_id=acct,
+            title="\ud800",
+        )
+    with pytest.raises(SourceRegistryValidationError, match="collection_ref"):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PL\x00ref",
+            account_binding_id=acct,
+            title="NUL ref",
+        )
+    with pytest.raises(SourceRegistryValidationError, match="extractor_ids"):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PLfixtureNULEXTRACTOR",
+            account_binding_id=acct,
+            title="NUL extractor",
+            acquisition_policy={"extractor_ids": ["ex\x00tract"]},
+        )
+    with pytest.raises(SourceRegistryValidationError, match="max_quality"):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PLfixtureNULQUALITY",
+            account_binding_id=acct,
+            title="NUL quality",
+            acquisition_policy={"media": {"max_quality": "q\x00"}},
+        )
+    # Unhashable values in enum-checked fields raise the documented
+    # validation error, never a raw TypeError (round-B review finding).
+    with pytest.raises(SourceRegistryValidationError, match="mode"):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PLfixtureLISTMODE",
+            account_binding_id=acct,
+            title="List mode",
+            acquisition_policy={"mode": ["acquire_transcript"]},
+        )
+    with pytest.raises(SourceRegistryValidationError, match="origin"):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PLfixtureLISTORIGIN",
+            account_binding_id=acct,
+            title="List origin",
+            provenance={"origin": ["user_pick"]},
+        )
     with pytest.raises(SourceRegistryValidationError):
         reg.register(
             collection_kind="not_a_real_kind",

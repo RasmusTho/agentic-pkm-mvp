@@ -255,8 +255,10 @@ def _validate_media_policy(media: Any) -> None:
     if "enabled" in media and not isinstance(media["enabled"], bool):
         raise SourceRegistryValidationError("acquisition_policy.media.enabled must be a boolean")
     for key in ("max_quality", "format", "storage_binding"):
-        if key in media and media[key] is not None and not isinstance(media[key], str):
-            raise SourceRegistryValidationError(f"acquisition_policy.media.{key} must be a string or null")
+        if key in media and media[key] is not None:
+            if not isinstance(media[key], str):
+                raise SourceRegistryValidationError(f"acquisition_policy.media.{key} must be a string or null")
+            _check_portable_string(media[key], f"acquisition_policy.media.{key}")
     for key in ("min_free_gb", "retention_days"):
         if key in media and media[key] is not None:
             number = media[key]
@@ -297,7 +299,9 @@ def _validate_acquisition_policy_override(override: Any) -> None:
     unknown = set(override) - _ALLOWED_POLICY_KEYS
     if unknown:
         raise SourceRegistryValidationError(f"acquisition_policy has unknown keys: {sorted(unknown)}")
-    if "mode" in override and override["mode"] not in VALID_ACQUISITION_MODES:
+    if "mode" in override and (
+        not isinstance(override["mode"], str) or override["mode"] not in VALID_ACQUISITION_MODES
+    ):
         raise SourceRegistryValidationError(
             f"acquisition_policy.mode must be one of {sorted(VALID_ACQUISITION_MODES)}, "
             f"got {override['mode']!r}"
@@ -310,6 +314,8 @@ def _validate_acquisition_policy_override(override: Any) -> None:
         extractor_ids = override["extractor_ids"]
         if not isinstance(extractor_ids, list) or not all(isinstance(x, str) for x in extractor_ids):
             raise SourceRegistryValidationError("acquisition_policy.extractor_ids must be a list of strings")
+        for index, extractor_id in enumerate(extractor_ids):
+            _check_portable_string(extractor_id, f"acquisition_policy.extractor_ids[{index}]")
     if "captions" in override and not isinstance(override["captions"], bool):
         raise SourceRegistryValidationError("acquisition_policy.captions must be a boolean")
     if "media" in override:
@@ -429,7 +435,7 @@ def _build_provenance(now: str, override: dict[str, Any] | None) -> dict[str, An
     if unknown:
         raise SourceRegistryValidationError(f"provenance has unsupported keys: {sorted(unknown)}")
     origin = override.get("origin", "manual_add")
-    if origin not in VALID_PROVENANCE_ORIGINS:
+    if not isinstance(origin, str) or origin not in VALID_PROVENANCE_ORIGINS:
         raise SourceRegistryValidationError(
             f"provenance.origin must be one of {sorted(VALID_PROVENANCE_ORIGINS)}, got {origin!r}"
         )
@@ -720,6 +726,13 @@ def _row_to_binding(row: tuple[Any, ...]) -> SourceBinding:
         value = values[name]
         if value is None:
             return None
+        if isinstance(value, datetime):
+            # psycopg localizes timestamptz values to the session TimeZone
+            # GUC; canonicalize to UTC so the serialized form is stable
+            # across sessions and identical to the memory backend's +00:00.
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc)
+            return value.isoformat()
         if hasattr(value, "isoformat"):
             return value.isoformat()
         return str(value)
@@ -863,6 +876,8 @@ class _PgSourceRegistryBackend:
         return result
 
     def set_inbox(self, account_binding_id: str | None, binding_id: str) -> SourceBinding:
+        from psycopg.errors import UniqueViolation  # noqa: PLC0415
+
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
@@ -906,6 +921,18 @@ class _PgSourceRegistryBackend:
                     (now, binding_id),
                 )
                 conn.commit()
+            except UniqueViolation as exc:
+                # Two concurrent swaps for the same account: each transaction's
+                # disable-others UPDATE can miss the other's uncommitted enable,
+                # so the loser trips acquisition_source_registry_single_inbox_uq.
+                # The DB invariant held; surface a documented, retryable error
+                # instead of a raw psycopg exception (memory backend serializes
+                # under a lock and cannot reach this).
+                conn.rollback()
+                raise ValueError(
+                    "concurrent set_inbox swap for this account collided; "
+                    "the single-enabled-inbox invariant held — retry the swap"
+                ) from exc
             except Exception:
                 conn.rollback()
                 raise
@@ -966,9 +993,10 @@ class SourceRegistry:
         """
         if not isinstance(collection_ref, str) or not collection_ref.strip():
             raise SourceRegistryValidationError("collection_ref must be a non-empty string")
+        _check_portable_string(collection_ref, "collection_ref")
         if collection_ref in UNSUPPORTED_COLLECTION_REFS:
             raise SourceUnsupportedError(collection_ref)
-        if collection_kind not in VALID_COLLECTION_KINDS:
+        if not isinstance(collection_kind, str) or collection_kind not in VALID_COLLECTION_KINDS:
             raise SourceRegistryValidationError(
                 f"collection_kind must be one of {sorted(VALID_COLLECTION_KINDS)}, got {collection_kind!r}"
             )
@@ -979,6 +1007,7 @@ class SourceRegistry:
             )
         if not isinstance(title, str) or not title.strip():
             raise SourceRegistryValidationError("title must be a non-empty string")
+        _check_portable_string(title, "title")
 
         resolved_interval = (
             _KIND_DEFAULT_POLL_INTERVAL_SECONDS[collection_kind]
@@ -989,7 +1018,7 @@ class SourceRegistry:
         resolved_discovery_mode = discovery_mode
         if resolved_discovery_mode is None:
             resolved_discovery_mode = "rss_poll" if collection_kind == "subscription_feed" else "api_poll"
-        elif resolved_discovery_mode not in VALID_DISCOVERY_MODES:
+        elif not isinstance(resolved_discovery_mode, str) or resolved_discovery_mode not in VALID_DISCOVERY_MODES:
             raise SourceRegistryValidationError(
                 f"discovery_mode must be one of {sorted(VALID_DISCOVERY_MODES)}, got {resolved_discovery_mode!r}"
             )
@@ -997,7 +1026,7 @@ class SourceRegistry:
         resolved_priority = priority
         if resolved_priority is None:
             resolved_priority = "high" if collection_kind == "inbox_playlist" else "normal"
-        elif resolved_priority not in VALID_PRIORITIES:
+        elif not isinstance(resolved_priority, str) or resolved_priority not in VALID_PRIORITIES:
             raise SourceRegistryValidationError(
                 f"priority must be one of {sorted(VALID_PRIORITIES)}, got {resolved_priority!r}"
             )
@@ -1041,6 +1070,7 @@ class SourceRegistry:
         """Change only ``title``; identity, cursor, and policy are untouched."""
         if not isinstance(title, str) or not title.strip():
             raise SourceRegistryValidationError("title must be a non-empty string")
+        _check_portable_string(title, "title")
         return self._backend.update_title(binding_id, title)
 
     def get(self, binding_id: str) -> SourceBinding | None:

@@ -469,31 +469,23 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line."
     ),
-    ("app/vault/settings_service.py", 499): (
+    ("app/vault/settings_service.py", 508): (
         "guarded: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 499 (site unchanged); re-pinned per this census's "
+        "Line drifted 348 -> 508 (site unchanged); re-pinned per this census's "
         "own directly-related-repair convention when YSS-01 (#3916) added the "
-        "youtubeSync.* SettingDefinitions earlier in the file."
+        "youtubeSync.* SettingDefinitions and the scaffold action constant "
+        "earlier in the file."
     ),
-    ("app/vault/settings_service.py", 558): (
+    ("app/vault/settings_service.py", 567): (
         "guarded: _scaffold_missing_settings_file asserts "
-        "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
+        "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) "
         "before writing every missing static vault-shared settings seed, including "
-        "legacy non-gating paths.md and settings/youtube.md. Line drifted 561 -> 558 "
-        "while broadening the YSS-01 #3916 review repair to every static seed."
-    ),
-    ("app/watcher/settings_delta.py", 309): (
-        "guarded: _revert_denied_gating_keys writes only after "
-        "SettingsService.update_setting raised SettingsWriteError for a "
-        "runtime-gating key -- i.e. after the same seam's "
-        "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
-        "already DENIED the transition. The write restores the owner file to "
-        "its last accepted state so resolution cannot surface the denied "
-        "value (YSS-01 #3916 final-review P1); it is the gate's enforcement "
-        "of a denial, not a new gated settings write, and never persists a "
-        "value the guard has not previously accepted."
+        "legacy non-gating paths.md and settings/youtube.md. Line drifted 558 -> 567 "
+        "when the scaffold gained its own WriteGuard action name (YSS-01 #3916 "
+        "round-B review: scaffolds must not be conflated with runtime-gating "
+        "writes in guard errors/audits)."
     ),
     ("app/instance/vault_registry.py", 1088): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "

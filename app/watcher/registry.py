@@ -1002,6 +1002,12 @@ def _collect_changed_entries(
             hashed = _hash_file(path)
             if hashed is not None:
                 digest = hashed[0]
+        if settings_delta.deferred:
+            # The gating delta could not be routed (vault not selected). Do
+            # not record the file as seen: it must re-process on a later tick
+            # once the vault validates, or the unrouted on-disk edit would
+            # silently become effective through resolution.
+            continue
         if is_settings_source_path(rel):
             # Settings markdown is runtime control input, never ordinary vault
             # content.  Record it as seen for every spec, reload it only once

@@ -139,16 +139,16 @@ def test_youtube_master_switch_file_delta_is_guarded_and_receipted(
         if row.key == "youtubeSync.enabled"
     ]
 
-    # The denial controls the settings source of truth: the owner file is
-    # reverted to the accepted state, so SettingsService.resolve (which
-    # re-reads youtube.md) can never surface the denied value as effective.
+    # Keep-on-disk deny semantics: the human's edit REMAINS in the git-shared
+    # owner file — this seam never rewrites it, because a denial on one
+    # machine must not clobber a value another machine legitimately accepted
+    # and receipted (youtube.md syncs with 'commit' policy). The ACCEPTED
+    # values stay at the last guarded state, so runtime-gating consumers must
+    # consume the seam's accepted values, never raw resolution.
     store = MarkdownSettingsStore()
     youtube_md = vault_root / SETTINGS_YOUTUBE_REL
-    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is False
-    assert any("reverted" in error for error in blocked.errors)
+    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is True
 
-    # Once the guard clears, the human re-applies the edit and it activates.
-    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
     with patch.object(
         _wg_module.DEFAULT_WRITE_GUARD,
         "snapshot_fn",
@@ -175,9 +175,9 @@ def test_youtube_master_switch_file_delta_is_guarded_and_receipted(
     assert row.old_value is False
     assert row.new_value is True
 
-    # Reverse direction: deleting the enabling key while blocked is denied
-    # AND reverted — the accepted True value returns to the file, so a
-    # safe-mode file edit cannot silently disarm the gate either.
+    # Reverse direction: deleting the enabling key while blocked is denied the
+    # same way — the accepted True stays in the seam's values, no receipt is
+    # emitted, and the file keeps the human's edit (key absent, not restored).
     document = store.read(youtube_md)
     frontmatter = dict(document.frontmatter)
     del frontmatter["youtubeSync.enabled"]
@@ -194,7 +194,57 @@ def test_youtube_master_switch_file_delta_is_guarded_and_receipted(
         )
     assert removal_blocked.values == {"youtubeSync.enabled": True}
     assert removal_blocked.receipts == ()
-    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is True
+    assert removal_blocked.errors
+    assert "youtubeSync.enabled" not in store.read(youtube_md).frontmatter
+
+
+def test_gating_delta_on_unselected_vault_is_deferred_not_marked_seen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gating-file delta on a not-selected vault defers instead of routing.
+
+    The result carries ``deferred=True`` so callers skip recording the file
+    as seen and the edit re-processes once the vault validates — otherwise
+    the unrouted on-disk value would silently become effective through
+    resolution when the vault recovers (round-B review finding).
+    """
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    # Invalidate the vault: the committed marker file is required for
+    # validate_vault to return 'selected'.
+    (vault_root / "settings" / "vault.md").unlink()
+
+    result = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": False},
+    )
+
+    assert result.deferred is True
+    assert result.values == {"youtubeSync.enabled": False}
+    assert result.receipts == ()
+    assert result.errors and "requires selected vault" in result.errors[0]
+
+    # A routable delta is not deferred (control case).
+    (vault_root / "settings" / "vault.md").write_text(
+        "---\nschema: design-handoff.vault.v1\nscope: vault-shared\nvaultId: v1\nvaultName: V\n---\n",
+        encoding="utf-8",
+    )
+    import app.write_guard as _wg_module
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        routable = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values={"youtubeSync.enabled": False},
+        )
+    assert routable.deferred is False
 
 
 def test_local_file_cannot_override_youtube_master_switch(
@@ -260,17 +310,14 @@ def test_first_seen_youtube_activation_is_guarded_and_receipted(
         if row.key == "youtubeSync.enabled"
     ]
 
-    # The denied first-seen activation is reverted on disk to the accepted
-    # baseline: with watcher state lost, resolution must not surface the
-    # untrusted on-disk true either (same source-of-truth rule as the
-    # tracked-state denial). The vault-shared file is Git-tracked, so the
-    # human's edit stays recoverable from history.
+    # Keep-on-disk deny: the untrusted on-disk true stays as human-authored
+    # input (never rewritten by this seam — the file may have arrived via git
+    # from a machine where it WAS legitimately accepted); only the seam's
+    # accepted values guard what the runtime trusts.
     store = MarkdownSettingsStore()
     youtube_md = vault_root / SETTINGS_YOUTUBE_REL
-    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is False
+    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is True
 
-    # After the guard clears, the human re-applies the activation.
-    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
     with patch.object(
         _wg_module.DEFAULT_WRITE_GUARD,
         "snapshot_fn",
