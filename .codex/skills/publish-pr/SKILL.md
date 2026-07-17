@@ -182,11 +182,11 @@ bypass this local gate, use `--bypass-reason` and name the bypass in the PR/issu
 ```bash
 PR_LANE="<implementation|docs-authoring|governance|direct-repair>"
 if [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
-  mapfile -t CHANGED_FILES < <(git diff --name-only origin/main...HEAD)
+  # Portable read loop, not `mapfile`/`readarray` (bash 4+ only) — macOS ships bash 3.2.
   review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
-  for file in "${CHANGED_FILES[@]}"; do
-    review_gate_args+=(--changed-file "$file")
-  done
+  while IFS= read -r file; do
+    [ -n "$file" ] && review_gate_args+=(--changed-file "$file")
+  done < <(git diff --name-only origin/main...HEAD)
   python3 scripts/review_before_ci_gate.py "${review_gate_args[@]}" || exit 1
 fi
 ```
