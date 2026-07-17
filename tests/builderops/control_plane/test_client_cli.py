@@ -206,7 +206,7 @@ def test_missing_manifest_for_addressed_repo_fails_closed(tmp_path: Path, factor
             "implementation",
             "task-claim",
             "--repository",
-            "RasmusTho/bifrost",  # no manifest loaded for this repo
+            "RasmusTho/example-second-repo",  # no manifest loaded for this repo
             "--scope",
             "issue:1",
             "--stack",

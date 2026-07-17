@@ -7,11 +7,14 @@ routing, the service, auth, and models must never import a raw database driver
 ``PostgresBuilderOpsStore``. That is what makes the API boundary real: a client
 cannot silently reopen a worktree-local database or reach PostgreSQL directly.
 
-Only two control-plane modules are permitted store access:
+Only these control-plane modules are permitted store access:
 
 * ``store.py`` — the PostgreSQL data layer.
 * ``selection.py`` — the fail-closed production selector plus the explicit
   SQLite migration/test adapter seam.
+* ``legacy_migration.py`` — BCP-03's deterministic, read-only legacy-authority
+  import mechanism (merged after this slice via #3929); it hash-verifies each
+  source before and after every read and performs no production cutover.
 
 A new control-plane module that imports a database driver or constructs a store
 outside this allowlist fails this test. This inventory is the completeness proof
@@ -41,6 +44,7 @@ DATA_LAYER_AND_MIGRATION_ALLOWLIST: frozenset[str] = frozenset(
     {
         "app/builderops/control_plane/store.py",  # PostgreSQL data layer
         "app/builderops/control_plane/selection.py",  # selector + migration/test adapter
+        "app/builderops/control_plane/legacy_migration.py",  # BCP-03 read-only import mechanism
     }
 )
 

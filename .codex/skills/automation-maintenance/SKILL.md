@@ -61,7 +61,8 @@ specific justified exception. The redirect workspace
 (`LearningSignal`/worklog/promotion/receipt vault artifacts and `generate-projections`
 exports) — a system distinct from the newer BuilderOps **control plane** (task/lease/
 attempt/promotion/receipt coordination authority for the build process itself, hosted on
-Demerzel). For control-plane operations, use the authenticated API-only client instead:
+the independent control-plane host). For control-plane operations, use the authenticated
+API-only client instead:
 `scripts/builderops_api_client.sh` (`python -m app.builderops.control_plane`; see
 `docs/BUILDEROPS_CONTROL_PLANE/API_ONLY_CLIENT_CUTOVER.md`). Do not redirect the Vault-record
 commands below (`list`, `create-learning-signal`, `generate-projections`) to the new client:
