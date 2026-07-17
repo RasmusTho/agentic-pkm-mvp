@@ -76,6 +76,6 @@ def test_panel_runtime_enqueues_db_outbox(monkeypatch, tmp_path) -> None:
         cur = conn.cursor()
         cur.execute("select count(*) from outbox where topic = %s", ("promote.intent.created",))
         row = cur.fetchone()
-        assert row and int(row[0]) >= 1
+        assert row and int(outbox_service._row_value(row, 0)) >= 1
     finally:
         conn.close()

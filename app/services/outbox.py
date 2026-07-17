@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import uuid as uuid_module
 from datetime import datetime, timezone
@@ -16,6 +17,8 @@ from app.events.topic_schema_registry import (
     is_registered_topic,
     validate_topic_payload,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # Optional DB helpers (tests kan ge FakeConn). Import the real implementations
 # from app.db.db directly: the package-level names (`from app.db import
@@ -137,7 +140,12 @@ def open_outbox_txn_conn():
     non-pg test runs hermetic: ``conn_rw`` falls back to ``settings.db_dsn``,
     which could reach a real local database the test run never named. Returns
     ``None`` (never raises) when the helper is unavailable or the connect
-    fails — the degraded path preserves at-least-once semantics.
+    fails — the degraded path preserves at-least-once semantics. Unlike
+    :func:`_open_conn`, this has no plain-DSN fallback: a ``conn_rw`` failure
+    with the DB explicitly configured (as opposed to simply unconfigured)
+    silently reintroduces the non-atomic bookkeeping this function exists to
+    avoid, so that case is logged to distinguish it from the expected
+    unconfigured short-circuit above.
     """
     if not conn_rw:
         return None
@@ -147,6 +155,11 @@ def open_outbox_txn_conn():
     try:
         return conn_rw()
     except Exception:
+        _LOGGER.warning(
+            "open_outbox_txn_conn: DB is configured but conn_rw() failed; "
+            "poison-path bookkeeping degrades to the non-atomic per-call sequence",
+            exc_info=True,
+        )
         return None
 
 

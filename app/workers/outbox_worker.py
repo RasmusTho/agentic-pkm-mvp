@@ -1253,15 +1253,40 @@ def _record_failed_dispatch(
                 conn=conn,
             )
             ack_outbox(conn, message_id)
-            conn.commit()
-            return True
-        conn.commit()
+            # A commit failure here leaves nothing durable on this connection,
+            # so fall through to the same "not resolved" signal the below-cap
+            # path returns: the caller re-raises the original dispatch error
+            # for crash-retry, instead of a new commit-failure exception
+            # masking it.
+            return _commit_or_log(conn, topic=topic, message_id=message_id)
+        _commit_or_log(conn, topic=topic, message_id=message_id)
         return False
     finally:
         try:
             conn.close()
         except Exception:  # pragma: no cover - close is best-effort
             pass
+
+
+def _commit_or_log(conn: Any, *, topic: str | None, message_id: Any) -> bool:
+    """Commit ``conn``, logging (not raising) on failure.
+
+    A raise here would replace the caller's own dispatch-failure exception
+    with an unrelated commit-failure exception by the time it reaches the
+    `except Exception as handler_exc: ... raise` re-raise in `run()` (#3930
+    review) — the row stays safely pending either way (nothing committed), so
+    the caller only needs a bool to decide whether bookkeeping is durable.
+    """
+    try:
+        conn.commit()
+    except Exception:
+        logger.exception(
+            "worker failed to commit dispatch-failure bookkeeping topic=%s id=%s",
+            topic,
+            message_id,
+        )
+        return False
+    return True
 
 
 def _draft_schema_violation_case(
