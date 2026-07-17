@@ -77,11 +77,16 @@ def is_settings_control_path(
         return False
     if rel_path.parts[0] in {SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name}:
         return True
-    if (
-        configured_system_dir is not None
-        and rel_path == Path(configured_system_dir) / "Settings" / "health.md"
-    ):
-        return True
+    if configured_system_dir is not None:
+        configured_root = Path(configured_system_dir)
+        if any(
+            rel_path == root or rel_path.is_relative_to(root)
+            for root in (
+                configured_root / "settings",
+                configured_root / "Settings",
+            )
+        ):
+            return True
     return rel_path.parts[:2] in {
         ("_system", "settings"),
         ("_system", "Settings"),

@@ -149,6 +149,7 @@ def emit_settings_write_receipts_for_changes(
     file: Path | str,
     key_prefix: str | None = None,
     flatten_nested: bool = False,
+    require_durable: bool = False,
 ) -> tuple[SettingsWriteReceipt, ...]:
     """Emit key-scoped receipts for changed leaves in two settings mappings."""
 
@@ -170,7 +171,7 @@ def emit_settings_write_receipts_for_changes(
             surface=surface,
             actor=actor,
         )
-        emit_settings_write_receipt(receipt)
+        emit_settings_write_receipt(receipt, require_durable=require_durable)
         receipts.append(receipt)
     return tuple(receipts)
 

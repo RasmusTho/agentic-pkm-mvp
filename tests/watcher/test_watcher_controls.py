@@ -110,7 +110,33 @@ def test_nested_local_markdown_is_a_compiler_source() -> None:
     assert is_settings_control_path(
         Path("Meta/Settings/health.md"), configured_system_dir="Meta"
     )
+    assert is_settings_control_path(
+        Path("Meta/settings/ingest.override.md"), configured_system_dir="Meta"
+    )
     assert not is_settings_control_path(Path("Projects/Settings/health.md"))
+
+
+def test_configured_legacy_override_is_never_emitted_as_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "Meta")
+    cfg = replace(_config(tmp_path), scope_glob="*.md,**/*.md")
+    system_root = cfg.vault_path / "Meta"
+    system_root.mkdir(parents=True)
+    (system_root / "vault.layout.md").write_text(
+        "---\nsystem_folder: Meta\ninbox_folder: Inbox\ndesk_folder: Desk\n---\n",
+        encoding="utf-8",
+    )
+    override = system_root / "settings" / "ingest.override.md"
+    override.parent.mkdir()
+    override.write_text("---\ninclude_folders: [Notes]\n---\n", encoding="utf-8")
+
+    summary = run_tick(cfg, WatcherState(), now=0.0)
+
+    assert summary["emitted_in_tick"] == 1
+    emitted = cfg.outbox_path.read_text(encoding="utf-8")
+    assert "Meta/vault.layout.md" in emitted
+    assert "ingest.override.md" not in emitted
 
 
 def test_scoped_settings_control_file_is_never_emitted_as_note(tmp_path: Path) -> None:

@@ -236,7 +236,13 @@ def iter_vault_markdown_files(
     try:
         from app.vault.paths import get_vault_system_dir_rel
 
-        control_roots.add(Path(get_vault_system_dir_rel(selected_root_real)) / "Settings")
+        configured_system_root = Path(get_vault_system_dir_rel(selected_root_real))
+        control_roots.update(
+            {
+                configured_system_root / "settings",
+                configured_system_root / "Settings",
+            }
+        )
     except (OSError, ValueError):
         pass
 

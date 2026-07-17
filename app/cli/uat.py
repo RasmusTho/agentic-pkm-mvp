@@ -8,7 +8,8 @@ from typing import Any, Dict, Literal, Tuple
 import yaml
 
 from app.promotion.consumer import consume_promotion_intents
-from app.settings.locations import resolve_settings_file
+from app.receipts.settings_write import emit_settings_write_receipts_for_changes
+from app.settings.locations import canonical_settings_root, resolve_settings_file
 from app.testing.runtime_contract import failing_check_names, write_contract_report
 from app.vault.layout import ensure_vault_layout, load_layout, normalize_md_filename
 from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
@@ -100,14 +101,22 @@ def seed_vault_test_notes(
     return SeedSummary(written=written, skipped=skipped, destination=dest)
 
 
-def _ingest_override_path(vault_root: Path) -> Path:
+def _ingest_override_paths(vault_root: Path) -> tuple[Path, Path]:
+    """Return the compatibility read path and canonical write path.
+
+    Legacy settings are read-only during the compatibility release.  A UAT
+    bootstrap may seed its values into the canonical artifact, but it must
+    never mutate the retired location in place.
+    """
+
     layout = load_layout(vault_root)
     filename = normalize_md_filename("ingest.override.md")
-    return resolve_settings_file(
+    read_path = resolve_settings_file(
         vault_root,
         filename,
         legacy_paths=(Path(layout.system_folder) / "settings" / filename,),
     )
+    return read_path, canonical_settings_root(vault_root) / filename
 
 
 def _read_existing_override(path: Path) -> dict[str, Any]:
@@ -128,7 +137,9 @@ def _normalize_unique_folders(values: list[object]) -> list[str]:
     return folders
 
 
-def _write_ingest_override(path: Path, payload: dict[str, Any]) -> None:
+def _write_ingest_override(
+    path: Path, payload: dict[str, Any], *, previous: dict[str, Any]
+) -> None:
     frontmatter = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True).strip()
     body = (
         "# Ingest Override\n"
@@ -136,11 +147,21 @@ def _write_ingest_override(path: Path, payload: dict[str, Any]) -> None:
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\n{frontmatter}\n---\n\n{body}", encoding="utf-8")
+    emit_settings_write_receipts_for_changes(
+        old_values=previous,
+        new_values=payload,
+        surface="uat-bootstrap",
+        actor="uat-seed",
+        file=path,
+        key_prefix="ingest.override",
+        flatten_nested=True,
+        require_durable=True,
+    )
 
 
 def _ensure_uat_ingest_scope(vault_root: Path, *, target_subdir: str) -> None:
-    override_path = _ingest_override_path(vault_root)
-    existing = _read_existing_override(override_path)
+    read_path, canonical_path = _ingest_override_paths(vault_root)
+    existing = _read_existing_override(read_path)
     include_folders = existing.get("include_folders")
     if isinstance(include_folders, list):
         merged = _normalize_unique_folders([*include_folders, target_subdir])
@@ -151,7 +172,7 @@ def _ensure_uat_ingest_scope(vault_root: Path, *, target_subdir: str) -> None:
 
     payload = dict(existing)
     payload["include_folders"] = merged
-    _write_ingest_override(override_path, payload)
+    _write_ingest_override(canonical_path, payload, previous=existing)
 
 
 def _default_snapshot_path(scope: Path) -> Path:
