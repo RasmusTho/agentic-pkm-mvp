@@ -631,7 +631,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     )
     scores = {dimension: 0.5 for dimension in MATURITY_DIMENSIONS}
     citations = {dimension: [edge.to_dict()] for dimension in MATURITY_DIMENSIONS}
-    legacy.append_assessment(
+    current_assessment = legacy.append_assessment(
         capability_id=capability.id,
         scores=scores,
         citations=citations,
@@ -641,6 +641,48 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
                 "utf-8"
             )
         ).hexdigest(),
+        watermark_set={"repo": "commit:abc"},
+        valid_from="2026-07-15T00:00:00Z",
+        asserted_at="2026-07-15T00:00:00Z",
+    )
+    with sqlite3.connect(db_path) as conn:
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(ckm_assessment)")]
+        current_row = conn.execute(
+            "SELECT * FROM ckm_assessment WHERE id = ?", (current_assessment.id,)
+        ).fetchone()
+        assert current_row is not None
+        historical = dict(zip(columns, current_row, strict=True))
+        historical.update(
+            {
+                "id": "assess_pre_v5_history",
+                "public_id": "legacy-history-placeholder",
+                "functional_completeness": 0.4,
+                "aggregate": 0.4,
+                "edge_fingerprint": hashlib.sha256(
+                    b"historical-pre-v5-evidence-domain"
+                ).hexdigest(),
+                "valid_from": "2026-07-14T00:00:00Z",
+                "asserted_at": "2026-07-14T00:00:00Z",
+            }
+        )
+        conn.execute(
+            f"INSERT INTO ckm_assessment ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+            [historical[column] for column in columns],
+        )
+        conn.commit()
+
+    zero_capability = legacy.upsert_capability(
+        identity_key="pre-v5-zero-evidence",
+        name="Zero evidence capability",
+        definition="A valid empty assessment domain.",
+        existence_provenance="receipt:legacy-zero",
+    )
+    legacy.append_assessment(
+        capability_id=zero_capability.id,
+        scores=scores,
+        citations={dimension: [] for dimension in MATURITY_DIMENSIONS},
+        aggregate=0.5,
+        edge_fingerprint=hashlib.sha256(b"pre-v5-empty-domain").hexdigest(),
         watermark_set={"repo": "commit:abc"},
         valid_from="2026-07-15T00:00:00Z",
         asserted_at="2026-07-15T00:00:00Z",
@@ -734,11 +776,18 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert all(item.public_id for item in legacy.list_evidence_edges())
     assessments = legacy.list_assessments_for_capability(capability.id)
     assert all(item.public_id for item in assessments)
-    migrated_assessment_public_id = assessments[0].public_id
-    assert assessments[0].edge_fingerprint.startswith("v2:")
+    assert len(assessments) == 2
+    historical_assessment, migrated_current_assessment = assessments
+    assert historical_assessment.edge_fingerprint == "legacy"
+    assert historical_assessment.public_id != migrated_current_assessment.public_id
+    migrated_assessment_public_id = migrated_current_assessment.public_id
+    assert migrated_current_assessment.edge_fingerprint.startswith("v2:")
+    zero_assessment = legacy.latest_assessment_for_capability(zero_capability.id)
+    assert zero_assessment is not None
+    assert zero_assessment.edge_fingerprint.startswith("v2:")
     immediate_run = assess_capabilities(legacy)
     assert immediate_run.assessed == 0
-    assert immediate_run.skipped == 1
+    assert immediate_run.skipped == 2
     assert all(
         citation.get("public_id")
         for assessment in assessments

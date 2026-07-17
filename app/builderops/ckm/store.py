@@ -275,16 +275,50 @@ class CkmStore:
                 (public_id, row["history_id"]),
             )
         citations_changed = CkmStore._backfill_serialized_citation_identities(conn)
-        for row in conn.execute("SELECT * FROM ckm_assessment ORDER BY id").fetchall():
-            public_id = str(row["public_id"] or "") or CkmStore._assessment_public_id(conn, row)
-            normalized_fingerprint = CkmStore._normalized_assessment_fingerprint(
-                conn, row
+        assessment_rows = conn.execute(
+            "SELECT * FROM ckm_assessment ORDER BY id"
+        ).fetchall()
+        latest_by_capability: dict[str, str] = {}
+        latest_order_by_capability: dict[str, tuple[str, str, str]] = {}
+        for row in assessment_rows:
+            capability_id = str(row["capability_id"])
+            row_order = (
+                str(row["asserted_at"]),
+                str(row["valid_from"]),
+                str(row["id"]),
+            )
+            if row_order > latest_order_by_capability.get(
+                capability_id, ("", "", "")
+            ):
+                latest_by_capability[capability_id] = str(row["id"])
+                latest_order_by_capability[capability_id] = row_order
+
+        for row in assessment_rows:
+            fingerprint = str(row["edge_fingerprint"])
+            is_pre_v5 = fingerprint != "legacy" and not fingerprint.startswith("v2:")
+            is_historical_pre_v5 = is_pre_v5 and str(row["id"]) != latest_by_capability[
+                str(row["capability_id"])
+            ]
+            identity_row: Mapping[str, Any] = row
+            if is_historical_pre_v5:
+                historical_row = dict(row)
+                historical_row["edge_fingerprint"] = "legacy"
+                identity_row = historical_row
+            public_id = str(row["public_id"] or "") or CkmStore._assessment_public_id(
+                conn, identity_row
+            )
+            normalized_fingerprint = (
+                None
+                if is_historical_pre_v5
+                else CkmStore._normalized_assessment_fingerprint(conn, row)
             )
             conn.execute(
                 "UPDATE ckm_assessment SET public_id = ?, edge_fingerprint = ? WHERE id = ?",
                 (
                     public_id,
-                    normalized_fingerprint or row["edge_fingerprint"],
+                    "legacy"
+                    if is_historical_pre_v5
+                    else normalized_fingerprint or row["edge_fingerprint"],
                     row["id"],
                 ),
             )
@@ -654,10 +688,6 @@ class CkmStore:
             (str(row["capability_id"]),),
         ).fetchall()
         edges = [CkmEvidenceEdge.from_row(edge_row) for edge_row in edge_rows]
-        if not edges:
-            raise CkmValidationError(
-                "cannot normalize pre-v5 assessment without its active evidence graph"
-            )
         artifact_ids = sorted({edge.artifact_id for edge in edges})
         artifacts = {
             artifact.id: artifact
