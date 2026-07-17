@@ -341,27 +341,7 @@ def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT count(*) AS total
-                FROM store_objects AS o
-                LEFT JOIN store_vector_index AS v
-                  ON v.object_id = o.object_id
-                 AND v.embedding IS NOT NULL
-                 AND array_length(v.embedding, 1) > 0
-                WHERE v.object_id IS NULL
-                  AND (
-                    COALESCE(o.payload->>'content', '') <> ''
-                    OR COALESCE(o.payload->>'text', '') <> ''
-                    OR COALESCE(o.payload->>'raw_text', '') <> ''
-                  )
-                """
-            )
-            row = cur.fetchone()
-            total = int((row.get("total") if isinstance(row, dict) else row[0]) or 0) if row else 0
-            if not total:
-                return 0, []
-            cur.execute(
-                """
-                SELECT o.object_id AS object_id
+                SELECT o.object_id AS object_id, o.payload AS payload
                 FROM store_objects AS o
                 LEFT JOIN store_vector_index AS v
                   ON v.object_id = o.object_id
@@ -374,14 +354,23 @@ def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
                     OR COALESCE(o.payload->>'raw_text', '') <> ''
                   )
                 ORDER BY o.updated_at DESC
-                LIMIT %s
-                """,
-                (limit,),
+                """
             )
-            return total, [
-                str(sample.get("object_id") if isinstance(sample, dict) else sample[0])
-                for sample in cur.fetchall()
-            ]
+            rows = cur.fetchall()
+
+    from app.index.artifact_metadata import canonicalize_indexable_text
+
+    indexable_rows = [
+        row
+        for row in rows
+        if canonicalize_indexable_text(
+            dict((row.get("payload") or {}) if isinstance(row, dict) else (row[1] or {}))
+        )
+    ]
+    return len(indexable_rows), [
+        str(row.get("object_id") if isinstance(row, dict) else row[0])
+        for row in indexable_rows[:limit]
+    ]
 
 
 def inspect_vault_coverage_gap(*, limit: int = 5) -> Dict[str, Any]:

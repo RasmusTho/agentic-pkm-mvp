@@ -1424,11 +1424,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "derived-artifact payload; ingest_object -> store_vector_index."
     ),
     # -- carries_via_indexed_unit_builder: payload = build_indexed_unit_payload(...) (the choke) --
-    ("app/cli/index_rebuild.py", 318): (
+    ("app/cli/index_rebuild.py", 319): (
         "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
         "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index."
     ),
-    ("app/cli/index_rebuild.py", 615): (
+    ("app/cli/index_rebuild.py", 640): (
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
         "-> store_vector_index."
     ),

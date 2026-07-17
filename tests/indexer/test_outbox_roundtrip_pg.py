@@ -314,6 +314,20 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
             emit_outbox=False,
             trace_id="trace-contentless",
         )
+        panel_only_oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(panel_only_oid),
+                kind="note",
+                payload={
+                    "content": "%% AI:Start %%\nTransient panel only.\n%% AI:End %%\n"
+                },
+                source_ref="unit-test:panel-only",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-panel-only",
+        )
         events.emit_index_embedding_requested(
             {"object_id": oid, "trace_id": "trace-fail-loud", "source": "test"}
         )
@@ -338,6 +352,7 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
         assert unembedded_total == 1
         assert str(oid) in unembedded_samples
         assert str(contentless_oid) not in unembedded_samples
+        assert str(panel_only_oid) not in unembedded_samples
         from app.index.doctor import diagnose_index, reset_diagnose_cache
 
         reset_diagnose_cache()

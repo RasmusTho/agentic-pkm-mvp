@@ -649,6 +649,86 @@ jobs:
           name: pytest-not-pg-logs
           path: pytest-not-pg.log
 
+  pr-index-pg-contracts:
+    name: Index PG contracts
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      DB_DSN: postgresql://app:app@localhost:5432/app
+      PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/companion-ui/companion-app
+      STORE_BACKEND: pg
+      LLM_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect index PG acceptance surface
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            index_pg:
+              - 'app/cli/index_rebuild.py'
+              - 'app/index/**'
+              - 'app/stores/pg.py'
+              - 'tests/index/test_provenance_stamp.py'
+              - 'tests/indexer/test_outbox_roundtrip_pg.py'
+              - '.github/workflows/ci-smoke.yaml'
+
+      - uses: actions/setup-python@v5
+        if: steps.changes.outputs.index_pg == 'true'
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.changes.outputs.index_pg == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r dev-requirements.txt
+
+      - name: Enable pgvector extension
+        if: steps.changes.outputs.index_pg == 'true'
+        run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
+
+      - name: Run exact index PG acceptance surface
+        if: steps.changes.outputs.index_pg == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q -m "pg" \
+            tests/index/test_provenance_stamp.py \
+            tests/indexer/test_outbox_roundtrip_pg.py \
+            --tb=short \
+            | tee pytest-index-pg.log
+
+      - name: Skip index PG contracts for unrelated PR
+        if: steps.changes.outputs.index_pg != 'true'
+        run: echo "No index PG acceptance surface changed."
+
+      - name: Upload index PG log
+        if: always() && steps.changes.outputs.index_pg == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-index-pg-log
+          path: pytest-index-pg.log
+
   contract-validation:
     # Activated dead gates (#3892): import-linter, OpenAPI/AsyncAPI
     # validation, and YAML/JSON lint moved here from the retired

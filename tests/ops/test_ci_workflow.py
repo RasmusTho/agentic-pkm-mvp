@@ -44,6 +44,22 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     assert "tests/eval/test_classification_golden.py" in job
 
 
+def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
+    workflow = _smoke_text()
+
+    assert "pr-index-pg-contracts:" in workflow
+    job = workflow[
+        workflow.index("pr-index-pg-contracts:") : workflow.index("contract-validation:")
+    ]
+    assert "if: github.event_name == 'pull_request'" in job
+    assert "pgvector/pgvector:pg16" in job
+    assert "dorny/paths-filter@v3" in job
+    assert "app/cli/index_rebuild.py" in job
+    assert "tests/index/test_provenance_stamp.py" in job
+    assert "tests/indexer/test_outbox_roundtrip_pg.py" in job
+    assert '-m "pg"' in job
+
+
 def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:
     job = _unit_tests_job_text()
 

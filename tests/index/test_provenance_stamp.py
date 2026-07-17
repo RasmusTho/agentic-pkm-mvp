@@ -17,6 +17,7 @@ auto-mutates.
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -339,6 +340,81 @@ Transient panel text.
         staleness = diagnosis.get("content_hash_staleness") or {}
         assert staleness.get("stale_count", 0) == 0
         assert str(stale_oid) not in (staleness.get("stale_sample_ids") or [])
+    finally:
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_reconcile_purges_vector_for_present_non_indexable_source(tmp_path, monkeypatch) -> None:
+    """Explicit reconcile removes derived bytes after their source becomes non-indexable."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from click.testing import CliRunner
+
+    from app.cli import cli
+    from app.index.doctor import inspect_unembedded_pg_objects
+    from app.stores import get_object_store
+    from app.stores.pg import _connect, inspect_pg_content_hash_staleness
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    try:
+        from app.search import service as search_service
+
+        oid, _ = search_service.ingest_object(
+            kind="note",
+            source_ref="unit-test://reconcile-non-indexable",
+            payload={"content": "previous source text", "text": "previous source text"},
+            text="previous source text",
+        )
+        get_object_store().put(
+            oid,
+            kind="note",
+            source_ref="unit-test://reconcile-non-indexable",
+            payload={"content": "previous source text", "text": "previous source text"},
+        )
+
+        authoritative_payload = {"url": "https://example.invalid/now-contentless"}
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE store_objects SET payload = %s::jsonb WHERE object_id = %s",
+                    (json.dumps(authoritative_payload), oid),
+                )
+
+        result = CliRunner().invoke(
+            cli,
+            ["index", "reconcile", "--backend", "pg", "--json", "--strict"],
+            env=dict(os.environ),
+        )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)
+        assert summary["purged_non_indexable"] == 1
+        assert summary["reconciled"] == 0
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload FROM store_objects WHERE object_id = %s",
+                    (oid,),
+                )
+                source_row = cur.fetchone()
+                cur.execute(
+                    "SELECT count(*) AS total FROM store_vector_index WHERE object_id = %s",
+                    (oid,),
+                )
+                vector_row = cur.fetchone()
+
+        assert source_row["payload"] == authoritative_payload
+        assert vector_row["total"] == 0
+        assert inspect_unembedded_pg_objects(limit=10) == (0, [])
+        assert inspect_pg_content_hash_staleness()["stale_count"] == 0
     finally:
         _reset_store_backend_cache_only()
         _drop_schema(base_dsn, schema)

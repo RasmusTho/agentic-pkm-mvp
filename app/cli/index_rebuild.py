@@ -18,6 +18,7 @@ from app.index.artifact_metadata import (
 )
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app import objects as domain_objects
+from app.outbox.events import DEFAULT_EMBEDDING_VIEW
 from app.stores import get_vector_index, resolve_store_backend
 
 FAILURES_PATH_ENV = "INDEX_REBUILD_FAILURES_PATH"
@@ -440,7 +441,7 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
     return stale
 
 
-def _reconcile_object_payload(object_id, vector_payload: dict | None) -> dict:
+def _reconcile_object_payload(object_id, vector_payload: dict | None) -> Tuple[dict, bool]:
     """Resolve the authoritative payload to re-embed for a row.
 
     Prefer the authoritative ``store_objects`` payload (the durable object of
@@ -456,11 +457,9 @@ def _reconcile_object_payload(object_id, vector_payload: dict | None) -> dict:
                 (object_id,),
             )
             row = cur.fetchone()
-    if row and row.get("payload"):
-        payload = dict(row["payload"])
-        if _extract_text(payload):
-            return payload
-    return dict(vector_payload or {})
+    if row is not None:
+        return dict(row.get("payload") or {}), True
+    return dict(vector_payload or {}), False
 
 
 @index.command("reconcile", help="Re-embed non-primary-identity vectors under the primary identity (converge a mixed index).")
@@ -493,8 +492,11 @@ def reconcile(
     the run is interrupted (SIGINT, crash, embed failure), already-processed rows carry
     the primary identity and unprocessed rows retain their prior (fallback) identity —
     the index is still mixed but never missing a vector or partially written. A row is
-    never deleted; a failed re-embed leaves the original fallback vector in place and is
-    dead-lettered for retry.
+    never deleted because an embed/upsert failed; a failed re-embed leaves the original
+    fallback vector in place and is dead-lettered for retry. The one semantic deletion
+    is a derived vector
+    whose present authoritative source has become canonically non-indexable;
+    explicit reconcile purges that row so retrieval cannot serve stale bytes.
     """
     if backend:
         os.environ["STORE_BACKEND"] = backend
@@ -504,6 +506,7 @@ def reconcile(
         "backend": resolved_backend,
         "total_mismatched": 0,
         "reconciled": 0,
+        "purged_non_indexable": 0,
         "skipped": 0,
         "errors": [],
     }
@@ -563,7 +566,9 @@ def reconcile(
         kind = str(row.get("kind") or "note")
         source_ref = str(row.get("source_ref") or "")
         vector_payload = dict(row.get("payload") or {})
-        source_payload = _reconcile_object_payload(object_id, vector_payload)
+        source_payload, authoritative_source_present = _reconcile_object_payload(
+            object_id, vector_payload
+        )
         domain_obj = domain_objects.DomainObject(
             uuid=str(object_id),
             kind=kind,
@@ -574,7 +579,28 @@ def reconcile(
 
         text = _extract_text(source_payload)
         if not text:
-            summary["skipped"] = int(summary["skipped"]) + 1
+            if authoritative_source_present:
+                try:
+                    purged = index_store.purge_vectors(
+                        UUID(str(object_id)), view=DEFAULT_EMBEDDING_VIEW
+                    )
+                except Exception as purge_exc:
+                    _record_failure(
+                        summary,
+                        path,
+                        identity_info,
+                        domain_obj,
+                        "purge",
+                        purge_exc,
+                        1,
+                        False,
+                    )
+                    continue
+                summary["purged_non_indexable"] = int(
+                    summary["purged_non_indexable"]
+                ) + int(purged)
+            else:
+                summary["skipped"] = int(summary["skipped"]) + 1
             continue
 
         # ``store_vector_index`` is a derived retrieval projection.  Keep both
