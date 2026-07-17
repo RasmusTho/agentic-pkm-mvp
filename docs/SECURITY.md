@@ -66,7 +66,8 @@ BuilderOps independent control-plane contract (#3790):
 - The server-side credential manifest carries scope, revocation/rotation metadata, a non-secret
   SHA-256 verifier, and references only. Raw bearer values may be supplied through host secret files
   for compatibility bootstrap but are never returned or stored in BuilderOps PostgreSQL.
-- Durable request payloads fail closed on registered bearer values, credential-shaped keys,
+- Complete durable request documents, including identifiers, envelope metadata, idempotency keys,
+  and payloads, fail closed on registered bearer values, credential-shaped keys,
   credential-bearing database URLs, and known provider-token shapes. Secret references,
   fingerprints, scopes, credential IDs, and rotation generations remain valid durable metadata.
 - Normal client, executor, probe, and operator scopes are separate. Authentication failure is

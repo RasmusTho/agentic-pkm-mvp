@@ -131,9 +131,53 @@ def test_builderops_probe_uses_separate_health_and_status_credentials(
         calls.append((path, token))
         if path == "/readyz":
             return 200, {"ready": True}
-        return 200, {"recovery_pipeline": {"alerting": False}}
+        return 200, {"recovery_pipeline": {"alert": False}}
 
     monkeypatch.setattr(probe, "_get", fake_get)
 
     assert probe.run_probe() is True
     assert calls == [("/readyz", "health-only"), ("/status", "status-only")]
+
+
+def test_builderops_probe_consumes_the_service_recovery_alert_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    probe_path = root / "ops/host-setup/mac-mini/builderops_probe.py"
+    spec = importlib.util.spec_from_file_location("builderops_probe_alert_test", probe_path)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    health_token = tmp_path / "health-token"
+    status_token = tmp_path / "status-token"
+    health_token.write_text("health-only\n", encoding="utf-8")
+    status_token.write_text("status-only\n", encoding="utf-8")
+    monkeypatch.setattr(probe, "TOKEN_FILE", health_token)
+    monkeypatch.setattr(probe, "STATUS_TOKEN_FILE", status_token)
+    monkeypatch.setattr(probe, "STATE_FILE", tmp_path / "probe-state.json")
+    monkeypatch.setattr(
+        probe,
+        "_get",
+        lambda path, _token: (
+            (200, {"ready": True})
+            if path == "/readyz"
+            else (200, {"recovery_pipeline": {"alert": True}})
+        ),
+    )
+
+    class Channel:
+        def __init__(self) -> None:
+            self.messages: list[tuple[str, str]] = []
+
+        def send(self, subject: str, body: str) -> None:
+            self.messages.append((subject, body))
+
+    channel = Channel()
+    assert probe.run_probe(channel) is False
+    assert channel.messages == [
+        (
+            "BuilderOps control plane down",
+            "backup/WAL recovery pipeline is stalled or lagging",
+        )
+    ]

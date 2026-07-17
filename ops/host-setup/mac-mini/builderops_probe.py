@@ -56,7 +56,7 @@ def run_probe(channel: NotificationChannel | None = None) -> bool:
             failures.append("readiness failed")
         _, control_status = _get("/status", status_token)
         recovery = control_status.get("recovery_pipeline", {})
-        if isinstance(recovery, dict) and recovery.get("alerting") is True:
+        if isinstance(recovery, dict) and recovery.get("alert") is True:
             failures.append("backup/WAL recovery pipeline is stalled or lagging")
     except Exception as exc:
         failures.append(f"BuilderOps probe failed: {type(exc).__name__}")

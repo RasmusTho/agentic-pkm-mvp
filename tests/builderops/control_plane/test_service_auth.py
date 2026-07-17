@@ -202,3 +202,65 @@ def test_database_dsn_resolves_from_secret_file(tmp_path: Path) -> None:
     resolved = database_environment({"BUILDEROPS_DATABASE_URL_FILE": str(dsn_file)})
     assert resolved["BUILDEROPS_DATABASE_URL"].endswith("@db/builderops")
     assert resolved["BUILDEROPS_DATABASE_URL_FILE"] == str(dsn_file)
+
+
+def test_raw_credentials_are_rejected_from_every_client_controlled_durable_field(
+    tmp_path: Path,
+) -> None:
+    store = _Store()
+    registry = _registry(tmp_path)
+    canary = "raw-bearer/repo"
+    canary_secret = tmp_path / "durable-canary.secret"
+    canary_secret.write_text(canary + "\n", encoding="utf-8")
+    manifest = json.loads(registry.manifest_path.read_text(encoding="utf-8"))
+    manifest["credentials"].append(
+        {
+            "id": "durable-canary",
+            "principal": "test:durable-canary",
+            "secret_ref": "host-secret:durable-canary",
+            "secret_file": str(canary_secret),
+            "scopes": ["records:write"],
+            "rotation_generation": 1,
+        }
+    )
+    registry.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    health = HealthService(store, registry, _Operational())  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry, health=health))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer client-token"}
+
+    lease_mutations = (
+        lambda body: body["envelope"].update(repository=canary),
+        lambda body: body["envelope"].update(scope=canary),
+        lambda body: body["envelope"].update(stack=canary),
+        lambda body: body["envelope"].update(source_refs=[canary]),
+        lambda body: body.update(resource_id=canary),
+        lambda body: body.update(idempotency_key=canary),
+        lambda body: body.update(request={"command": canary}),
+    )
+    for mutate in lease_mutations:
+        body = _lease_payload()
+        mutate(body)
+        response = client.post("/v1/leases/claim", headers=headers, json=body)
+        assert response.status_code == 400
+        assert canary not in response.text
+
+    record_mutations = (
+        lambda body: body["envelope"].update(repository=canary),
+        lambda body: body["envelope"].update(scope=canary),
+        lambda body: body["envelope"].update(stack=canary),
+        lambda body: body["envelope"].update(source_refs=[canary]),
+        lambda body: body.update(record_id=canary),
+        lambda body: body.update(record_type=canary),
+        lambda body: body.update(state=canary),
+        lambda body: body.update(payload={"summary": canary}),
+        lambda body: body.update(idempotency_key=canary),
+    )
+    for mutate in record_mutations:
+        body = _record_payload({"summary": "safe"})
+        mutate(body)
+        response = client.post("/v1/records", headers=headers, json=body)
+        assert response.status_code == 400
+        assert canary not in response.text
+
+    assert store.claims == {}
+    assert store.last_actor is None

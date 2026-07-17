@@ -63,6 +63,17 @@ def test_builderops_compose_is_lifecycle_isolated() -> None:
     assert services["api"]["ports"] == ["127.0.0.1:${BUILDEROPS_API_PORT:-18100}:8000"]
     assert services["db"].get("ports") is None
     assert compose["networks"]["builderops-internal"]["internal"] is True
+    assert compose["networks"]["builderops-recovery-egress"].get("internal") is not True
+    assert services["db"]["networks"] == [
+        "builderops-internal",
+        "builderops-recovery-egress",
+    ]
+    assert services["backup"]["networks"] == [
+        "builderops-internal",
+        "builderops-recovery-egress",
+    ]
+    for name in ("migrate", "api", "worker"):
+        assert services[name]["networks"] == ["builderops-internal"]
 
     secret_names = set(compose["secrets"])
     assert {

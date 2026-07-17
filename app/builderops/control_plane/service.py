@@ -194,7 +194,11 @@ def create_app(
         credential: Credential = Depends(lease_write),
     ) -> dict[str, Any]:
         try:
-            _assert_durable_payload_safe(request.request, credentials)
+            # Every client-controlled field below becomes durable authority,
+            # idempotency, or lease state. Validate the complete request before
+            # constructing any store arguments so credentials cannot escape the
+            # payload boundary through identifiers or envelope metadata.
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
             result, lease = await run_in_threadpool(
                 store.claim_lease,
                 envelope=_envelope(request.envelope, credential),
@@ -232,7 +236,7 @@ def create_app(
         credential: Credential = Depends(record_write),
     ) -> dict[str, Any]:
         try:
-            _assert_durable_payload_safe(request.payload, credentials)
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
             result = await run_in_threadpool(
                 store.commit_record,
                 envelope=_envelope(request.envelope, credential),

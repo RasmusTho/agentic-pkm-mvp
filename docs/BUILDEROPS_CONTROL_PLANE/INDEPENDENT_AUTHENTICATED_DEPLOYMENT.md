@@ -42,6 +42,8 @@ Product ownership.
   references, non-secret fingerprints, scopes, and rotation generations;
 - create a BuilderOps-only Compose project with its own API, outbox worker, migration gate,
   PostgreSQL service/database/role/volume/secrets, and immutable release pin;
+- keep API, migration, and worker services on an internal-only network while granting outbound
+  recovery-target access only to the PostgreSQL WAL archiver and scheduled backup service;
 - provide independent deploy/rollback receipts and a host probe with separate least-privilege
   readiness and status credentials;
 - implement `/healthz`, `/readyz`, and secret-safe status/metrics for database/schema, outbox age and
@@ -89,6 +91,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 
 - BuilderOps Compose project/database/volume/role/secrets/pin/migrations remain distinct from
   `pkm-dev`, `pkm-test`, and `pkm-prod`.
+- Only recovery producers (PostgreSQL WAL archiving and the backup job) receive recovery-target
+  egress; API, migration, and worker services remain internal-only.
 - Tailnet membership alone is not authentication; no anonymous mutation or Product API key reuse.
 - Raw client, database, GitHub, merge, model/session, and recovery-decryption credentials are never
   returned to clients or persisted in repo config, PostgreSQL, outbox payloads, receipts, artifacts,
