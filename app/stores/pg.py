@@ -922,14 +922,14 @@ def inspect_pg_content_hash_staleness(*, limit: int = 5) -> dict:
                 """
                 SELECT v.object_id AS object_id,
                        v.payload->'provenance'->>'content_hash' AS stored_hash,
-                       COALESCE(o.payload->>'text', o.payload->>'content', '') AS current_text
+                       o.payload AS current_payload
                 FROM store_vector_index AS v
                 JOIN store_objects AS o ON o.object_id = v.object_id
                 """
             )
             rows = cur.fetchall()
 
-    from app.index.artifact_metadata import compute_content_hash
+    from app.index.artifact_metadata import compute_payload_content_hash
 
     stale_ids: list[str] = []
     unstamped_ids: list[str] = []
@@ -938,7 +938,7 @@ def inspect_pg_content_hash_staleness(*, limit: int = 5) -> dict:
         if not stored_hash:
             unstamped_ids.append(str(row["object_id"]))
             continue
-        current_hash = compute_content_hash(row.get("current_text") or "")
+        current_hash = compute_payload_content_hash(dict(row.get("current_payload") or {}))
         if current_hash != stored_hash:
             stale_ids.append(str(row["object_id"]))
 

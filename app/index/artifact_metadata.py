@@ -13,6 +13,7 @@ from app.ingest.episode_ref import episode_ref_from_frontmatter
 # changes in a way that would make existing vectors stale relative to a
 # re-run, independent of a chunk-policy or model change.
 EMBED_PIPELINE_VERSION = "v1"
+INDEXABLE_TEXT_KEYS = ("content", "text", "raw_text")
 
 
 def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
@@ -47,6 +48,31 @@ def compute_content_hash(text: str) -> str:
     changed since the vector was produced).
     """
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def extract_indexable_text(payload: dict | None) -> str:
+    """Select source text with the same precedence used by index rebuild.
+
+    ``store_objects`` can carry compatibility aliases simultaneously.  The
+    producer contract is content-first, then text, then raw_text; diagnosis
+    and reconcile must not independently choose a different alias.
+    """
+    data = payload or {}
+    for key in INDEXABLE_TEXT_KEYS:
+        value = data.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def compute_indexed_content_hash(text: str) -> str:
+    """Hash text with the producer's AI-panel canonicalization."""
+    return compute_content_hash(strip_ai_panels(text or ""))
+
+
+def compute_payload_content_hash(payload: dict | None) -> str:
+    """Hash the producer-selected text from a durable object payload."""
+    return compute_indexed_content_hash(extract_indexable_text(payload))
 
 
 def build_indexed_unit_payload(
@@ -99,11 +125,10 @@ def build_indexed_unit_payload(
     # note (idempotent no-op on panel-free text). Hashing the enriched body
     # instead makes content_hash non-deterministic and breaks reingest
     # idempotence + cold-rebuild (registry_chain).
-    embedded_text = text if text is not None else str(payload_out.get("text") or payload_out.get("content") or "")
-    canonical_text = strip_ai_panels(embedded_text)
+    embedded_text = text if text is not None else extract_indexable_text(payload_out)
     payload_out["provenance"] = {
         "source_ref": safe_source_ref,
-        "content_hash": compute_content_hash(canonical_text),
+        "content_hash": compute_indexed_content_hash(embedded_text),
         "chunk_policy_version": CHUNK_POLICY_VERSION,
         "pipeline_version": EMBED_PIPELINE_VERSION,
         "embedding_identity": _embedding_identity_dict(embedding_identity) if embedding_identity is not None else None,
@@ -114,5 +139,9 @@ def build_indexed_unit_payload(
 __all__ = [
     "build_indexed_unit_payload",
     "compute_content_hash",
+    "compute_indexed_content_hash",
+    "compute_payload_content_hash",
+    "extract_indexable_text",
     "EMBED_PIPELINE_VERSION",
+    "INDEXABLE_TEXT_KEYS",
 ]

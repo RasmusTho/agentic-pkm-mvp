@@ -21,6 +21,7 @@ import os
 
 import pytest
 
+from app.agents.panel.filters import strip_ai_panels
 from app.components.embeddings import EmbeddingIdentity
 from app.index.artifact_metadata import compute_content_hash
 from app.ingest.chunk_policy import CHUNK_POLICY_VERSION
@@ -169,6 +170,51 @@ def test_doctor_lists_stale_candidates(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.pg
+def test_doctor_uses_rebuild_text_precedence_for_content_hash(tmp_path, monkeypatch) -> None:
+    """Doctor hashes the same ``content`` field that rebuild embeds when both
+    ``content`` and a divergent legacy ``text`` field are present."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from app.index.doctor import diagnose_index, reset_diagnose_cache
+    from app.stores import get_object_store
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    reset_diagnose_cache()
+    try:
+        from app.search import service as search_service
+
+        canonical_content = "producer-selected content"
+        oid, _dim = search_service.ingest_object(
+            kind="note",
+            source_ref="unit-test://doctor-content-precedence",
+            payload={"content": canonical_content, "text": "legacy shadow text"},
+            text=canonical_content,
+        )
+        get_object_store().put(
+            oid,
+            kind="note",
+            source_ref="unit-test://doctor-content-precedence",
+            payload={"content": canonical_content, "text": "legacy shadow text"},
+        )
+
+        reset_diagnose_cache()
+        result = diagnose_index()
+        staleness = result.get("content_hash_staleness") or {}
+        assert staleness.get("stale_count", 0) == 0
+        assert str(oid) not in (staleness.get("stale_sample_ids") or [])
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
 def test_reconcile_incremental_on_stale_only(tmp_path, monkeypatch) -> None:
     """`index reconcile` re-embeds only stale rows: unchanged rows are untouched."""
     if not _pg_available():
@@ -214,14 +260,25 @@ def test_reconcile_incremental_on_stale_only(tmp_path, monkeypatch) -> None:
             payload={"text": "fresh unchanged", "content": "fresh unchanged"},
         )
 
-        # Simulate content drift on ONE object only: store_objects text
-        # changes but the durable vector row (and its stamped content_hash)
-        # is untouched until reconcile runs.
+        # Simulate content drift on ONE object only. The authoritative
+        # ``content`` field includes an AI panel while the legacy ``text``
+        # field diverges; reconcile and doctor must both use content-first
+        # precedence and the producer's panel-stripping hash canonicalization.
+        changed_content = """stale changed
+
+%% AI:Start %%
+## AI-instruktion
+Transient panel text.
+%% AI:End %%
+"""
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE store_objects SET payload = payload || '{\"text\": \"stale changed\", \"content\": \"stale changed\"}'::jsonb WHERE object_id = %s",
-                    (stale_oid,),
+                    "UPDATE store_objects "
+                    "SET payload = payload || "
+                    "jsonb_build_object('content', %s::text, 'text', %s::text) "
+                    "WHERE object_id = %s",
+                    (changed_content, "legacy shadow text", stale_oid),
                 )
 
         runner = CliRunner()
@@ -238,12 +295,21 @@ def test_reconcile_incremental_on_stale_only(tmp_path, monkeypatch) -> None:
                 )
                 rows_after = {row["object_id"]: row["content_hash"] for row in cur.fetchall()}
 
-        # Stale row is re-embedded: its content_hash now matches the new text.
-        assert rows_after[stale_oid] == compute_content_hash("stale changed")
+        # Stale row is re-embedded: its hash matches the producer's canonical
+        # panel-free form of the selected content field.
+        assert rows_after[stale_oid] == compute_content_hash(strip_ai_panels(changed_content))
 
         # Fresh (unchanged) row is untouched: same content_hash as before —
         # incremental repair, not a blanket re-embed of the whole index.
         assert rows_after[fresh_oid] == compute_content_hash("fresh unchanged")
+
+        from app.index.doctor import diagnose_index, reset_diagnose_cache
+
+        reset_diagnose_cache()
+        diagnosis = diagnose_index()
+        staleness = diagnosis.get("content_hash_staleness") or {}
+        assert staleness.get("stale_count", 0) == 0
+        assert str(stale_oid) not in (staleness.get("stale_sample_ids") or [])
     finally:
         _reset_store_backend_cache_only()
         _drop_schema(base_dsn, schema)

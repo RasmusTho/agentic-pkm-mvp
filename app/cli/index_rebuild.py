@@ -11,7 +11,7 @@ from uuid import UUID
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
-from app.index.artifact_metadata import build_indexed_unit_payload
+from app.index.artifact_metadata import build_indexed_unit_payload, compute_payload_content_hash, extract_indexable_text
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app import objects as domain_objects
 from app.stores import get_vector_index, resolve_store_backend
@@ -38,12 +38,7 @@ _RETRYABLE_NAMES = {"SerializationFailure", "DeadlockDetected", "TooManyRequests
 
 
 def _extract_text(payload: dict | None) -> str:
-    data = payload or {}
-    for key in ("content", "text", "raw_text"):
-        val = data.get(key)
-        if val:
-            return str(val)
-    return ""
+    return extract_indexable_text(payload)
 
 
 def _load_objects(limit: int | None) -> Tuple[List[domain_objects.DomainObject], str]:
@@ -408,7 +403,6 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
     ``inspect_pg_content_hash_staleness`` reports them separately as
     ``unstamped_count`` for visibility.
     """
-    from app.index.artifact_metadata import compute_content_hash
     from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
@@ -418,7 +412,7 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
                        v.payload AS payload, v.provider AS provider, v.model AS model,
                        v.dim AS dim, v.normalize AS normalize,
                        v.payload->'provenance'->>'content_hash' AS stored_hash,
-                       COALESCE(o.payload->>'text', o.payload->>'content', '') AS current_text
+                       o.payload AS current_payload
                 FROM store_vector_index AS v
                 JOIN store_objects AS o ON o.object_id = v.object_id
                 WHERE v.payload->'provenance'->>'content_hash' IS NOT NULL
@@ -430,7 +424,8 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
     stale = [
         row
         for row in candidates
-        if compute_content_hash(row.get("current_text") or "") != row.get("stored_hash")
+        if compute_payload_content_hash(dict(row.get("current_payload") or {}))
+        != row.get("stored_hash")
     ]
     if limit is not None:
         stale = stale[:limit]

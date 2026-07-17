@@ -348,6 +348,11 @@ def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
                  AND v.embedding IS NOT NULL
                  AND array_length(v.embedding, 1) > 0
                 WHERE v.object_id IS NULL
+                  AND (
+                    COALESCE(o.payload->>'content', '') <> ''
+                    OR COALESCE(o.payload->>'text', '') <> ''
+                    OR COALESCE(o.payload->>'raw_text', '') <> ''
+                  )
                 """
             )
             row = cur.fetchone()
@@ -363,6 +368,11 @@ def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
                  AND v.embedding IS NOT NULL
                  AND array_length(v.embedding, 1) > 0
                 WHERE v.object_id IS NULL
+                  AND (
+                    COALESCE(o.payload->>'content', '') <> ''
+                    OR COALESCE(o.payload->>'text', '') <> ''
+                    OR COALESCE(o.payload->>'raw_text', '') <> ''
+                  )
                 ORDER BY o.updated_at DESC
                 LIMIT %s
                 """,
