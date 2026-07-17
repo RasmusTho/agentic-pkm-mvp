@@ -205,6 +205,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/health/",
             "tests/invariants/test_health_probe.py",
             "tests/invariants/test_health_heartbeat_visibility.py",
+            # /app/runtime container-writability contract (#3047): no app/
+            # module owns it exclusively (it probes the Dockerfile plus the
+            # ask_synthesis receipt path as one example writer), so its own
+            # suite membership is the only available trigger.
+            "tests/invariants/test_receipt_surface_writable.py",
             "docs/OBSERVABILITY_STABILIZATION/",
         ),
         (
