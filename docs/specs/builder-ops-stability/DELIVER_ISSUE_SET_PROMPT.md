@@ -1,3 +1,5 @@
+State: Prompt artifact — input for the `docs-to-issue` conversion of the sibling README's capability spec. Not a spec itself; `README.md` owns the builder-ops-stability specification.
+
 # Deliver Issue Set: Builder Ops Stability
 
 Use this prompt with the `docs-to-issue` skill to create the issue set for the builder-ops-stability capability.
