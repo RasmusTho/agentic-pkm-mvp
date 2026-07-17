@@ -46,8 +46,9 @@ ingress transport only; it is never a secret store or raw-audio archive.
 The only initial logical identifier is `heimdal.raw-store-key`. It is declared separately for the
 `dev`, `test`, and `prod` `heimdal-capture-watch` consumers in
 `config/secrets/host_secret_contract.json`; no value or host path is stored in that file. The
-Keychain service name is a stable non-secret namespace, and its account is derived exactly as
-`{channel}:{consumer}:{secret}` from a declared tuple, so each channel resolves a distinct item.
+Keychain service name is a stable non-secret namespace, and its account is derived by
+percent-encoding each `{channel}:{consumer}:{secret}` component before colon-joining the declared
+tuple, so distinct tuples cannot collide and each channel resolves a distinct item.
 HSP-02 is the only future component permitted to resolve that declaration into a process-local
 environment variable.
 

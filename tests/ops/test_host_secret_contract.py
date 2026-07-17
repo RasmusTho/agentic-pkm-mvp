@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from app.ops.host_secret_contract import UndeclaredSecretConsumerError, load_host_secret_contract
+from app.ops.host_secret_contract import (
+    HostSecretContract,
+    UndeclaredSecretConsumerError,
+    load_host_secret_contract,
+)
 
 
 def test_contract_rejects_undeclared_consumer_secret_pair() -> None:
@@ -41,6 +45,26 @@ def test_contract_resolves_distinct_channel_scoped_keychain_accounts() -> None:
         "test:heimdal-capture-watch:heimdal.raw-store-key",
         "prod:heimdal-capture-watch:heimdal.raw-store-key",
     }
+
+
+def test_contract_percent_encodes_components_to_prevent_account_collisions() -> None:
+    contract = HostSecretContract(
+        keychain_service="test",
+        keychain_account_template="{channel}:{consumer}:{secret}",
+        allowed=frozenset(
+            {
+                ("dev:ops", "watch", "key"),
+                ("dev", "ops:watch", "key"),
+            }
+        ),
+    )
+
+    left = contract.keychain_account(channel="dev:ops", consumer="watch", secret="key")
+    right = contract.keychain_account(channel="dev", consumer="ops:watch", secret="key")
+
+    assert left == "dev%3Aops:watch:key"
+    assert right == "dev:ops%3Awatch:key"
+    assert left != right
 
 
 def test_contract_rejects_undeclared_consumer_field(tmp_path: Path) -> None:

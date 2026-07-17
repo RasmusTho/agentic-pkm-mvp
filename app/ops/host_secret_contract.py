@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 
 DEFAULT_CONTRACT_PATH = Path("config/secrets/host_secret_contract.json")
@@ -33,7 +34,9 @@ class HostSecretContract:
         """Return the declared, channel-scoped Keychain account identifier."""
         self.require_declared(channel=channel, consumer=consumer, secret=secret)
         return self.keychain_account_template.format(
-            channel=channel, consumer=consumer, secret=secret
+            channel=quote(channel, safe=""),
+            consumer=quote(consumer, safe=""),
+            secret=quote(secret, safe=""),
         )
 
 
