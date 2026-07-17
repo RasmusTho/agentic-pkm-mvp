@@ -22,6 +22,11 @@ cleanup() {
   fi
   docker rm -f "$primary" "$restored" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
+  docker run --rm --user root \
+    -e "CLEANUP_UID=$(id -u)" -e "CLEANUP_GID=$(id -g)" \
+    -v "$test_root:/cleanup" \
+    "$postgres_image" sh -c \
+    'chown -R "$CLEANUP_UID:$CLEANUP_GID" /cleanup' >/dev/null 2>&1 || true
   rm -rf "$test_root"
 }
 trap cleanup EXIT

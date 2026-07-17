@@ -75,11 +75,15 @@ def test_built_image_version_reports_build_sha(monkeypatch) -> None:
 
 def test_single_image_artifact_per_commit() -> None:
     workflow = _workflow_text()
+    product_image_job = workflow.split("\n  build-builderops-images:", maxsplit=1)[0]
 
-    assert "strategy:" not in workflow
-    assert workflow.count("uses: docker/build-push-action@") == 2
-    assert workflow.count("if: github.event_name == 'pull_request'") == 2
-    assert workflow.count("if: github.event_name == 'push' && github.ref == 'refs/heads/main'") >= 2
-    assert "matrix:" not in workflow
-    assert "CHANNEL" not in workflow
-    assert "ENVIRONMENT" not in workflow
+    assert "strategy:" not in product_image_job
+    assert product_image_job.count("uses: docker/build-push-action@") == 2
+    assert product_image_job.count("if: github.event_name == 'pull_request'") == 2
+    assert (
+        product_image_job.count("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
+        >= 1
+    )
+    assert "matrix:" not in product_image_job
+    assert "CHANNEL" not in product_image_job
+    assert "ENVIRONMENT" not in product_image_job
