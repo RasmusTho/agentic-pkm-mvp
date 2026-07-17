@@ -17,6 +17,9 @@ class CredentialConfigurationError(RuntimeError):
     """Raised when the host-owned credential configuration is unusable."""
 
 
+_REPOSITORY_SCOPE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
 @dataclass(frozen=True)
 class Credential:
     credential_id: str
@@ -26,6 +29,20 @@ class Credential:
     scopes: frozenset[str]
     rotation_generation: int
     token_length: int
+    repositories: frozenset[str] = frozenset()
+
+    def may_address(self, repository: str) -> bool:
+        """Return whether this credential is granted authority for ``repository``.
+
+        A credential that declares ``repositories`` is bound to exactly that set
+        (canonical ``owner/name``, lowercased). Cross-repo access fails closed.
+        A credential that declares no repositories is unrestricted for repo
+        addressing; production write credentials are expected to declare their
+        scope, which the cutover provisions.
+        """
+        if not self.repositories:
+            return True
+        return repository.strip().lower() in self.repositories
 
 
 class CredentialRegistry:
@@ -102,6 +119,21 @@ class CredentialRegistry:
                     "BuilderOps credential scopes must be unique bounded identifiers"
                 )
             scopes = frozenset(scopes_raw)
+            repositories_raw = raw.get("repositories", [])
+            if not isinstance(repositories_raw, list) or not all(
+                isinstance(repository, str)
+                and _REPOSITORY_SCOPE.fullmatch(repository.strip()) is not None
+                and not any(part in {".", ".."} for part in repository.strip().split("/"))
+                for repository in repositories_raw
+            ):
+                raise CredentialConfigurationError(
+                    "BuilderOps credential repositories must be bounded owner/name references"
+                )
+            repositories = frozenset(repository.strip().lower() for repository in repositories_raw)
+            if len(repositories) != len(repositories_raw):
+                raise CredentialConfigurationError(
+                    "BuilderOps credential repositories must be unique"
+                )
             revoked = raw.get("revoked", False)
             if type(revoked) is not bool:
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata")
@@ -160,6 +192,7 @@ class CredentialRegistry:
                         scopes=scopes,
                         rotation_generation=generation,
                         token_length=token_length,
+                        repositories=repositories,
                     ),
                     verifier,
                 )
@@ -235,6 +268,7 @@ class CredentialRegistry:
                     "secret_ref": entry.secret_ref,
                     "fingerprint": entry.fingerprint,
                     "scopes": sorted(entry.scopes),
+                    "repositories": sorted(entry.repositories),
                     "rotation_generation": entry.rotation_generation,
                     "token_length": entry.token_length,
                 }

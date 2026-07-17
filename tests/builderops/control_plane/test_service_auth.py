@@ -459,3 +459,69 @@ def test_raw_credentials_are_rejected_from_every_client_controlled_durable_field
 
     assert store.claims == {}
     assert store.last_actor is None
+
+
+def _scoped_registry(tmp_path: Path) -> CredentialRegistry:
+    """A normal MacBook client: repo-scoped writes, no executor/outbox scope."""
+    secret = tmp_path / "normal.secret"
+    secret.write_text("normal-token\n", encoding="utf-8")
+    manifest = tmp_path / "scoped-credentials.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "credentials": [
+                    {
+                        "id": "normal-client",
+                        "principal": "client:macbook",
+                        "secret_ref": "host-secret:normal-client",
+                        "secret_file": str(secret),
+                        "scopes": ["records:write", "leases:write", "tasks:write"],
+                        "repositories": ["RasmusTho/agentic-pkm-mvp"],
+                        "rotation_generation": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return CredentialRegistry(manifest)
+
+
+def test_normal_client_cannot_use_executor_or_cross_repo_scope(tmp_path: Path) -> None:
+    store = _Store()
+    registry = _scoped_registry(tmp_path)
+    health = HealthService(store, registry, _Operational())  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry, health=health))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer normal-token"}
+
+    # Positive control: the credential works for its own repository.
+    granted = client.post(
+        "/v1/records", headers=headers, json=_record_payload({"summary": "ok"})
+    )
+    assert granted.status_code == 200
+    assert store.last_actor == "client:macbook"
+
+    # A normal client credential holds no executor/outbox scope: the privileged
+    # executor operation is forbidden (403), not silently downgraded.
+    executor = client.post(
+        "/v1/executor/outbox/claim",
+        headers=headers,
+        json={
+            "envelope": _lease_payload()["envelope"],
+            "operation_key": "outbox-3790",
+            "worker_id": "worker:demerzel",
+            "claim_ttl_seconds": 300,
+        },
+    )
+    assert executor.status_code == 403
+
+    # A credential scoped to one repository cannot address another repository;
+    # the cross-repo write is rejected before it can reach the store.
+    cross_repo = _record_payload({"summary": "ok"})
+    cross_repo["envelope"] = {
+        **_lease_payload()["envelope"],
+        "repository": "OtherOwner/other-repo",
+    }
+    cross_repo["idempotency_key"] = "record-cross-repo"
+    rejected = client.post("/v1/records", headers=headers, json=cross_repo)
+    assert rejected.status_code == 403

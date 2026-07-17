@@ -11,6 +11,18 @@ can_parallelize_with: []
 
 # API-Only Client Cutover
 
+Delivery status: the versioned authenticated control-plane client
+(`app/builderops/control_plane/client.py`), its API-only CLI
+(`python -m app.builderops.control_plane`), delivery-manifest routing, the
+client-facing service routes, repo/executor scope enforcement, and the
+store-boundary/governance gates are implemented in the development baseline by
+#3791. The client transport ships non-authoritative: it targets whatever
+BuilderOps service/store backend is configured, and BCP-06 owns activating
+production authority and freezing the legacy SQLite writers. The legacy
+direct-SQLite `app.dispatcher`/`app.builderops` CLIs remain until that
+BCP-06 freeze; this slice adds the API-only client alongside them and gates the
+control-plane package against local-store fallback.
+
 ## Purpose
 
 Current CLI, boundary, dispatcher, skills, automations, and SSH wrappers can construct/open local
@@ -74,25 +86,25 @@ removes direct operational-store access from builder clients.
 
 ## Acceptance Criteria
 
-- [ ] Representative MacBook commands for records, inquiry, task claim/heartbeat/complete, and
+- [x] Representative MacBook commands for records, inquiry, task claim/heartbeat/complete, and
   receipts call the authenticated API and share one authority epoch.
   Verify: `tests/builderops/control_plane/test_api_clients.py::test_all_authority_commands_use_remote_api`.
-- [ ] With the API unavailable or credentials invalid, mutation returns a typed error and creates no
+- [x] With the API unavailable or credentials invalid, mutation returns a typed error and creates no
   SQLite/JSONL/JSON authority or GitHub lease substitute.
   Verify: `tests/builderops/control_plane/test_api_clients.py::test_client_failure_never_creates_local_authority_fallback`.
-- [ ] Production CLI/help/config exposes no direct database path or SSH-wrapped store mode; migration
+- [x] Production CLI/help/config exposes no direct database path or SSH-wrapped store mode; migration
   tooling retains explicit read-only source paths.
   Verify: `tests/governance/test_builderops_api_only_clients.py::test_production_clients_expose_no_direct_store_mode`.
-- [ ] Repo-local BuilderOps/dispatcher skills and automations route authority-bearing operations
+- [x] Repo-local BuilderOps/dispatcher skills and automations route authority-bearing operations
   through the client and document credential setup without secrets.
   Verify: `tests/governance/test_builderops_api_only_clients.py::test_skills_and_automations_route_through_authenticated_api`.
-- [ ] A normal client credential cannot call privileged executor/merge operations or address a repo
+- [x] A normal client credential cannot call privileged executor/merge operations or address a repo
   outside its granted scope.
   Verify: `tests/builderops/control_plane/test_service_auth.py::test_normal_client_cannot_use_executor_or_cross_repo_scope`.
-- [ ] Client policy loads the addressed repo's delivery manifest and routes by
+- [x] Client policy loads the addressed repo's delivery manifest and routes by
   `(RepoRef, stack, task-class)`; missing/ambiguous manifests and cross-repo prior reuse fail closed.
   Verify: `tests/builderops/control_plane/test_delivery_manifest_routing.py::test_repo_stack_task_routing_is_explicit_and_non_transitive`.
-- [ ] Static/runtime inventory rejects production imports/construction of SQLite stores outside the
+- [x] Static/runtime inventory rejects production imports/construction of SQLite stores outside the
   migration/test adapter allowlist.
   Verify: `tests/architecture/test_builderops_store_boundary.py::test_only_control_plane_data_layer_and_migration_adapters_access_stores`.
 
@@ -102,6 +114,28 @@ removes direct operational-store access from builder clients.
 - importing/finally freezing legacy stores;
 - removing Product Runtime routes; and
 - distributing credentials outside the owner-operated MacBook/Demerzel boundary.
+
+## Client setup (secret-safe)
+
+Repo-local skills and automations route authority-bearing BuilderOps operations
+through the authenticated API client, not a local store. The canonical entry
+points are `python -m app.builderops.control_plane <command>` and the
+`scripts/builderops_api_client.sh` automation wrapper. Both resolve their base
+URL and scoped bearer credential from host-owned configuration only; no
+credential is inlined in the repo, skills, docs, or logs:
+
+- `BUILDEROPS_API_URL` — the control-plane base URL (required), reached over
+  Tailscale, e.g. `https://demerzel.<tailnet>.ts.net:<port>`.
+- `BUILDEROPS_API_TOKEN_FILE` — path to a host secret file holding the scoped
+  bearer token (preferred), or
+- `BUILDEROPS_API_TOKEN` — the scoped bearer token in the host environment.
+
+Exactly one of `BUILDEROPS_API_TOKEN_FILE` or `BUILDEROPS_API_TOKEN` is set by
+the host. A normal client credential is scoped to its granted repositories and
+cannot call the privileged executor/outbox operations; the Demerzel executor
+holds the only `outbox:write` credential. With the service unavailable or the
+credential rejected, the client and wrapper fail closed with a non-zero exit and
+create no local SQLite/JSONL/JSON authority and no fabricated GitHub lease.
 
 ## How to Verify (Pre-Merge)
 
