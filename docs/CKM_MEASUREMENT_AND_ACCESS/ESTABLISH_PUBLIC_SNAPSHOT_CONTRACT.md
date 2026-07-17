@@ -24,7 +24,15 @@ Create the durable public semantics that Q1b will execute without exposing mutab
 
 ## Concretely
 
-`CapabilityResource.public_id` survives rebuild and rename and is never reused. Deletion tombstones the identifier, split tombstones the original and links new successor identifiers, and merge creates a new identifier with successor aliases from the tombstoned inputs. A snapshot manifest binds epoch/revision, schema versions, taxonomy digest, exact watermarks, provenance, `effective_audience=single_operator_local`, the versioned local policy, `redaction_profile=none`, and a completeness manifest. V1 defines no cursor contract or multi-user security machinery.
+`CapabilityResource.public_id` survives rebuild and rename and is never reused. Durable human
+confirmation binds edge, artifact, and capability public IDs rather than mutable display metadata.
+Deletion tombstones the identifier, split tombstones the original and links new successor
+identifiers, and merge creates a new identifier with successor aliases from the tombstoned inputs;
+the same transaction retires and tombstones the capability's public edge, assessment, and finding
+dependents. A snapshot manifest binds epoch/revision, schema versions, taxonomy digest, exact
+watermarks, provenance, `effective_audience=single_operator_local`, the versioned local policy,
+`redaction_profile=none`, and a completeness manifest. V1 defines no cursor contract or multi-user
+security machinery.
 
 ## Why This Matters
 

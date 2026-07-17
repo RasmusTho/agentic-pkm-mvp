@@ -302,7 +302,9 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _confirmation_payload(store: CkmStore, edge_id: str) -> tuple[dict[str, Any], str, str]:
+def _confirmation_payload(
+    store: CkmStore, edge_id: str
+) -> tuple[dict[str, Any], str, str, str]:
     edge = store.get_active_evidence_edge_by_id(edge_id)
     if edge is None:
         raise CkmValidationError(f"evidence edge not found: {edge_id}")
@@ -314,8 +316,9 @@ def _confirmation_payload(store: CkmStore, edge_id: str) -> tuple[dict[str, Any]
         raise CkmValidationError(f"capability not found: {edge.capability_id}")
     payload = {
         "edge_id": edge.id,
-        "artifact_source_ref": artifact.source_ref,
-        "capability_name": capability.name,
+        "edge_public_id": edge.public_id,
+        "artifact_public_id": artifact.public_id,
+        "capability_public_id": capability.public_id,
         "evidence_kind": edge.evidence_kind,
         "polarity": edge.polarity,
         "maturity_dimension": edge.maturity_dimension,
@@ -331,7 +334,7 @@ def _confirmation_payload(store: CkmStore, edge_id: str) -> tuple[dict[str, Any]
     payload["confirmation_key"] = sha256(
         _canonical_json(stable_claim).encode("utf-8")
     ).hexdigest()
-    return payload, artifact.source_ref, capability.name
+    return payload, artifact.public_id, capability.public_id, capability.name
 
 
 def _binding_document(receipt: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -391,8 +394,11 @@ def _validated_confirmation_receipt(
         raise CkmValidationError("confirmation receipt payload requires an edge id")
     if expected_edge_id is not None and edge_id != expected_edge_id:
         raise CkmValidationError("confirmation receipt does not bind the requested edge")
+    edge_public_id = payload.get("edge_public_id")
+    if not isinstance(edge_public_id, str) or not edge_public_id:
+        raise CkmValidationError("confirmation receipt payload requires an edge public id")
     if receipt.get("source_refs") != [
-        {"ref_type": "ckm_evidence_edge", "ref": edge_id}
+        {"ref_type": "ckm_evidence_edge", "ref": edge_public_id}
     ]:
         raise CkmValidationError("confirmation receipt source does not bind its payload edge")
     if payload.get("extraction_method") != "inferred" or payload.get("lifecycle") != "confirmed":
@@ -401,8 +407,8 @@ def _validated_confirmation_receipt(
         "basis",
         "provider",
         "model",
-        "artifact_source_ref",
-        "capability_name",
+        "artifact_public_id",
+        "capability_public_id",
         "confirmation_key",
         "binding",
     ):
@@ -411,22 +417,23 @@ def _validated_confirmation_receipt(
             raise CkmValidationError(
                 f"confirmation receipt payload requires non-empty {field}"
             )
-    if payload.get("source_ref") != payload["artifact_source_ref"]:
-        raise CkmValidationError("confirmation payload artifact source binding is inconsistent")
-
     artifact = next(
-        (item for item in store.list_artifacts() if item.source_ref == payload["artifact_source_ref"]),
+        (item for item in store.list_artifacts() if item.public_id == payload["artifact_public_id"]),
         None,
     )
     capability = next(
-        (item for item in store.list_capabilities() if item.name == payload["capability_name"]),
+        (
+            item
+            for item in store.list_capabilities()
+            if item.public_id == payload["capability_public_id"]
+        ),
         None,
     )
     if artifact is None or capability is None:
         raise CkmValidationError("confirmation receipt target is absent from the current graph")
     expected_targets = [
-        {"ref_type": "repo_artifact", "ref": artifact.source_ref},
-        {"ref_type": "ckm_capability", "ref": capability.name},
+        {"ref_type": "ckm_artifact", "ref": artifact.public_id},
+        {"ref_type": "ckm_capability", "ref": capability.public_id},
     ]
     if receipt.get("target_refs") != expected_targets:
         raise CkmValidationError("confirmation receipt targets do not bind its payload")
@@ -444,7 +451,7 @@ def _validated_confirmation_receipt(
 
     current = store.get_active_evidence_edge_by_id(edge_id)
     if current is not None:
-        expected_payload, _, _ = _confirmation_payload(store, current.id)
+        expected_payload, _, _, _ = _confirmation_payload(store, current.id)
         for field, value in expected_payload.items():
             if field != "binding" and payload.get(field) != value:
                 raise CkmValidationError(
@@ -458,7 +465,9 @@ def _validated_confirmation_receipt(
 def _confirm_edge_from_cli(store: CkmStore, edge_id: str) -> dict[str, Any]:
     """Execute the human-operated CLI confirmation boundary."""
 
-    payload, artifact_ref, capability_name = _confirmation_payload(store, edge_id)
+    payload, artifact_public_id, capability_public_id, capability_name = (
+        _confirmation_payload(store, edge_id)
+    )
     for existing in store.list_builderops_receipts("ckm_edge_confirmed"):
         try:
             existing_payload, _, _ = _validated_confirmation_receipt(store, existing)
@@ -472,10 +481,12 @@ def _confirm_edge_from_cli(store: CkmStore, edge_id: str) -> dict[str, Any]:
         "event_type": "ckm_edge_confirmed",
         "action": "confirm_edge",
         "actor": {"actor_type": "human", "id": "operator"},
-        "source_refs": [{"ref_type": "ckm_evidence_edge", "ref": edge_id}],
+        "source_refs": [
+            {"ref_type": "ckm_evidence_edge", "ref": payload["edge_public_id"]}
+        ],
         "target_refs": [
-            {"ref_type": "repo_artifact", "ref": artifact_ref},
-            {"ref_type": "ckm_capability", "ref": capability_name},
+            {"ref_type": "ckm_artifact", "ref": artifact_public_id},
+            {"ref_type": "ckm_capability", "ref": capability_public_id},
         ],
     }
     payload["binding"] = _sign_confirmation(store, envelope, payload)
@@ -499,15 +510,15 @@ def _confirm_edge_from_cli(store: CkmStore, edge_id: str) -> dict[str, Any]:
 
 def reapply_confirmation_receipts(store: CkmStore) -> int:
     restored = 0
-    artifacts = {item.source_ref: item for item in store.list_artifacts()}
-    capabilities = {item.name: item for item in store.list_capabilities()}
+    artifacts = {item.public_id: item for item in store.list_artifacts()}
+    capabilities = {item.public_id: item for item in store.list_capabilities()}
     for receipt in store.list_builderops_receipts("ckm_edge_confirmed"):
         try:
             payload, artifact, capability = _validated_confirmation_receipt(store, receipt)
             # The lookup maps make the rebuild dependency explicit and reject
             # receipts whose targets do not belong to this rebuilt graph.
-            artifact = artifacts[artifact.source_ref]
-            capability = capabilities[capability.name]
+            artifact = artifacts[artifact.public_id]
+            capability = capabilities[capability.public_id]
         except (CkmValidationError, KeyError, TypeError, ValueError):
             continue
         active = store.get_active_evidence_edge_by_id(payload["edge_id"])
@@ -521,6 +532,8 @@ def reapply_confirmation_receipts(store: CkmStore) -> int:
             capability_public_id=capability.public_id,
             basis=payload["basis"],
         )
+        if public_id != payload["edge_public_id"]:
+            continue
         lifecycle = store.identity_lifecycle(public_id)
         if lifecycle is not None and lifecycle["status"] == "tombstone":
             # Rebuild drops disposable edge/history rows but deliberately keeps

@@ -129,15 +129,17 @@ def _append_confirmation_receipt(
     store: CkmStore,
     *,
     edge,
-    artifact_ref: str,
-    capability_name: str,
     variant: str,
 ) -> None:
+    artifact = next(item for item in store.list_artifacts() if item.id == edge.artifact_id)
+    capability = store.get_capability(edge.capability_id)
+    assert capability is not None
     payload = {
         "edge_id": edge.id,
         "lifecycle": "confirmed",
-        "artifact_source_ref": artifact_ref,
-        "capability_name": capability_name,
+        "edge_public_id": edge.public_id,
+        "artifact_public_id": artifact.public_id,
+        "capability_public_id": capability.public_id,
         "evidence_kind": edge.evidence_kind,
         "polarity": edge.polarity,
         "maturity_dimension": edge.maturity_dimension,
@@ -156,8 +158,8 @@ def _append_confirmation_receipt(
     action = "confirm_edge"
     event_type = "ckm_edge_confirmed"
     target_refs = [
-        {"ref_type": "repo_artifact", "ref": artifact_ref},
-        {"ref_type": "ckm_capability", "ref": capability_name},
+        {"ref_type": "ckm_artifact", "ref": artifact.public_id},
+        {"ref_type": "ckm_capability", "ref": capability.public_id},
     ]
     if variant == "non-human":
         actor = {"actor_type": "agent", "id": "forger"}
@@ -166,11 +168,11 @@ def _append_confirmation_receipt(
     elif variant == "wrong-action":
         action = "observe_edge"
     elif variant == "wrong-target":
-        target_refs[0] = {"ref_type": "repo_artifact", "ref": "docs/other.md"}
+        target_refs[0] = {"ref_type": "ckm_artifact", "ref": "ckm_art_other"}
     elif variant == "forged-payload":
         payload["confidence"] = 0.01
     store.append_builderops_receipt(
-        source_refs=[{"ref_type": "ckm_evidence_edge", "ref": edge.id}],
+        source_refs=[{"ref_type": "ckm_evidence_edge", "ref": edge.public_id}],
         summary="Attempted confirmation",
         event_type=event_type,
         actor=actor,
@@ -208,8 +210,6 @@ def test_confirmation_rejects_invalid_or_forged_receipts(
     _append_confirmation_receipt(
         store,
         edge=edge,
-        artifact_ref=artifact.source_ref,
-        capability_name=capability.name,
         variant=variant,
     )
 
@@ -365,7 +365,13 @@ def test_confirmation_receipt_survives_rebuild(
     assert store.get_evidence_edge_by_id(original.id).lifecycle == "confirmed"
 
     store.rebuild()
-    rebuilt_capability = _capability(store)
+    rebuilt_capability = store.upsert_capability(
+        identity_key="fixture:semantic:retrieval",
+        name="Renamed Retrieval",
+        definition="Retrieve relevant material with provenance.",
+        existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",
+        lifecycle="confirmed",
+    )
     rebuilt_artifact = _artifact(store)
     assert reapply_confirmation_receipts(store) == 1
 

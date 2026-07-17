@@ -832,20 +832,24 @@ class CkmStore:
                         f"active successor capability identity not found: {successor_public_id}"
                     )
             capability_id = str(capability["id"])
-            dependent = conn.execute(
-                """
-                SELECT
-                    (SELECT COUNT(*) FROM ckm_evidence_edge WHERE capability_id = ?) +
-                    (SELECT COUNT(*) FROM ckm_assessment WHERE capability_id = ?) +
-                    (SELECT COUNT(*) FROM ckm_finding WHERE capability_id = ?) AS count
-                """,
-                (capability_id, capability_id, capability_id),
-            ).fetchone()["count"]
-            if dependent:
-                raise CkmValidationError(
-                    "capability tombstone requires dependent evidence, assessments, and findings "
-                    "to be retired first"
-                )
+            edge_rows = conn.execute(
+                "SELECT * FROM ckm_evidence_edge WHERE capability_id = ?",
+                (capability_id,),
+            ).fetchall()
+            assessment_rows = conn.execute(
+                "SELECT public_id FROM ckm_assessment WHERE capability_id = ?",
+                (capability_id,),
+            ).fetchall()
+            finding_rows = conn.execute(
+                "SELECT public_id FROM ckm_finding WHERE capability_id = ?",
+                (capability_id,),
+            ).fetchall()
+            self._archive_evidence_edges(conn, edge_rows)
+            for row in (*edge_rows, *assessment_rows, *finding_rows):
+                self._tombstone_public_identity(conn, str(row["public_id"]))
+            conn.execute("DELETE FROM ckm_evidence_edge WHERE capability_id = ?", (capability_id,))
+            conn.execute("DELETE FROM ckm_assessment WHERE capability_id = ?", (capability_id,))
+            conn.execute("DELETE FROM ckm_finding WHERE capability_id = ?", (capability_id,))
             conn.execute(
                 "UPDATE ckm_capability SET parent_id = NULL WHERE parent_id = ?",
                 (capability_id,),

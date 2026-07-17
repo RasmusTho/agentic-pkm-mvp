@@ -360,6 +360,71 @@ def test_public_identity_lifecycle_policy(
     assert rebuilt_seed.public_id == seeded.public_id
 
 
+@pytest.mark.parametrize("relation", ["split_successor", "merge_successor"])
+def test_assessed_capability_tombstone_atomically_retires_public_dependents(
+    store: CkmStore, relation: str
+) -> None:
+    source = store.upsert_capability(
+        identity_key=f"inferred:assessed-{relation}",
+        name=f"Assessed {relation}",
+        definition="Capability with every public dependent class.",
+        existence_provenance="receipt:assessed-lifecycle",
+    )
+    successor = store.upsert_capability(
+        identity_key=f"inferred:assessed-{relation}-successor",
+        name=f"Assessed {relation} successor",
+        definition="Lifecycle successor.",
+        existence_provenance="receipt:assessed-lifecycle",
+    )
+    artifact = _artifact(store, source_ref=f"docs/{relation}.md")
+    edge = _edge(
+        store,
+        artifact.id,
+        source.id,
+        basis=f"{relation}:evidence",
+        source_ref=artifact.source_ref,
+    )
+    scores = {dimension: 0.5 for dimension in MATURITY_DIMENSIONS}
+    assessment = store.append_assessment(
+        capability_id=source.id,
+        scores=scores,
+        citations={dimension: [edge.to_dict()] for dimension in MATURITY_DIMENSIONS},
+        aggregate=0.5,
+        edge_fingerprint=assessment_fingerprint([edge], {artifact.id: artifact}),
+        watermark_set={"repo": "commit:assessed"},
+    )
+    finding = store.upsert_finding(
+        kind="gap",
+        capability_id=source.id,
+        dimension="documentation_quality",
+        statement="Temporary dependent finding.",
+        citations=[{"artifact": artifact.to_dict()}],
+    )
+
+    store.tombstone_capability(
+        source.public_id,
+        successor_public_ids=[successor.public_id],
+        relation=relation,
+    )
+
+    assert store.get_capability(source.id) is None
+    assert store.get_active_evidence_edge_by_id(edge.id) is None
+    assert store.list_assessments_for_capability(source.id) == []
+    assert store.get_finding(
+        kind="gap", capability_id=source.id, dimension="documentation_quality"
+    ) is None
+    for public_id in (
+        source.public_id,
+        edge.public_id,
+        assessment.public_id,
+        finding.public_id,
+    ):
+        assert store.identity_lifecycle(public_id)["status"] == "tombstone"
+    assert store.identity_lifecycle(source.public_id)["successors"] == [
+        {"successor_public_id": successor.public_id, "relation": relation}
+    ]
+
+
 def test_all_mutations_advance_state_revision_atomically(
     store: CkmStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
