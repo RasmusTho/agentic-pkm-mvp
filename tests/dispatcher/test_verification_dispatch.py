@@ -408,7 +408,7 @@ def test_promoted_legacy_v2_identical_replay_is_idempotent(tmp_path) -> None:
     repaired_head = "b" * 40
     initial = ledger(tmp_path)
     run_id, _legacy_request = _write_deployed_v1_run(
-        initial, supporting_issues=[]
+        initial, supporting_issues=[3626]
     )
     with sqlite3.connect(initial.store.db_path) as conn:
         conn.execute(
@@ -440,6 +440,7 @@ def test_promoted_legacy_v2_identical_replay_is_idempotent(tmp_path) -> None:
     attempts_before = state.attempts(run_id)
     budget_before = state.repair_budget_projection(run_id)
     promoted_request = request(repaired_head)
+    promoted_request["supporting_issues"] = [3626]
     recovered = state.ingest(
         _live_observed_request(state, promoted_request)
     )
@@ -459,16 +460,35 @@ def test_promoted_legacy_v2_identical_replay_is_idempotent(tmp_path) -> None:
     assert _verification_state_snapshot(state) == snapshot_before_replay
     assert len(state.list()) == 1
 
-    conflicting_supporting = request(repaired_head)
-    conflicting_supporting["supporting_issues"] = [3626]
-    with pytest.raises(
-        ValueError,
-        match="idempotency authority conflict",
-    ):
-        state.ingest(
-            _live_observed_request(state, conflicting_supporting)
-        )
-    assert _verification_state_snapshot(state) == snapshot_before_replay
+    conflicting_authority = []
+    conflicting_supporting = dict(promoted_request)
+    conflicting_supporting["supporting_issues"] = [3626, 4999]
+    conflicting_authority.append(conflicting_supporting)
+    conflicting_governing = dict(promoted_request)
+    conflicting_governing["linked_issue"] = 3626
+    # The request grammar forbids the governing issue from also appearing in
+    # supporting authority, so a valid changed-governor artifact must move the
+    # former governor into the evidence set while retaining the closing child.
+    conflicting_governing["supporting_issues"] = [3603]
+    conflicting_authority.append(conflicting_governing)
+    conflicting_closing = dict(promoted_request)
+    conflicting_closing["closing_issues"] = [3626]
+    conflicting_authority.append(conflicting_closing)
+
+    for conflicting_request in conflicting_authority:
+        with pytest.raises(
+            ValueError,
+            match=(
+                "idempotency authority conflict|"
+                "canonical run governing issue mismatch"
+            ),
+        ):
+            state.ingest(
+                _live_observed_request(state, conflicting_request)
+            )
+        assert _verification_state_snapshot(state) == snapshot_before_replay
+        assert state.attempts(run_id) == attempts_before
+        assert state.repair_budget_projection(run_id) == budget_before
 
     claimed = state.claim(run_id, "repair-host")
     running = state.start(
