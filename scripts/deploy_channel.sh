@@ -311,15 +311,35 @@ prod_pending_retry_preflight() {
   # docs/HEALTH.md :: Outbox and dead-letter signals.
   local receipt_json rc=0 dsn_from_file="" runtime_env_ref="" runtime_env_file=""
 
-  # Resolve the channel's governed runtime env file exactly the way the
-  # shared compose lib does (_deploy_channel_env_value on the
-  # WATCHER_RUNTIME_ENV_FILE ref in the channel pin file), and extract a DSN
-  # from it for the preflight. The value is injected ONLY into the single
-  # preflight subprocess env below -- never exported into this shell, never
-  # passed to Compose, never printed (#3875 redaction posture). Ambient shell
-  # DATABASE_URL/DB_DSN remains the fallback when the governed file provides
-  # none.
+  # Resolve the channel's governed runtime env file the way the running stack
+  # actually resolves it, in the same precedence order Compose interpolation
+  # sees: (1) the WATCHER_RUNTIME_ENV_FILE ref in the channel pin file (read
+  # via _deploy_channel_env_value, like the shared compose lib); (2) an
+  # exported shell WATCHER_RUNTIME_ENV_FILE; (3) the docker-compose.yaml
+  # service env_file default `./tmp/runtime.env`. Committed pin files carry
+  # only APP_IMAGE_* keys, so on a real host the default in step (3) IS the
+  # live configuration -- stopping at step (1) would make this gate skip on
+  # every real prod deploy (the round-2 D1 gap). The extracted DSN is
+  # injected ONLY into the single preflight subprocess env below -- never
+  # exported into this shell, never passed to Compose, never printed (#3875
+  # redaction posture). Ambient shell DATABASE_URL/DB_DSN remains the
+  # fallback when the resolved file provides none.
   runtime_env_ref="$(_deploy_channel_env_value "${pin_file}" WATCHER_RUNTIME_ENV_FILE)"
+  if [ -z "${runtime_env_ref}" ]; then
+    # Outside the pinning wrapper, Compose interpolation reads the exported
+    # shell value; honor it between the governed pin value and the default.
+    # (The wrapper itself pins/unsets this var for the actual service
+    # selection -- this fallback only widens the DSN lookup, governed value
+    # first.)
+    runtime_env_ref="${WATCHER_RUNTIME_ENV_FILE:-}"
+  fi
+  if [ -z "${runtime_env_ref}" ]; then
+    # docker-compose.yaml: `${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}`,
+    # resolved against the compose project directory = ${ROOT} (directory of
+    # the first -f file; the wrapper also cd's there). Keep this literal in
+    # sync with docker-compose.yaml.
+    runtime_env_ref="./tmp/runtime.env"
+  fi
   if [ -n "${runtime_env_ref}" ]; then
     case "${runtime_env_ref}" in
       /*) runtime_env_file="${runtime_env_ref}" ;;

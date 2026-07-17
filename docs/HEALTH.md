@@ -176,11 +176,14 @@ Posture:
 - **Redacted.** The failure output reports aggregate counts only — `terminal_pending_count`, a
   `by_topic` breakdown keyed on the event-type label, and a `by_classification` breakdown by which
   counter is exhausted — never payload content, note/source paths, DSNs, or credentials. The DSN
-  itself is sourced from the channel's governed runtime env file (the `WATCHER_RUNTIME_ENV_FILE`
-  reference in the channel pin file, same resolution `deploy_channel_compose` uses) and injected
-  only into the single preflight subprocess — never exported to the wider shell, never passed to
-  Compose, never printed (the #3875 posture). Ambient shell `DATABASE_URL`/`DB_DSN` is the
-  fallback when the governed file provides none.
+  itself is extracted from the channel's runtime env file, located the way the running stack
+  locates it: the `WATCHER_RUNTIME_ENV_FILE` reference in the channel pin file when present, an
+  exported shell `WATCHER_RUNTIME_ENV_FILE` otherwise, and finally the `docker-compose.yaml`
+  service default `./tmp/runtime.env` (relative to the repo root) — the configuration every
+  committed pin file actually runs with. The value is injected only into the single preflight
+  subprocess — never exported to the wider shell, never passed to Compose, never printed (the
+  #3875 posture). Ambient shell `DATABASE_URL`/`DB_DSN` is the fallback when the resolved file
+  provides none.
 - **Never silent.** The deploy log always carries exactly one status line —
   `prod pending-retry preflight: ok`, `... skipped:<reason>`, or
   `... blocked terminal_pending_count=<n>` — so a skipped safety gate can never masquerade as a

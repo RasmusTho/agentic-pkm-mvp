@@ -208,6 +208,7 @@ def _configure_prod_retry_preflight(
     rows: list[tuple[str, dict, int]] | None = None,
     unreachable: bool = False,
     no_dsn: bool = False,
+    runtime_env_via: str = "pin_key",
 ) -> None:
     """Copy the real preflight script into the fixture repo and fake its DB layer.
 
@@ -218,11 +219,20 @@ def _configure_prod_retry_preflight(
     the classification logic under test is real.
 
     DSN sourcing mirrors the production mechanics (#3903 D1): the DSN lives in
-    the channel's governed runtime env file, referenced from the channel pin
-    file via WATCHER_RUNTIME_ENV_FILE -- not in the ambient shell env, which
-    the real prod call chain never provides. ``no_dsn=True`` leaves the
-    runtime env file without any DSN key (and the shell env is scrubbed in
-    every mode), exercising the visible skipped:no_dsn path.
+    the channel's governed runtime env file -- not in the ambient shell env,
+    which the real prod call chain never provides (both DATABASE_URL/DB_DSN
+    and WATCHER_RUNTIME_ENV_FILE are scrubbed from the shell env in every
+    mode). ``runtime_env_via`` selects which resolution step locates that
+    file:
+
+    - ``"pin_key"``: the channel pin file carries a WATCHER_RUNTIME_ENV_FILE
+      reference to it (governed override).
+    - ``"compose_default"``: the pin file carries NO such key -- the shape
+      every committed pin file actually has -- and the runtime env file sits
+      at the docker-compose.yaml service env_file default ./tmp/runtime.env.
+
+    ``no_dsn=True`` leaves the located runtime env file without any DSN key,
+    exercising the visible skipped:no_dsn path.
     """
     shutil.copy2(
         REPO_ROOT / "scripts/prod_deploy_retry_preflight.py",
@@ -233,17 +243,28 @@ def _configure_prod_retry_preflight(
     (pylib_dir / "psycopg.py").write_text(_FAKE_PSYCOPG_MODULE, encoding="utf-8")
     env["PYTHONPATH"] = str(pylib_dir)
 
-    # The governed channel pin file references the runtime env file; the DSN
-    # lives only in the latter, exactly like the real prod channel.
-    (root / "config/deploy/prod.env").write_text(
-        "WATCHER_RUNTIME_ENV_FILE=./runtime-prod.env\n", encoding="utf-8"
-    )
     runtime_env_lines = "SOME_OTHER_KEY=untouched\n"
     if not no_dsn:
         runtime_env_lines += f"DATABASE_URL={_FAKE_PROD_DSN}\n"
-    (root / "runtime-prod.env").write_text(runtime_env_lines, encoding="utf-8")
+    if runtime_env_via == "pin_key":
+        (root / "config/deploy/prod.env").write_text(
+            "WATCHER_RUNTIME_ENV_FILE=./runtime-prod.env\n", encoding="utf-8"
+        )
+        (root / "runtime-prod.env").write_text(runtime_env_lines, encoding="utf-8")
+    elif runtime_env_via == "compose_default":
+        # Committed pin files carry only comment + APP_IMAGE_* lines; the
+        # runtime env is found via the compose default ./tmp/runtime.env.
+        (root / "config/deploy/prod.env").write_text(
+            "# deploy pin (no WATCHER_RUNTIME_ENV_FILE key, like every committed pin)\n",
+            encoding="utf-8",
+        )
+        (root / "tmp").mkdir(exist_ok=True)
+        (root / "tmp/runtime.env").write_text(runtime_env_lines, encoding="utf-8")
+    else:  # pragma: no cover - guard against typo'd parametrize ids
+        raise ValueError(f"unknown runtime_env_via: {runtime_env_via!r}")
     env.pop("DATABASE_URL", None)
     env.pop("DB_DSN", None)
+    env.pop("WATCHER_RUNTIME_ENV_FILE", None)
 
     if unreachable:
         env["FAKE_OUTBOX_DB_UNREACHABLE"] = "1"
@@ -430,8 +451,19 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
     )
 
 
+@pytest.mark.parametrize(
+    "runtime_env_via",
+    [
+        # Governed override: pin file references the runtime env file.
+        "pin_key",
+        # The real committed configuration: pin file has NO such key and the
+        # runtime env sits at the docker-compose.yaml default ./tmp/runtime.env.
+        # The gate must actually RUN (and block) here, not skip on no_dsn.
+        "compose_default",
+    ],
+)
 def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutation(
-    tmp_path: Path,
+    tmp_path: Path, runtime_env_via: str
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
     # Dispatch-attempt mechanism at the corrected terminal boundary: the
@@ -444,15 +476,17 @@ def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutat
         env,
         tmp_path,
         rows=[("panel.scan.requested", {}, 4)],
+        runtime_env_via=runtime_env_via,
     )
 
     result = _run_deploy(root, env, sha, channel="prod")
 
     assert result.returncode != 0
     assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
+    assert "skipped:no_dsn" not in result.stdout
     assert "terminal retry boundary" in result.stderr
-    # The pin file pre-exists to carry WATCHER_RUNTIME_ENV_FILE, so "no pin
-    # mutation" means no APP_IMAGE_* lines were written to it.
+    # The pin file pre-exists (fixture provisioning), so "no pin mutation"
+    # means no APP_IMAGE_* lines were written to it.
     assert "APP_IMAGE_TAG" not in (root / "config/deploy/prod.env").read_text(encoding="utf-8")
     assert not (root / "config/deploy/prod.previous.env").exists()
     assert not (tmp_path / "docker-called").exists()
@@ -543,14 +577,19 @@ def test_prod_deploy_pending_retry_preflight_fails_open_when_db_unreachable(
     assert (tmp_path / "docker-called").exists()
 
 
+@pytest.mark.parametrize("runtime_env_via", ["pin_key", "compose_default"])
 def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
-    tmp_path: Path,
+    tmp_path: Path, runtime_env_via: str
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
-    # Governed runtime env file carries no DATABASE_URL/DB_DSN and the shell
+    # The resolved runtime env file (via the pin-file reference OR the
+    # compose-default location) carries no DATABASE_URL/DB_DSN and the shell
     # env is scrubbed: the preflight cannot inspect the outbox and must skip
-    # visibly while the deploy proceeds.
-    _configure_prod_retry_preflight(root, env, tmp_path, no_dsn=True)
+    # visibly while the deploy proceeds. The skip is legitimate ONLY once the
+    # default location has also been consulted and found DSN-less.
+    _configure_prod_retry_preflight(
+        root, env, tmp_path, no_dsn=True, runtime_env_via=runtime_env_via
+    )
 
     result = _run_deploy(root, env, sha, channel="prod")
 

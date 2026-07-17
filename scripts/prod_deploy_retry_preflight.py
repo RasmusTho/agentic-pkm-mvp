@@ -62,9 +62,12 @@ Exit codes:
 Usage: ``python scripts/prod_deploy_retry_preflight.py`` (no arguments).
 Reads ``DATABASE_URL`` or ``DB_DSN`` from the process environment, same
 precedence as ``app/services/outbox.py::_open_conn``; the production caller
-(``scripts/deploy_channel.sh::prod_pending_retry_preflight``) sources the
-DSN from the channel's governed runtime env file and injects it into THIS
-subprocess only. Prints one JSON receipt object to stdout.
+(``scripts/deploy_channel.sh::prod_pending_retry_preflight``) locates the
+channel's runtime env file the way the running stack does (pin-file
+``WATCHER_RUNTIME_ENV_FILE`` reference, exported shell override, or the
+docker-compose.yaml default ``./tmp/runtime.env``), extracts the DSN from
+it, and injects it into THIS subprocess only. Prints one JSON receipt
+object to stdout.
 """
 
 from __future__ import annotations
