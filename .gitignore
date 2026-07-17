@@ -55,6 +55,8 @@ tmp/index.jsonl
 /runtime/panel/
 /runtime/agent_memory/
 /runtime/eval/
+/runtime/relevance/
+/runtime/activation/
 # Settings-compiler swap artifacts written as dot-prefixed *siblings* of
 # runtime/settings/ (app/settings/compiler.py): .settings.lock, .settings.next,
 # .settings.previous, and .settings.staged-* temp dirs. The /runtime/settings/
