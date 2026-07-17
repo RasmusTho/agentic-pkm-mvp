@@ -18,6 +18,7 @@ GOVERNANCE_TEMPORAL_ENFORCEMENT = frozenset(
         "scripts/docs_guard.py",
         "scripts/docs_guard_logic.py",
         "scripts/git_hygiene.py",
+        "scripts/select_pr_tests.py",
     }
 )
 
@@ -25,7 +26,7 @@ GOVERNANCE_TEMPORAL_ENFORCEMENT = frozenset(
 def requires_temporal_owner_doc(changed: list[str]) -> bool:
     """Return true unless a changed temporal surface has an owner-doc writeback.
 
-    A governance-only change to one of the two enforcement scripts may use its
+    A governance-only change to one of these enforcement scripts may use its
     `docs/development/` contract as the owner writeback. Presence of governance
     files is insufficient: every changed temporal surface must be one of those
     scripts, so a mixed runtime/config PR cannot inherit the exception.

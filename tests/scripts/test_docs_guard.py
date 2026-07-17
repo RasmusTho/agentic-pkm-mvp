@@ -70,3 +70,20 @@ def test_governance_enforcement_with_development_writeback_passes(tmp_path: Path
 
     assert result.returncode == 0
     assert "Docs guard: OK" in result.stdout
+
+
+def test_select_pr_tests_governance_enforcement_with_development_writeback_passes(
+    tmp_path: Path,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/select_pr_tests.py").write_text("# governance\n", encoding="utf-8")
+    (repo / "docs/development/TEST_STRATEGY_HOT_PATH.md").write_text(
+        "governance writeback\n", encoding="utf-8"
+    )
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "governance"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == 0
+    assert "Docs guard: OK" in result.stdout
