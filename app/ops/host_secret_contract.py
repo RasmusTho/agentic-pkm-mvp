@@ -12,6 +12,7 @@ DEFAULT_CONTRACT_PATH = Path("config/secrets/host_secret_contract.json")
 _CONTRACT_FIELDS = frozenset({"version", "keychain_service", "keychain_account_template", "consumers"})
 _CONSUMER_FIELDS = frozenset({"channel", "consumer", "secrets"})
 _KEYCHAIN_ACCOUNT_TEMPLATE = "{channel}:{consumer}:{secret}"
+_KEYCHAIN_SERVICE = "yggdrasil.host-secrets"
 _INITIAL_CHANNELS = frozenset({"dev", "test", "prod"})
 _INITIAL_CONSUMER = "heimdal-capture-watch"
 _INITIAL_SECRET = "heimdal.raw-store-key"
@@ -48,8 +49,9 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
     if not isinstance(payload, dict) or set(payload) != _CONTRACT_FIELDS:
         raise ValueError("invalid host secret contract")
     if (
-        payload["version"] != 1
-        or not isinstance(payload["keychain_service"], str)
+        type(payload["version"]) is not int
+        or payload["version"] != 1
+        or payload["keychain_service"] != _KEYCHAIN_SERVICE
         or payload["keychain_account_template"] != _KEYCHAIN_ACCOUNT_TEMPLATE
         or not isinstance(payload["consumers"], list)
     ):
