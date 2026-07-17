@@ -39,9 +39,7 @@ class HostSecretContract:
 
     def require_declared(self, *, channel: str, consumer: str, secret: str) -> None:
         if (channel, consumer, secret) not in self.allowed:
-            raise UndeclaredSecretConsumerError(
-                f"undeclared host secret request: channel={channel!r}, consumer={consumer!r}, secret={secret!r}"
-            )
+            raise UndeclaredSecretConsumerError("undeclared host secret request")
 
     def keychain_account(self, *, channel: str, consumer: str, secret: str) -> str:
         """Return the declared, channel-scoped Keychain account identifier."""

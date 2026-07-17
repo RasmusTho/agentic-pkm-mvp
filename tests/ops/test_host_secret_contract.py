@@ -21,6 +21,22 @@ def test_contract_rejects_undeclared_consumer_secret_pair() -> None:
         contract.require_declared(channel="dev", consumer="heimdal-capture-watch", secret="unrelated-key")
 
 
+def test_undeclared_request_error_does_not_disclose_caller_identifiers() -> None:
+    contract = load_host_secret_contract()
+    raw_channel = "noncanonical-channel"
+    raw_consumer = "noncanonical-consumer"
+    raw_secret = "raw-key-material"
+
+    with pytest.raises(UndeclaredSecretConsumerError) as error:
+        contract.require_declared(channel=raw_channel, consumer=raw_consumer, secret=raw_secret)
+
+    message = str(error.value)
+    assert message == "undeclared host secret request"
+    assert raw_channel not in message
+    assert raw_consumer not in message
+    assert raw_secret not in message
+
+
 def test_contract_is_value_free() -> None:
     text = Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8")
 
