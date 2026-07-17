@@ -1,13 +1,17 @@
 """Shared fixtures for BCP-03 legacy-authority-migration tests.
 
 Every builder writes a *real* legacy source in its true on-disk shape (via the
-production SQLite/JSON stores where practical, or the faithful file layout for the
-file-first inquiry store), so the read-only adapters are exercised against genuine
-legacy data rather than a re-implemented double.
+production SQLite/JSON stores and the real JSONL event writer where practical, or
+the faithful file layout for the file-first inquiry store — receipts under
+``{inquiry_dir}/receipts/<name>.json``, artifacts with the store's own
+canonical-JSON-minus-hash-field ``artifact_hash`` scheme), so the read-only
+adapters are exercised against genuine legacy data rather than a re-implemented
+double.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping
@@ -17,16 +21,19 @@ from pathlib import Path
 from app.builderops.control_plane.legacy_migration import (
     ExpectedRoot,
     ObservedSource,
-    RootKind,
     WriterStatus,
     freeze_content_hash,
 )
+from app.builderops.epic_run_state import new_epic_run_state, save_epic_run_state
 from app.builderops.store import SqliteBuilderOpsStore
+from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
-from app.builderops.epic_run_state import new_epic_run_state, save_epic_run_state
 
 REPO = "RasmusTho/agentic-pkm-mvp"
+# NormalizedRecord canonicalizes repo evidence via canonical_repository (F12),
+# which lowercases — assertions compare against the canonical form.
+REPO_CANON = "rasmustho/agentic-pkm-mvp"
 
 
 def _iso(dt: datetime) -> str:
@@ -37,18 +44,33 @@ def now() -> datetime:
     return datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
 
 
+def iso_now() -> str:
+    return _iso(now())
+
+
 # ---------------------------------------------------------------------------
 # Source builders
 # ---------------------------------------------------------------------------
 
 
-def write_builderops_sqlite(path: Path, *, with_ckm: bool = True, live_lease: bool = True) -> dict:
+def write_builderops_sqlite(
+    path: Path,
+    *,
+    with_ckm: bool = True,
+    live_lease: bool = True,
+    payload_repo: str | None = None,
+) -> dict:
     """Create a real BuilderOps SQLite store with a record, idempotency key, and
-    lease, plus co-resident CKM/CEG rows."""
+    lease, plus co-resident CKM/CEG rows.
+
+    ``payload_repo`` embeds repo evidence inside the record's JSON payload (the
+    only place a BuilderOps record can carry it — there is no repo column).
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     store = SqliteBuilderOpsStore(path)
     store.initialize()
+    extra = {"repo": payload_repo} if payload_repo else {}
     worklog = store.create_agent_worklog(
         summary="BCP-03 fixture worklog",
         body="fixture body for migration",
@@ -56,6 +78,7 @@ def write_builderops_sqlite(path: Path, *, with_ckm: bool = True, live_lease: bo
         source_refs=[{"ref_type": "github_issue", "ref": "#3789"}],
         created_by={"actor_type": "agent", "id": "codex-fixture"},
         idempotency_key="wl-bcp03-1",
+        **extra,
     )
     lease = store.acquire_lease(
         worklog["id"],
@@ -70,7 +93,7 @@ def write_builderops_sqlite(path: Path, *, with_ckm: bool = True, live_lease: bo
 
 def _write_ckm_rows(path: Path) -> dict[str, str]:
     """Apply the real CKM DDL into the same file and insert a capability +
-    artifact + evidence edge (authority-bearing CEG rows)."""
+    artifact (authority-bearing CEG rows)."""
 
     from app.builderops.ckm.schema import CKM_DDL_STATEMENTS
 
@@ -89,8 +112,8 @@ def _write_ckm_rows(path: Path) -> dict[str, str]:
                 "candidate",
                 "docs/BUILDEROPS_CONTROL_PLANE/LEGACY_AUTHORITY_MIGRATION.md",
                 None,
-                _iso(now()),
-                _iso(now()),
+                iso_now(),
+                iso_now(),
             ),
         )
         conn.execute(
@@ -103,8 +126,8 @@ def _write_ckm_rows(path: Path) -> dict[str, str]:
                 "docs",
                 "wm-1",
                 json.dumps({"source_ref": "docs/BUILDEROPS_CONTROL_PLANE/README.md"}),
-                _iso(now()),
-                _iso(now()),
+                iso_now(),
+                iso_now(),
             ),
         )
         conn.commit()
@@ -134,8 +157,8 @@ def add_ckm_schema_growth_row(path: Path) -> str:
                 "candidate",
                 "docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md",
                 None,
-                _iso(now()),
-                _iso(now()),
+                iso_now(),
+                iso_now(),
                 "high",
             ),
         )
@@ -145,13 +168,25 @@ def add_ckm_schema_growth_row(path: Path) -> str:
     return "cap_bcp03_grown"
 
 
-def write_dispatcher_sqlite(path: Path, *, repo: str = REPO, live_lease: bool = True) -> dict:
-    """Create a real dispatcher SQLite store with a task, live lease, and event."""
+def write_dispatcher_sqlite(
+    path: Path,
+    *,
+    repo: str = REPO,
+    live_lease: bool = True,
+    with_verification: bool = True,
+) -> dict:
+    """Create a real dispatcher SQLite store with a task, live lease, event, and
+    (by default) verification runs/attempts/exceptions rows.
+
+    ``verification_runs.repository`` is the per-row repo evidence;
+    ``verification_attempts``/``verification_exceptions`` deliberately carry no
+    repo column (schema truth) — the adapter must join via ``run_id``.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     store = SqliteStore(path)
     store.initialize()
-    created = _iso(now())
+    created = iso_now()
     store.upsert_task(
         TaskRecord(
             task_id="github-RasmusTho--agentic-pkm-mvp-issue-3789",
@@ -187,16 +222,78 @@ def write_dispatcher_sqlite(path: Path, *, repo: str = REPO, live_lease: bool = 
             payload={"note": "fixture"},
         )
     )
-    return {"task_id": "github-RasmusTho--agentic-pkm-mvp-issue-3789", "lease_id": "disp-lease-1"}
+    if with_verification:
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute(
+                "INSERT INTO verification_runs (run_id, idempotency_key, contract_version, "
+                "repository, pr_number, head_sha, current_head_sha, stage, request_json, "
+                "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "vrun-1",
+                    "vkey-1",
+                    "v3",
+                    repo,
+                    3929,
+                    "abc123",
+                    "abc123",
+                    "verify",
+                    "{}",
+                    "queued",
+                    created,
+                    created,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO verification_attempts (attempt_id, run_id, attempt_kind, ordinal, "
+                "session_id, capability, reasoning_effort, context_hash, outcome, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "vatt-1",
+                    "vrun-1",
+                    "review",
+                    1,
+                    "sess-1",
+                    "sonnet",
+                    "high",
+                    "ctx-hash-1",
+                    "pass",
+                    created,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO verification_exceptions (exception_id, run_id, failure_class, "
+                "head_sha, packet_json, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                ("vexc-1", "vrun-1", "ci_failure", "abc123", "{}", created, created),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return {
+        "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-3789",
+        "lease_id": "disp-lease-1",
+        "run_id": "vrun-1" if with_verification else None,
+    }
 
 
 def write_dispatcher_events_jsonl(path: Path) -> dict:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    events = [
-        {"event_id": "jsonl-1", "task_id": "t1", "event_type": "created", "repo": REPO},
-        {"event_id": "jsonl-2", "task_id": "t1", "event_type": "claimed", "repo": REPO},
-    ]
-    path.write_text("\n".join(json.dumps(e, sort_keys=True) for e in events) + "\n", "utf-8")
+    """Write dispatcher events through the REAL JsonlEventWriter, so the lines
+    are exactly ``EventRecord.to_dict()`` (no top-level repo field exists)."""
+
+    writer = JsonlEventWriter(path)
+    created = iso_now()
+    for ordinal in (1, 2):
+        writer.append(
+            EventRecord(
+                event_id=f"jsonl-{ordinal}",
+                timestamp=created,
+                task_id="t1",
+                event_type="created" if ordinal == 1 else "claimed",
+                actor="agent:codex-fixture",
+                lease_id=None,
+                payload={"note": f"fixture-{ordinal}"},
+            )
+        )
     return {"event_ids": ["jsonl-1", "jsonl-2"]}
 
 
@@ -207,32 +304,67 @@ def write_epic_run_json(root: Path, *, run_id: str = "epic-3788-run-1") -> dict:
     return {"run_id": run_id}
 
 
+def model_inquiry_artifact_hash(payload: Mapping) -> str:
+    """Mirror model_inquiry._artifact_hash: sha256 over the canonical JSON of the
+    payload minus its own artifact_hash field."""
+
+    canonical = {key: value for key, value in payload.items() if key != "artifact_hash"}
+    encoded = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def write_model_inquiry(root: Path, *, inquiry_id: str = "inq-bcp03-1", repo: str = REPO) -> dict:
-    """Build a faithful file-first inquiry: manifest + receipts + immutable
-    content-addressed question/turn artifacts."""
+    """Build a faithful file-first inquiry: manifest + receipts under
+    ``receipts/<name>.json`` (the store's real layout — receipt files never share
+    a filename prefix) + immutable content-addressed question/turn artifacts
+    whose ``artifact_hash`` uses the store's real canonical-JSON scheme."""
 
     inquiry_dir = root / inquiry_id
     (inquiry_dir / "turns").mkdir(parents=True, exist_ok=True)
+    (inquiry_dir / "receipts").mkdir(parents=True, exist_ok=True)
 
-    question = {"artifact_id": "question", "artifact_hash": "qhash", "text": "why migrate?"}
+    question = {"artifact_id": "question", "text": "why migrate?"}
+    question["artifact_hash"] = model_inquiry_artifact_hash(question)
     _write_json(inquiry_dir / "question.json", question)
-    turn = {"artifact_id": "turn-000001", "artifact_hash": "thash", "text": "because fragmentation"}
+    turn = {"artifact_id": "turn-000001", "text": "because fragmentation"}
+    turn["artifact_hash"] = model_inquiry_artifact_hash(turn)
     _write_json(inquiry_dir / "turns" / "000001.json", turn)
 
     manifest = {
         "inquiry_id": inquiry_id,
         "repo": repo,
         "status": "completed",
-        "artifact_hash": "mhash",
         "question_artifact_id": "question",
-        "question_artifact_hash": "qhash",
+        "question_artifact_hash": question["artifact_hash"],
         "start_receipt_id": "rcpt-start",
     }
+    manifest["artifact_hash"] = model_inquiry_artifact_hash(manifest)
     _write_json(inquiry_dir / "manifest.json", manifest)
 
-    receipt = {"id": "rcpt-start", "event_type": "inquiry_started", "inquiry_id": inquiry_id}
-    _write_json(inquiry_dir / "receipt-start.json", receipt)
-    return {"inquiry_id": inquiry_id, "artifact_ids": ["question", "turn-000001"]}
+    started = {
+        "id": "rcpt-start",
+        "event_type": "inquiry_started",
+        "inquiry_id": inquiry_id,
+        "occurred_at": iso_now(),
+    }
+    _write_json(inquiry_dir / "receipts" / "inquiry-started.json", started)
+    terminal = {
+        "id": "rcpt-run-terminal",
+        "event_type": "inquiry_run_terminal",
+        "inquiry_id": inquiry_id,
+        "occurred_at": iso_now(),
+    }
+    _write_json(inquiry_dir / "receipts" / "inquiry-run-terminal.json", terminal)
+    return {
+        "inquiry_id": inquiry_id,
+        "artifact_ids": ["question", "turn-000001"],
+        "receipt_files": ["inquiry-started.json", "inquiry-run-terminal.json"],
+        "receipt_ids": ["rcpt-start", "rcpt-run-terminal"],
+        "declared_hashes": {
+            "question": question["artifact_hash"],
+            "turn-000001": turn["artifact_hash"],
+        },
+    }
 
 
 def _write_json(path: Path, value: Mapping) -> None:
@@ -240,19 +372,34 @@ def _write_json(path: Path, value: Mapping) -> None:
     path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
 
 
-def write_state_producers(root: Path, *, live_lease: bool = True) -> dict:
-    """Write all four per-worktree state producers under one root directory."""
+def write_state_producers(
+    root: Path,
+    *,
+    live_lease: bool = True,
+    dispatcher: bool = True,
+    payload_repo: str | None = None,
+) -> dict:
+    """Write the per-worktree state producers under one root directory.
 
-    return {
+    ``dispatcher=False`` models a LINKED worktree: the dispatcher's real resolver
+    writes only at the clone-set primary, so linked worktrees carry builderops +
+    epic-run state but no dispatcher store.
+    """
+
+    written = {
         "builderops": write_builderops_sqlite(
-            root / "runtime/builderops/builderops.sqlite3", live_lease=live_lease
+            root / "runtime/builderops/builderops.sqlite3",
+            live_lease=live_lease,
+            payload_repo=payload_repo,
         ),
-        "dispatcher": write_dispatcher_sqlite(
-            root / "runtime/dispatcher/dispatcher.sqlite3", live_lease=live_lease
-        ),
-        "events": write_dispatcher_events_jsonl(root / "runtime/dispatcher/events.jsonl"),
         "epic": write_epic_run_json(root / "runtime/builderops/epic-runs"),
     }
+    if dispatcher:
+        written["dispatcher"] = write_dispatcher_sqlite(
+            root / "runtime/dispatcher/dispatcher.sqlite3", live_lease=live_lease
+        )
+        written["events"] = write_dispatcher_events_jsonl(root / "runtime/dispatcher/events.jsonl")
+    return written
 
 
 def write_vault(root: Path) -> dict:
@@ -353,47 +500,45 @@ def make_probe(
 
 
 def build_full_universe(tmp_path: Path) -> dict:
-    """Materialize a two-host universe with real sources under one worktree and a
-    quiescent second worktree, returning hosts + expected-root helpers."""
+    """Materialize a two-host universe with real sources.
+
+    MacBook: one primary worktree (env snapshot known-empty). Demerzel: a
+    container mount plus the vault, with NO env snapshot (env=None) — exercising
+    the remote-env limitation surfaced in the preflight receipt.
+    """
 
     from app.builderops.control_plane.legacy_migration import (
         EnumeratedRoot,
         HostContext,
+        RootKind,
         derive_expected_universe,
     )
 
     macbook_wt = tmp_path / "macbook" / "worktree-a"
-    demerzel_wt = tmp_path / "demerzel" / "container-mount"
+    demerzel_mount = tmp_path / "demerzel" / "container-mount"
 
-    # Real sources under the MacBook worktree.
-    write_builderops_sqlite(macbook_wt / "runtime/builderops/builderops.sqlite3")
-    write_dispatcher_sqlite(macbook_wt / "runtime/dispatcher/dispatcher.sqlite3")
-    write_dispatcher_events_jsonl(macbook_wt / "runtime/dispatcher/events.jsonl")
-    write_epic_run_json(macbook_wt / "runtime/builderops/epic-runs")
-
-    # Real sources under the Demerzel container mount.
-    write_builderops_sqlite(demerzel_wt / "runtime/builderops/builderops.sqlite3")
-    write_dispatcher_sqlite(demerzel_wt / "runtime/dispatcher/dispatcher.sqlite3")
-    write_dispatcher_events_jsonl(demerzel_wt / "runtime/dispatcher/events.jsonl")
-    write_epic_run_json(demerzel_wt / "runtime/builderops/epic-runs")
+    write_state_producers(macbook_wt)
+    write_state_producers(demerzel_mount)
 
     # Host-stable vault holding the file-first inquiry store.
     vault_root = tmp_path / "demerzel" / "vault"
-    write_model_inquiry(vault_root / "model-inquiries")
+    write_vault(vault_root)
 
     hosts = (
         HostContext(
             host="macbook",
             user="rasmus",
             roots=(EnumeratedRoot(RootKind.GIT_WORKTREE, str(macbook_wt), repo_identity=REPO),),
+            env={},
         ),
         HostContext(
             host="demerzel",
             user="rasmus",
             roots=(
-                EnumeratedRoot(RootKind.CONTAINER_MOUNT, str(demerzel_wt), repo_identity=REPO),
+                EnumeratedRoot(RootKind.CONTAINER_MOUNT, str(demerzel_mount), repo_identity=REPO),
                 EnumeratedRoot(RootKind.VAULT, str(vault_root), repo_identity=REPO),
             ),
+            env=None,
         ),
     )
     expected_roots = derive_expected_universe(hosts)
@@ -401,6 +546,6 @@ def build_full_universe(tmp_path: Path) -> dict:
         "hosts": hosts,
         "expected_roots": expected_roots,
         "macbook_worktree": macbook_wt,
-        "demerzel_mount": demerzel_wt,
+        "demerzel_mount": demerzel_mount,
         "vault_root": vault_root,
     }

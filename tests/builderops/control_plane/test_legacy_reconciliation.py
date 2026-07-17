@@ -4,6 +4,7 @@ cutover on any coverage or authority-replay gap. Runs without Postgres (`not pg`
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from app.builderops.control_plane.legacy_migration import (
@@ -30,6 +31,7 @@ _ACCOUNTED = {
     Disposition.EXCLUDED,
     Disposition.ARCHIVED,
     Disposition.BLOCKED,
+    Disposition.EMPTY,
 }
 
 
@@ -41,6 +43,20 @@ def _ack(manifest, host="demerzel"):
         acknowledged_at=manifest.freshness_at,
         freshness_horizon_seconds=3600,
     )
+
+
+def _reconcilable(expected, *, exclusions=None):
+    freshness = fx.iso_now()
+    probe = fx.make_probe(freshness_at=freshness)
+    manifest = build_coverage_manifest(
+        expected,
+        probe=probe,
+        host="demerzel",
+        user="rasmus",
+        freshness_at=freshness,
+        exclusions=exclusions,
+    )
+    return manifest, _ack(manifest)
 
 
 def test_reconciliation_accounts_for_expected_universe_and_blocks_coverage_gaps(
@@ -77,7 +93,7 @@ def test_reconciliation_accounts_for_expected_universe_and_blocks_coverage_gaps(
 def test_reconciliation_blocks_on_missing_root_coverage_gap(tmp_path: Path) -> None:
     universe = fx.build_full_universe(tmp_path)
     expected = universe["expected_roots"]
-    freshness = fx._iso(fx.now())
+    freshness = fx.iso_now()
 
     # Delete one expected source so it is missing at freeze.
     missing = next(r for r in expected if r.producer == "dispatcher_store")
@@ -100,6 +116,32 @@ def test_reconciliation_blocks_on_missing_root_coverage_gap(tmp_path: Path) -> N
     assert missing.key in ledger.coverage_gaps
     assert ledger.roots[missing.key] == Disposition.MISSING
     assert ledger.cutover_blocked
+
+
+def test_reconciliation_blocks_on_present_but_empty_root(tmp_path: Path) -> None:
+    """F11: a present, accessible, non-excluded root that yields ZERO records is
+    NOT silently 'imported' — it is an explicit coverage gap (this is exactly
+    the failure mode that hid an adapter reading nothing)."""
+
+    universe = fx.build_full_universe(tmp_path)
+    expected = universe["expected_roots"]
+
+    # Empty one expected source while keeping it present and accessible: an
+    # epic-runs directory that exists but holds no state files.
+    empty_root = next(r for r in expected if r.producer == "epic_run_state")
+    shutil.rmtree(empty_root.path)
+    Path(empty_root.path).mkdir(parents=True)
+
+    manifest, ack = _reconcilable(expected)
+    assert not manifest.is_blocking  # present + accessible: freezing succeeds
+
+    sink = InMemoryAuthoritySink()
+    run = run_migration(expected_roots=expected, manifest=manifest, ack=ack, sink=sink, epoch_id="e1")
+    ledger = run.ledger
+
+    assert ledger.roots[empty_root.key] == Disposition.EMPTY
+    assert empty_root.key in ledger.coverage_gaps
+    assert ledger.cutover_blocked  # must NOT read clean
 
 
 def test_reconciliation_blocks_on_authority_replay_gap(tmp_path: Path) -> None:
@@ -145,7 +187,7 @@ def test_reconciliation_blocks_on_authority_replay_gap(tmp_path: Path) -> None:
 def test_reconciliation_accounts_excluded_and_archived_roots(tmp_path: Path) -> None:
     universe = fx.build_full_universe(tmp_path)
     expected = universe["expected_roots"]
-    freshness = fx._iso(fx.now())
+    freshness = fx.iso_now()
 
     # Intentionally exclude the dispatcher event log; treat one epic-run root as
     # already archived. Both must remain ACCOUNTED (never silently subtracted).
@@ -180,10 +222,31 @@ def test_reconciliation_accounts_excluded_and_archived_roots(tmp_path: Path) -> 
     assert archived_root.key not in ledger.coverage_gaps
 
 
-def _reconcilable(expected):
-    freshness = fx._iso(fx.now())
-    probe = fx.make_probe(freshness_at=freshness)
-    manifest = build_coverage_manifest(
-        expected, probe=probe, host="demerzel", user="rasmus", freshness_at=freshness
+def test_authority_bearing_exclusion_is_ack_bound_and_surfaced_in_preflight(
+    tmp_path: Path,
+) -> None:
+    """C5: excluding an AUTHORITY-BEARING root is an operator decision — it is
+    hash-bound into the acknowledged manifest and explicitly surfaced in the
+    preflight receipt for BCP-06 to audit."""
+
+    universe = fx.build_full_universe(tmp_path)
+    expected = universe["expected_roots"]
+    authority_excluded = next(
+        r for r in expected if r.producer == "dispatcher_store" and r.host == "macbook"
     )
-    return manifest, _ack(manifest)
+    exclusions = {authority_excluded.key: "operator: superseded clone-set, do not migrate"}
+
+    manifest, ack = _reconcilable(expected, exclusions=exclusions)
+    # The exclusion set is part of the acknowledged identity: the same universe
+    # without the exclusion hashes differently.
+    manifest_without, _ = _reconcilable(expected)
+    assert manifest.manifest_hash != manifest_without.manifest_hash
+
+    sink = InMemoryAuthoritySink()
+    run = run_migration(expected_roots=expected, manifest=manifest, ack=ack, sink=sink, epoch_id="e1")
+
+    assert run.ledger.roots[authority_excluded.key] == Disposition.EXCLUDED
+    preflight = run.receipts.as_json()["preflight"]
+    assert preflight["exclusions"] == dict(exclusions)
+    assert preflight["excluded_authority_roots"] == [authority_excluded.key]
+    assert not run.cutover_blocked

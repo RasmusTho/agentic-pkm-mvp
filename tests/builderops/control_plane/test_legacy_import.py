@@ -1,4 +1,6 @@
-"""BCP-03 import-engine acceptance tests (AC2, AC3, AC4, CKM/CEG, AC6).
+"""BCP-03 import-engine acceptance tests (AC2, AC3, AC4, CKM/CEG, AC6) plus the
+review-round regression tests for repo evidence, hash re-verification, epic-run
+normalization, cross-group reservations, crash-resume, and repo_ref validation.
 
 All tests run without Postgres (`not pg`): the deterministic import engine targets
 the domain-neutral :class:`AuthoritySink`, exercised here through the in-memory
@@ -7,10 +9,12 @@ adapter, and reads real on-disk legacy fixture sources.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from app.builderops.control_plane.models import EnvelopeValidationError
 from app.builderops.control_plane.legacy_migration import (
     AuthorityReplayError,
     ConflictResolution,
@@ -18,9 +22,15 @@ from app.builderops.control_plane.legacy_migration import (
     InMemoryAuthoritySink,
     InventoryAcknowledgement,
     NormalizedRecord,
+    RootKind,
     SourceChangedError,
     build_coverage_manifest,
+    default_reader,
     import_records,
+    normalize_sources,
+    read_builderops_sqlite,
+    read_dispatcher_sqlite,
+    read_epic_run_json,
     run_migration,
 )
 
@@ -28,7 +38,7 @@ from tests.builderops.control_plane import _legacy_fixtures as fx
 
 
 def _manifest_and_ack(universe, *, host="demerzel"):
-    freshness = fx._iso(fx.now())
+    freshness = fx.iso_now()
     probe = fx.make_probe(freshness_at=freshness)
     manifest = build_coverage_manifest(
         universe, probe=probe, host=host, user="rasmus", freshness_at=freshness
@@ -70,6 +80,19 @@ def _authority_record(
     )
 
 
+def _expected_root_for(path: Path, *, producer: str, source_class: str, repo=None):
+    return fx.ExpectedRoot(
+        producer=producer,
+        source_class=source_class,
+        host="macbook",
+        user="rasmus",
+        root_kind=RootKind.GIT_WORKTREE,
+        path=str(path),
+        authority_bearing=True,
+        repo_identity=repo,
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC2: restart-safe / idempotent and rejects a changed source
 # ---------------------------------------------------------------------------
@@ -85,22 +108,23 @@ def test_import_is_restart_safe_and_rejects_changed_source(tmp_path: Path) -> No
     applied_after_first = dict(sink_a.applied)
     assert applied_after_first  # something was imported
     assert not run_a.cutover_blocked
+    assert run_a.import_result.replayed == ()  # first pass applied everything
 
     # Deterministic: a fresh sink over the same frozen inputs yields the same
-    # normalized result and the same applied authority set.
+    # normalized plan and the same applied authority set.
     sink_b = InMemoryAuthoritySink()
     run_b = run_migration(expected_roots=expected, manifest=manifest, ack=ack, sink=sink_b, epoch_id="e1")
     assert run_a.import_result.result_hash == run_b.import_result.result_hash
     assert run_a.ledger.ledger_hash == run_b.ledger.ledger_hash
     assert sink_a.applied == sink_b.applied
 
-    # Restart-safe/idempotent: re-running the SAME sink imports nothing new; every
-    # authority row is a dedup no-op and no state changes.
-    rerun = run_migration(
-        expected_roots=expected, manifest=manifest, ack=ack, sink=sink_a, epoch_id="e2", fencing_base=2
-    )
-    assert rerun.import_result.imported == ()
+    # Restart-safe/idempotent: re-running the SAME sink with IDENTICAL args
+    # resumes the epoch as a no-op, changes nothing in the sink, reports every
+    # authority row as replayed, and returns the identical result hash.
+    rerun = run_migration(expected_roots=expected, manifest=manifest, ack=ack, sink=sink_a, epoch_id="e1")
+    assert rerun.import_result.result_hash == run_a.import_result.result_hash
     assert sink_a.applied == applied_after_first
+    assert set(rerun.import_result.replayed) == set(run_a.import_result.imported)
 
     # A source changed after freeze fails hash verification and imports nothing.
     macbook_builderops = universe["macbook_worktree"] / "runtime/builderops/builderops.sqlite3"
@@ -117,11 +141,76 @@ def test_import_is_restart_safe_and_rejects_changed_source(tmp_path: Path) -> No
     )
     sink_c = InMemoryAuthoritySink()
     with pytest.raises(SourceChangedError):
-        run_migration(
-            expected_roots=expected, manifest=manifest, ack=ack, sink=sink_c, epoch_id="e1"
-        )
+        run_migration(expected_roots=expected, manifest=manifest, ack=ack, sink=sink_c, epoch_id="e1")
     assert sink_c.applied == {}
     assert sink_c.epoch_id is None
+
+
+def test_source_mutated_mid_read_fails_post_read_verification(tmp_path: Path) -> None:
+    """Adapters hash-verify before AND after the read (F4): a multi-file source
+    mutated between its pre-check and the end of its read fails closed."""
+
+    universe = fx.build_full_universe(tmp_path)
+    expected = universe["expected_roots"]
+    manifest, _ack = _manifest_and_ack(expected)
+    mutated = {"done": False}
+
+    def mid_read_mutating_reader(observed):
+        records = default_reader(observed)
+        if observed.expected.producer == "epic_run_state" and not mutated["done"]:
+            # Simulates a concurrent writer landing a file DURING the read,
+            # after the pre-read hash check already passed.
+            (Path(observed.expected.path) / "sneaky.json").write_text("{}", encoding="utf-8")
+            mutated["done"] = True
+        return records
+
+    with pytest.raises(SourceChangedError, match="changed during read"):
+        normalize_sources(manifest, reader=mid_read_mutating_reader)
+    assert mutated["done"]
+
+
+def test_crash_mid_apply_resumes_with_identical_args_and_result_hash(tmp_path: Path) -> None:
+    """F9: a crash mid-apply retried with IDENTICAL args resumes the epoch,
+    completes, and returns the same result hash as an uncrashed run."""
+
+    universe = fx.build_full_universe(tmp_path)
+    expected = universe["expected_roots"]
+    manifest, ack = _manifest_and_ack(expected)
+
+    clean_sink = InMemoryAuthoritySink()
+    clean = run_migration(
+        expected_roots=expected, manifest=manifest, ack=ack, sink=clean_sink, epoch_id="e1"
+    )
+
+    crash_sink = InMemoryAuthoritySink()
+    original_apply = crash_sink.apply_authority_record
+    calls = {"n": 0}
+
+    def flaky_apply(record):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("simulated crash mid-apply")
+        return original_apply(record)
+
+    crash_sink.apply_authority_record = flaky_apply  # instance-level shadow
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        run_migration(
+            expected_roots=expected, manifest=manifest, ack=ack, sink=crash_sink, epoch_id="e1"
+        )
+    del crash_sink.apply_authority_record  # restore the real method
+    assert crash_sink.applied  # partial state survived the crash
+    assert len(crash_sink.applied) < len(clean_sink.applied)
+
+    # Retry with IDENTICAL arguments: same epoch resumes (no-op begin_epoch),
+    # completion is reached, the plan hash is identical, and the rows applied
+    # before the crash come back as replayed.
+    resumed = run_migration(
+        expected_roots=expected, manifest=manifest, ack=ack, sink=crash_sink, epoch_id="e1"
+    )
+    assert resumed.import_result.result_hash == clean.import_result.result_hash
+    assert crash_sink.applied == clean_sink.applied
+    assert resumed.import_result.replayed  # pre-crash applies acknowledged as replays
+    assert not resumed.cutover_blocked
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +298,51 @@ def test_conflicting_identity_requires_resolution_or_duplicate_preventing_tombst
         sink_tomb.apply_authority_record(replay)
 
 
+def test_cross_group_reserved_key_collision_blocks_at_planning_time() -> None:
+    """F7: a clean record in ANOTHER group sharing a legacy key (here a lease_id
+    operation key) with a tombstoned group must block at planning time — the run
+    completes, the sink never raises mid-apply."""
+
+    left = _authority_record(
+        "wt-a#dispatcher_tasks:shared-3789",
+        content_hash="hash-left",
+        operation_keys=("lease-shared-1",),
+    )
+    right = _authority_record(
+        "wt-b#dispatcher_tasks:shared-3789",
+        content_hash="hash-right",
+        operation_keys=("lease-shared-1",),
+    )
+    # A CLEAN verification_run group whose row carries the same lease_id.
+    bystander = _authority_record(
+        "wt-a#verification_runs:vrun-9",
+        identity_key="verification_runs:vrun-9",
+        content_hash="hash-vrun",
+        object_kind="verification_run",
+        operation_keys=("lease-shared-1",),
+    )
+
+    sink = InMemoryAuthoritySink()
+    result = import_records(  # completes: no mid-apply AuthorityReplayError
+        [left, right, bystander],
+        sink=sink,
+        epoch_id="e1",
+        resolutions=[
+            ConflictResolution(
+                object_kind="dispatcher_task",
+                identity_key="dispatcher_task:shared-3789",
+                kind="tombstone",
+                reason="divergent, tombstoned",
+            )
+        ],
+    )
+    assert result.dispositions[bystander.source_ref] == Disposition.BLOCKED
+    collision = [b for b in result.blocked if b.identity_key == "verification_runs:vrun-9"]
+    assert collision and "cross-group reserved-key collision" in collision[0].reason
+    assert ("verification_run", "verification_runs:vrun-9") not in sink.applied
+    assert result.cutover_blocked
+
+
 # ---------------------------------------------------------------------------
 # AC4: live legacy leases never cross the authority epoch
 # ---------------------------------------------------------------------------
@@ -249,6 +383,137 @@ def test_live_legacy_leases_do_not_cross_authority_epoch(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# F2: repo evidence is row-bound, never root-defaulted
+# ---------------------------------------------------------------------------
+
+
+def test_repo_evidence_is_row_bound_for_dispatcher_and_builderops(tmp_path: Path) -> None:
+    """Under a root with NO registered repo identity, repo evidence must come
+    from the rows: dispatcher `repo`, verification_runs `repository`, attempts/
+    exceptions joined via run_id, and the decoded BuilderOps record payload."""
+
+    freshness = fx.iso_now()
+    probe = fx.make_probe(freshness_at=freshness)
+
+    dispatcher_db = tmp_path / "runtime/dispatcher/dispatcher.sqlite3"
+    fx.write_dispatcher_sqlite(dispatcher_db)  # includes verification rows
+    dispatcher_root = _expected_root_for(
+        dispatcher_db, producer="dispatcher_store", source_class="dispatcher_sqlite", repo=None
+    )
+    dispatcher_records = read_dispatcher_sqlite(probe(dispatcher_root))
+    by_kind = {}
+    for record in dispatcher_records:
+        by_kind.setdefault(record.object_kind, []).append(record)
+
+    # dispatcher_tasks.repo column.
+    assert all(r.repo_ref == fx.REPO_CANON for r in by_kind["dispatcher_task"])
+    # verification_runs.repository column (F2a).
+    assert all(r.repo_ref == fx.REPO_CANON for r in by_kind["verification_run"])
+    # attempts/exceptions have NO repo column: joined via run_id (F2b).
+    assert all(r.repo_ref == fx.REPO_CANON for r in by_kind["verification_attempt"])
+    assert all(r.repo_ref == fx.REPO_CANON for r in by_kind["verification_exception"])
+    # dispatcher_meta rows carry no evidence and the root has none: ambiguous.
+    assert all(r.repo_ref is None for r in by_kind["dispatcher_meta"])
+
+    # BuilderOps record payload is a JSON TEXT column: decoded for evidence (F2c).
+    builderops_db = tmp_path / "runtime/builderops/builderops.sqlite3"
+    fx.write_builderops_sqlite(builderops_db, payload_repo=fx.REPO)
+    builderops_root = _expected_root_for(
+        builderops_db, producer="builderops_store", source_class="builderops_sqlite", repo=None
+    )
+    builderops_records = read_builderops_sqlite(probe(builderops_root))
+    worklogs = [r for r in builderops_records if r.object_kind == "builderops_record"]
+    assert worklogs and all(r.repo_ref == fx.REPO_CANON for r in worklogs)
+
+
+def test_malformed_repo_evidence_fails_closed() -> None:
+    """F12: a malformed repo reference never imports cleanly — normalization
+    (and mapping/resolution entry validation) fails closed."""
+
+    with pytest.raises(EnvelopeValidationError):
+        _authority_record("x#task:1", content_hash="h", repo_ref="not-a-repo-reference")
+
+    clean = _authority_record("x#task:1", content_hash="h", repo_ref=None)
+    sink = InMemoryAuthoritySink()
+    with pytest.raises(EnvelopeValidationError):
+        import_records(
+            [clean], sink=sink, epoch_id="e1", repo_mappings={"x#task:1": "garbage repo!!"}
+        )
+    with pytest.raises(EnvelopeValidationError):
+        import_records(
+            [clean],
+            sink=sink,
+            epoch_id="e1",
+            resolutions=[
+                ConflictResolution(
+                    object_kind="dispatcher_task",
+                    identity_key="dispatcher_task:shared-3789",
+                    kind="evidence",
+                    winner_source_ref="x#task:1",
+                    repo_ref="also garbage",
+                )
+            ],
+        )
+
+
+# ---------------------------------------------------------------------------
+# F6: epic-run states import via producer validation
+# ---------------------------------------------------------------------------
+
+
+def test_epic_run_old_shape_normalizes_and_invalid_fails_closed(tmp_path: Path) -> None:
+    freshness = fx.iso_now()
+    probe = fx.make_probe(freshness_at=freshness)
+
+    # Root A: current-shape state written by the real producer.
+    root_a = tmp_path / "wt-a/runtime/builderops/epic-runs"
+    fx.write_epic_run_json(root_a, run_id="epic-3788-run-9")
+    # Root B: an OLD-SHAPE file of the same run — several later-added list
+    # fields absent (the _STATE_FIELDS growth case). deserialize fills defaults.
+    root_b = tmp_path / "wt-b/runtime/builderops/epic-runs"
+    root_b.mkdir(parents=True)
+    old_shape = {
+        "schema_version": 1,
+        "epic_issue_number": 3788,
+        "run_id": "epic-3788-run-9",
+        "child_queue": [3789, 3790],
+    }
+    (root_b / "epic-3788-run-9.json").write_text(json.dumps(old_shape), encoding="utf-8")
+    # Root B also holds a file the producer REJECTS (unknown field).
+    (root_b / "epic-bad.json").write_text(
+        json.dumps({"schema_version": 1, "run_id": "epic-bad", "epic_issue_number": 1, "hax": 1}),
+        encoding="utf-8",
+    )
+
+    records_a = read_epic_run_json(
+        probe(_expected_root_for(root_a, producer="epic_run_state", source_class="epic_run_json", repo=fx.REPO))
+    )
+    records_b = read_epic_run_json(
+        probe(_expected_root_for(root_b, producer="epic_run_state", source_class="epic_run_json", repo=fx.REPO))
+    )
+
+    # The old-shape file normalizes to the same envelope -> same content hash ->
+    # dedup, not a spurious authority-divergence block.
+    run_a = next(r for r in records_a if r.identity_key == "epic_run:epic-3788-run-9")
+    run_b = next(r for r in records_b if r.identity_key == "epic_run:epic-3788-run-9")
+    assert run_a.content_hash == run_b.content_hash
+
+    sink = InMemoryAuthoritySink()
+    result = import_records([*records_a, *records_b], sink=sink, epoch_id="e1")
+    assert not result.cutover_blocked
+    assert result.dispositions[run_a.source_ref] == Disposition.IMPORTED
+    assert result.dispositions[run_b.source_ref] == Disposition.DEDUPLICATED
+
+    # The producer-rejected file failed closed: quarantined evidence, never
+    # imported as authority.
+    invalid = next(r for r in records_b if r.invalid_reason is not None)
+    assert invalid.authority_bearing is False
+    assert result.dispositions[invalid.source_ref] == Disposition.EVIDENCE_QUARANTINED
+    assert not any("epic-bad" in identity for (_kind, identity) in sink.applied)
+    assert sink.quarantines[invalid.source_ref].authorizes_effect() is False
+
+
+# ---------------------------------------------------------------------------
 # CKM/CEG (spec AC): CKM tables inventoried and imported with schema growth
 # ---------------------------------------------------------------------------
 
@@ -275,7 +540,7 @@ def test_ckm_ceg_tables_are_inventoried_and_imported(tmp_path: Path) -> None:
     # evidence-bound repo provenance, and import into the sink.
     for record in ckm_records + ckm_artifacts:
         assert record.authority_bearing is True
-        assert record.repo_ref == fx.REPO
+        assert record.repo_ref == fx.REPO_CANON
         assert record.provenance["producer"] == "builderops_store"
 
     # The post-freeze schema addition (new column) is imported, payload included.
@@ -283,8 +548,7 @@ def test_ckm_ceg_tables_are_inventoried_and_imported(tmp_path: Path) -> None:
     assert grown, "grown CKM capability must be inventoried"
     assert "confidence_note" in grown[0].payload
     assert any(
-        kind[0].startswith("builderops_store:ckm_capability")
-        and grown_id in kind[1]
+        kind[0].startswith("builderops_store:ckm_capability") and grown_id in kind[1]
         for kind in sink.applied
     )
 

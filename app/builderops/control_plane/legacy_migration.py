@@ -4,17 +4,30 @@ This module implements the migration *mechanism* for the independent BuilderOps
 control plane (``docs/BUILDEROPS_CONTROL_PLANE/LEGACY_AUTHORITY_MIGRATION.md``).
 It does not perform the production cutover (BCP-06 owns the freeze window); it
 inventories every repo-owned legacy authority producer, freezes and hash-verifies
-each source, imports authority identities/state/receipts into a target authority
-sink under a new epoch, and reconciles the expected universe against the import
-outcome so cutover can be gated.
+each source before AND after reading, imports authority identities/state/receipts
+into a target authority sink under a new epoch, and reconciles the expected
+universe against the import outcome so cutover can be gated.
 
 Design constraints held here (all from the task spec):
 
-* Producer/default-path inventory is the expected-source authority. Caller roots
-  may add scope but never subtract expected coverage. An omitted or inaccessible
-  expected root blocks acknowledgement.
-* Source adapters are read-only and hash-verify; a source changed after freeze
-  imports nothing further.
+* Producer/default-path inventory is the expected-source authority, derived
+  through each producer's *real* path-resolution semantics (the dispatcher
+  resolves its default state root to the PRIMARY worktree of a clone-set via
+  ``app.dispatcher.config``; the BuilderOps store and epic-run state are
+  CWD-relative per root; the model-inquiry store lives under the configured
+  vault). Caller roots may add scope but never subtract expected coverage. An
+  omitted or inaccessible expected root blocks acknowledgement.
+* Producer env overrides (``DISPATCHER_STATE_DIR``/``DISPATCHER_DB_PATH``/
+  ``DISPATCHER_EVENTS_PATH``, ``BUILDEROPS_STATE_DIR``/``BUILDEROPS_DB_PATH``,
+  ``BUILDEROPS_VAULT_ROOT``) are consulted from each host's environment snapshot
+  at derivation time; the consulted keys are recorded per manifest entry.
+  **Remote-env limitation:** environment snapshots are only available for hosts
+  the operator can introspect. A ``HostContext`` without an ``env`` mapping is
+  derived from default paths alone, its manifest entries record
+  ``env_known=false``, and the preflight receipt lists those hosts explicitly —
+  a per-remote-host env channel is bounded follow-up work, not silent coverage.
+* Source adapters are read-only and hash-verify **before and after** each read;
+  a source changed after freeze (or mutated mid-read) imports nothing further.
 * Conflicting equal authority-bearing identities never use last-write-wins.
   Evidence-only ambiguity may remain plain quarantine; authority-bearing
   ambiguity/conflict blocks cutover until evidence-resolved or represented by a
@@ -22,18 +35,31 @@ Design constraints held here (all from the task spec):
 * No legacy lease crosses the authority epoch — a legacy lease imports only as
   expired/tombstone evidence.
 * ``RepoRef``/scope/stack are backfilled only from evidence-bound mappings, never
-  defaulted from CWD or the import target.
+  defaulted from CWD or the import target. Repo evidence is extracted from the
+  rows themselves where the producer stores it (dispatcher ``repo``,
+  verification ``repository`` — joined onto attempts/exceptions via ``run_id`` —
+  and the JSON-encoded BuilderOps record payload), falling back to the
+  registered root identity only when the rows carry none.
 
-The target authority is PostgreSQL in production; this module depends only on the
-domain-neutral :class:`AuthoritySink` protocol so the deterministic pipeline is
-verifiable against an in-memory adapter (BCP-01 established the explicit
-non-production adapter seam). ``sink-payload`` writes deliberately avoid the vault
-``ObjectStore`` sink primitives — this authority is the control-plane authority,
-not the vault content plane.
+BCP-06 adapter notes: the target authority is PostgreSQL in production; this
+module depends only on the domain-neutral :class:`AuthoritySink` protocol so the
+deterministic pipeline is verifiable against the in-memory adapter (BCP-01
+established the explicit non-production adapter seam). The future PostgreSQL
+adapter is **not thin**: :class:`NormalizedRecord` deliberately preserves raw
+payloads verbatim and carries no ``actor``/``state`` split, so the BCP-06 adapter
+must synthesize the BCP-01 ``AuthorityEnvelope`` per object kind (actor, scope,
+state derivation from the preserved payload) and reconcile this module's
+epoch/fencing-base model with the store's own epoch machinery. Nothing here
+should be read as that adapter already existing.
+
+``sink-payload`` writes deliberately avoid the vault ``ObjectStore`` sink
+primitives — this authority is the control-plane authority, not the vault
+content plane.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import sqlite3
@@ -42,6 +68,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
+
+from app.builderops.control_plane.models import canonical_repository
 
 # ---------------------------------------------------------------------------
 # Deterministic helpers
@@ -98,6 +126,10 @@ class Disposition:
     EXCLUDED = "excluded"
     ARCHIVED = "archived"
     BLOCKED = "blocked"
+    # A present, accessible, non-excluded root that yielded zero records is NOT
+    # silently "imported": it is a coverage gap until explicitly excluded or
+    # explained (this is what would have hidden a reader that reads nothing).
+    EMPTY = "empty_unaccounted"
 
 
 class WriterStatus:
@@ -116,6 +148,19 @@ SOURCE_MODEL_INQUIRY_FILES = "model_inquiry_files"
 # Root scopes describe how a producer's default path multiplies across a host.
 _SCOPE_PER_WORKTREE = "per_worktree"
 _SCOPE_VAULT_FILE_FIRST = "vault_file_first"
+
+# How the producer resolves its default state root (mirrors the real resolvers):
+# - "cwd": CWD-relative default (app/builderops/config.py; epic_run_state.py's
+#   literal DEFAULT_EPIC_RUNS_DIR) — one candidate per enumerated root.
+# - "primary_worktree": app/dispatcher/config.py::_default_state_dir resolves to
+#   the clone-set's PRIMARY worktree — one candidate per clone-set, so linked
+#   worktrees collapse onto their primary instead of multiplying paths the
+#   runtime never writes.
+# - "vault": lives under the configured vault root (model_inquiry.py:
+#   vault_root / "model-inquiries").
+_RESOLVE_CWD = "cwd"
+_RESOLVE_PRIMARY_WORKTREE = "primary_worktree"
+_RESOLVE_VAULT = "vault"
 
 # Which enumerated root kinds a producer scope applies to. A per-worktree
 # producer state directory can appear under a linked worktree, a container mount,
@@ -152,7 +197,7 @@ class AcknowledgementRejected(LegacyMigrationError):
 
 
 class SourceChangedError(LegacyMigrationError):
-    """Raised when a frozen source's content hash changes before import."""
+    """Raised when a frozen source's content hash changes before/during import."""
 
 
 class AuthorityReplayError(LegacyMigrationError):
@@ -173,6 +218,7 @@ class ProducerSpec:
     relative_default_path: str
     authority_bearing: bool
     root_scope: str
+    resolution: str
     env_override_keys: tuple[str, ...]
     description: str
 
@@ -187,7 +233,8 @@ PRODUCER_MANIFEST: tuple[ProducerSpec, ...] = (
         relative_default_path="runtime/builderops/builderops.sqlite3",
         authority_bearing=True,
         root_scope=_SCOPE_PER_WORKTREE,
-        env_override_keys=("BUILDEROPS_STATE_DIR", "BUILDEROPS_DB_PATH"),
+        resolution=_RESOLVE_CWD,
+        env_override_keys=("BUILDEROPS_DB_PATH", "BUILDEROPS_STATE_DIR"),
         description=(
             "BuilderOps records, leases, and idempotency keys, plus the "
             "co-resident CKM/Capability Evidence Graph tables (ADR-0062 A3) "
@@ -200,7 +247,8 @@ PRODUCER_MANIFEST: tuple[ProducerSpec, ...] = (
         relative_default_path="runtime/dispatcher/dispatcher.sqlite3",
         authority_bearing=True,
         root_scope=_SCOPE_PER_WORKTREE,
-        env_override_keys=("DISPATCHER_STATE_DIR", "DISPATCHER_DB_PATH"),
+        resolution=_RESOLVE_PRIMARY_WORKTREE,
+        env_override_keys=("DISPATCHER_DB_PATH", "DISPATCHER_STATE_DIR"),
         description="Dispatcher tasks, leases, and verification runs/attempts/exceptions.",
     ),
     ProducerSpec(
@@ -209,7 +257,8 @@ PRODUCER_MANIFEST: tuple[ProducerSpec, ...] = (
         relative_default_path="runtime/dispatcher/events.jsonl",
         authority_bearing=False,
         root_scope=_SCOPE_PER_WORKTREE,
-        env_override_keys=("DISPATCHER_STATE_DIR", "DISPATCHER_EVENTS_PATH"),
+        resolution=_RESOLVE_PRIMARY_WORKTREE,
+        env_override_keys=("DISPATCHER_EVENTS_PATH", "DISPATCHER_STATE_DIR"),
         description="Append-only dispatcher event audit log (evidence).",
     ),
     ProducerSpec(
@@ -218,7 +267,11 @@ PRODUCER_MANIFEST: tuple[ProducerSpec, ...] = (
         relative_default_path="runtime/builderops/epic-runs",
         authority_bearing=True,
         root_scope=_SCOPE_PER_WORKTREE,
-        env_override_keys=("BUILDEROPS_STATE_DIR",),
+        resolution=_RESOLVE_CWD,
+        # epic_run_state.py resolves DEFAULT_EPIC_RUNS_DIR CWD-relative and takes
+        # only an explicit --root/root= argument (no env key); explicit roots are
+        # the caller-roots channel.
+        env_override_keys=(),
         description="deliver-issue-set epic run state JSON files.",
     ),
     ProducerSpec(
@@ -227,6 +280,7 @@ PRODUCER_MANIFEST: tuple[ProducerSpec, ...] = (
         relative_default_path="model-inquiries",
         authority_bearing=True,
         root_scope=_SCOPE_VAULT_FILE_FIRST,
+        resolution=_RESOLVE_VAULT,
         env_override_keys=("BUILDEROPS_VAULT_ROOT",),
         description=(
             "File-first model inquiry manifests, receipts, and immutable "
@@ -240,6 +294,33 @@ _PRODUCERS_BY_NAME: dict[str, ProducerSpec] = {p.name: p for p in PRODUCER_MANIF
 
 def producer(name: str) -> ProducerSpec:
     return _PRODUCERS_BY_NAME[name]
+
+
+def _env_override_path(spec: ProducerSpec, env: Mapping[str, str]) -> str | None:
+    """Resolve a producer's env-pinned location, mirroring its real resolver."""
+
+    def _expand(value: str) -> str:
+        return str(Path(value).expanduser())
+
+    if spec.name == "dispatcher_store":
+        if env.get("DISPATCHER_DB_PATH"):
+            return _expand(env["DISPATCHER_DB_PATH"])
+        if env.get("DISPATCHER_STATE_DIR"):
+            return str(Path(env["DISPATCHER_STATE_DIR"]).expanduser() / "dispatcher.sqlite3")
+    elif spec.name == "dispatcher_events":
+        if env.get("DISPATCHER_EVENTS_PATH"):
+            return _expand(env["DISPATCHER_EVENTS_PATH"])
+        if env.get("DISPATCHER_STATE_DIR"):
+            return str(Path(env["DISPATCHER_STATE_DIR"]).expanduser() / "events.jsonl")
+    elif spec.name == "builderops_store":
+        if env.get("BUILDEROPS_DB_PATH"):
+            return _expand(env["BUILDEROPS_DB_PATH"])
+        if env.get("BUILDEROPS_STATE_DIR"):
+            return str(Path(env["BUILDEROPS_STATE_DIR"]).expanduser() / "builderops.sqlite3")
+    elif spec.name == "model_inquiry":
+        if env.get("BUILDEROPS_VAULT_ROOT"):
+            return str(Path(env["BUILDEROPS_VAULT_ROOT"]).expanduser() / "model-inquiries")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -258,15 +339,26 @@ class EnumeratedRoot:
     # of any authority found here is ambiguous and must be resolved, never
     # defaulted.
     repo_identity: str | None = None
+    # The primary worktree of the clone-set this root belongs to, when the root
+    # is a linked git worktree (``git worktree list --porcelain`` lists the
+    # primary first). Producers with primary-worktree resolution collapse onto
+    # it; ``None`` means the root is its own state base.
+    primary_worktree: str | None = None
 
 
 @dataclass(frozen=True)
 class HostContext:
-    """One cutover host and the roots enumerated on it."""
+    """One cutover host, its enumerated roots, and its environment snapshot.
+
+    ``env=None`` means the host's process environment could not be introspected
+    (remote-env limitation): expected roots are then derived from default paths
+    only, marked ``env_known=False``, and surfaced in the preflight receipt.
+    """
 
     host: str
     user: str
     roots: tuple[EnumeratedRoot, ...] = ()
+    env: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -281,6 +373,8 @@ class ExpectedRoot:
     path: str
     authority_bearing: bool
     repo_identity: str | None = None
+    env_keys_consulted: tuple[str, ...] = ()
+    env_known: bool = False
 
     @property
     def key(self) -> str:
@@ -292,7 +386,16 @@ def derive_expected_universe(
     *,
     caller_roots: Sequence[ExpectedRoot] = (),
 ) -> tuple[ExpectedRoot, ...]:
-    """Cross-product repo producers with each host's enumerated roots.
+    """Cross repo producers with each host's roots via real resolution semantics.
+
+    Per host and producer: a producer env override (from the host's environment
+    snapshot) pins the producer to ONE expected root — the location its real
+    resolver would write — replacing default-path derivation for that host.
+    Without an override, per-root defaults apply, with primary-worktree
+    producers collapsing linked worktrees onto their clone-set primary (one
+    expected dispatcher root per clone-set, not per linked worktree). Historical
+    pre-override locations are host-stable-candidate scope: enumerate them as
+    ``RootKind.HOST_STABLE`` roots or pass them as caller roots.
 
     Caller roots may only *add* to the producer-derived universe. Any caller root
     whose key collides with a producer-derived root but changes its identity is a
@@ -301,21 +404,44 @@ def derive_expected_universe(
 
     derived: dict[str, ExpectedRoot] = {}
     for host in hosts:
-        for root in host.roots:
-            base = Path(root.path)
-            for spec in PRODUCER_MANIFEST:
+        env_known = host.env is not None
+        env_map = {key: str(value) for key, value in dict(host.env or {}).items()}
+        for spec in PRODUCER_MANIFEST:
+            consulted = tuple(key for key in spec.env_override_keys if key in env_map)
+            override = _env_override_path(spec, env_map) if env_known else None
+            if override is not None:
+                expected = ExpectedRoot(
+                    producer=spec.name,
+                    source_class=spec.source_class,
+                    host=host.host,
+                    user=host.user,
+                    root_kind=RootKind.PRODUCER_DEFAULT,
+                    path=override,
+                    authority_bearing=spec.authority_bearing,
+                    repo_identity=None,
+                    env_keys_consulted=consulted,
+                    env_known=True,
+                )
+                derived[expected.key] = expected
+                continue
+            for root in host.roots:
                 if not spec.applies_to(root.kind):
                     continue
-                path = str(base / spec.relative_default_path)
+                if spec.resolution == _RESOLVE_PRIMARY_WORKTREE and root.primary_worktree:
+                    base = Path(root.primary_worktree)
+                else:
+                    base = Path(root.path)
                 expected = ExpectedRoot(
                     producer=spec.name,
                     source_class=spec.source_class,
                     host=host.host,
                     user=host.user,
                     root_kind=root.kind,
-                    path=path,
+                    path=str(base / spec.relative_default_path),
                     authority_bearing=spec.authority_bearing,
                     repo_identity=root.repo_identity,
+                    env_keys_consulted=consulted,
+                    env_known=env_known,
                 )
                 derived[expected.key] = expected
 
@@ -365,6 +491,8 @@ class ObservedSource:
             "path": self.expected.path,
             "authority_bearing": self.expected.authority_bearing,
             "repo_identity": self.expected.repo_identity,
+            "env_keys_consulted": list(self.expected.env_keys_consulted),
+            "env_known": self.expected.env_known,
             "present": self.present,
             "accessible": self.accessible,
             "schema_version": self.schema_version,
@@ -432,6 +560,9 @@ def build_coverage_manifest(
     fingerprint = {
         "host": host,
         "user": user,
+        # The freeze timestamp is part of the acknowledged identity: an
+        # acknowledgement binds THIS freeze, not just this file set.
+        "freshness_at": freshness_at,
         "sources": [source.as_manifest_entry() for source in observed],
         "exclusions": dict(sorted(exclusions.items())),
     }
@@ -492,12 +623,21 @@ def accept_acknowledgement(
 
 @dataclass(frozen=True)
 class ArtifactRef:
-    """A content-hash reference to an immutable, externally stored artifact."""
+    """A content-hash reference to an immutable, externally stored artifact.
+
+    ``content_hash`` is ALWAYS computed from the artifact's bytes by this module
+    (a self-reported hash inside the file is never trusted for identity);
+    ``declared_hash`` records the artifact's own ``artifact_hash`` field, when
+    present, as evidence. The two use different schemes by construction (the
+    model-inquiry store hashes the canonical JSON payload minus the hash field),
+    so a difference between them is expected, not a mismatch signal.
+    """
 
     artifact_id: str
     content_hash: str
     location: str
     kind: str
+    declared_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -518,6 +658,17 @@ class NormalizedRecord:
     operation_keys: tuple[str, ...] = ()
     lease_state: str | None = None
     artifact_refs: tuple[ArtifactRef, ...] = ()
+    # Set when the source item failed its producer's own validation (e.g. an
+    # epic-run file rejected by normalize_epic_run_state). Invalid items can
+    # never import as authority; they route to evidence quarantine.
+    invalid_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        # Repo provenance is authority-scoping data: a malformed reference must
+        # fail closed at normalization time, in the dry-run gates, not import
+        # cleanly (mirrors AuthorityEnvelope's own canonicalization).
+        if self.repo_ref is not None:
+            object.__setattr__(self, "repo_ref", canonical_repository(self.repo_ref))
 
     @property
     def is_lease(self) -> bool:
@@ -536,8 +687,14 @@ class NormalizedRecord:
             "idempotency_keys": list(self.idempotency_keys),
             "operation_keys": list(self.operation_keys),
             "lease_state": self.lease_state,
+            "invalid_reason": self.invalid_reason,
             "artifact_refs": [
-                {"artifact_id": a.artifact_id, "content_hash": a.content_hash, "kind": a.kind}
+                {
+                    "artifact_id": a.artifact_id,
+                    "content_hash": a.content_hash,
+                    "declared_hash": a.declared_hash,
+                    "kind": a.kind,
+                }
                 for a in self.artifact_refs
             ],
         }
@@ -579,10 +736,13 @@ def _open_readonly(path: Path) -> sqlite3.Connection:
     return conn
 
 
-# Table -> (object_kind, authority_bearing, is_lease-flag) classification for the
-# generic SQLite reader. Unknown tables (schema growth, e.g. new CKM tables) fall
-# back to an authority-bearing record keyed by their primary key, so additive
-# schema is import-covered by default.
+# Table -> (object_kind, table_authority) classification for the generic SQLite
+# reader. ``table_authority`` refines WITHIN the producer: the effective flag is
+# ``expected.authority_bearing AND table_authority``, so the ProducerSpec flag is
+# load-bearing and a table refinement can only narrow it (meta/idempotency/event
+# tables are evidence even inside an authority-bearing store). Unknown tables
+# (schema growth, e.g. new CKM tables) fall back to the producer flag keyed by
+# their primary key, so additive schema is import-covered by default.
 _BUILDEROPS_TABLE_KINDS: dict[str, tuple[str, bool]] = {
     "builderops_records": ("builderops_record", True),
     "builderops_leases": ("lease", True),
@@ -606,22 +766,53 @@ def _scope_stack_for(producer_name: str, object_kind: str) -> tuple[str, str]:
     return (f"legacy:{producer_name}:{object_kind}", f"builderops-legacy:{producer_name}")
 
 
+def _repo_from_row(row: Mapping[str, Any]) -> str | None:
+    """Row-level repo evidence: dispatcher stores ``repo``; verification stores
+    ``repository`` (part of its unique key)."""
+
+    for column in ("repo", "repository"):
+        value = row.get(column)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _repo_from_json_text(text: Any) -> str | None:
+    """Repo evidence embedded in a JSON-encoded TEXT column (BuilderOps record
+    payloads keep their whole envelope in ``payload``)."""
+
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        decoded = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(decoded, Mapping):
+        return _repo_from_row(decoded)
+    return None
+
+
+RowRepoEvidence = Callable[[str, Mapping[str, Any]], "str | None"]
+
+
 def _generic_sqlite_records(
     observed: ObservedSource,
     *,
     table_kinds: Mapping[str, tuple[str, bool]],
-    default_authority_bearing: bool,
+    repo_evidence: RowRepoEvidence | None = None,
 ) -> list[NormalizedRecord]:
     expected = observed.expected
     path = Path(expected.path)
     records: list[NormalizedRecord] = []
+    evidence_fn: RowRepoEvidence = repo_evidence or (lambda table, row: _repo_from_row(row))
     conn = _open_readonly(path)
     try:
         for table in _sqlite_tables(conn):
             pk_columns = _sqlite_primary_key(conn, table)
-            object_kind, authority_bearing = table_kinds.get(
-                table, (f"{expected.producer}:{table}", default_authority_bearing)
+            object_kind, table_authority = table_kinds.get(
+                table, (f"{expected.producer}:{table}", True)
             )
+            authority_bearing = expected.authority_bearing and table_authority
             for row in _sqlite_rows(conn, table):
                 identity = "|".join(str(row.get(col)) for col in pk_columns)
                 source_ref = f"{expected.key}#{table}:{identity}"
@@ -634,7 +825,7 @@ def _generic_sqlite_records(
                 operation_keys: tuple[str, ...] = ()
                 if "lease_id" in row and row.get("lease_id"):
                     operation_keys = (str(row["lease_id"]),)
-                repo_ref = _repo_from_row(row) or expected.repo_identity
+                repo_ref = evidence_fn(table, row) or expected.repo_identity
                 scope, stack = _scope_stack_for(expected.producer, object_kind)
                 # Authority-bearing rows keep their natural, globally unique
                 # identity so a genuine cross-worktree collision (the #3686
@@ -686,35 +877,77 @@ def _lease_state(row: Mapping[str, Any], freeze_at: str | None) -> str:
     return "live" if expires > frozen else "expired"
 
 
-def _repo_from_row(row: Mapping[str, Any]) -> str | None:
-    repo = row.get("repo")
-    if isinstance(repo, str) and repo.strip():
-        return repo.strip()
-    return None
-
-
 def read_builderops_sqlite(observed: ObservedSource) -> list[NormalizedRecord]:
-    """Read BuilderOps records/leases/idempotency plus co-resident CKM/CEG tables."""
+    """Read BuilderOps records/leases/idempotency plus co-resident CKM/CEG tables.
+
+    BuilderOps records keep their envelope inside the JSON-encoded ``payload``
+    TEXT column, so row-level repo evidence must decode it (mirrors the store's
+    own ``_loads``) instead of looking at raw columns only.
+    """
+
+    def evidence(table: str, row: Mapping[str, Any]) -> str | None:
+        direct = _repo_from_row(row)
+        if direct is not None:
+            return direct
+        if table == "builderops_records":
+            return _repo_from_json_text(row.get("payload"))
+        return None
 
     return _generic_sqlite_records(
         observed,
         table_kinds=_BUILDEROPS_TABLE_KINDS,
-        default_authority_bearing=True,
+        repo_evidence=evidence,
     )
 
 
 def read_dispatcher_sqlite(observed: ObservedSource) -> list[NormalizedRecord]:
-    """Read dispatcher tasks/leases/events/verification tables."""
+    """Read dispatcher tasks/leases/events/verification tables.
+
+    ``verification_runs`` carries ``repository`` (part of its unique key);
+    ``verification_attempts``/``verification_exceptions`` carry no repo column of
+    their own, so their evidence is joined back to the owning run via ``run_id``
+    during the read pass.
+    """
+
+    runs_repo: dict[str, str] = {}
+    path = Path(observed.expected.path)
+    conn = _open_readonly(path)
+    try:
+        tables = set(_sqlite_tables(conn))
+        if "verification_runs" in tables:
+            for row in _sqlite_rows(conn, "verification_runs"):
+                run_id = row.get("run_id")
+                repo = _repo_from_row(row)
+                if isinstance(run_id, str) and repo:
+                    runs_repo[run_id] = repo
+    finally:
+        conn.close()
+
+    def evidence(table: str, row: Mapping[str, Any]) -> str | None:
+        direct = _repo_from_row(row)
+        if direct is not None:
+            return direct
+        if table in ("verification_attempts", "verification_exceptions"):
+            run_id = row.get("run_id")
+            if isinstance(run_id, str):
+                return runs_repo.get(run_id)
+        return None
 
     return _generic_sqlite_records(
         observed,
         table_kinds=_DISPATCHER_TABLE_KINDS,
-        default_authority_bearing=True,
+        repo_evidence=evidence,
     )
 
 
 def read_dispatcher_events_jsonl(observed: ObservedSource) -> list[NormalizedRecord]:
-    """Read the append-only dispatcher event audit log (evidence)."""
+    """Read the append-only dispatcher event audit log (evidence).
+
+    Lines are ``EventRecord.to_dict()`` objects (event_id/timestamp/task_id/
+    event_type/actor/lease_id/payload) — the writer never emits a top-level repo
+    field, so repo evidence can only come from a payload mapping or the
+    registered root identity.
+    """
 
     expected = observed.expected
     path = Path(expected.path)
@@ -725,15 +958,17 @@ def read_dispatcher_events_jsonl(observed: ObservedSource) -> list[NormalizedRec
             continue
         event = json.loads(stripped)
         identity = str(event.get("event_id", index))
+        payload_map = event.get("payload")
+        payload_repo = _repo_from_row(payload_map) if isinstance(payload_map, Mapping) else None
         scope, stack = _scope_stack_for(expected.producer, "dispatcher_event")
         records.append(
             NormalizedRecord(
                 source_ref=f"{expected.key}#event:{identity}",
                 object_kind="dispatcher_event",
                 identity_key=f"{expected.key}#dispatcher_event:{identity}",
-                authority_bearing=False,
+                authority_bearing=expected.authority_bearing,
                 content_hash=_hash(event),
-                repo_ref=_repo_from_row(event) or expected.repo_identity,
+                repo_ref=_repo_from_row(event) or payload_repo or expected.repo_identity,
                 scope=scope,
                 stack=stack,
                 provenance={
@@ -750,21 +985,58 @@ def read_dispatcher_events_jsonl(observed: ObservedSource) -> list[NormalizedRec
 
 
 def read_epic_run_json(observed: ObservedSource) -> list[NormalizedRecord]:
-    """Read epic-run state JSON files (authority-bearing run state)."""
+    """Read epic-run state JSON files (authority-bearing run state).
+
+    Files are parsed through the producer's own validation
+    (``deserialize_epic_run_state``: schema_version enforcement, unknown-field
+    rejection, default fill), so the record-level content hash is over the
+    NORMALIZED envelope — a dormant old-shape file of the same run whose missing
+    fields normalize to defaults deduplicates instead of raising a spurious
+    authority-divergence block. Files the producer itself rejects import only as
+    quarantined evidence (``invalid_reason``), never as authority. The freeze
+    hash stays raw bytes: any byte change still trips SourceChangedError.
+    """
+
+    from app.builderops.epic_run_state import EpicRunStateError, deserialize_epic_run_state
 
     expected = observed.expected
     root = Path(expected.path)
     records: list[NormalizedRecord] = []
     for path in sorted(root.glob("*.json")):
-        state = json.loads(path.read_text(encoding="utf-8"))
-        run_id = str(state.get("run_id", path.stem))
+        raw_text = path.read_text(encoding="utf-8")
         scope, stack = _scope_stack_for(expected.producer, "epic_run")
+        try:
+            state = deserialize_epic_run_state(raw_text)
+        except (EpicRunStateError, ValueError) as exc:
+            records.append(
+                NormalizedRecord(
+                    source_ref=f"{expected.key}#invalid:{path.stem}",
+                    object_kind="epic_run",
+                    identity_key=f"{expected.key}#epic_run_invalid:{path.stem}",
+                    authority_bearing=False,
+                    content_hash=_hash_bytes(raw_text.encode("utf-8")),
+                    repo_ref=expected.repo_identity,
+                    scope=scope,
+                    stack=stack,
+                    provenance={
+                        "producer": expected.producer,
+                        "host": expected.host,
+                        "user": expected.user,
+                        "path": str(path),
+                        "root_kind": expected.root_kind,
+                    },
+                    payload={"raw_text": raw_text},
+                    invalid_reason=f"epic-run state rejected by producer validation: {exc}",
+                )
+            )
+            continue
+        run_id = str(state.get("run_id", path.stem))
         records.append(
             NormalizedRecord(
                 source_ref=f"{expected.key}#run:{run_id}",
                 object_kind="epic_run",
                 identity_key=f"epic_run:{run_id}",
-                authority_bearing=True,
+                authority_bearing=expected.authority_bearing,
                 content_hash=_hash(state),
                 repo_ref=expected.repo_identity,
                 scope=scope,
@@ -786,9 +1058,14 @@ def read_epic_run_json(observed: ObservedSource) -> list[NormalizedRecord]:
 def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]:
     """Read file-first model inquiries: identity + receipts + immutable artifacts.
 
-    The authoritative identity/state (manifest) and receipts normalize into the
-    sink; the large question/turn artifacts stay external and are referenced by
-    content hash, so no terminal authority state remains file-only.
+    The authoritative identity/state (manifest) and the receipts under
+    ``{inquiry_dir}/receipts/*.json`` (mirroring the store's own
+    ``_read_receipts``; receipt files are named ``inquiry-started.json``,
+    ``readiness-terminal.json``, ``turn-*-terminal.json``, ... — none share a
+    filename prefix) normalize into the sink; the large question/turn artifacts
+    stay external and are referenced by a content hash COMPUTED from their bytes
+    (never trusted from the file's own ``artifact_hash`` field), so no terminal
+    authority state remains file-only.
     """
 
     expected = observed.expected
@@ -800,21 +1077,35 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
             continue
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         inquiry_id = str(manifest.get("inquiry_id", inquiry_dir.name))
+        receipts_dir = inquiry_dir / "receipts"
         artifact_refs: list[ArtifactRef] = []
         for artifact_path in sorted(inquiry_dir.rglob("*.json")):
-            if artifact_path.name in {"manifest.json"}:
+            if artifact_path == manifest_path:
                 continue
-            if artifact_path.name.startswith("receipt"):
+            # Receipts are authority material read below — exclusion is
+            # path-based (parent directory), never filename-prefix-based.
+            if receipts_dir in artifact_path.parents:
                 continue
-            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            artifact_bytes = _read_bytes(artifact_path)
+            try:
+                artifact = json.loads(artifact_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                artifact = {}
+            declared = artifact.get("artifact_hash") if isinstance(artifact, Mapping) else None
+            artifact_id = (
+                artifact.get("artifact_id") if isinstance(artifact, Mapping) else None
+            )
             artifact_refs.append(
                 ArtifactRef(
-                    artifact_id=str(artifact.get("artifact_id", artifact_path.stem)),
-                    content_hash=str(
-                        artifact.get("artifact_hash") or _hash_bytes(_read_bytes(artifact_path))
-                    ),
+                    artifact_id=str(artifact_id or artifact_path.stem),
+                    content_hash=_hash_bytes(artifact_bytes),
                     location=str(artifact_path),
-                    kind=artifact_path.parent.name if artifact_path.parent != inquiry_dir else "root",
+                    kind=(
+                        artifact_path.parent.name
+                        if artifact_path.parent != inquiry_dir
+                        else "root"
+                    ),
+                    declared_hash=str(declared) if isinstance(declared, str) else None,
                 )
             )
         scope, stack = _scope_stack_for(expected.producer, "model_inquiry")
@@ -824,7 +1115,7 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
                 source_ref=f"{expected.key}#inquiry:{inquiry_id}",
                 object_kind="model_inquiry",
                 identity_key=f"model_inquiry:{inquiry_id}",
-                authority_bearing=True,
+                authority_bearing=expected.authority_bearing,
                 content_hash=_hash(manifest),
                 repo_ref=repo_ref,
                 scope=scope,
@@ -840,30 +1131,34 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
                 artifact_refs=tuple(artifact_refs),
             )
         )
-        for receipt_path in sorted(inquiry_dir.glob("receipt*.json")):
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            receipt_id = str(receipt.get("id", receipt_path.stem))
-            records.append(
-                NormalizedRecord(
-                    source_ref=f"{expected.key}#receipt:{receipt_id}",
-                    object_kind="model_inquiry_receipt",
-                    identity_key=f"{expected.key}#model_inquiry_receipt:{receipt_id}",
-                    authority_bearing=False,
-                    content_hash=_hash(receipt),
-                    repo_ref=repo_ref,
-                    scope=scope,
-                    stack=stack,
-                    provenance={
-                        "producer": expected.producer,
-                        "host": expected.host,
-                        "user": expected.user,
-                        "path": str(receipt_path),
-                        "root_kind": expected.root_kind,
-                        "inquiry_id": inquiry_id,
-                    },
-                    payload=receipt,
+        if receipts_dir.is_dir():
+            for receipt_path in sorted(receipts_dir.glob("*.json")):
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt_id = str(receipt.get("id", receipt_path.stem))
+                records.append(
+                    NormalizedRecord(
+                        source_ref=f"{expected.key}#receipt:{inquiry_id}:{receipt_path.stem}",
+                        object_kind="model_inquiry_receipt",
+                        identity_key=(
+                            f"{expected.key}#model_inquiry_receipt:{inquiry_id}:{receipt_id}"
+                        ),
+                        authority_bearing=False,
+                        content_hash=_hash(receipt),
+                        repo_ref=repo_ref,
+                        scope=scope,
+                        stack=stack,
+                        provenance={
+                            "producer": expected.producer,
+                            "host": expected.host,
+                            "user": expected.user,
+                            "path": str(receipt_path),
+                            "root_kind": expected.root_kind,
+                            "inquiry_id": inquiry_id,
+                            "receipt_file": receipt_path.name,
+                        },
+                        payload=receipt,
+                    )
                 )
-            )
     return records
 
 
@@ -909,20 +1204,28 @@ def normalize_sources(
 ) -> list[NormalizedRecord]:
     """Read and normalize every usable frozen source, rejecting changed sources.
 
-    Each source's content hash is re-verified against the frozen manifest before
-    any record is produced; a single changed source fails closed and no records
-    are returned (import nothing further).
+    Each source's content hash is re-verified against the frozen manifest BEFORE
+    the read and again AFTER the read (spec: adapters hash-verify before and
+    after import) — a source mutated at any point between freeze and the end of
+    its read fails closed and no records are returned (import nothing further).
     """
 
     records: list[NormalizedRecord] = []
     for observed in manifest.usable_sources():
-        current = freeze_content_hash(observed.expected)
-        if observed.content_hash is not None and current != observed.content_hash:
+        pre = freeze_content_hash(observed.expected)
+        if observed.content_hash is not None and pre != observed.content_hash:
             raise SourceChangedError(
                 f"source {observed.expected.key!r} changed after freeze "
-                f"(frozen={observed.content_hash}, current={current})"
+                f"(frozen={observed.content_hash}, current={pre})"
             )
-        records.extend(reader(observed))
+        source_records = reader(observed)
+        post = freeze_content_hash(observed.expected)
+        if observed.content_hash is not None and post != observed.content_hash:
+            raise SourceChangedError(
+                f"source {observed.expected.key!r} changed during read "
+                f"(frozen={observed.content_hash}, current={post})"
+            )
+        records.extend(source_records)
     return sorted(records, key=lambda r: r.source_ref)
 
 
@@ -1081,10 +1384,21 @@ class InMemoryAuthoritySink:
         self._reserved_operations: set[str] = set()
 
     def begin_epoch(self, *, epoch_id: str, fencing_base: int) -> None:
-        # Fail closed on an epoch rewind: fencing must be monotonic.
-        if self.fencing_base is not None and fencing_base <= self.fencing_base:
+        # Restart-safety follows BCP-01's replay idiom (same key + same request =
+        # replay; same key + different request = conflict): an EXACT repeat of
+        # the open epoch is an idempotent no-op resume; a rewind or a different
+        # epoch identity at the same fencing base fails closed.
+        if self.fencing_base is None:
+            self.epoch_id = epoch_id
+            self.fencing_base = fencing_base
+            return
+        if epoch_id == self.epoch_id and fencing_base == self.fencing_base:
+            return  # idempotent resume of the same epoch
+        if fencing_base <= self.fencing_base:
             raise LegacyMigrationError(
-                f"epoch fencing base must advance ({fencing_base} <= {self.fencing_base})"
+                "epoch must resume exactly or advance: got "
+                f"({epoch_id!r}, base {fencing_base}) over "
+                f"({self.epoch_id!r}, base {self.fencing_base})"
             )
         self.epoch_id = epoch_id
         self.fencing_base = fencing_base
@@ -1167,7 +1481,14 @@ class MigrationReceipts:
 
 @dataclass(frozen=True)
 class ImportResult:
-    """The deterministic outcome of one import pass."""
+    """The deterministic outcome of one import pass.
+
+    ``result_hash`` covers the deterministic PLAN (dispositions, tombstones,
+    quarantines, expired leases, blocked conflicts) — never sink execution
+    detail. ``replayed`` reports which planned applies the sink answered as
+    idempotent no-ops (BCP-01's ``replayed`` idiom); it varies between a clean
+    run and a crash-resume of the same plan, so it is excluded from the hash.
+    """
 
     epoch_id: str
     fencing_base: int
@@ -1178,6 +1499,7 @@ class ImportResult:
     tombstoned: tuple[str, ...]
     expired_leases: tuple[str, ...]
     blocked: tuple[BlockingConflict, ...]
+    replayed: tuple[str, ...]
     dry_run: bool
     result_hash: str
 
@@ -1196,6 +1518,7 @@ class ImportResult:
             "tombstoned": list(self.tombstoned),
             "expired_leases": list(self.expired_leases),
             "blocked": [conflict.summary() for conflict in self.blocked],
+            "replayed": list(self.replayed),
             "dry_run": self.dry_run,
             "cutover_blocked": self.cutover_blocked,
         }
@@ -1210,17 +1533,6 @@ def _group_records(
     for group in groups.values():
         group.sort(key=lambda r: r.source_ref)
     return groups
-
-
-def _resolution_for(
-    resolutions: Sequence[ConflictResolution],
-    object_kind: str,
-    identity_key: str,
-) -> ConflictResolution | None:
-    for resolution in resolutions:
-        if resolution.object_kind == object_kind and resolution.identity_key == identity_key:
-            return resolution
-    return None
 
 
 def _build_tombstone(
@@ -1261,48 +1573,74 @@ def import_records(
 ) -> ImportResult:
     """Deterministically import normalized records into a target authority sink.
 
-    The pass is idempotent and restart-safe: applying the same records twice
-    yields the same ``result_hash`` and no second authority row. Authority
-    conflicts/ambiguities never resolve silently; they block unless
-    evidence-resolved or duplicate-preventing tombstoned.
+    The pass plans deterministically and is restart-safe: an exact-args retry
+    after a crash resumes the same epoch as an idempotent no-op (already-applied
+    rows come back as ``replayed``) and yields the same ``result_hash``, because
+    the hash covers the plan, not sink execution detail. Authority conflicts and
+    ambiguities never resolve silently; they block unless evidence-resolved or
+    duplicate-preventing tombstoned, and a planned apply whose keys collide with
+    a tombstone's reservations is blocked at planning time rather than
+    discovered mid-apply.
     """
 
-    repo_mappings = dict(repo_mappings or {})
-    groups = _group_records(records)
+    repo_mappings = {
+        key: canonical_repository(value) for key, value in dict(repo_mappings or {}).items()
+    }
+    for resolution in resolutions:
+        if resolution.repo_ref is not None:
+            canonical_repository(resolution.repo_ref)
+    # Pre-index resolutions once instead of scanning the sequence per group; the
+    # FIRST resolution for an identity wins, matching the prior scan order.
+    resolution_index: dict[tuple[str, str], ConflictResolution] = {}
+    for resolution in resolutions:
+        resolution_index.setdefault((resolution.object_kind, resolution.identity_key), resolution)
+
+    valid_records = [r for r in records if r.invalid_reason is None]
+    invalid_records = [r for r in records if r.invalid_reason is not None]
+    groups = _group_records(valid_records)
 
     dispositions: dict[str, str] = {}
-    imported: list[str] = []
-    deduplicated: list[str] = []
-    quarantined: list[str] = []
-    tombstoned: list[str] = []
-    expired_leases: list[str] = []
     blocked: list[BlockingConflict] = []
-
     planned_apply: list[NormalizedRecord] = []
     planned_tombstones: list[AuthorityTombstone] = []
     planned_quarantines: list[QuarantineItem] = []
     planned_expired: list[ExpiredLeaseEvidence] = []
 
+    # Producer-rejected items can never import as authority: quarantine.
+    for record in invalid_records:
+        planned_quarantines.append(
+            QuarantineItem(
+                source_ref=record.source_ref,
+                object_kind=record.object_kind,
+                identity_key=record.identity_key,
+                content_hash=record.content_hash,
+                reason=record.invalid_reason or "invalid source record",
+            )
+        )
+        dispositions[record.source_ref] = Disposition.EVIDENCE_QUARANTINED
+
     for (object_kind, identity_key), group in sorted(groups.items()):
-        resolution = _resolution_for(resolutions, object_kind, identity_key)
+        group_resolution = resolution_index.get((object_kind, identity_key))
 
         # Leases never cross the epoch: import as expired evidence only.
         if object_kind == "lease":
             for record in group:
-                evidence = ExpiredLeaseEvidence(
-                    source_ref=record.source_ref,
-                    identity_key=record.identity_key,
-                    holder=str(record.payload.get("holder") or record.payload.get("actor") or ""),
-                    legacy_expires_at=(
-                        str(record.payload.get("expires_at"))
-                        if record.payload.get("expires_at")
-                        else None
-                    ),
-                    legacy_state=record.lease_state or "unknown",
-                    source_hash=record.content_hash,
+                planned_expired.append(
+                    ExpiredLeaseEvidence(
+                        source_ref=record.source_ref,
+                        identity_key=record.identity_key,
+                        holder=str(
+                            record.payload.get("holder") or record.payload.get("actor") or ""
+                        ),
+                        legacy_expires_at=(
+                            str(record.payload.get("expires_at"))
+                            if record.payload.get("expires_at")
+                            else None
+                        ),
+                        legacy_state=record.lease_state or "unknown",
+                        source_hash=record.content_hash,
+                    )
                 )
-                planned_expired.append(evidence)
-                expired_leases.append(record.source_ref)
                 dispositions[record.source_ref] = Disposition.EXPIRED_LEASE
             continue
 
@@ -1319,30 +1657,24 @@ def import_records(
                     object_kind,
                     identity_key,
                     resolved_group,
-                    resolution,
+                    group_resolution,
                     reason="divergent authority-bearing identities",
                 )
                 _record_group_outcome(
-                    outcome,
-                    dispositions,
-                    imported,
-                    tombstoned,
-                    blocked,
-                    planned_apply,
-                    planned_tombstones,
+                    outcome, dispositions, blocked, planned_apply, planned_tombstones
                 )
             else:
                 # Evidence-only conflict may remain plain quarantine.
                 for record in resolved_group:
-                    item = QuarantineItem(
-                        source_ref=record.source_ref,
-                        object_kind=object_kind,
-                        identity_key=identity_key,
-                        content_hash=record.content_hash,
-                        reason="evidence-only divergent content",
+                    planned_quarantines.append(
+                        QuarantineItem(
+                            source_ref=record.source_ref,
+                            object_kind=object_kind,
+                            identity_key=identity_key,
+                            content_hash=record.content_hash,
+                            reason="evidence-only divergent content",
+                        )
                     )
-                    planned_quarantines.append(item)
-                    quarantined.append(record.source_ref)
                     dispositions[record.source_ref] = Disposition.EVIDENCE_QUARANTINED
             continue
 
@@ -1354,58 +1686,86 @@ def import_records(
                     object_kind,
                     identity_key,
                     resolved_group,
-                    resolution,
+                    group_resolution,
                     reason="authority-bearing ambiguous repo provenance",
                 )
                 _record_group_outcome(
-                    outcome,
-                    dispositions,
-                    imported,
-                    tombstoned,
-                    blocked,
-                    planned_apply,
-                    planned_tombstones,
+                    outcome, dispositions, blocked, planned_apply, planned_tombstones
                 )
             else:
                 for record in resolved_group:
-                    item = QuarantineItem(
-                        source_ref=record.source_ref,
-                        object_kind=object_kind,
-                        identity_key=identity_key,
-                        content_hash=record.content_hash,
-                        reason="evidence-only ambiguous repo provenance",
+                    planned_quarantines.append(
+                        QuarantineItem(
+                            source_ref=record.source_ref,
+                            object_kind=object_kind,
+                            identity_key=identity_key,
+                            content_hash=record.content_hash,
+                            reason="evidence-only ambiguous repo provenance",
+                        )
                     )
-                    planned_quarantines.append(item)
-                    quarantined.append(record.source_ref)
                     dispositions[record.source_ref] = Disposition.EVIDENCE_QUARANTINED
             continue
 
         # Clean group: import the canonical record once, dedup the rest.
         canonical = resolved_group[0]
         planned_apply.append(canonical)
-        imported.append(canonical.source_ref)
         dispositions[canonical.source_ref] = Disposition.IMPORTED
         for record in resolved_group[1:]:
-            deduplicated.append(record.source_ref)
             dispositions[record.source_ref] = Disposition.DEDUPLICATED
 
-    # Apply the plan (unless dry-run). Tombstones first so replay of a reserved
-    # key fails closed even within the same pass.
+    # Cross-group reserved-key collision is a PLANNING outcome, never a mid-apply
+    # surprise: any planned apply whose identity/idempotency/operation keys
+    # intersect this run's planned tombstone reservations (or reservations
+    # already durable in the sink) blocks with its own distinguishing reason.
+    planned_reserved: set[str] = set()
+    for tombstone in planned_tombstones:
+        planned_reserved |= set(tombstone.reserved_identity_keys)
+        planned_reserved |= set(tombstone.reserved_idempotency_keys)
+        planned_reserved |= set(tombstone.reserved_operation_keys)
+    final_apply: list[NormalizedRecord] = []
+    for record in planned_apply:
+        record_keys = {record.identity_key, *record.idempotency_keys, *record.operation_keys}
+        collision = bool(record_keys & planned_reserved) or any(
+            sink.is_reserved(identity_key=key)
+            or sink.is_reserved(idempotency_key=key)
+            or sink.is_reserved(operation_key=key)
+            for key in record_keys
+        )
+        if collision:
+            blocked.append(
+                BlockingConflict(
+                    object_kind=record.object_kind,
+                    identity_key=record.identity_key,
+                    reason=(
+                        "cross-group reserved-key collision: record shares a legacy "
+                        "identity/idempotency/operation key with a duplicate-preventing "
+                        "tombstone"
+                    ),
+                    source_refs=(record.source_ref,),
+                )
+            )
+            dispositions[record.source_ref] = Disposition.BLOCKED
+        else:
+            final_apply.append(record)
+
+    replayed: list[str] = []
     if not dry_run:
         sink.begin_epoch(epoch_id=epoch_id, fencing_base=fencing_base)
+        # Tombstones first so replay of a reserved key fails closed even within
+        # the same pass (the sink-level raise remains a backstop; the planning
+        # pass above is the gate).
         for tombstone in planned_tombstones:
             sink.record_tombstone(tombstone)
         for item in planned_quarantines:
             sink.record_quarantine(item)
         for evidence in planned_expired:
             sink.record_expired_lease(evidence)
-        for record in planned_apply:
-            applied = sink.apply_authority_record(record)
-            if not applied and dispositions.get(record.source_ref) == Disposition.IMPORTED:
-                dispositions[record.source_ref] = Disposition.DEDUPLICATED
-                if record.source_ref in imported:
-                    imported.remove(record.source_ref)
-                    deduplicated.append(record.source_ref)
+        for record in final_apply:
+            if not sink.apply_authority_record(record):
+                replayed.append(record.source_ref)
+
+    def _refs(disposition: str) -> tuple[str, ...]:
+        return tuple(sorted(ref for ref, value in dispositions.items() if value == disposition))
 
     result_body = {
         "epoch_id": epoch_id,
@@ -1420,12 +1780,13 @@ def import_records(
         epoch_id=epoch_id,
         fencing_base=fencing_base,
         dispositions=dispositions,
-        imported=tuple(sorted(imported)),
-        deduplicated=tuple(sorted(deduplicated)),
-        quarantined=tuple(sorted(quarantined)),
-        tombstoned=tuple(sorted(tombstoned)),
-        expired_leases=tuple(sorted(expired_leases)),
+        imported=_refs(Disposition.IMPORTED),
+        deduplicated=_refs(Disposition.DEDUPLICATED),
+        quarantined=_refs(Disposition.EVIDENCE_QUARANTINED),
+        tombstoned=_refs(Disposition.AUTHORITY_TOMBSTONED),
+        expired_leases=_refs(Disposition.EXPIRED_LEASE),
         blocked=tuple(sorted(blocked, key=lambda b: (b.object_kind, b.identity_key))),
+        replayed=tuple(sorted(replayed)),
         dry_run=dry_run,
         result_hash=_hash(result_body),
     )
@@ -1442,22 +1803,7 @@ def _apply_repo_mapping(
     )
     if mapped is None:
         return record
-    return NormalizedRecord(
-        source_ref=record.source_ref,
-        object_kind=record.object_kind,
-        identity_key=record.identity_key,
-        authority_bearing=record.authority_bearing,
-        content_hash=record.content_hash,
-        repo_ref=mapped,
-        scope=record.scope,
-        stack=record.stack,
-        provenance=record.provenance,
-        payload=record.payload,
-        idempotency_keys=record.idempotency_keys,
-        operation_keys=record.operation_keys,
-        lease_state=record.lease_state,
-        artifact_refs=record.artifact_refs,
-    )
+    return dataclasses.replace(record, repo_ref=mapped)
 
 
 @dataclass(frozen=True)
@@ -1506,7 +1852,7 @@ def _resolve_authority_group(
             )
         resolved = winner
         if resolved.repo_ref is None and resolution.repo_ref is not None:
-            resolved = _with_repo_ref(resolved, resolution.repo_ref)
+            resolved = dataclasses.replace(resolved, repo_ref=resolution.repo_ref)
         if resolved.repo_ref is None:
             return _GroupOutcome(
                 blocked=BlockingConflict(
@@ -1544,30 +1890,9 @@ def _select_winner(
     return None
 
 
-def _with_repo_ref(record: NormalizedRecord, repo_ref: str) -> NormalizedRecord:
-    return NormalizedRecord(
-        source_ref=record.source_ref,
-        object_kind=record.object_kind,
-        identity_key=record.identity_key,
-        authority_bearing=record.authority_bearing,
-        content_hash=record.content_hash,
-        repo_ref=repo_ref,
-        scope=record.scope,
-        stack=record.stack,
-        provenance=record.provenance,
-        payload=record.payload,
-        idempotency_keys=record.idempotency_keys,
-        operation_keys=record.operation_keys,
-        lease_state=record.lease_state,
-        artifact_refs=record.artifact_refs,
-    )
-
-
 def _record_group_outcome(
     outcome: _GroupOutcome,
     dispositions: dict[str, str],
-    imported: list[str],
-    tombstoned: list[str],
     blocked: list[BlockingConflict],
     planned_apply: list[NormalizedRecord],
     planned_tombstones: list[AuthorityTombstone],
@@ -1575,14 +1900,12 @@ def _record_group_outcome(
     for record in outcome.apply:
         planned_apply.append(record)
     for source_ref in outcome.imported:
-        imported.append(source_ref)
         dispositions[source_ref] = Disposition.IMPORTED
     for source_ref in outcome.deduplicated:
         dispositions[source_ref] = Disposition.DEDUPLICATED
     if outcome.tombstone is not None:
         planned_tombstones.append(outcome.tombstone)
     for source_ref in outcome.tombstoned:
-        tombstoned.append(source_ref)
         dispositions[source_ref] = Disposition.AUTHORITY_TOMBSTONED
     if outcome.blocked is not None:
         blocked.append(outcome.blocked)
@@ -1632,7 +1955,10 @@ def reconcile(
     """Reconcile the expected universe against the import outcome.
 
     Every expected producer/root and every source item is accounted for; any
-    unresolved coverage gap or authority-replay gap blocks cutover.
+    unresolved coverage gap or authority-replay gap blocks cutover. A present,
+    accessible, non-excluded root that yielded ZERO records is a coverage gap
+    (``Disposition.EMPTY``), not a silent success — an adapter that reads
+    nothing must be explained or the root explicitly excluded.
     """
 
     archived = dict(archived or {})
@@ -1663,12 +1989,16 @@ def reconcile(
             roots[key] = Disposition.INACCESSIBLE
             coverage_gaps.append(key)
             continue
+        if not records_by_root.get(key):
+            roots[key] = Disposition.EMPTY
+            coverage_gaps.append(key)
+            continue
         roots[key] = Disposition.IMPORTED
 
     items: dict[str, str] = dict(import_result.dispositions)
 
     authority_replay_gaps = tuple(
-        sorted(conflict.identity_key for conflict in import_result.blocked)
+        sorted({conflict.identity_key for conflict in import_result.blocked})
     )
 
     ledger_body = {
@@ -1701,8 +2031,22 @@ def build_receipts(
     import_result: ImportResult,
     ledger: ReconciliationLedger,
 ) -> MigrationReceipts:
-    """Assemble the preflight/dry-run/import/reconciliation receipts for BCP-06."""
+    """Assemble the preflight/dry-run/import/reconciliation receipts for BCP-06.
 
+    The preflight receipt surfaces the acknowledged exclusions (including which
+    excluded roots were authority-bearing — an authority-bearing exclusion is an
+    operator decision BCP-06 must be able to audit) and the hosts whose
+    environment could not be consulted (the remote-env limitation).
+    """
+
+    excluded_authority_roots = sorted(
+        source.expected.key
+        for source in manifest.sources
+        if source.expected.key in manifest.exclusions and source.expected.authority_bearing
+    )
+    env_unknown_hosts = sorted(
+        {source.expected.host for source in manifest.sources if not source.expected.env_known}
+    )
     preflight = {
         "host": manifest.host,
         "user": manifest.user,
@@ -1712,6 +2056,11 @@ def build_receipts(
         "blocking_roots": list(manifest.blocking_roots),
         "source_count": len(manifest.sources),
         "usable_source_count": len(manifest.usable_sources()),
+        "exclusions": dict(sorted(manifest.exclusions.items())),
+        "excluded_authority_roots": excluded_authority_roots,
+        # Hosts derived without an environment snapshot (remote-env limitation):
+        # their producer env overrides could not be consulted at derivation time.
+        "env_unknown_hosts": env_unknown_hosts,
         # #3686 / PR #3695 fragmentation evidence is preserved in the coverage
         # entries: every enumerated worktree root is a distinct manifest source.
         "evidence_refs": ["issue:3686", "pr:3695"],
@@ -1753,7 +2102,13 @@ def run_migration(
     repo_mappings: Mapping[str, str] | None = None,
     archived: Mapping[str, str] | None = None,
 ) -> MigrationRun:
-    """Acknowledge, freeze-verify, dry-run, import, and reconcile in one pass."""
+    """Acknowledge, freeze-verify, dry-run, import, and reconcile in one pass.
+
+    Restart-safe by construction: a crash mid-apply retried with IDENTICAL
+    arguments resumes the same epoch (idempotent ``begin_epoch``), re-applies
+    only what the sink has not seen (already-applied rows return as
+    ``replayed``), and yields the same ``result_hash``.
+    """
 
     accept_acknowledgement(manifest, ack)
     records = tuple(normalize_sources(manifest, reader=reader))

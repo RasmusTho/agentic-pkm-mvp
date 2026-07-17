@@ -1,4 +1,4 @@
-State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 and the repo/deployment contract for BCP-02 are implemented by #3792 and #3790; live authority activation remains forbidden until BCP-03 through BCP-06 complete. BCP-03 and BCP-04 are now dependency-unblocked, BCP-05 still waits for BCP-04, and BCP-06/07 remain dependency-blocked. Existing issues #3603 and #3690 are reconciled into the sequence.
+State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 is implemented in the development baseline by #3792/PR #3852; the repo/deployment contract for BCP-02 is implemented by #3790; BCP-03 is implemented in the development baseline by #3789/PR #3929 (mechanism only, no cutover); live authority activation remains forbidden until BCP-03 through BCP-06 complete. BCP-04 is now dependency-unblocked, BCP-05 still waits for BCP-04, and BCP-06/07 remain dependency-blocked. Existing issues #3603 and #3690 are reconciled into the sequence.
 Doc role: Specification directory
 Authority: Owns the bounded task decomposition and cross-task invariants after merge. ADR-0062 owns the architectural decision; ADR-0010 owns the repo/BuilderOps authority seam; shipped owner docs win for current behavior.
 Owner: BuilderOps governance / Architecture spine
@@ -27,6 +27,20 @@ and independently credentialed restore drill with a new recovery epoch and execu
 still not a production cutover: the checked-in zero pins are non-runnable placeholders, no live
 Demerzel authority was activated, and client migration, legacy import, privileged execution, final
 restore rehearsal, and Product Runtime route removal remain owned by BCP-03 through BCP-06.
+
+BCP-03 is implemented in the development baseline by #3789/PR #3929
+(`app/builderops/control_plane/legacy_migration.py`): producer-derived expected-source
+inventory across enumerated hosts/worktrees/mounts/automation/vault roots with real
+resolver semantics and env-override consultation, host/user/freshness/manifest-hash-bound
+acknowledgement, read-only hash-verified (pre- and post-read) adapters for the BuilderOps
+SQLite store (including co-resident CKM/CEG tables), dispatcher SQLite/JSONL, epic-run
+JSON, and file-first model inquiries, deterministic restart-safe import into a
+domain-neutral authority sink under a new epoch with evidence quarantine,
+duplicate-preventing tombstones, and expired-lease evidence, plus the
+preflight/dry-run/import/reconciliation receipts BCP-06 consumes. This is the migration
+mechanism only: no production cutover, writer disablement, or PostgreSQL adapter wiring
+(BCP-06 owns the freeze window and the sink adapter), and remote-host env snapshots are a
+recorded preflight limitation.
 
 ## Target boundary
 
@@ -58,9 +72,10 @@ Execution order:
 `BCP-02 -> BCP-04 -> BCP-05`; `BCP-03 + BCP-04 + BCP-05 -> BCP-06 -> BCP-07`.
 
 Parent validation hub: #3788. BCP-01 is implemented in the development baseline by #3792/PR #3852,
-and BCP-02's repo/deployment contract is implemented by #3790 without live authority activation.
-BCP-03 (#3789) and BCP-04 (#3791) are the next executable work; the BCP-05 migration (#3603)
-follows BCP-04, and BCP-06/07 remain blocked.
+BCP-02's repo/deployment contract is implemented by #3790 without live authority activation, and
+BCP-03 (#3789) is implemented in the development baseline by PR #3929 (mechanism only). BCP-04
+(#3791) is the next dependency-unblocked candidate; the BCP-05 migration (#3603) follows BCP-04,
+and BCP-06/07 remain blocked.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
 not by rewriting that merge.
