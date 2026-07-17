@@ -441,6 +441,42 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
     return stale
 
 
+def _present_non_indexable_rows(limit: int | None) -> List[dict]:
+    """Return derived rows whose present source now has no canonical text.
+
+    This candidate class is independent of identity and content hash.  Legacy
+    panel-bearing vectors can already carry the current primary identity and a
+    hash of the empty canonical body, so neither ordinary reconcile selector
+    can prove that their stale retrieval bytes must be purged.
+    """
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT v.object_id AS object_id, v.kind AS kind,
+                       v.source_ref AS source_ref, v.payload AS payload,
+                       v.provider AS provider, v.model AS model,
+                       v.dim AS dim, v.normalize AS normalize,
+                       o.payload AS current_payload
+                FROM store_vector_index AS v
+                JOIN store_objects AS o ON o.object_id = v.object_id
+                ORDER BY v.object_id
+                """
+            )
+            candidates = list(cur.fetchall())
+
+    rows = [
+        row
+        for row in candidates
+        if not canonicalize_indexable_text(dict(row.get("current_payload") or {}))
+    ]
+    if limit is not None:
+        rows = rows[:limit]
+    return rows
+
+
 def _reconcile_object_payload(object_id, vector_payload: dict | None) -> Tuple[dict, bool]:
     """Resolve the authoritative payload to re-embed for a row.
 
@@ -505,6 +541,7 @@ def reconcile(
     summary: Dict[str, object] = {
         "backend": resolved_backend,
         "total_mismatched": 0,
+        "total_present_non_indexable": 0,
         "reconciled": 0,
         "purged_non_indexable": 0,
         "skipped": 0,
@@ -541,9 +578,15 @@ def reconcile(
     stale_content_rows = [
         row for row in _stale_content_hash_rows(limit) if row["object_id"] not in seen_ids
     ]
-    rows = identity_rows + stale_content_rows
+    seen_ids.update(row["object_id"] for row in stale_content_rows)
+    present_non_indexable_rows = _present_non_indexable_rows(limit)
+    additional_non_indexable_rows = [
+        row for row in present_non_indexable_rows if row["object_id"] not in seen_ids
+    ]
+    rows = identity_rows + stale_content_rows + additional_non_indexable_rows
     summary["total_mismatched"] = len(identity_rows)
     summary["total_stale_content_hash"] = len(stale_content_rows)
+    summary["total_present_non_indexable"] = len(present_non_indexable_rows)
 
     if not as_json:
         click.echo(
@@ -552,9 +595,10 @@ def reconcile(
         )
         click.echo(f"Mismatched rows: {len(identity_rows)}")
         click.echo(f"Stale content-hash rows: {len(stale_content_rows)}")
+        click.echo(f"Present non-indexable source rows: {len(present_non_indexable_rows)}")
 
     if dry_run:
-        summary["message"] = "Dry run complete; no vectors re-embedded."
+        summary["message"] = "Dry run complete; no vectors re-embedded or purged."
         _emit_reconcile_summary(summary, as_json)
         return
 
@@ -678,6 +722,7 @@ def _emit_reconcile_summary(summary: Dict[str, object], as_json: bool) -> None:
     click.echo(
         f"total_mismatched={summary.get('total_mismatched', 0)} "
         f"total_stale_content_hash={summary.get('total_stale_content_hash', 0)} "
+        f"total_present_non_indexable={summary.get('total_present_non_indexable', 0)} "
         f"reconciled={summary.get('reconciled', 0)} "
         f"skipped={summary.get('skipped', 0)} "
         f"errors={summary['error_count']}"

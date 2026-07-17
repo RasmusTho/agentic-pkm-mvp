@@ -382,8 +382,9 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
   AI-panel removal reaches a fixed point, and a remainder containing only whitespace is treated as
   non-indexable rather than embedded as an empty vector payload.
   `index doctor` remains read-only. During explicit `index reconcile`, a present authoritative
-  source that has become canonically non-indexable causes only its rebuildable vector row to be
-  purged; the source row is never mutated, and an absent source retains the vector-payload fallback.
+  source that has become canonically non-indexable is selected regardless of its stored hash or
+  identity and causes only its rebuildable vector row to be purged; the source row is never mutated,
+  and an absent source retains the vector-payload fallback.
 
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).

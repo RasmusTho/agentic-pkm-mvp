@@ -456,6 +456,92 @@ def test_reconcile_purges_vector_for_present_non_indexable_source(tmp_path, monk
 
 
 @pytest.mark.pg
+def test_reconcile_purges_equal_empty_hash_panel_only_vector(tmp_path, monkeypatch) -> None:
+    """A legacy panel vector is purgeable even when its hash already looks clean."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from click.testing import CliRunner
+
+    from app.cli import cli
+    from app.index.doctor import inspect_unembedded_pg_objects, reset_diagnose_cache
+    from app.stores import get_object_store
+    from app.stores.pg import _connect, inspect_pg_content_hash_staleness
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    try:
+        from app.search import service as search_service
+
+        panel_only = "%% AI:Start %%\nLegacy indexed panel bytes.\n%% AI:End %%"
+        oid, _ = search_service.ingest_object(
+            kind="note",
+            source_ref="unit-test://reconcile-equal-empty-panel",
+            payload={"content": panel_only, "text": panel_only},
+            text=panel_only,
+        )
+        get_object_store().put(
+            oid,
+            kind="note",
+            source_ref="unit-test://reconcile-equal-empty-panel",
+            payload={"content": panel_only, "text": panel_only},
+        )
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload, provider, model FROM store_vector_index "
+                    "WHERE object_id = %s",
+                    (oid,),
+                )
+                before = cur.fetchone()
+
+        assert before["payload"]["content"] == panel_only
+        assert before["payload"]["provenance"]["content_hash"] == compute_content_hash("")
+        assert before["provider"] == "mock"
+        assert before["model"] == "mock-embedding"
+        assert inspect_pg_content_hash_staleness()["stale_count"] == 0
+
+        result = CliRunner().invoke(
+            cli,
+            ["index", "reconcile", "--backend", "pg", "--json", "--strict"],
+            env=dict(os.environ),
+        )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)
+        assert summary["total_present_non_indexable"] == 1
+        assert summary["purged_non_indexable"] == 1
+        assert summary["reconciled"] == 0
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload FROM store_objects WHERE object_id = %s",
+                    (oid,),
+                )
+                source_row = cur.fetchone()
+                cur.execute(
+                    "SELECT count(*) AS total FROM store_vector_index WHERE object_id = %s",
+                    (oid,),
+                )
+                vector_total = cur.fetchone()["total"]
+
+        reset_diagnose_cache()
+        assert source_row["payload"] == {"content": panel_only, "text": panel_only}
+        assert vector_total == 0
+        assert inspect_unembedded_pg_objects(limit=10) == (0, [])
+        assert inspect_pg_content_hash_staleness()["stale_count"] == 0
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
 def test_reconcile_absent_source_retains_vector_payload_fallback(tmp_path, monkeypatch) -> None:
     """An orphaned vector remains reconcilable from its derived payload."""
     if not _pg_available():

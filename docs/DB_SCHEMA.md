@@ -160,7 +160,8 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
     doctor's read-only missing-vector and staleness checks use that
     same canonical predicate. `index reconcile` re-embeds only rows that drifted; when a present
     authoritative `store_objects` row has become canonically non-indexable, explicit reconcile
-    purges only its derived vector row so retrieval cannot serve obsolete bytes. It never mutates
+    selects it for purge independently of stored hash or embedding identity, then purges only its
+    derived vector row so retrieval cannot serve obsolete bytes. It never mutates
     the source row, and a genuinely absent source row retains the existing vector-payload fallback.
     A B-tree expression index on `payload->>'content_hash'` (migration `699c97b7c007`) backs the
     staleness scan.

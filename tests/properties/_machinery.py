@@ -1428,7 +1428,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
         "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index."
     ),
-    ("app/cli/index_rebuild.py", 641): (
+    ("app/cli/index_rebuild.py", 685): (
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
         "-> store_vector_index."
     ),
