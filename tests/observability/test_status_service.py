@@ -6,6 +6,7 @@ import pytest
 
 from app.observability.ingest_meta import record_ingest_run, reset_ingest_meta
 from app.observability.status_service import get_system_status, record_ask_error, record_ask_query, reset_ask_metrics
+from app.services import outbox as outbox_service
 from app.stores import get_object_store, reset_store_backends
 import app.observability.status_service as status_service
 
@@ -267,3 +268,41 @@ def test_get_system_status_includes_panel_actions_provenance(monkeypatch, tmp_pa
         assert len(status.panel_diagnostics.source_mtimes) == len(status.panel_diagnostics.source_paths)
         # At least one path should be the panel_actions file we created
         assert str(panel_actions) in status.panel_diagnostics.source_paths
+
+
+class _DictRowCursor:
+    """Emulates psycopg's dict_row cursor factory (app.db.db.conn_rw's shape, #3930)."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+
+    def execute(self, *_a, **_k) -> None:
+        return None
+
+    def fetchone(self):
+        return {"count": self._count}
+
+
+class _DictRowConn:
+    def __init__(self, count: int) -> None:
+        self._count = count
+
+    def cursor(self):
+        return _DictRowCursor(self._count)
+
+    def close(self) -> None:
+        pass
+
+
+def test_count_outbox_pending_db_handles_dict_row_cursor(monkeypatch):
+    """Regression for #3930 review: outbox_service._open_conn() now can return
+    the real conn_rw() connection (dict_row cursors), not just the plain
+    tuple-row psycopg fallback that was the only reachable path while
+    app.services.outbox bound the always-raising stub conn_rw."""
+    monkeypatch.setattr(outbox_service, "_open_conn", lambda: _DictRowConn(3))
+    assert status_service._count_outbox_pending_db() == 3
+
+
+def test_count_outbox_total_db_handles_dict_row_cursor(monkeypatch):
+    monkeypatch.setattr(outbox_service, "_open_conn", lambda: _DictRowConn(7))
+    assert status_service._count_outbox_total_db() == 7

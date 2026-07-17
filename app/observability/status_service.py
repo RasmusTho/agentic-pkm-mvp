@@ -631,7 +631,7 @@ def _count_outbox_pending_db() -> int | None:
         cur = conn.cursor()
         cur.execute("select count(*) from outbox where delivered_at is null")
         row = cur.fetchone()
-        return int(row[0]) if row else 0
+        return int(outbox_service._row_value(row, 0)) if row else 0
     except Exception:
         return None
     finally:
@@ -654,7 +654,7 @@ def _count_outbox_total_db() -> int | None:
         cur = conn.cursor()
         cur.execute("select count(*) from outbox")
         row = cur.fetchone()
-        return int(row[0]) if row else 0
+        return int(outbox_service._row_value(row, 0)) if row else 0
     except Exception:
         return None
     finally:
