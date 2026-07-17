@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
@@ -11,7 +12,7 @@ from app.receipts.settings_write import (
     emit_settings_write_receipt,
     resolve_settings_receipt_old_value,
 )
-from app.vault.manager import VaultContext
+from app.vault.manager import VaultContext, shared_settings_file_seed
 from app.vault.markdown_settings import MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore
 
 
@@ -66,6 +67,7 @@ class SettingDefinition:
     aliases: tuple[str, ...] = ()
     min_value: float | None = None
     max_value: float | None = None
+    require_integer: bool = False
 
 
 @dataclass(frozen=True)
@@ -267,6 +269,7 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         "youtube.md",
         min_value=60,
         max_value=3600,
+        require_integer=True,
     ),
     SettingDefinition(
         "youtubeSync.playlistPollSeconds",
@@ -281,6 +284,7 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         "youtube.md",
         min_value=300,
         max_value=86400,
+        require_integer=True,
     ),
     SettingDefinition(
         "youtubeSync.subscriptionsPollSeconds",
@@ -295,6 +299,7 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         "youtube.md",
         min_value=3600,
         max_value=86400,
+        require_integer=True,
     ),
     SettingDefinition(
         "youtubeSync.reconcileIntervalDays",
@@ -308,6 +313,7 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         True,
         "youtube.md",
         min_value=1,
+        require_integer=True,
     ),
     SettingDefinition(
         "youtubeSync.maxConcurrentAcquisitions",
@@ -321,6 +327,7 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         True,
         "youtube.md",
         min_value=1,
+        require_integer=True,
     ),
     SettingDefinition(
         "youtubeSync.subscriptionDefaultPolicy",
@@ -474,7 +481,7 @@ class SettingsService:
         try:
             document = self.markdown_store.read(path)
         except FileNotFoundError as exc:
-            raise SettingsWriteError(f"settings file does not exist: {path}") from exc
+            document = self._scaffold_missing_settings_file(path, definition.file, cause=exc)
         except (OSError, MarkdownSettingsError) as exc:
             raise SettingsWriteError(str(exc)) from exc
 
@@ -525,6 +532,24 @@ class SettingsService:
         emit_settings_write_receipt(receipt)
 
         return effective, receipt
+
+    def _scaffold_missing_settings_file(
+        self, path: Path, filename: str, *, cause: FileNotFoundError
+    ) -> MarkdownSettingsDocument:
+        """Seed a static shared settings file missing from an older vault.
+
+        This runs only after runtime-gating WriteGuard evaluation. Files with
+        vault- or machine-specific seeds stay absent and fail loudly.
+        """
+        seed = shared_settings_file_seed(filename)
+        if seed is None:
+            raise SettingsWriteError(f"settings file does not exist: {path}") from cause
+        seed_frontmatter, seed_body = seed
+        try:
+            self.markdown_store.write_frontmatter(path, seed_frontmatter, body=seed_body)
+            return self.markdown_store.read(path)
+        except (OSError, MarkdownSettingsError) as exc:
+            raise SettingsWriteError(str(exc)) from exc
 
     def resolve(self, context: VaultContext) -> SettingsResolution:
         values = {
@@ -710,13 +735,16 @@ def _validate_value(definition: SettingDefinition, value: Any) -> _ValidationRes
             return True, None
         return False, f"{definition.key} must be a boolean"
     if definition.type == "number":
-        if isinstance(value, int | float) and not isinstance(value, bool):
+        if isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value):
+            if definition.require_integer and not isinstance(value, int):
+                return False, f"{definition.key} must be a finite integer"
             if definition.min_value is not None and value < definition.min_value:
                 return False, f"{definition.key} must be >= {definition.min_value}"
             if definition.max_value is not None and value > definition.max_value:
                 return False, f"{definition.key} must be <= {definition.max_value}"
             return True, None
-        return False, f"{definition.key} must be a number"
+        suffix = "finite integer" if definition.require_integer else "finite number"
+        return False, f"{definition.key} must be a {suffix}"
     if definition.type == "array":
         if isinstance(value, list):
             return True, None

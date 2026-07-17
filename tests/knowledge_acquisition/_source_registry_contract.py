@@ -285,6 +285,19 @@ def assert_invalid_interval_and_policy_fail_loud(make_registry: RegistryFactory)
             title="Bad media shape",
             acquisition_policy={"media": {"enabled": "not-a-bool"}},
         )
+    # bool is an int subclass, while NaN/+/-infinity would serialize in the
+    # memory backend but fail differently in PostgreSQL jsonb. Validation must
+    # reject each at the shared service boundary.
+    for media_key in ("min_free_gb", "retention_days"):
+        for bad_number in (True, float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(SourceRegistryValidationError):
+                reg.register(
+                    collection_kind="owned_playlist",
+                    collection_ref=f"PLfixtureBADNUMBER{media_key}{bad_number!r}",
+                    account_binding_id=acct,
+                    title="Invalid media number",
+                    acquisition_policy={"media": {media_key: bad_number}},
+                )
     with pytest.raises(SourceRegistryValidationError):
         reg.register(
             collection_kind="not_a_real_kind",
@@ -315,6 +328,55 @@ def assert_invalid_interval_and_policy_fail_loud(make_registry: RegistryFactory)
     assert boundary.poll_interval_seconds == 60
 
 
+def assert_memory_json_isolation(make_registry: RegistryFactory) -> None:
+    """Returned nested JSON cannot mutate the memory store out of band.
+
+    The same assertion runs on Postgres, where jsonb deserialization already
+    yields fresh values, and documents the identical-backend contract.
+    """
+    reg = make_registry()
+    acct = _acct()
+    binding = reg.register(
+        collection_kind="inbox_playlist",
+        collection_ref="PLfixtureISOLATION",
+        account_binding_id=acct,
+        title="Isolation",
+        acquisition_policy={"extractor_ids": ["summary"], "media": {"min_free_gb": 4}},
+        provenance={"origin": "manual_add", "detail": {"reason": "test"}},
+    )
+
+    # Insert return: mutating it must not alter what was stored.
+    binding.cursor["page"] = {"token": "caller"}
+    binding.acquisition_policy["extractor_ids"].append("caller")
+    binding.provenance["detail"]["reason"] = "caller"
+    stored = reg.get(binding.binding_id)
+    assert stored is not None
+    assert stored.cursor == {}
+    assert stored.acquisition_policy["extractor_ids"] == ["summary"]
+    assert stored.provenance["detail"]["reason"] == "test"
+
+    # Get and list returns carry the same isolation.
+    stored.cursor["page"] = {"token": "get"}
+    listed = reg.list_for_account(acct)[0]
+    listed.acquisition_policy["extractor_ids"].append("list")
+    listed.provenance["detail"]["reason"] = "list"
+    assert reg.get(binding.binding_id).cursor == {}  # type: ignore[union-attr]
+    assert reg.get(binding.binding_id).acquisition_policy["extractor_ids"] == ["summary"]  # type: ignore[union-attr]
+    assert reg.get(binding.binding_id).provenance["detail"]["reason"] == "test"  # type: ignore[union-attr]
+
+    # Update returns must be isolated too.
+    renamed = reg.rename(binding.binding_id, "Renamed")
+    renamed.cursor["page"] = {"token": "rename"}
+    renamed.acquisition_policy["extractor_ids"].append("rename")
+    renamed.provenance["detail"]["reason"] = "rename"
+    final = reg.get(binding.binding_id)
+    assert final is not None
+    assert final.title == "Renamed"
+    assert final.cursor == {}
+    assert final.acquisition_policy["extractor_ids"] == ["summary"]
+    assert final.provenance["detail"]["reason"] == "test"
+
+
 ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
@@ -322,4 +384,5 @@ ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_watch_later_and_history_refused,
     assert_title_rename_preserves_binding,
     assert_invalid_interval_and_policy_fail_loud,
+    assert_memory_json_isolation,
 )

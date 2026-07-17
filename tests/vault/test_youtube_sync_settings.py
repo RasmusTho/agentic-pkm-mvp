@@ -177,3 +177,86 @@ def test_defaults_scopes_provenance_and_gated_writes(tmp_path: Path) -> None:
         )
         assert effective.value is False
         assert receipt.is_runtime_gating is False
+
+
+@pytest.mark.parametrize(
+    ("key", "default", "invalid_literals"),
+    (
+        ("youtubeSync.inboxPollSeconds", 180, ("180.5", ".nan", ".inf", "-.inf", "true")),
+        ("youtubeSync.playlistPollSeconds", 3600, ("3600.5", ".nan", ".inf", "-.inf", "true")),
+        ("youtubeSync.subscriptionsPollSeconds", 21600, ("21600.5", ".nan", ".inf", "-.inf", "true")),
+        ("youtubeSync.reconcileIntervalDays", 7, ("7.5", ".nan", ".inf", "-.inf", "true")),
+        ("youtubeSync.maxConcurrentAcquisitions", 2, ("2.5", ".nan", ".inf", "-.inf", "true")),
+    ),
+)
+def test_bounded_youtube_numeric_settings_reject_non_finite_non_integer_values(
+    tmp_path: Path, key: str, default: int, invalid_literals: tuple[str, ...]
+) -> None:
+    """Resolution and the production write seam share finite-int validation."""
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(status="selected", active_vault_path=str(vault_root), settings_path=str(settings_dir))
+    service = SettingsService()
+    youtube_md = settings_dir / "youtube.md"
+
+    for literal in invalid_literals:
+        _write(youtube_md, f"---\nscope: vault-shared\n{key}: {literal}\n---\n")
+        resolution = service.resolve(context)
+        effective = resolution.settings[key]
+        assert effective.value == default
+        assert effective.scope == "built-in"
+        assert any(error.key == key and error.source_file == str(youtube_md) for error in resolution.validation_errors)
+
+    for invalid_value in (default + 0.5, float("nan"), float("inf"), float("-inf"), True):
+        with pytest.raises(SettingsWriteError, match="finite"):
+            service.update_setting(context, key, invalid_value, surface="cli", actor="human")
+
+
+def test_update_setting_scaffolds_missing_youtube_settings_file(tmp_path: Path) -> None:
+    """An existing vault becomes writable only after a healthy guard permits it."""
+    import app.write_guard as _wg_module
+
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(status="selected", active_vault_path=str(vault_root), settings_path=str(settings_dir))
+    service = SettingsService()
+    youtube_md = settings_dir / "youtube.md"
+    assert not youtube_md.exists()
+
+    healthy_snapshot = {"state": "healthy", "reason": None}
+    blocked_snapshot = {"state": "safe_mode", "reason": "maintenance window"}
+
+    with patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=healthy_snapshot):
+        effective, receipt = service.update_setting(
+            context, "youtubeSync.enabled", True, surface="cli", actor="human"
+        )
+    assert youtube_md.exists()
+    assert effective.value is True
+    assert receipt.is_runtime_gating is True
+    resolution = service.resolve(context)
+    assert resolution.settings["youtubeSync.captionsEnabled"].value is True
+    assert resolution.settings["youtubeSync.captionsEnabled"].source_file == str(youtube_md)
+
+    youtube_md.unlink()
+    with (
+        patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=blocked_snapshot),
+        pytest.raises(SettingsWriteError),
+    ):
+        service.update_setting(context, "youtubeSync.enabled", True, surface="cli", actor="human")
+    assert not youtube_md.exists()
+
+    effective, receipt = service.update_setting(
+        context, "youtubeSync.captionsEnabled", False, surface="cli", actor="human"
+    )
+    assert youtube_md.exists()
+    assert effective.value is False
+    assert receipt.is_runtime_gating is False
+
+    local_md = settings_dir / "local.md"
+    local_md.unlink()
+    with (
+        patch.object(_wg_module.DEFAULT_WRITE_GUARD, "snapshot_fn", return_value=healthy_snapshot),
+        pytest.raises(SettingsWriteError, match="does not exist"),
+    ):
+        service.update_setting(context, "youtubeSync.runnerEnabled", True, surface="cli", actor="human")
+    assert not local_md.exists()

@@ -21,6 +21,7 @@ from app.knowledge_acquisition.source_registry import SourceRegistry, reset_memo
 from tests.knowledge_acquisition._source_registry_contract import (
     assert_duplicate_binding_refused,
     assert_invalid_interval_and_policy_fail_loud,
+    assert_memory_json_isolation,
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
     assert_title_rename_preserves_binding,
@@ -67,3 +68,7 @@ def test_title_rename_does_not_break_binding() -> None:
 
 def test_invalid_interval_and_policy_fail_loud() -> None:
     assert_invalid_interval_and_policy_fail_loud(_make_registry)
+
+
+def test_memory_json_isolation_matches_postgres_contract() -> None:
+    assert_memory_json_isolation(_make_registry)

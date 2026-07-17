@@ -57,9 +57,11 @@ later slices add those call sites against this same table.
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
@@ -227,8 +229,15 @@ def _validate_media_policy(media: Any) -> None:
         if key in media and media[key] is not None and not isinstance(media[key], str):
             raise SourceRegistryValidationError(f"acquisition_policy.media.{key} must be a string or null")
     for key in ("min_free_gb", "retention_days"):
-        if key in media and media[key] is not None and not isinstance(media[key], int | float):
-            raise SourceRegistryValidationError(f"acquisition_policy.media.{key} must be a number or null")
+        if key in media and media[key] is not None:
+            number = media[key]
+            # ``bool`` passes ``isinstance(..., int)`` and NaN/infinity are
+            # accepted by memory but rejected by Postgres jsonb. Refuse all
+            # three before either backend sees the policy.
+            if isinstance(number, bool) or not isinstance(number, int | float) or not math.isfinite(number):
+                raise SourceRegistryValidationError(
+                    f"acquisition_policy.media.{key} must be a finite number or null"
+                )
     if "checksum" in media and not isinstance(media["checksum"], bool):
         raise SourceRegistryValidationError("acquisition_policy.media.checksum must be a boolean")
 
@@ -360,20 +369,24 @@ class _MemorySourceRegistryBackend:
                     and row.account_binding_id == binding.account_binding_id
                 ):
                     raise DuplicateBindingError(_duplicate_message(binding))
-            self._rows[binding.binding_id] = binding
-            return binding
+            stored = _copy_binding(binding)
+            self._rows[binding.binding_id] = stored
+            return _copy_binding(stored)
 
     def get(self, binding_id: str) -> SourceBinding | None:
         with self._lock:
-            return self._rows.get(binding_id)
+            row = self._rows.get(binding_id)
+            return _copy_binding(row) if row is not None else None
 
     def list_all(self) -> tuple[SourceBinding, ...]:
         with self._lock:
-            return tuple(self._rows.values())
+            return tuple(_copy_binding(row) for row in self._rows.values())
 
     def list_for_account(self, account_binding_id: str | None) -> tuple[SourceBinding, ...]:
         with self._lock:
-            return tuple(row for row in self._rows.values() if row.account_binding_id == account_binding_id)
+            return tuple(
+                _copy_binding(row) for row in self._rows.values() if row.account_binding_id == account_binding_id
+            )
 
     def update_title(self, binding_id: str, title: str) -> SourceBinding:
         with self._lock:
@@ -382,7 +395,7 @@ class _MemorySourceRegistryBackend:
                 raise KeyError(f"no such binding: {binding_id}")
             updated = replace(row, title=title, updated_at=_now_iso())
             self._rows[binding_id] = updated
-            return updated
+            return _copy_binding(updated)
 
     def set_inbox(self, account_binding_id: str | None, binding_id: str) -> SourceBinding:
         with self._lock:
@@ -408,7 +421,7 @@ class _MemorySourceRegistryBackend:
 
             updated_target = replace(target, enabled=True, updated_at=now)
             self._rows[binding_id] = updated_target
-            return updated_target
+            return _copy_binding(updated_target)
 
     def clear(self) -> None:
         with self._lock:
@@ -421,6 +434,22 @@ _MEMORY_REGISTRY = _MemorySourceRegistryBackend()
 def reset_memory_source_registry() -> None:
     """Test-only reset hook."""
     _MEMORY_REGISTRY.clear()
+
+
+def _copy_binding(binding: SourceBinding) -> SourceBinding:
+    """Return a binding whose nested JSON does not alias caller or store state.
+
+    Postgres JSONB round-trips already produce fresh Python objects. The
+    in-memory test backend must provide the same isolation: a caller may only
+    persist cursor/policy/provenance changes through an explicit service write.
+    """
+    return replace(
+        binding,
+        cursor=deepcopy(binding.cursor),
+        last_error=deepcopy(binding.last_error),
+        acquisition_policy=deepcopy(binding.acquisition_policy),
+        provenance=deepcopy(binding.provenance),
+    )
 
 
 def _duplicate_message(binding: SourceBinding) -> str:
