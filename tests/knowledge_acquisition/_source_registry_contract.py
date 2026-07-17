@@ -285,6 +285,18 @@ def assert_invalid_interval_and_policy_fail_loud(make_registry: RegistryFactory)
             title="Bad media shape",
             acquisition_policy={"media": {"enabled": "not-a-bool"}},
         )
+    # Omission means "use the default"; an explicit media field must always
+    # be the contract's object shape. This shared service-path assertion runs
+    # against both memory and Postgres backends.
+    for bad_media in (None, ["not-an-object"]):
+        with pytest.raises(SourceRegistryValidationError, match="media must be an object"):
+            reg.register(
+                collection_kind="owned_playlist",
+                collection_ref=f"PLfixtureBADMEDIASHAPE{bad_media!r}",
+                account_binding_id=acct,
+                title="Bad media shape",
+                acquisition_policy={"media": bad_media},
+            )
     # bool is an int subclass, while NaN/+/-infinity would serialize in the
     # memory backend but fail differently in PostgreSQL jsonb. Validation must
     # reject each at the shared service boundary.

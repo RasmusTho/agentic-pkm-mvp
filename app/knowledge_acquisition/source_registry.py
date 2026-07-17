@@ -274,7 +274,7 @@ def _validate_acquisition_policy_override(override: Any) -> None:
             raise SourceRegistryValidationError("acquisition_policy.extractor_ids must be a list of strings")
     if "captions" in override and not isinstance(override["captions"], bool):
         raise SourceRegistryValidationError("acquisition_policy.captions must be a boolean")
-    if "media" in override and override["media"] is not None:
+    if "media" in override:
         _validate_media_policy(override["media"])
 
 
