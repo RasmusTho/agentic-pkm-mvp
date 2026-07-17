@@ -20,6 +20,7 @@ def store(tmp_path: Path) -> CkmStore:
 
 def _upsert_capability(store: CkmStore, name: str = "semantic-search"):
     return store.upsert_capability(
+        identity_key=f"fixture:store:{name}",
         name=name,
         definition="Retrieve relevant vault content by meaning, not keyword.",
         existence_provenance="docs/CAPABILITY_CONTRACT_MODEL.md#semantic-search",
@@ -81,7 +82,7 @@ def test_upsert_idempotent_and_rebuild(store: CkmStore) -> None:
 
     assert store.table_names() == sorted(CKM_TABLE_NAMES)
 
-    store.rebuild()
+    store.rebuild(retained_public_ids=[])
 
     assert store.table_names() == sorted(CKM_TABLE_NAMES)
     assert store.list_capabilities() == []
@@ -132,6 +133,9 @@ def test_schema_migrates_edge_basis_without_losing_rows(tmp_path: Path) -> None:
             """,
             ("edge_legacy_second", artifact.id, capability.id, artifact.source_ref),
         )
+        conn.execute("DROP TABLE ckm_identity_successor")
+        conn.execute("DROP TABLE ckm_public_identity")
+        conn.execute("DROP TABLE ckm_state")
         conn.commit()
 
     store.ensure_schema()
@@ -182,15 +186,18 @@ def test_provenance_columns_required(tmp_path: Path) -> None:
         conn.execute(
             """
             INSERT INTO ckm_capability
-                (id, name, definition, lifecycle, existence_provenance, created_at, updated_at)
-            VALUES ('cap_y', 'y', 'def', 'candidate', 'prov', 't', 't')
+                (id, public_id, identity_key, name, definition, lifecycle,
+                 existence_provenance, created_at, updated_at)
+            VALUES ('cap_y', 'pub_cap_y', 'fixture:cap_y', 'y', 'def', 'candidate',
+                    'prov', 't', 't')
             """
         )
         conn.execute(
             """
             INSERT INTO ckm_artifact
-                (id, source_ref, artifact_kind, source, watermark, provenance, created_at, updated_at)
-            VALUES ('art_y', 'ref_y', 'adr', 'src', 'wm', 'prov', 't', 't')
+                (id, public_id, source_ref, artifact_kind, source, watermark, provenance,
+                 created_at, updated_at)
+            VALUES ('art_y', 'pub_art_y', 'ref_y', 'adr', 'src', 'wm', 'prov', 't', 't')
             """
         )
         with pytest.raises(sqlite3.IntegrityError):
@@ -302,7 +309,7 @@ def test_schema_events_emit_receipt(tmp_path: Path) -> None:
     store = CkmStore(db_path)
 
     ensure_response = store.ensure_schema()
-    rebuild_response = store.rebuild()
+    rebuild_response = store.rebuild(retained_public_ids=[])
 
     assert ensure_response["event_type"] == "ckm_schema_ensured"
     assert rebuild_response["event_type"] == "ckm_schema_rebuilt"

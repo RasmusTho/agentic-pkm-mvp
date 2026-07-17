@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hmac
 import json
 from pathlib import Path
 import sqlite3
+from hashlib import sha256
 
 import pytest
 from click.testing import CliRunner
@@ -15,6 +17,8 @@ from app.builderops.ckm.semantic import (
     SemanticAssociationResult,
     SemanticBatch,
     SemanticProposal,
+    _binding_document,
+    _canonical_json,
     associate_unlinked_artifacts,
     reapply_confirmation_receipts,
 )
@@ -31,6 +35,7 @@ def store(tmp_path: Path) -> CkmStore:
 
 def _capability(store: CkmStore):
     return store.upsert_capability(
+        identity_key="fixture:semantic:retrieval",
         name="Retrieval",
         definition="Retrieve relevant material with provenance.",
         existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",
@@ -128,15 +133,17 @@ def _append_confirmation_receipt(
     store: CkmStore,
     *,
     edge,
-    artifact_ref: str,
-    capability_name: str,
     variant: str,
 ) -> None:
+    artifact = next(item for item in store.list_artifacts() if item.id == edge.artifact_id)
+    capability = store.get_capability(edge.capability_id)
+    assert capability is not None
     payload = {
         "edge_id": edge.id,
         "lifecycle": "confirmed",
-        "artifact_source_ref": artifact_ref,
-        "capability_name": capability_name,
+        "edge_public_id": edge.public_id,
+        "artifact_public_id": artifact.public_id,
+        "capability_public_id": capability.public_id,
         "evidence_kind": edge.evidence_kind,
         "polarity": edge.polarity,
         "maturity_dimension": edge.maturity_dimension,
@@ -155,8 +162,8 @@ def _append_confirmation_receipt(
     action = "confirm_edge"
     event_type = "ckm_edge_confirmed"
     target_refs = [
-        {"ref_type": "repo_artifact", "ref": artifact_ref},
-        {"ref_type": "ckm_capability", "ref": capability_name},
+        {"ref_type": "ckm_artifact", "ref": artifact.public_id},
+        {"ref_type": "ckm_capability", "ref": capability.public_id},
     ]
     if variant == "non-human":
         actor = {"actor_type": "agent", "id": "forger"}
@@ -165,11 +172,11 @@ def _append_confirmation_receipt(
     elif variant == "wrong-action":
         action = "observe_edge"
     elif variant == "wrong-target":
-        target_refs[0] = {"ref_type": "repo_artifact", "ref": "docs/other.md"}
+        target_refs[0] = {"ref_type": "ckm_artifact", "ref": "ckm_art_other"}
     elif variant == "forged-payload":
         payload["confidence"] = 0.01
     store.append_builderops_receipt(
-        source_refs=[{"ref_type": "ckm_evidence_edge", "ref": edge.id}],
+        source_refs=[{"ref_type": "ckm_evidence_edge", "ref": edge.public_id}],
         summary="Attempted confirmation",
         event_type=event_type,
         actor=actor,
@@ -207,8 +214,6 @@ def test_confirmation_rejects_invalid_or_forged_receipts(
     _append_confirmation_receipt(
         store,
         edge=edge,
-        artifact_ref=artifact.source_ref,
-        capability_name=capability.name,
         variant=variant,
     )
 
@@ -217,7 +222,7 @@ def test_confirmation_rejects_invalid_or_forged_receipts(
 
     # Absence of the source edge after rebuild must not turn a structurally
     # valid human self-assertion into authority.
-    store.rebuild()
+    store.rebuild(retained_public_ids=[capability.public_id, artifact.public_id])
     _capability(store)
     _artifact(store)
     assert reapply_confirmation_receipts(store) == 0
@@ -363,8 +368,14 @@ def test_confirmation_receipt_survives_rebuild(
     )
     assert store.get_evidence_edge_by_id(original.id).lifecycle == "confirmed"
 
-    store.rebuild()
-    rebuilt_capability = _capability(store)
+    store.rebuild(retained_public_ids=store.active_public_ids())
+    rebuilt_capability = store.upsert_capability(
+        identity_key="fixture:semantic:retrieval",
+        name="Renamed Retrieval",
+        definition="Retrieve relevant material with provenance.",
+        existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",
+        lifecycle="confirmed",
+    )
     rebuilt_artifact = _artifact(store)
     assert reapply_confirmation_receipts(store) == 1
 
@@ -374,6 +385,87 @@ def test_confirmation_receipt_survives_rebuild(
     assert restored[0].capability_id == rebuilt_capability.id
     assert restored[0].lifecycle == "confirmed"
     assert restored[0].basis == original.basis
+
+
+def test_authenticated_pre_v5_confirmation_migrates_before_rebuild(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([_proposal(artifact.id, capability.id)]),
+    )
+    edge = store.list_evidence_edges()[0]
+    payload = {
+        "edge_id": edge.id,
+        "artifact_source_ref": artifact.source_ref,
+        "capability_name": capability.name,
+        "evidence_kind": edge.evidence_kind,
+        "polarity": edge.polarity,
+        "maturity_dimension": edge.maturity_dimension,
+        "confidence": edge.confidence,
+        "extraction_method": "inferred",
+        "lifecycle": "confirmed",
+        "source_ref": edge.source_ref,
+        "basis": edge.basis,
+        "provider": edge.provider,
+        "model": edge.model,
+    }
+    stable_claim = {key: value for key, value in payload.items() if key != "edge_id"}
+    payload["confirmation_key"] = sha256(
+        _canonical_json(stable_claim).encode("utf-8")
+    ).hexdigest()
+    envelope = {
+        "event_type": "ckm_edge_confirmed",
+        "action": "confirm_edge",
+        "actor": {"actor_type": "human", "id": "legacy-operator"},
+        "source_refs": [{"ref_type": "ckm_evidence_edge", "ref": edge.id}],
+        "target_refs": [
+            {"ref_type": "repo_artifact", "ref": artifact.source_ref},
+            {"ref_type": "ckm_capability", "ref": capability.name},
+        ],
+    }
+    key = store._confirmation_signing_key(create=True)
+    assert key is not None
+    payload["binding"] = hmac.new(
+        key,
+        _canonical_json(_binding_document(envelope, payload)).encode("utf-8"),
+        sha256,
+    ).hexdigest()
+    store.append_builderops_receipt(
+        source_refs=envelope["source_refs"],
+        summary="Legacy confirmed inferred CKM edge",
+        event_type=envelope["event_type"],
+        actor=envelope["actor"],
+        occurred_at=edge.updated_at,
+        target_refs=envelope["target_refs"],
+        action=envelope["action"],
+        receipt_body=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        idempotency_key=f"legacy-confirm:{payload['confirmation_key']}",
+    )
+
+    store.ensure_schema()
+    store.ensure_schema()
+    receipts = store.list_builderops_receipts("ckm_edge_confirmed")
+    assert len(receipts) == 2
+    receipt_payloads = [json.loads(item["receipt_body"]) for item in receipts]
+    migrated = [item for item in receipt_payloads if "edge_public_id" in item]
+    assert len(migrated) == 1
+    assert migrated[0]["edge_public_id"] == edge.public_id
+    assert migrated[0]["artifact_public_id"] == artifact.public_id
+    assert migrated[0]["capability_public_id"] == capability.public_id
+
+    store.rebuild(retained_public_ids=store.active_public_ids())
+    store.upsert_capability(
+        identity_key="fixture:semantic:retrieval",
+        name="Renamed Retrieval",
+        definition="Retrieve relevant material with provenance.",
+        existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",
+        lifecycle="confirmed",
+    )
+    _artifact(store)
+
+    assert reapply_confirmation_receipts(store) == 1
+    assert store.list_evidence_edges()[0].lifecycle == "confirmed"
 
 
 def test_retired_inferred_edge_cannot_be_confirmed(store: CkmStore) -> None:
@@ -398,7 +490,7 @@ def test_retired_inferred_edge_cannot_be_confirmed(store: CkmStore) -> None:
     assert store.list_builderops_receipts("ckm_edge_confirmed") == []
 
 
-def test_retired_confirmed_edge_is_not_resurrected_but_rebuild_restores(
+def test_retired_confirmed_edge_stays_tombstoned_across_rebuild(
     store: CkmStore,
 ) -> None:
     capability = _capability(store)
@@ -420,17 +512,14 @@ def test_retired_confirmed_edge_is_not_resurrected_but_rebuild_restores(
     assert reapply_confirmation_receipts(store) == 0
     assert store.list_evidence_edges() == []
 
-    store.rebuild()
-    rebuilt_capability = _capability(store)
-    rebuilt_artifact = _artifact(store)
+    store.rebuild(retained_public_ids=store.active_public_ids())
+    _capability(store)
+    _artifact(store)
 
     assert store.has_retired_evidence_edge(edge.id) is False
-    assert reapply_confirmation_receipts(store) == 1
-    restored = store.list_evidence_edges()
-    assert len(restored) == 1
-    assert restored[0].artifact_id == rebuilt_artifact.id
-    assert restored[0].capability_id == rebuilt_capability.id
-    assert restored[0].lifecycle == "confirmed"
+    assert reapply_confirmation_receipts(store) == 0
+    assert store.list_evidence_edges() == []
+    assert store.identity_lifecycle(edge.public_id)["status"] == "tombstone"
 
 
 @pytest.mark.parametrize(
@@ -567,7 +656,7 @@ def test_trusted_confirmation_rejects_tampering_before_and_after_rebuild(
         conn.commit()
 
     assert reapply_confirmation_receipts(store) == 0
-    store.rebuild()
+    store.rebuild(retained_public_ids=[capability.public_id, artifact.public_id])
     _capability(store)
     _artifact(store)
     assert reapply_confirmation_receipts(store) == 0

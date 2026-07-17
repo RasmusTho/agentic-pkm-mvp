@@ -18,6 +18,7 @@ class SeedManifestError(ValueError):
 @dataclass(frozen=True)
 class SeedCapability:
     slug: str
+    stable_key: str
     name: str
     definition: str
     parent: str | None
@@ -48,6 +49,7 @@ def load_manifest(path: Path = DEFAULT_MANIFEST_PATH, *, repo_root: Path = REPO_
 
     entries: list[SeedCapability] = []
     seen: set[str] = set()
+    seen_stable_keys: set[str] = set()
     seen_names: set[str] = set()
     for raw in payload["capabilities"]:
         if not isinstance(raw, dict):
@@ -55,6 +57,7 @@ def load_manifest(path: Path = DEFAULT_MANIFEST_PATH, *, repo_root: Path = REPO_
         try:
             entry = SeedCapability(
                 slug=raw["id"],
+                stable_key=raw["stable_key"],
                 name=raw["name"],
                 definition=raw["definition"],
                 parent=raw.get("parent"),
@@ -63,21 +66,30 @@ def load_manifest(path: Path = DEFAULT_MANIFEST_PATH, *, repo_root: Path = REPO_
             )
         except KeyError as exc:
             raise SeedManifestError(f"capability entry lacks required field {exc.args[0]!r}") from exc
-        if not all(isinstance(value, str) and value.strip() for value in (entry.slug, entry.name, entry.definition, entry.seed_source)):
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (
+                entry.slug,
+                entry.stable_key,
+                entry.name,
+                entry.definition,
+                entry.seed_source,
+            )
+        ):
             raise SeedManifestError(f"capability {entry.slug!r} has an empty required field")
         if entry.parent is not None and not isinstance(entry.parent, str):
             raise SeedManifestError(f"capability {entry.slug!r} parent must be a slug or null")
         if entry.slug in seen:
             raise SeedManifestError(f"duplicate capability slug: {entry.slug}")
+        if entry.stable_key in seen_stable_keys:
+            raise SeedManifestError(f"duplicate capability stable_key: {entry.stable_key}")
         if entry.name in seen_names:
-            # CkmStore.upsert_capability dedups on `name` (ON CONFLICT(name)), not
-            # on this manifest's `id`/slug, so two entries that share a `name` but
-            # have different slugs would otherwise silently collapse into one row
-            # on seed, with the later entry overwriting the earlier one.
+            # Display names remain unique even though stable_key owns identity.
             raise SeedManifestError(f"duplicate capability name: {entry.name}")
         if not _source_path(entry.seed_source, repo_root).is_file():
             raise SeedManifestError(f"seed source does not resolve: {entry.seed_source}")
         seen.add(entry.slug)
+        seen_stable_keys.add(entry.stable_key)
         seen_names.add(entry.name)
         entries.append(entry)
 
@@ -128,9 +140,11 @@ def seed_capabilities(
             seed_one(by_slug[entry.parent])
             parent_id = seeded[entry.parent].id
         provenance = f"seeded:{entry.seed_source}"
-        existing = store.get_capability_by_name(entry.name)
+        identity_key = f"seed:{entry.stable_key}"
+        existing = store.get_capability_by_identity_key(identity_key)
         if existing is not None and (
-            existing.definition == entry.definition
+            existing.name == entry.name
+            and existing.definition == entry.definition
             and existing.parent_id == parent_id
             and existing.lifecycle == "confirmed"
             and existing.existence_provenance == provenance
@@ -145,6 +159,7 @@ def seed_capabilities(
             lifecycle="confirmed",
             existence_provenance=provenance,
             boundary_ref=entry.boundary_ref,
+            identity_key=identity_key,
         )
         changed += 1
 

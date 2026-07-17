@@ -25,6 +25,7 @@ def populated_store(tmp_path: Path) -> CkmStore:
     store.set_watermark("github", "2026-07-14T12:00:00Z")
     store.set_watermark("repo", "abc123")
     capability = store.upsert_capability(
+        identity_key="fixture:projections:retrieval",
         name="Retrieval",
         definition="Retrieve grounded context.",
         existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",
@@ -235,6 +236,7 @@ def test_show_resolves_manifest_slug_and_inferred_fallback(tmp_path: Path) -> No
     store.ensure_schema()
     seed_capabilities(store)
     store.upsert_capability(
+        identity_key="fixture:projections:novel-inferred",
         name="Novel Inferred Capability",
         definition="A candidate capability outside the reviewed seed manifest.",
         existence_provenance="inferred:fixture",

@@ -24,7 +24,26 @@ Create the durable public semantics that Q1b will execute without exposing mutab
 
 ## Concretely
 
-`CapabilityResource.public_id` survives rebuild and rename and is never reused. Deletion tombstones the identifier, split tombstones the original and links new successor identifiers, and merge creates a new identifier with successor aliases from the tombstoned inputs. A snapshot manifest binds epoch/revision, schema versions, taxonomy digest, exact watermarks, provenance, `effective_audience=single_operator_local`, the versioned local policy, `redaction_profile=none`, and a completeness manifest. V1 defines no cursor contract or multi-user security machinery.
+`CapabilityResource.public_id` survives rebuild and rename and is never reused. Durable human
+confirmation binds edge, artifact, and capability public IDs rather than mutable display metadata.
+Deletion tombstones the identifier, split tombstones the original and links new successor
+identifiers, and merge creates a new identifier with successor aliases from the tombstoned inputs;
+the same transaction retires and tombstones the capability's public edge, assessment, and finding
+dependents. A snapshot manifest binds epoch/revision, schema versions, taxonomy digest, exact
+watermarks, provenance, `effective_audience=single_operator_local`, the versioned local policy,
+`redaction_profile=none`, and a completeness manifest. V1 defines no cursor contract or multi-user
+security machinery. Rebuild callers declare the exact active public-ID keep-set before content is
+dropped; identities absent from that set become content-free tombstones atomically. Assessment
+identity binds the measured state and watermark set, not rebuild-time `valid_from`/`asserted_at`
+timestamps; it also binds a rebuild-stable digest of the cited evidence's public identities and
+material state, so changed evidence with identical scores remains a distinct assertion. Every
+snapshot field covered by the digest is deeply immutable after construction. A complete manifest's
+declared
+object classes and included counts must exactly match the canonical, immutable read set. A result
+envelope must declare its own resource type in that scope and carry exactly that type's read set.
+Schema ensure
+authenticates pre-v5 human-confirmation receipts against their original signed envelope and emits
+one idempotent public-ID-bound successor receipt before rebuild can discard mutable legacy refs.
 
 ## Why This Matters
 
@@ -72,4 +91,4 @@ Watermarks miss link, confirmation, assessment, and finding mutations. Random ro
 
 ## Related GitHub Issues
 
-Implementation issue #3776 under validation parent #3775. The owner decisions are accepted, but the Issue remains blocked until its stale cursor, lifecycle-identity, and access assumptions are reconciled to this contract and strict readiness validation passes. TCD hint: Sol/high or Terra/high; escalate for unresolved migration, transaction, identity, access-policy, or compatibility risk.
+Implementation issue #3776 under validation parent #3775. The owner decisions and contract reconciliation are complete, and the Issue is under current-SHA verification. Q1 acceptance remains blocked on the separately governed Q1b work; this Q1a slice does not claim that successor delivery. TCD hint: Sol/high or Terra/high; escalate for unresolved migration, transaction, identity, access-policy, or compatibility risk.
