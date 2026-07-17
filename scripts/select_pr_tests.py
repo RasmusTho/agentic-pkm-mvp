@@ -325,6 +325,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/memory/",
             "app/retrieval/",
             "app/index/",
+            # Index rebuild is the memory-retrieval CLI producer for the
+            # canonical vector rows exercised by the index suites.
+            "app/cli/index_rebuild.py",
             "tests/agent_memory/",
             "tests/retrieval/",
             "tests/indexer/",
