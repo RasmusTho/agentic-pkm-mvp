@@ -17,9 +17,15 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 
-# Optional DB helpers (tests kan ge FakeConn)
+# Optional DB helpers (tests kan ge FakeConn). Import the real implementations
+# from app.db.db directly: the package-level names (`from app.db import
+# conn_rw`) resolve through app/db/__init__.py::__getattr__ to the permanent
+# psycopg-free smoke stub in app/db/sqlalchemy.py (#30), whose conn_rw always
+# raises and whose ensure_schema is a no-op — the same stub-binding defect
+# vault_sync fixed in #2937 (#3930). The try/except keeps this module
+# importable where psycopg or the settings stack is unavailable.
 try:
-    from app.db import conn_rw, ensure_schema  # type: ignore
+    from app.db.db import conn_rw, ensure_schema  # type: ignore
 except Exception:  # pragma: no cover
     conn_rw = None  # type: ignore
 
@@ -78,11 +84,27 @@ def _assert_outbox_schema(conn: Any) -> None:
 
 
 def _open_conn():
+    """Open a connection for a single self-owned outbox statement.
+
+    Prefers the canonical ``app.db.db.conn_rw`` (canonical DSN resolution,
+    dict-row cursors) switched to autocommit: every self-opened caller in this
+    module is single-statement and never calls ``commit()``, and psycopg3
+    rolls back uncommitted work on ``close()`` — handing back conn_rw's
+    manual-commit connection unchanged would silently lose these writes
+    (#3930). Callers that need multi-statement transactions pass their own
+    connection (or use :func:`open_outbox_txn_conn`) and own the commit.
+
+    Falls back to a plain env-DSN ``psycopg.connect`` when the canonical
+    helper is unavailable or cannot connect.
+    """
     if conn_rw:
         try:
-            return conn_rw()
+            conn = conn_rw()
         except Exception:
             pass
+        else:
+            conn.autocommit = True
+            return conn
     import psycopg
 
     url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
@@ -96,6 +118,36 @@ def _open_conn():
         if url.startswith("postgresql+psycopg://"):
             url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
     return psycopg.connect(url, autocommit=True)
+
+
+def open_outbox_txn_conn():
+    """Open one manual-commit canonical connection for multi-statement outbox bookkeeping.
+
+    The outbox worker uses this to commit ``bump_outbox_attempts`` + the
+    dead-letter audit insert + ``ack_outbox`` as ONE transaction (#3930):
+    with per-call autocommit connections a crash between those statements
+    strands partial poison bookkeeping (a row durably ``attempts == max`` yet
+    undelivered) and duplicates the dead-letter audit row under the next
+    attempt-scoped idempotency key on the retry cycle.
+
+    Requires the database to be named explicitly by the environment
+    (``DATABASE_URL``/``DB_DSN``/``STORE_BACKEND=pg``, mirroring the worker's
+    ``_use_db_outbox``); otherwise returns ``None`` and callers degrade to the
+    historical per-call autocommit sequence. The explicit-env gate keeps
+    non-pg test runs hermetic: ``conn_rw`` falls back to ``settings.db_dsn``,
+    which could reach a real local database the test run never named. Returns
+    ``None`` (never raises) when the helper is unavailable or the connect
+    fails — the degraded path preserves at-least-once semantics.
+    """
+    if not conn_rw:
+        return None
+    backend = (os.environ.get("STORE_BACKEND") or "").strip().lower()
+    if backend != "pg" and not (os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")):
+        return None
+    try:
+        return conn_rw()
+    except Exception:
+        return None
 
 
 def _use_conn(maybe_conn: Any) -> Tuple[Any, bool]:
@@ -126,10 +178,11 @@ def _exec(conn: Any, sql: str, params: tuple = ()) -> Any:
 def _row_value(row: Any, index: int, key: str | None = None) -> Any:
     """Return a column value from a fetched row, tolerating either shape.
 
-    ``_open_conn()``'s plain-psycopg fallback yields tuple rows, but callers
-    (e.g. ``app.services.vault_sync``) may hand in a connection whose cursors
-    use a ``dict_row`` factory (``app.db.db.conn_rw``). Index into either
-    shape by the column's positional index or its select-list name. When
+    ``_open_conn()``'s canonical ``conn_rw`` path (and callers such as
+    ``app.services.vault_sync`` handing in their own connection) yields
+    ``dict_row`` rows; the plain-psycopg env fallback yields tuple rows.
+    Index into either shape by the column's positional index or its
+    select-list name. When
     ``key`` is omitted (unaliased aggregate expressions such as ``count(*)``
     whose dict key is unpredictable), fall back to positional order on the
     dict's values.
@@ -652,6 +705,7 @@ __all__ = [
     "payload_fingerprint",
     "write_outbox_event",
     "insert_object_and_outbox",
+    "open_outbox_txn_conn",
     "poll_outbox_one",
     "ack_outbox",
     "bump_outbox_attempts",

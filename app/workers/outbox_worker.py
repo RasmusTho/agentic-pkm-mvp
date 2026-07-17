@@ -54,6 +54,7 @@ from app.services.outbox import (
     bootstrap,
     bump_outbox_attempts,
     derive_idempotency_key,
+    open_outbox_txn_conn,
     payload_fingerprint,
     poll_outbox_one,
     write_outbox_event,
@@ -356,16 +357,15 @@ def run_once(
             topic,
             message.get("id"),
         )
-        _dead_letter_outbox_message(
-            topic,
-            payload,
-            message_id=str(message.get("id") or ""),
+        _dead_letter_and_ack(
+            message["id"],
+            topic=topic,
+            payload=payload,
             reason=INVALID_NOTE_UUID_REASON,
             attempts=0,
             trace_id=None if trace_id == "-" else trace_id,
             error=str(uuid_exc),
         )
-        ack_outbox(message["id"])
         return WorkerTickResult(state="processed", processed=1)
     except SchemaViolationDispatchError as schema_exc:
         # Immediate dead-letter (KERNEL-08, #2770): see the matching branch in
@@ -376,16 +376,15 @@ def run_once(
             message.get("id"),
             schema_exc.violation.reason,
         )
-        _dead_letter_outbox_message(
-            topic,
-            payload,
-            message_id=str(message.get("id") or ""),
+        _dead_letter_and_ack(
+            message["id"],
+            topic=topic,
+            payload=payload,
             reason=SCHEMA_VIOLATION_REASON,
             attempts=0,
             trace_id=None if trace_id == "-" else trace_id,
             error=str(schema_exc),
         )
-        ack_outbox(message["id"])
         return WorkerTickResult(state="processed", processed=1)
     ack_outbox(message["id"])
     return WorkerTickResult(state="processed", processed=1)
@@ -1056,12 +1055,19 @@ def _dead_letter_outbox_message(
     attempts: int,
     trace_id: str | None,
     error: str,
+    conn: Any = None,
 ) -> None:
     """Audit a poison outbox row that exceeded the dispatch-attempt budget.
 
     Writes an ``outbox.event.dead_lettered`` record to the JSONL audit sink (and the
     DB outbox when enabled) so the drop is observable. Best-effort: a failure here must
     not re-block the queue, so exceptions are swallowed after logging.
+
+    ``conn`` (#3930): when the caller shares its manual-commit connection so the
+    audit row commits atomically with the surrounding bookkeeping, the DB write
+    runs inside a savepoint (``conn.transaction()``) — its failure rolls back
+    only the audit insert, never the caller's transaction, preserving the
+    best-effort contract (the ack must still commit).
     """
     try:
         event = make_outbox_event(
@@ -1082,14 +1088,16 @@ def _dead_letter_outbox_message(
             # Keyed on (topic, poisoned outbox row id, attempts): duplicate
             # audit emission for the same drop dedups; a later re-poisoning at
             # a different attempt count produces a distinct row (I-E1).
-            write_outbox_event(
-                event,
-                idempotency_key=derive_idempotency_key(
-                    OUTBOX_EVENT_DEAD_LETTERED,
-                    str(message_id),
-                    f"poison:{attempts}",
-                ),
+            key = derive_idempotency_key(
+                OUTBOX_EVENT_DEAD_LETTERED,
+                str(message_id),
+                f"poison:{attempts}",
             )
+            if conn is not None:
+                with conn.transaction():
+                    write_outbox_event(event, conn=conn, idempotency_key=key)
+            else:
+                write_outbox_event(event, idempotency_key=key)
         logger.warning(
             "worker dead-lettered poison outbox row topic=%s id=%s reason=%s attempts=%s",
             topic,
@@ -1111,6 +1119,149 @@ def _dead_letter_outbox_message(
         payload=payload,
         trace_id=trace_id,
     )
+
+
+def _dead_letter_and_ack(
+    message_id: Any,
+    *,
+    topic: str | None,
+    payload: Mapping[str, Any],
+    reason: str,
+    attempts: int,
+    trace_id: str | None,
+    error: str,
+) -> None:
+    """Write the dead-letter audit row and ack the poisoned row atomically (#3930).
+
+    One canonical manual-commit connection carries both statements so a crash
+    between them cannot strand an audited-but-unacked row (which would re-poll
+    and duplicate work on restart). When the canonical connection is
+    unavailable, degrade to the historical per-call autocommit sequence —
+    at-least-once semantics hold either way (the attempt-scoped idempotency
+    key dedups the audit row on a same-attempt retry).
+    """
+    conn = open_outbox_txn_conn()
+    if conn is None:
+        _dead_letter_outbox_message(
+            topic,
+            payload,
+            message_id=str(message_id or ""),
+            reason=reason,
+            attempts=attempts,
+            trace_id=trace_id,
+            error=error,
+        )
+        ack_outbox(message_id)
+        return
+    try:
+        # Outermost transaction block: the connection is fresh/idle here, so
+        # this BEGINs and commits both statements on clean exit. Without it,
+        # the dead-letter helper's own savepoint block would be the outermost
+        # transaction on this connection and psycopg3 would commit the audit
+        # insert on block exit — before the ack, i.e. two transactions again.
+        with conn.transaction():
+            _dead_letter_outbox_message(
+                topic,
+                payload,
+                message_id=str(message_id or ""),
+                reason=reason,
+                attempts=attempts,
+                trace_id=trace_id,
+                error=error,
+                conn=conn,
+            )
+            ack_outbox(conn, message_id)
+    finally:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - close is best-effort
+            pass
+
+
+def _record_failed_dispatch(
+    message_id: Any,
+    *,
+    topic: str | None,
+    payload: Mapping[str, Any],
+    trace_id: str | None,
+    error: BaseException,
+) -> bool:
+    """Record one failed dispatch: bump the poison budget, dead-letter at the cap.
+
+    Returns True when the row was dead-lettered and acked (the caller moves on
+    to the next row) and False when the row stays pending (the caller re-raises
+    so the supervised worker crash-retries; at-least-once).
+
+    On the canonical connection all bookkeeping for this failure commits as ONE
+    transaction (#3930): below the cap the attempts bump commits alone, making
+    the poison budget durable across the crash-retry (#2252); at the cap bump +
+    dead-letter audit + ack commit together, so a crash between the statements
+    rolls the whole cycle back instead of stranding partial state (a row
+    durably ``attempts == max`` yet undelivered, then a duplicate dead-letter
+    audit row under ``poison:<n+1>`` on the next cycle). When the canonical
+    connection is unavailable, degrade to the historical per-call autocommit
+    sequence.
+    """
+    reason = f"dispatch_failed:{type(error).__name__}"
+    conn = open_outbox_txn_conn()
+    if conn is None:
+        attempts = 0
+        try:
+            attempts = bump_outbox_attempts(message_id)
+        except Exception:
+            logger.exception(
+                "worker failed to record dispatch attempt topic=%s id=%s",
+                topic,
+                message_id,
+            )
+        if attempts and attempts >= _resolve_max_dispatch_attempts():
+            _dead_letter_outbox_message(
+                topic,
+                payload,
+                message_id=str(message_id or ""),
+                reason=reason,
+                attempts=attempts,
+                trace_id=trace_id,
+                error=str(error),
+            )
+            ack_outbox(message_id)
+            return True
+        return False
+    try:
+        attempts = 0
+        try:
+            attempts = bump_outbox_attempts(conn, message_id)
+        except Exception:
+            logger.exception(
+                "worker failed to record dispatch attempt topic=%s id=%s",
+                topic,
+                message_id,
+            )
+            try:
+                conn.rollback()
+            except Exception:  # pragma: no cover - rollback is best-effort
+                pass
+        if attempts and attempts >= _resolve_max_dispatch_attempts():
+            _dead_letter_outbox_message(
+                topic,
+                payload,
+                message_id=str(message_id or ""),
+                reason=reason,
+                attempts=attempts,
+                trace_id=trace_id,
+                error=str(error),
+                conn=conn,
+            )
+            ack_outbox(conn, message_id)
+            conn.commit()
+            return True
+        conn.commit()
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - close is best-effort
+            pass
 
 
 def _draft_schema_violation_case(
@@ -1706,16 +1857,15 @@ def run(
                             topic,
                             message.get("id"),
                         )
-                        _dead_letter_outbox_message(
-                            topic,
-                            payload,
-                            message_id=str(message.get("id") or ""),
+                        _dead_letter_and_ack(
+                            message["id"],
+                            topic=topic,
+                            payload=payload,
                             reason=INVALID_NOTE_UUID_REASON,
                             attempts=0,
                             trace_id=None if trace_id == "-" else trace_id,
                             error=str(uuid_exc),
                         )
-                        ack_outbox(message["id"])
                         continue
                     except SchemaViolationDispatchError as schema_exc:
                         # Immediate dead-letter (KERNEL-08, #2770): a registered-schema
@@ -1729,16 +1879,15 @@ def run(
                             message.get("id"),
                             schema_exc.violation.reason,
                         )
-                        _dead_letter_outbox_message(
-                            topic,
-                            payload,
-                            message_id=str(message.get("id") or ""),
+                        _dead_letter_and_ack(
+                            message["id"],
+                            topic=topic,
+                            payload=payload,
                             reason=SCHEMA_VIOLATION_REASON,
                             attempts=0,
                             trace_id=None if trace_id == "-" else trace_id,
                             error=str(schema_exc),
                         )
-                        ack_outbox(message["id"])
                         continue
                     except Exception as handler_exc:
                         logger.exception(
@@ -1759,27 +1908,16 @@ def run(
                         # Bound retries per row so a single un-handleable (poison) event
                         # cannot crash-loop the worker at the head of the queue and
                         # block every following row (the processed_total=0 stall, #2252).
-                        attempts = 0
-                        try:
-                            attempts = bump_outbox_attempts(message["id"])
-                        except Exception:
-                            logger.exception(
-                                "worker failed to record dispatch attempt topic=%s id=%s",
-                                topic,
-                                message.get("id"),
-                            )
-                        if attempts and attempts >= _resolve_max_dispatch_attempts():
+                        # The bump, dead-letter audit, and ack commit as one
+                        # transaction on one connection (#3930).
+                        if _record_failed_dispatch(
+                            message["id"],
+                            topic=topic,
+                            payload=payload,
+                            trace_id=None if trace_id == "-" else trace_id,
+                            error=handler_exc,
+                        ):
                             errors_total += 1
-                            _dead_letter_outbox_message(
-                                topic,
-                                payload,
-                                message_id=str(message.get("id") or ""),
-                                reason=f"dispatch_failed:{type(handler_exc).__name__}",
-                                attempts=attempts,
-                                trace_id=None if trace_id == "-" else trace_id,
-                                error=str(handler_exc),
-                            )
-                            ack_outbox(message["id"])
                             continue
                         # Below the poison threshold: treat as transient and re-raise so
                         # the supervised worker restarts and retries (at-least-once).
