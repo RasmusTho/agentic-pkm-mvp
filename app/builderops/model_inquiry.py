@@ -263,16 +263,26 @@ class ModelInquiryService:
         }
         payload.update(normalized_provider_metadata)
         payload["artifact_hash"] = _artifact_hash(payload)
+        new_reservation: dict[str, Any] = {
+            "schema": "builderops.model-inquiry-turn-reservation.v1",
+            "inquiry_id": inquiry_id,
+            "turn_id": turn_id,
+            "sequence": sequence,
+            "artifact_hash": payload["artifact_hash"],
+        }
+        # A reservation that crashed before this fix shipped has no created_at key.
+        # Unconditionally writing one here would make every retry against it --
+        # even an exact one -- fail strict dict-equality forever (new_reservation
+        # can never equal a 5-key legacy record), permanently stranding a
+        # genuinely pre-fix orphan instead of merely inheriting its old
+        # same-second-luck retry odds. Only add created_at when there is no
+        # legacy shape to stay compatible with: a brand-new reservation, or one
+        # this fix already wrote.
+        if existing_reservation is None or "created_at" in existing_reservation:
+            new_reservation["created_at"] = created_at
         _, reservation_created = self._write_immutable_status(
             reservation_path,
-            {
-                "schema": "builderops.model-inquiry-turn-reservation.v1",
-                "inquiry_id": inquiry_id,
-                "turn_id": turn_id,
-                "sequence": sequence,
-                "created_at": created_at,
-                "artifact_hash": payload["artifact_hash"],
-            },
+            new_reservation,
             label="immutable turn id reservation",
         )
         try:
@@ -1545,15 +1555,20 @@ class ModelInquiryService:
         artifact_hash: str,
         created_by_this_attempt: bool,
     ) -> None:
-        expected = {
+        existing = self._read_optional(reservation_path)
+        expected: dict[str, Any] = {
             "schema": "builderops.model-inquiry-turn-reservation.v1",
             "inquiry_id": directory.name,
             "turn_id": turn_id,
             "sequence": sequence,
-            "created_at": created_at,
             "artifact_hash": artifact_hash,
         }
-        existing = self._read_optional(reservation_path)
+        # Mirrors the write-side and _read_turns backward-compat rule: only
+        # require created_at when the on-disk reservation actually carries it, so
+        # a legacy (pre-fix) orphan this attempt just matched or wrote is still
+        # recognized and cleaned up.
+        if existing is not None and "created_at" in existing:
+            expected["created_at"] = created_at
         committed = any(
             turn.get("turn_id") == turn_id
             for turn in self._read_turn_files_without_reservations(directory)

@@ -96,7 +96,12 @@ or provenance -- still recomputes a different `artifact_hash` (or targets a rese
 `sequence` disagrees) and fails closed against the durable reservation, exactly like a conflicting
 rewrite of an already-committed turn. Reservations written before this mechanism existed have no
 `created_at` field; trace validation accepts that legacy shape unchanged and only requires the field
-to match the committed turn's own `created_at` when the reservation carries one.
+to match the committed turn's own `created_at` when the reservation carries one. The retry write path
+mirrors that same rule: it only adds `created_at` to the reservation payload it writes when no
+reservation exists yet or the existing one already carries the field, so a retry against a genuinely
+pre-fix (legacy, five-key) orphan can still match and recover -- reproducing that orphan's pre-fix
+same-timestamp-luck retry odds -- instead of being permanently stranded by an unconditional field the
+legacy record can never equal.
 
 ## How to Verify (Pre-Merge)
 
