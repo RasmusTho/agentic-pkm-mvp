@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+from uuid import uuid4
 
 import pytest
 
@@ -177,8 +178,12 @@ def test_doctor_uses_rebuild_text_precedence_for_content_hash(tmp_path, monkeypa
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
+    from click.testing import CliRunner
+
+    from app.cli import cli
     from app.index.doctor import diagnose_index, reset_diagnose_cache
     from app.stores import get_object_store
+    from app.stores.pg import _connect
     from tests.indexer.test_outbox_roundtrip_pg import (
         _configure_isolated_pg_test,
         _drop_schema,
@@ -188,20 +193,36 @@ def test_doctor_uses_rebuild_text_precedence_for_content_hash(tmp_path, monkeypa
     base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
     reset_diagnose_cache()
     try:
-        from app.search import service as search_service
-
         canonical_content = "producer-selected content"
-        oid, _dim = search_service.ingest_object(
-            kind="note",
-            source_ref="unit-test://doctor-content-precedence",
-            payload={"content": canonical_content, "text": "legacy shadow text"},
-            text=canonical_content,
-        )
+        oid = uuid4()
         get_object_store().put(
             oid,
             kind="note",
             source_ref="unit-test://doctor-content-precedence",
             payload={"content": canonical_content, "text": "legacy shadow text"},
+        )
+
+        rebuild = CliRunner().invoke(
+            cli,
+            ["index", "rebuild", "--backend", "pg", "--json", "--strict"],
+            env=dict(os.environ),
+        )
+        assert rebuild.exit_code == 0, rebuild.output
+        rebuild_summary = json.loads(rebuild.output)
+        assert rebuild_summary["processed"] == 1
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload FROM store_vector_index WHERE object_id = %s",
+                    (oid,),
+                )
+                vector_row = cur.fetchone()
+
+        assert vector_row["payload"]["content"] == canonical_content
+        assert vector_row["payload"]["text"] == canonical_content
+        assert vector_row["payload"]["provenance"]["content_hash"] == compute_content_hash(
+            canonical_content
         )
 
         reset_diagnose_cache()
