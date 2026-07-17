@@ -175,7 +175,7 @@ def test_settings_compile_reads_legacy_only_selected_vault(
         ```
         """,
     )
-    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
     monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
     captured: list[object] = []
     real_compile = compiler.compile_all
@@ -187,7 +187,9 @@ def test_settings_compile_reads_legacy_only_selected_vault(
 
     monkeypatch.setattr(cli_module, "compile_all", _compile)
 
-    result = CliRunner().invoke(cli, ["settings", "compile"])
+    result = CliRunner().invoke(
+        cli, ["settings", "compile", "--vault-root", str(vault_root)]
+    )
 
     assert result.exit_code == 0, result.output
     bundle = captured[0]

@@ -1532,11 +1532,16 @@ def settings_explain_alias(as_json: bool, compact: bool) -> None:
 
 
 @settings.command("compile", help="Compile vault/settings into runtime/settings.")
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    help="Vault whose canonical settings root should be compiled.",
+)
 @click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
-def settings_compile(auto_heal: bool) -> None:
+def settings_compile(vault_root: Path | None, auto_heal: bool) -> None:
     try:
-        vault_root = _require_vault_root_path(None, purpose="settings compile")
-        bundle = compile_all(auto_heal=auto_heal, vault_root=vault_root)
+        resolved_vault = _require_vault_root_path(vault_root, purpose="settings compile")
+        bundle = compile_all(auto_heal=auto_heal, vault_root=resolved_vault)
     except WritesBlockedError as exc:
         raise click.ClickException(f"settings compile blocked: {exc}") from exc
     click.echo(f"compiled {len(bundle.agents)} agents")

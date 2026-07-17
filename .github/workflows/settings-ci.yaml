@@ -33,7 +33,7 @@ jobs:
           LLM_PROVIDER: mock
           REASONING_PROVIDER: mock
           PLANNER_PROVIDER: mock
-        run: python -m app.cli settings compile
+        run: python -m app.cli settings compile --vault-root vault
       - name: Run settings tests
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
