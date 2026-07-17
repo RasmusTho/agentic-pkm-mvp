@@ -524,8 +524,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "ops",
+        ("app/ops/", "tests/ops/"),
+        ("tests/ops",),
+    ),
+    (
         "ops_deploy",
-        ("scripts/", "ops/", "config/deploy/", "tests/ops/", "tests/scripts/", "tests/deploy/"),
+        ("scripts/", "ops/", "config/deploy/", "tests/scripts/", "tests/deploy/"),
         ("tests/ops", "tests/scripts", "tests/deploy"),
     ),
     (
