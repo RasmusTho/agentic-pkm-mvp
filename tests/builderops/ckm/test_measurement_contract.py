@@ -9,7 +9,7 @@ from threading import Barrier
 
 import pytest
 
-from app.builderops.ckm.assess import assessment_fingerprint
+from app.builderops.ckm.assess import assess_capabilities, assessment_fingerprint
 from app.builderops.ckm.contracts import (
     ACCESS_POLICY_VERSION,
     EFFECTIVE_AUDIENCE,
@@ -597,6 +597,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     db_path = tmp_path / "legacy.sqlite3"
     legacy = CkmStore(db_path)
     legacy.ensure_schema()
+    legacy.set_watermark("repo", "commit:abc")
     capability = legacy.upsert_capability(
         identity_key="pre-v5-placeholder",
         name="Legacy inferred capability",
@@ -606,6 +607,16 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     inferred_capability = capability
     artifact = _artifact(legacy)
     edge = _edge(legacy, artifact.id, capability.id)
+    unselected_artifact = _artifact(
+        legacy, source_ref="docs/measurement-diagram.md"
+    )
+    unselected_edge = _edge(
+        legacy,
+        unselected_artifact.id,
+        capability.id,
+        basis="diagram:1",
+        source_ref=unselected_artifact.source_ref,
+    )
     legacy.upsert_evidence_edge(
         artifact_id=artifact.id,
         capability_id=capability.id,
@@ -626,7 +637,9 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         citations=citations,
         aggregate=0.5,
         edge_fingerprint=hashlib.sha256(
-            f"{edge.id}:{artifact.id}".encode("utf-8")
+            f"{edge.id}:{artifact.id}:{unselected_edge.id}:{unselected_artifact.id}".encode(
+                "utf-8"
+            )
         ).hexdigest(),
         watermark_set={"repo": "commit:abc"},
         valid_from="2026-07-15T00:00:00Z",
@@ -657,7 +670,8 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         ],
     )
     assert legacy.delete_artifacts_not_in(
-        "repo_artifact_ingestion", {artifact.source_ref}
+        "repo_artifact_ingestion",
+        {artifact.source_ref, unselected_artifact.source_ref},
     ) == 1
 
     def strip_public_ids(value: object) -> object:
@@ -721,6 +735,10 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assessments = legacy.list_assessments_for_capability(capability.id)
     assert all(item.public_id for item in assessments)
     migrated_assessment_public_id = assessments[0].public_id
+    assert assessments[0].edge_fingerprint.startswith("v2:")
+    immediate_run = assess_capabilities(legacy)
+    assert immediate_run.assessed == 0
+    assert immediate_run.skipped == 1
     assert all(
         citation.get("public_id")
         for assessment in assessments
@@ -845,6 +863,28 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert rebuilt_inferred.public_id == migrated_inferred_public_id
     rebuilt_artifact = _artifact(legacy)
     rebuilt_edge = _edge(legacy, rebuilt_artifact.id, rebuilt_inferred.id)
+    rebuilt_edge = legacy.upsert_evidence_edge(
+        artifact_id=rebuilt_artifact.id,
+        capability_id=rebuilt_inferred.id,
+        evidence_kind="doc",
+        polarity="supports",
+        maturity_dimension="documentation_quality",
+        confidence=0.9,
+        extraction_method="deterministic",
+        lifecycle="confirmed",
+        source_ref=rebuilt_artifact.source_ref,
+        basis=rebuilt_edge.basis,
+    )
+    rebuilt_unselected_artifact = _artifact(
+        legacy, source_ref="docs/measurement-diagram.md"
+    )
+    rebuilt_unselected_edge = _edge(
+        legacy,
+        rebuilt_unselected_artifact.id,
+        rebuilt_inferred.id,
+        basis="diagram:1",
+        source_ref=rebuilt_unselected_artifact.source_ref,
+    )
     rebuilt_assessment = legacy.append_assessment(
         capability_id=rebuilt_inferred.id,
         scores=scores,
@@ -853,8 +893,11 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         },
         aggregate=0.5,
         edge_fingerprint=assessment_fingerprint(
-            [rebuilt_edge],
-            {rebuilt_artifact.id: rebuilt_artifact},
+            [rebuilt_edge, rebuilt_unselected_edge],
+            {
+                rebuilt_artifact.id: rebuilt_artifact,
+                rebuilt_unselected_artifact.id: rebuilt_unselected_artifact,
+            },
             watermark_set={"repo": "commit:abc"},
         ),
         watermark_set={"repo": "commit:abc"},

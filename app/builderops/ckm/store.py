@@ -277,8 +277,16 @@ class CkmStore:
         citations_changed = CkmStore._backfill_serialized_citation_identities(conn)
         for row in conn.execute("SELECT * FROM ckm_assessment ORDER BY id").fetchall():
             public_id = str(row["public_id"] or "") or CkmStore._assessment_public_id(conn, row)
+            normalized_fingerprint = CkmStore._normalized_assessment_fingerprint(
+                conn, row
+            )
             conn.execute(
-                "UPDATE ckm_assessment SET public_id = ? WHERE id = ?", (public_id, row["id"])
+                "UPDATE ckm_assessment SET public_id = ?, edge_fingerprint = ? WHERE id = ?",
+                (
+                    public_id,
+                    normalized_fingerprint or row["edge_fingerprint"],
+                    row["id"],
+                ),
             )
         for row in conn.execute("SELECT * FROM ckm_finding ORDER BY id").fetchall():
             public_id = str(row["public_id"] or "") or CkmStore._finding_public_id(
@@ -562,57 +570,8 @@ class CkmStore:
         capability_public_id = CkmStore._referenced_public_id(
             conn, "ckm_capability", str(row["capability_id"])
         )
-        edge_fingerprint = str(row["edge_fingerprint"])
-        fingerprint_payload = edge_fingerprint.removeprefix("v2:")
-        is_engine_fingerprint = edge_fingerprint.startswith("v2:") and len(
-            fingerprint_payload
-        ) == 64 and all(
-            character in "0123456789abcdef" for character in fingerprint_payload
-        )
-        if not is_engine_fingerprint and edge_fingerprint != "legacy":
-            # Identity-revision fixtures and pre-Q1 rows may carry internal ids
-            # in their old fingerprint.  Normalize those producers through the
-            # active public evidence graph so their migrated identity matches a
-            # real rebuild producer instead of preserving internal-id entropy.
-            from app.builderops.ckm.assess import assessment_fingerprint
-
-            edge_snapshots: dict[str, CkmEvidenceEdge] = {}
-            for dimension in MATURITY_DIMENSIONS:
-                raw_citations = row[f"{dimension}_citations"]
-                citations = (
-                    _loads(raw_citations)
-                    if isinstance(raw_citations, str)
-                    else raw_citations
-                )
-                for citation in citations:
-                    edge_payload = citation.get("edge", citation)
-                    edge = CkmEvidenceEdge.from_row(edge_payload)
-                    edge_snapshots[edge.public_id or edge.basis] = edge
-            edges = list(edge_snapshots.values())
-            artifact_ids = sorted({edge.artifact_id for edge in edges})
-            artifacts = {
-                artifact.id: artifact
-                for artifact_id in artifact_ids
-                if (
-                    artifact_row := conn.execute(
-                        "SELECT * FROM ckm_artifact WHERE id = ?", (artifact_id,)
-                    ).fetchone()
-                )
-                is not None
-                for artifact in (CkmArtifact.from_row(artifact_row),)
-            }
-            if len(artifacts) == len(artifact_ids):
-                raw_watermarks = row["watermark_set"]
-                watermark_set = (
-                    _loads(raw_watermarks)
-                    if isinstance(raw_watermarks, str)
-                    else raw_watermarks
-                )
-                edge_fingerprint = assessment_fingerprint(
-                    edges, artifacts, watermark_set=watermark_set
-                )
-                is_engine_fingerprint = True
-        if is_engine_fingerprint:
+        edge_fingerprint = CkmStore._normalized_assessment_fingerprint(conn, row)
+        if edge_fingerprint is not None:
             # The assessment engine uses this exact rebuild-stable fingerprint
             # as its append trigger.  Binding the public identity to the same
             # domain prevents valid but formula-unselected evidence from
@@ -671,6 +630,59 @@ class CkmStore:
             "watermark_set": row["watermark_set"],
         }
         return stable_public_id("assessment", canonical_digest(identity))
+
+    @staticmethod
+    def _normalized_assessment_fingerprint(
+        conn: sqlite3.Connection, row: Mapping[str, Any]
+    ) -> str | None:
+        edge_fingerprint = str(row["edge_fingerprint"])
+        fingerprint_payload = edge_fingerprint.removeprefix("v2:")
+        if edge_fingerprint.startswith("v2:") and len(fingerprint_payload) == 64 and all(
+            character in "0123456789abcdef" for character in fingerprint_payload
+        ):
+            return edge_fingerprint
+        if edge_fingerprint == "legacy":
+            return None
+
+        # Pre-v5 producers fingerprinted every active edge, including evidence
+        # that no scoring formula selected and therefore omitted from citations.
+        # Reconstruct the complete producer domain or fail the migration loudly.
+        from app.builderops.ckm.assess import assessment_fingerprint
+
+        edge_rows = conn.execute(
+            "SELECT * FROM ckm_evidence_edge WHERE capability_id = ? ORDER BY public_id",
+            (str(row["capability_id"]),),
+        ).fetchall()
+        edges = [CkmEvidenceEdge.from_row(edge_row) for edge_row in edge_rows]
+        if not edges:
+            raise CkmValidationError(
+                "cannot normalize pre-v5 assessment without its active evidence graph"
+            )
+        artifact_ids = sorted({edge.artifact_id for edge in edges})
+        artifacts = {
+            artifact.id: artifact
+            for artifact_id in artifact_ids
+            if (
+                artifact_row := conn.execute(
+                    "SELECT * FROM ckm_artifact WHERE id = ?", (artifact_id,)
+                ).fetchone()
+            )
+            is not None
+            for artifact in (CkmArtifact.from_row(artifact_row),)
+        }
+        if len(artifacts) != len(artifact_ids):
+            raise CkmValidationError(
+                "cannot normalize pre-v5 assessment with missing evidence artifacts"
+            )
+        raw_watermarks = row["watermark_set"]
+        watermark_set = (
+            _loads(raw_watermarks)
+            if isinstance(raw_watermarks, str)
+            else raw_watermarks
+        )
+        return assessment_fingerprint(
+            edges, artifacts, watermark_set=watermark_set
+        )
 
     @staticmethod
     def _finding_public_id(
