@@ -83,6 +83,47 @@ def test_deploy_pin_file_selects_ops_deploy() -> None:
     assert "tests/deploy" in selection.targets
 
 
+def test_release_channels_module_change_has_a_ci_owner() -> None:
+    # First registration of app/release_channels/ (#3903 round 5): its own
+    # direct suites live in tests/release_channels/, but tests/deploy/ already
+    # owns test_cutover_readiness.py, test_fleet_model_fitness.py, and the
+    # real deploy-entrypoint suites that exercise these modules -- both must
+    # be selected or a change here leaves half its coverage unrun.
+    selection = select_tests(
+        [
+            "app/release_channels/channel_isolation_preflight.py",
+            "tests/release_channels/test_channel_isolation_preflight.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("release_channels",)
+    assert selection.unowned_paths == ()
+    assert "tests/release_channels" in selection.targets
+    assert "tests/deploy" in selection.targets
+    assert "tests/release_channels/test_channel_isolation_preflight.py" in selection.targets
+
+
+def test_release_channels_sibling_modules_are_owned() -> None:
+    # The other five app/release_channels/ modules (cutover_readiness,
+    # fleet_model_fitness, prepare_promotion, prod_ref_fitness,
+    # reversibility) must resolve the same way, not just the one module this
+    # PR happens to touch.
+    for module in (
+        "cutover_readiness",
+        "fleet_model_fitness",
+        "prepare_promotion",
+        "prod_ref_fitness",
+        "reversibility",
+    ):
+        selection = select_tests([f"app/release_channels/{module}.py"])
+        assert selection.full_suite is False
+        assert selection.unowned_paths == ()
+        assert "release_channels" in selection.subsystems
+        assert "tests/release_channels" in selection.targets
+        assert "tests/deploy" in selection.targets
+
+
 def test_ops_contract_change_selects_ops_coverage() -> None:
     selection = select_tests(["app/ops/host_secret_contract.py", "tests/ops/test_host_secret_contract.py"])
 
