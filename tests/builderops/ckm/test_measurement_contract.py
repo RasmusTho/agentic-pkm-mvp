@@ -651,6 +651,24 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
             "SELECT * FROM ckm_assessment WHERE id = ?", (current_assessment.id,)
         ).fetchone()
         assert current_row is not None
+        same_measured_history = dict(zip(columns, current_row, strict=True))
+        same_measured_history.update(
+            {
+                "id": "assess_pre_v5_same_measured_history",
+                "public_id": "legacy-same-measured-placeholder",
+                # Pre-v5 producers included formula-unselected edges in this
+                # fingerprint even though citations and scores omitted them.
+                "edge_fingerprint": hashlib.sha256(
+                    b"distinct-unselected-historical-domain"
+                ).hexdigest(),
+                "valid_from": "2026-07-14T00:00:00Z",
+                "asserted_at": "2026-07-14T00:00:00Z",
+            }
+        )
+        conn.execute(
+            f"INSERT INTO ckm_assessment ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+            [same_measured_history[column] for column in columns],
+        )
         historical = dict(zip(columns, current_row, strict=True))
         historical.update(
             {
@@ -778,10 +796,15 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert all(item.public_id for item in legacy.list_evidence_edges())
     assessments = legacy.list_assessments_for_capability(capability.id)
     assert all(item.public_id for item in assessments)
-    assert len(assessments) == 2
-    historical_assessment, migrated_current_assessment = assessments
-    assert historical_assessment.edge_fingerprint == "legacy"
-    assert historical_assessment.public_id != migrated_current_assessment.public_id
+    assert len(assessments) == 3
+    historical_assessments = assessments[:2]
+    migrated_current_assessment = assessments[2]
+    assert all(item.edge_fingerprint == "legacy" for item in historical_assessments)
+    assert len({item.public_id for item in historical_assessments}) == 2
+    assert all(
+        item.public_id != migrated_current_assessment.public_id
+        for item in historical_assessments
+    )
     migrated_assessment_public_id = migrated_current_assessment.public_id
     assert migrated_current_assessment.edge_fingerprint.startswith("v2:")
     zero_assessment = legacy.latest_assessment_for_capability(zero_capability.id)
