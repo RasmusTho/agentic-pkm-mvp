@@ -49,6 +49,8 @@ The only initial logical identifier is `heimdal.raw-store-key`. It is declared s
 Keychain service name is a stable non-secret namespace, and its account is derived by
 percent-encoding each `{channel}:{consumer}:{secret}` component before colon-joining the declared
 tuple, so distinct tuples cannot collide and each channel resolves a distinct item.
+The v1 loader accepts only those three channels, that consumer, and the named logical identifier;
+any other identifier-bearing string is rejected rather than treated as a potential secret value.
 HSP-02 is the only future component permitted to resolve that declaration into a process-local
 environment variable.
 

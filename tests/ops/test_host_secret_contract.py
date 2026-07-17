@@ -85,3 +85,29 @@ def test_contract_rejects_undeclared_top_level_field(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="invalid host secret contract"):
         load_host_secret_contract(contract_path)
+
+
+def test_contract_rejects_value_bearing_identifier_field(tmp_path: Path) -> None:
+    payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
+    payload["consumers"][0]["secrets"] = ["actual-secret-material"]
+    contract_path = tmp_path / "host_secret_contract.json"
+    contract_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid host secret identifier"):
+        load_host_secret_contract(contract_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("channel", "secret-value"), ("consumer", "secret-value")],
+)
+def test_contract_rejects_unknown_channel_or_consumer(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
+    payload["consumers"][0][field] = value
+    contract_path = tmp_path / "host_secret_contract.json"
+    contract_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid host secret consumer declaration"):
+        load_host_secret_contract(contract_path)

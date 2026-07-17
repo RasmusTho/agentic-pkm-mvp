@@ -12,6 +12,9 @@ DEFAULT_CONTRACT_PATH = Path("config/secrets/host_secret_contract.json")
 _CONTRACT_FIELDS = frozenset({"version", "keychain_service", "keychain_account_template", "consumers"})
 _CONSUMER_FIELDS = frozenset({"channel", "consumer", "secrets"})
 _KEYCHAIN_ACCOUNT_TEMPLATE = "{channel}:{consumer}:{secret}"
+_INITIAL_CHANNELS = frozenset({"dev", "test", "prod"})
+_INITIAL_CONSUMER = "heimdal-capture-watch"
+_INITIAL_SECRET = "heimdal.raw-store-key"
 
 
 class UndeclaredSecretConsumerError(ValueError):
@@ -56,10 +59,16 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
         if not isinstance(item, dict) or set(item) != _CONSUMER_FIELDS:
             raise ValueError("invalid host secret consumer declaration")
         channel, consumer, secrets = item["channel"], item["consumer"], item["secrets"]
-        if not isinstance(channel, str) or not isinstance(consumer, str) or not isinstance(secrets, list):
+        if (
+            not isinstance(channel, str)
+            or channel not in _INITIAL_CHANNELS
+            or not isinstance(consumer, str)
+            or consumer != _INITIAL_CONSUMER
+            or not isinstance(secrets, list)
+        ):
             raise ValueError("invalid host secret consumer declaration")
         for secret in secrets:
-            if not isinstance(secret, str):
+            if secret != _INITIAL_SECRET:
                 raise ValueError("invalid host secret identifier")
             allowed.add((channel, consumer, secret))
     if not allowed:
