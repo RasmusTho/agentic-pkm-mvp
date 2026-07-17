@@ -71,6 +71,23 @@ def upgrade() -> None:
                     HINT = 'Inventory this live consumer and extend the reviewed migration strategy before retrying.';
             END IF;
 
+            IF EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_attribute referenced
+                  ON referenced.attrelid = c.confrelid
+                 AND referenced.attnum = c.confkey[1]
+                WHERE c.contype = 'f'
+                  AND c.confrelid = 'public.objects'::regclass
+                  AND cardinality(c.conkey) = 1
+                  AND cardinality(c.confkey) = 1
+                  AND referenced.attname <> 'id'
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = '#3510 unsupported schema: objects FK must reference objects.id',
+                    HINT = 'Inventory this live consumer and add a reviewed child-key translation before retrying.';
+            END IF;
+
             -- Existing-resource producer: materialize every retained legacy object
             -- in the canonical store before any FK is moved.  Existing canonical
             -- rows win; the legacy row is a continuity source, never a second

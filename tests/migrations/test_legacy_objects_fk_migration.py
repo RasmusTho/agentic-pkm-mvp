@@ -72,7 +72,38 @@ def test_legacy_objects_fk_migration_fails_loudly_on_unsupported_state(scratch_d
             "FROM pg_constraint WHERE conrelid = 'public.unreviewed_consumer'::regclass "
             "AND contype = 'f'"
         ).fetchone()
-    assert row == (True,), "failed migration must roll back without partially retargeting constraints"
+    assert row == (
+        True,
+    ), "failed migration must roll back without partially retargeting constraints"
+
+
+def test_legacy_objects_fk_migration_rejects_objects_uuid_fk_even_for_known_consumer(
+    scratch_dsn: str,
+) -> None:
+    """A known child table is not safe unless it references ``objects.id``."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "ALTER TABLE objects ADD CONSTRAINT objects_uuid_unique_for_3510 UNIQUE (uuid)"
+        )
+        conn.execute("ALTER TABLE decisions DROP CONSTRAINT decisions_object_id_fkey")
+        conn.execute(
+            "ALTER TABLE decisions ADD CONSTRAINT decisions_object_id_fkey "
+            "FOREIGN KEY (object_id) REFERENCES objects(uuid) ON DELETE SET NULL"
+        )
+
+    with pytest.raises(Exception, match=r"objects FK must reference objects\.id"):
+        _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        target = conn.execute(
+            "SELECT referenced.attname FROM pg_constraint constraint "
+            "JOIN pg_attribute referenced ON referenced.attrelid = constraint.confrelid "
+            "AND referenced.attnum = constraint.confkey[1] "
+            "WHERE constraint.conrelid = 'public.decisions'::regclass "
+            "AND constraint.conname = 'decisions_object_id_fkey'"
+        ).fetchone()
+    assert target == ("uuid",), "rejection must roll back before retargeting the child FK"
 
 
 def test_legacy_objects_fk_migration_backfills_existing_parents(scratch_dsn: str) -> None:
@@ -143,7 +174,7 @@ def test_legacy_objects_fk_migration_preserves_row_level_locator_and_payload(
                         null_locator_id,
                         null_locator_id,
                         "note",
-                        '{}',
+                        "{}",
                         None,
                         None,
                     ),
@@ -240,8 +271,7 @@ def test_unchanged_post_migration_sync_heals_incomplete_canonical_locator(
 
     with psycopg.connect(scratch_dsn) as conn:
         healed = conn.execute(
-            "SELECT source_ref, payload->>'content' "
-            "FROM store_objects WHERE object_id = %s",
+            "SELECT source_ref, payload->>'content' " "FROM store_objects WHERE object_id = %s",
             (object_id,),
         ).fetchone()
         metadata_events = conn.execute(
@@ -363,3 +393,69 @@ def test_deferred_then_unchanged_sync_materializes_canonical_parent(
         assert conn.execute(
             "SELECT count(*) FROM decisions WHERE object_id = %s", (object_id,)
         ).fetchone() == (1,)
+
+
+def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
+    scratch_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained ``objects.id != objects.uuid`` never creates a split parent."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    canonical_id = uuid.uuid4()
+    watcher_uuid = uuid.uuid4()
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "retained-id.md"
+    note.write_text(
+        f"---\nuuid: {watcher_uuid}\ntitle: Retained id\n---\n\nwatcher body\n",
+        encoding="utf-8",
+    )
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload, path) "
+            "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
+            (canonical_id, watcher_uuid, str(note.resolve())),
+        )
+
+    _upgrade("head")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    from app.services import vault_sync
+
+    monkeypatch.setattr(vault_sync, "active_edit", lambda path: False)
+    synced = vault_sync.sync_markdown(str(note))
+    assert synced["id"] == str(canonical_id)
+
+    import app.receipts.decision_receipt_log as receipt_log
+    from app.services.decisions import _resolved_backend, insert_decision
+
+    monkeypatch.setattr(
+        receipt_log.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda action: None
+    )
+    _resolved_backend.cache_clear()
+    insert_decision(str(canonical_id), "classification", {"type": "note"}, trace_id="retained-id")
+
+    renamed = vault / "renamed-retained-id.md"
+    note.rename(renamed)
+    assert vault_sync.handle_rename(str(note), str(renamed))["updated"] is True
+    renamed.unlink()
+    assert vault_sync.delete_note(str(renamed), uuid_value=str(watcher_uuid)) is True
+
+    with psycopg.connect(scratch_dsn) as conn:
+        canonical = conn.execute(
+            "SELECT source_ref FROM store_objects WHERE object_id = %s", (canonical_id,)
+        ).fetchone()
+        split_parent = conn.execute(
+            "SELECT count(*) FROM store_objects WHERE object_id = %s", (watcher_uuid,)
+        ).fetchone()
+        decision = conn.execute(
+            "SELECT object_id FROM decisions WHERE object_id = %s", (canonical_id,)
+        ).fetchone()
+        mirror = conn.execute(
+            "SELECT id, uuid FROM objects WHERE uuid = %s", (watcher_uuid,)
+        ).fetchone()
+    assert canonical == (None,)
+    assert split_parent == (0,)
+    assert decision == (canonical_id,)
+    assert mirror == (canonical_id, watcher_uuid)

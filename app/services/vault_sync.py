@@ -25,9 +25,18 @@ import yaml
 from app.db.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
+from app.events.types import (
+    INGEST_OBJECT_CREATED,
+    INGEST_OBJECT_DELETED,
+    INGEST_OBJECT_METADATA,
+    INGEST_OBJECT_UPDATED,
+)
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
-from app.objects import DomainObject, save_object_in_transaction, update_object_source_ref_in_transaction
+from app.objects import (
+    DomainObject,
+    save_object_in_transaction,
+    update_object_source_ref_in_transaction,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
 from app.domain.state_axes import normalize_artifact_state_axes
@@ -40,7 +49,9 @@ def _conn():
 
 
 def _hash_dict(data: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _hash_text(text: str) -> str:
@@ -72,7 +83,9 @@ def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
 
 def _get_state_by_path(conn: psycopg.Connection, path: str) -> Optional[dict[str, Any]]:
     with conn.cursor() as cur:
-        cur.execute("select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s", (path,))
+        cur.execute(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s", (path,)
+        )
         row = cur.fetchone()
         return row if isinstance(row, dict) else (dict(row) if row else None)
 
@@ -87,9 +100,35 @@ def _get_state_by_uuid(conn: psycopg.Connection, uuid_value: str) -> Optional[di
         return row if isinstance(row, dict) else (dict(row) if row else None)
 
 
+def _canonical_object_id(conn: psycopg.Connection, uuid_value: str) -> str:
+    """Resolve a watcher UUID to its retained legacy row's canonical id.
+
+    Watcher state and frontmatter keep the historical ``objects.uuid`` value,
+    while #3510 moves durable child FKs to ``store_objects.object_id``.  A
+    retained row may have a distinct ``objects.id``; using the UUID as the
+    canonical key in that case would split one note across two parents.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text
+            FROM objects
+            WHERE uuid = %s
+            LIMIT 1
+            """,
+            (uuid_value,),
+        )
+        row = cur.fetchone()
+    if isinstance(row, dict):
+        return str(row.get("id") or uuid_value)
+    return str(row[0]) if row and row[0] is not None else uuid_value
+
+
 def _object_materialization_state(
     conn: psycopg.Connection,
+    *,
     uuid_value: str,
+    canonical_object_id: str,
     expected_source_ref: str,
 ) -> tuple[bool, bool, bool]:
     """Return parent/mirror presence plus canonical locator completeness."""
@@ -106,11 +145,11 @@ def _object_materialization_state(
               ), FALSE) AS locator_complete
             """,
             (
-                uuid_value,
+                canonical_object_id,
                 uuid_value,
                 uuid_value,
                 expected_source_ref,
-                uuid_value,
+                canonical_object_id,
             ),
         )
         row = cur.fetchone()
@@ -124,7 +163,13 @@ def _object_materialization_state(
 
 
 def _upsert_file_state(
-    conn: psycopg.Connection, *, path: str, uuid_value: str, fm_hash: str, body_hash: str, mtime: datetime
+    conn: psycopg.Connection,
+    *,
+    path: str,
+    uuid_value: str,
+    fm_hash: str,
+    body_hash: str,
+    mtime: datetime,
 ) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -153,6 +198,7 @@ def _update_path_only(
     body_hash: str,
     mtime: datetime,
 ) -> None:
+    canonical_object_id = _canonical_object_id(conn, uuid_value)
     # Step 1: ensure an objects-row exists and has the new path. Do this first, with rollbacks between fallbacks.
     updated = 0
 
@@ -180,7 +226,7 @@ def _update_path_only(
             try:
                 cur.execute(
                     "insert into objects(id, uuid, kind, payload, path) values(%s, %s, %s, '{}'::jsonb, %s)",
-                    (uuid_value, uuid_value, "note", new_path),
+                    (canonical_object_id, uuid_value, "note", new_path),
                 )
                 inserted = True
             except Exception:
@@ -191,7 +237,7 @@ def _update_path_only(
                 try:
                     cur.execute(
                         "insert into objects(id, kind, payload, path) values(%s, %s, '{}'::jsonb, %s)",
-                        (uuid_value, "note", new_path),
+                        (canonical_object_id, "note", new_path),
                     )
                     inserted = True
                 except Exception:
@@ -207,7 +253,7 @@ def _update_path_only(
     save_object_in_transaction(
         conn,
         DomainObject(
-            uuid=uuid_value,
+            uuid=canonical_object_id,
             kind="note",
             payload=payload,
             source_ref=new_path,
@@ -257,6 +303,7 @@ def update_path(uuid_value: str, new_path: str) -> None:
         ensure_schema(conn)
         conn.commit()
         state = _get_state_by_uuid(conn, uuid_value)
+        canonical_object_id = _canonical_object_id(conn, uuid_value)
         fm_hash = state["fm_hash"] if state else None
         body_hash = state["body_hash"] if state else None
         mtime = state["mtime"] if state else None
@@ -267,7 +314,7 @@ def update_path(uuid_value: str, new_path: str) -> None:
                 cur.execute("update objects set path=%s where id=%s", (resolved_path, uuid_value))
             update_object_source_ref_in_transaction(
                 conn,
-                object_id=uuid_value,
+                object_id=canonical_object_id,
                 source_ref=resolved_path,
             )
             cur.execute(
@@ -321,13 +368,18 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                 else:
                     remaining_for_uuid = row[0] if row else 0
                 if remaining_for_uuid == 0:
+                    canonical_object_id = _canonical_object_id(conn, effective_uuid)
                     try:
-                        cur.execute("update objects set path = null where uuid = %s", (effective_uuid,))
+                        cur.execute(
+                            "update objects set path = null where uuid = %s", (effective_uuid,)
+                        )
                     except Exception:
-                        cur.execute("update objects set path = null where id = %s", (effective_uuid,))
+                        cur.execute(
+                            "update objects set path = null where id = %s", (effective_uuid,)
+                        )
                     update_object_source_ref_in_transaction(
                         conn,
-                        object_id=effective_uuid,
+                        object_id=canonical_object_id,
                         source_ref=None,
                     )
             if deleted and effective_uuid and remaining_for_uuid == 0:
@@ -353,27 +405,38 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                 INGEST_OBJECT_DELETED,
                 delete_payload,
                 conn=conn,
-                observation=str(deleted_version_mtime) if deleted_version_mtime is not None else None,
+                observation=str(deleted_version_mtime)
+                if deleted_version_mtime is not None
+                else None,
             )
         conn.commit()
     return deleted and delete_payload is not None
 
 
-def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool) -> None:
+def upsert_object_from_note(
+    path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool
+) -> None:
     note_path = Path(path).resolve()
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
     title = frontmatter.get("title") or note_path.stem
-    normalized_frontmatter = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
     review_state = normalized_frontmatter["review_state"]
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
-    mtime = datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc) if note_path.exists() else datetime.now(timezone.utc)
+    mtime = (
+        datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc)
+        if note_path.exists()
+        else datetime.now(timezone.utc)
+    )
 
     with _conn() as conn:
         ensure_schema(conn)
         conn.commit()
         state = _get_state_by_uuid(conn, uuid_value)
+        canonical_object_id = _canonical_object_id(conn, uuid_value)
         with conn.cursor() as cur:
             canonical_payload = {
                 "title": title,
@@ -393,7 +456,7 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, "note", payload_json, path_str),
+                    (canonical_object_id, "note", payload_json, path_str),
                 )
             except Exception:
                 cur.execute(
@@ -410,7 +473,7 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
         save_object_in_transaction(
             conn,
             DomainObject(
-                uuid=uuid_value,
+                uuid=canonical_object_id,
                 kind="note",
                 payload=canonical_payload,
                 source_ref=path_str,
@@ -468,7 +531,9 @@ def sync_markdown(path: str) -> dict[str, Any]:
         is_active = False
 
     uuid_value = frontmatter["uuid"]
-    normalized_frontmatter = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
     mtime = datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc)
@@ -487,6 +552,8 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
         # Previous state
         state = _get_state_by_path(conn, str(note_path))
+        canonical_object_id = _canonical_object_id(conn, uuid_value)
+        result["id"] = canonical_object_id
         rename_state: Optional[dict[str, Any]] = None
         if state is None:
             rename_state = _get_state_by_uuid(conn, uuid_value)
@@ -538,12 +605,11 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
         canonical_exists, mirror_exists, locator_complete = _object_materialization_state(
             conn,
-            uuid_value,
-            str(note_path),
+            uuid_value=uuid_value,
+            canonical_object_id=canonical_object_id,
+            expected_source_ref=str(note_path),
         )
-        materialization_missing = not (
-            canonical_exists and mirror_exists and locator_complete
-        )
+        materialization_missing = not (canonical_exists and mirror_exists and locator_complete)
         changed = state is None or materialization_missing
         if state:
             if state["uuid"] and state["uuid"] != uuid_value:
@@ -610,7 +676,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, uuid_value, "note", payload_json, str(note_path)),
+                    (canonical_object_id, uuid_value, "note", payload_json, str(note_path)),
                 )
                 wrote = True
             except Exception:
@@ -629,7 +695,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                           payload = excluded.payload,
                           path = excluded.path
                         """,
-                        (uuid_value, "note", payload_json, str(note_path)),
+                        (canonical_object_id, "note", payload_json, str(note_path)),
                     )
                     wrote = True
                 except Exception:
@@ -653,7 +719,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
         save_object_in_transaction(
             conn,
             DomainObject(
-                uuid=uuid_value,
+                uuid=canonical_object_id,
                 kind="note",
                 payload=json.loads(payload_json),
                 source_ref=str(note_path),
@@ -719,4 +785,11 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     return result
 
 
-__all__ = ["sync_markdown", "handle_rename", "update_path", "delete_note", "upsert_object_from_note", "active_edit"]
+__all__ = [
+    "sync_markdown",
+    "handle_rename",
+    "update_path",
+    "delete_note",
+    "upsert_object_from_note",
+    "active_edit",
+]

@@ -113,6 +113,18 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
+        if normalized.startswith("select id::text from objects where uuid = %s"):
+            (uuid_value,) = params
+            row = next(
+                (
+                    candidate
+                    for candidate in self.conn.objects.values()
+                    if str(candidate.get("uuid") or candidate["id"]) == uuid_value
+                ),
+                None,
+            )
+            self._fetchone = (row["id"],) if row else None
+            return
         if normalized.startswith("update store_objects"):
             source_ref, object_id = params
             row = self.conn.store_objects.get(str(object_id))
@@ -120,7 +132,9 @@ class _FakeCursor:
                 row["source_ref"] = source_ref
                 self.rowcount = 1
             return
-        if normalized.startswith("insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"):
+        if normalized.startswith(
+            "insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"
+        ):
             path, uuid_value, fm_hash, body_hash, mtime = params
             self.conn.file_state[path] = {
                 "path": path,
@@ -141,11 +155,15 @@ class _FakeCursor:
             }
             self.rowcount = before - len(self.conn.file_state)
             return
-        if normalized.startswith("select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"):
+        if normalized.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+        ):
             (path,) = params
             self._fetchone = self.conn.file_state.get(path)
             return
-        if normalized.startswith("select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"):
+        if normalized.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"
+        ):
             (uuid_value,) = params
             match = next(
                 (row for row in self.conn.file_state.values() if row.get("uuid") == uuid_value),
@@ -242,7 +260,9 @@ def _seed_note(
     }
 
 
-def _delete_note(monkeypatch: pytest.MonkeyPatch, conn: _FakeConn, path: str, object_id: str) -> list[tuple]:
+def _delete_note(
+    monkeypatch: pytest.MonkeyPatch, conn: _FakeConn, path: str, object_id: str
+) -> list[tuple]:
     """Drive the REAL ``vault_sync.delete_note`` (watcher delete propagation)
     against the fake connection, recording the outbox emission it makes."""
     emitted: list[tuple] = []
@@ -385,9 +405,9 @@ def test_delete_leaves_anchored_tombstone(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     assert vector_index.count_vectors() == 0
-    assert vector_index.purge_vectors(UUID(object_id), view="default") == 0, (
-        "vector row must already be purged by the real consumer dispatch -- redelivery is a no-op"
-    )
+    assert (
+        vector_index.purge_vectors(UUID(object_id), view="default") == 0
+    ), "vector row must already be purged by the real consumer dispatch -- redelivery is a no-op"
 
 
 # ---------------------------------------------------------------------------
@@ -433,8 +453,14 @@ def test_reingest_mints_new_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vault_sync, "ensure_schema", lambda *_a, **_kw: None)
     monkeypatch.setattr(vault_sync, "insert_object_and_outbox", lambda *a, **kw: None)
 
-    frontmatter = {"uuid": new_object_id, "title": "Property Note (recreated)", "review_state": "provisional"}
-    vault_sync.upsert_object_from_note(path, frontmatter, "New body", fm_changed=True, body_changed=True)
+    frontmatter = {
+        "uuid": new_object_id,
+        "title": "Property Note (recreated)",
+        "review_state": "provisional",
+    }
+    vault_sync.upsert_object_from_note(
+        path, frontmatter, "New body", fm_changed=True, body_changed=True
+    )
 
     # --- Assert: two distinct object rows exist -- the old tombstone
     # (path=NULL, decisions/audit lineage intact) and the new row (path
@@ -452,4 +478,6 @@ def test_reingest_mints_new_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     assert old_decision["object_id"] == old_object_id
 
     new_decision = latest_decision(new_object_id, "promotion_gate")
-    assert new_decision is None, "the re-ingested object must not inherit the old object's decision history"
+    assert (
+        new_decision is None
+    ), "the re-ingested object must not inherit the old object's decision history"

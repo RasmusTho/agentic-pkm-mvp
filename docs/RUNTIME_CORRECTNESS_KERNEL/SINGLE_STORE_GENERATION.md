@@ -91,5 +91,9 @@ and moves supported legacy `objects(id)` foreign keys to canonical `store_object
 legacy `objects` row. The migration is forward-only and fails loud on unknown FK consumers or
 orphaned ids, with reconciliation guidance in `docs/DB_SCHEMA.md :: Explicit Deltas / Known Gaps`.
 The retained filesystem-watcher compatibility lane still mirrors complete note state into
-`objects`; its `FilesystemVaultAdapter` producer now writes the canonical `store_objects` parent
-through the single store writer on the same transaction as the mirror, file state, and outbox event.
+`objects`; its `FilesystemVaultAdapter` producer resolves a retained `objects.uuid` to `objects.id`
+before writing the canonical `store_objects` parent through the single store writer on the same
+transaction as the mirror, file state, and outbox event. This prevents a historical `id != uuid`
+row from splitting into a second canonical parent. The migration rejects even an otherwise-known
+child FK when it references `objects.uuid`, because a reviewed child-key translation would be
+required before it could be retargeted safely.

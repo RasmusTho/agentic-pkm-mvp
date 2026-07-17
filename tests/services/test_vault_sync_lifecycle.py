@@ -39,6 +39,10 @@ class _FakeCursor:
                 self.conn.objects_path[uuid_value] = new_path
                 self.rowcount = 1
             return
+        if normalized.startswith("select id::text from objects where uuid = %s"):
+            (uuid_value,) = params
+            self._fetchone = (uuid_value,) if uuid_value in self.conn.objects_path else None
+            return
         if normalized.startswith("insert into store_objects"):
             object_id, _kind, source_ref, _payload = params
             self.conn.canonical_source[str(object_id)] = source_ref
@@ -51,7 +55,9 @@ class _FakeCursor:
                 self.conn.canonical_source[key] = source_ref
                 self.rowcount = 1
             return
-        if normalized.startswith("insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"):
+        if normalized.startswith(
+            "insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"
+        ):
             path, uuid_value, fm_hash, body_hash, mtime = params
             self.conn.file_state[path] = {
                 "path": path,
@@ -66,11 +72,15 @@ class _FakeCursor:
             uuid_value, keep_path = params
             before = len(self.conn.file_state)
             self.conn.file_state = {
-                path: row for path, row in self.conn.file_state.items() if not (row.get("uuid") == uuid_value and path != keep_path)
+                path: row
+                for path, row in self.conn.file_state.items()
+                if not (row.get("uuid") == uuid_value and path != keep_path)
             }
             self.rowcount = before - len(self.conn.file_state)
             return
-        if normalized.startswith("select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"):
+        if normalized.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+        ):
             (path,) = params
             self._fetchone = self.conn.file_state.get(path)
             return
@@ -143,7 +153,9 @@ def test_update_path_only_keeps_single_active_file_state_path() -> None:
 
     assert conn.objects_path[UUID1] == "/vault/new.md"
     assert conn.canonical_source[UUID1] == "/vault/new.md"
-    paths_for_uuid = sorted(path for path, row in conn.file_state.items() if row.get("uuid") == UUID1)
+    paths_for_uuid = sorted(
+        path for path, row in conn.file_state.items() if row.get("uuid") == UUID1
+    )
     assert paths_for_uuid == ["/vault/new.md"]
 
 
@@ -201,7 +213,9 @@ def test_delete_note_emits_outbox_event_on_real_delete(monkeypatch) -> None:
     assert payload["deleted"] is True
 
 
-def test_delete_note_does_not_emit_deleted_event_when_uuid_still_has_other_paths(monkeypatch) -> None:
+def test_delete_note_does_not_emit_deleted_event_when_uuid_still_has_other_paths(
+    monkeypatch,
+) -> None:
     conn = _FakeConn()
     conn.objects_path[UUID4] = "/vault/keep.md"
     conn.canonical_source[UUID4] = "/vault/keep.md"
