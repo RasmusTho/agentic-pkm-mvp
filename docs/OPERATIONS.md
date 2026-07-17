@@ -353,6 +353,7 @@ Use `python -m app.cli <command> --help` for the full, current argument list. Th
 | `settings-explain` | Show settings provenance and effective resolution. |
 | `canvas open|edit|close` | Operate the bounded canvas co-authoring surface when `CANVAS_ENABLED=1`. |
 | `llm check` | Probe LLM/embedding endpoint reachability. |
+| `index rebuild|doctor|reconcile` | Rebuild derived vectors, diagnose drift read-only, or explicitly reconcile stale/mixed rows. |
 | `pipe <note.md>` | Run ingest for a note/path outside the watcher loop. |
 | `pkm-alpha-ingest`, `vault-alpha-ingest` | Compatibility aliases for legacy startup and ingest callers; prefer the neutral ingest commands for new scripts. |
 | `make verify-runtime` | Check container health plus in-container runtime health/status for the live Docker stack. |
@@ -377,6 +378,10 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 - `checks.llm_task_routes` verifies the effective chat/reasoning/embed/eval routes for the current config.
 - `checks.embedding_index` reports `rebuild_required=true|false` and the active/stored embedding identity relationship.
 - `make verify-runtime` prints both the task-route summary and the embedding-index rebuild state from inside the containerized stack.
+- Index operations share the canonical text contract in `docs/DB_SCHEMA.md :: store_vector_index`.
+  `index doctor` remains read-only. During explicit `index reconcile`, a present authoritative
+  source that has become canonically non-indexable causes only its rebuildable vector row to be
+  purged; the source row is never mutated, and an absent source retains the vector-payload fallback.
 
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).
