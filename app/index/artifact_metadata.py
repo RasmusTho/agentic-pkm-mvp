@@ -67,12 +67,24 @@ def extract_indexable_text(payload: dict | None) -> str:
 
 def canonicalize_indexable_text(payload: dict | None) -> str:
     """Return the exact producer text used for embedding and provenance."""
-    return strip_ai_panels(extract_indexable_text(payload))
+    return _canonicalize_indexed_text(extract_indexable_text(payload))
+
+
+def _canonicalize_indexed_text(text: str) -> str:
+    """Strip panels while preserving meaningful source whitespace.
+
+    Panel removal can leave only separator newlines around an otherwise
+    panel-only note.  Such a remainder has no semantic bytes to embed and must
+    converge with contentless source handling, while text-bearing notes retain
+    their exact post-panel bytes.
+    """
+    canonical = strip_ai_panels(text or "")
+    return canonical if canonical.strip() else ""
 
 
 def compute_indexed_content_hash(text: str) -> str:
     """Hash text with the producer's AI-panel canonicalization."""
-    return compute_content_hash(strip_ai_panels(text or ""))
+    return compute_content_hash(_canonicalize_indexed_text(text))
 
 
 def compute_payload_content_hash(payload: dict | None) -> str:

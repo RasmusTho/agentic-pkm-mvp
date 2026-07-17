@@ -55,6 +55,7 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     assert "pgvector/pgvector:pg16" in job
     assert "dorny/paths-filter@v3" in job
     assert "app/cli/index_rebuild.py" in job
+    assert "app/agents/panel/**" in job
     assert "tests/index/test_provenance_stamp.py" in job
     assert "tests/indexer/test_outbox_roundtrip_pg.py" in job
     assert '-m "pg"' in job

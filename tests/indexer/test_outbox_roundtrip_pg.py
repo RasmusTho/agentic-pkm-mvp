@@ -320,7 +320,7 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
                 uuid=str(panel_only_oid),
                 kind="note",
                 payload={
-                    "content": "%% AI:Start %%\nTransient panel only.\n%% AI:End %%\n"
+                    "content": "\n%% AI:Start %%\nTransient panel only.\n%% AI:End %%\n\n"
                 },
                 source_ref="unit-test:panel-only",
                 created_at=datetime.now(timezone.utc),

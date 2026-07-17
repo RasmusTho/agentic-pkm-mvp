@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from app.components.embeddings import EmbeddingIdentity
-from app.index.artifact_metadata import _embedding_identity_dict
+from app.index.artifact_metadata import (
+    _embedding_identity_dict,
+    canonicalize_indexable_text,
+    compute_content_hash,
+    compute_indexed_content_hash,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -44,3 +49,13 @@ def test_embedding_identity_dict_variants() -> None:
 
     duck_typed = _DuckIdentity(provider="mock", model="mock-embedding", dim=3, normalize=True)
     assert _embedding_identity_dict(duck_typed) == expected
+
+
+def test_panel_only_canonicalization_collapses_whitespace_only_remainder() -> None:
+    panel_only = "\n%% AI:Start %%\nTransient panel text.\n%% AI:End %%\n\n"
+
+    assert canonicalize_indexable_text({"content": panel_only}) == ""
+    assert compute_indexed_content_hash(panel_only) == compute_content_hash("")
+
+    meaningful_whitespace = "\n  Retained text.  \n"
+    assert canonicalize_indexable_text({"content": meaningful_whitespace}) == meaningful_whitespace

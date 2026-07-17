@@ -453,3 +453,80 @@ def test_reconcile_purges_vector_for_present_non_indexable_source(tmp_path, monk
     finally:
         _reset_store_backend_cache_only()
         _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_reconcile_absent_source_retains_vector_payload_fallback(tmp_path, monkeypatch) -> None:
+    """An orphaned vector remains reconcilable from its derived payload."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from click.testing import CliRunner
+
+    from app.cli import cli
+    from app.stores.pg import _connect
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    try:
+        from app.search import service as search_service
+
+        fallback_text = "orphaned derived fallback"
+        oid, _ = search_service.ingest_object(
+            kind="note",
+            source_ref="unit-test://reconcile-absent-source",
+            payload={"content": fallback_text, "text": fallback_text},
+            text=fallback_text,
+        )
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE store_vector_index "
+                    "SET provider = %s, model = %s "
+                    "WHERE object_id = %s",
+                    ("legacy-provider", "legacy-model", oid),
+                )
+                cur.execute(
+                    "SELECT count(*) AS total FROM store_objects WHERE object_id = %s",
+                    (oid,),
+                )
+                assert cur.fetchone()["total"] == 0
+
+        result = CliRunner().invoke(
+            cli,
+            ["index", "reconcile", "--backend", "pg", "--json", "--strict"],
+            env=dict(os.environ),
+        )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)
+        assert summary["reconciled"] == 1
+        assert summary["purged_non_indexable"] == 0
+        assert summary["skipped"] == 0
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload, provider, model FROM store_vector_index "
+                    "WHERE object_id = %s",
+                    (oid,),
+                )
+                vector_row = cur.fetchone()
+                cur.execute(
+                    "SELECT count(*) AS total FROM store_objects WHERE object_id = %s",
+                    (oid,),
+                )
+                source_count = cur.fetchone()["total"]
+
+        assert vector_row["payload"]["content"] == fallback_text
+        assert vector_row["payload"]["text"] == fallback_text
+        assert vector_row["provider"] == "mock"
+        assert vector_row["model"] == "mock-embedding"
+        assert source_count == 0
+    finally:
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)

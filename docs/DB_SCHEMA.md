@@ -156,7 +156,8 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
     upsert statement as the vector (never a separate write). `content_hash` is a `sha256` of the
     exact embedded text. Canonical source selection is `content` → `text` → `raw_text`; AI panels
     are stripped to a fixed point before embedding, hashing, and projection into the derived row's `content`/`text`
-    retrieval aliases. The index doctor's read-only missing-vector and staleness checks use that
+    retrieval aliases; a post-panel remainder containing only whitespace is non-indexable. The index
+    doctor's read-only missing-vector and staleness checks use that
     same canonical predicate. `index reconcile` re-embeds only rows that drifted; when a present
     authoritative `store_objects` row has become canonically non-indexable, explicit reconcile
     purges only its derived vector row so retrieval cannot serve obsolete bytes. It never mutates

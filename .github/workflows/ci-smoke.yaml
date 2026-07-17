@@ -684,6 +684,7 @@ jobs:
           filters: |
             index_pg:
               - 'app/cli/index_rebuild.py'
+              - 'app/agents/panel/**'
               - 'app/index/**'
               - 'app/stores/pg.py'
               - 'tests/index/test_provenance_stamp.py'
