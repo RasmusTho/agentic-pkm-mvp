@@ -43,6 +43,13 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
 _SECRET_VALUE_PREFIXES = ("bearer ", "ghp_", "github_pat_", "sk-")
 
 
+def _canonical_durable_key(key: str) -> str:
+    """Normalize common structured-key spellings before secret classification."""
+
+    camel_split = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key.strip())
+    return re.sub(r"[^A-Za-z0-9]+", "_", camel_split).strip("_").lower()
+
+
 def _envelope(request: Any, credential: Credential) -> AuthorityEnvelope:
     return AuthorityEnvelope(
         repository=request.repository,
@@ -94,7 +101,7 @@ def _credential_dependency(
 
 def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, key: str = "") -> None:
     """Reject credential-shaped material before it can enter PostgreSQL/WAL/backups."""
-    normalized_key = key.strip().lower()
+    normalized_key = _canonical_durable_key(key)
     if (
         normalized_key
         and normalized_key not in _ALLOWED_SECRET_METADATA_KEYS

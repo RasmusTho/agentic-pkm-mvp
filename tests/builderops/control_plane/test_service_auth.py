@@ -174,6 +174,9 @@ def test_scoped_api_auth_fails_closed(tmp_path: Path) -> None:
     assert safe_record.status_code == 200
     for unsafe in (
         {"github_token": "github_pat_RAW"},
+        {"github-token": "opaque-sensitive-value"},
+        {"apiKey": "opaque-sensitive-value"},
+        {"session cookie": "opaque-sensitive-value"},
         {"summary": "client-token"},
         {"database": "postgresql://app:raw-password@db/builderops"},
     ):
