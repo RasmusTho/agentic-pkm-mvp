@@ -1260,7 +1260,7 @@ def _record_failed_dispatch(
             # signal the below-cap path returns: the caller re-raises the
             # original dispatch error for crash-retry, instead of a new
             # ack/commit-failure exception masking it.
-            return _ack_and_commit_or_log(conn, message_id, topic=topic)
+            return _ack_and_commit_or_log(conn, message_id=message_id, topic=topic)
         _commit_or_log(conn, topic=topic, message_id=message_id)
         return False
     finally:
@@ -1291,7 +1291,7 @@ def _commit_or_log(conn: Any, *, topic: str | None, message_id: Any) -> bool:
     return True
 
 
-def _ack_and_commit_or_log(conn: Any, message_id: Any, *, topic: str | None) -> bool:
+def _ack_and_commit_or_log(conn: Any, *, message_id: Any, topic: str | None) -> bool:
     """Ack ``message_id`` and commit ``conn``, logging (not raising) on failure.
 
     Same rationale as :func:`_commit_or_log`, extended to the ack call: a bare

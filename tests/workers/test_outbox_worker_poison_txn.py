@@ -316,10 +316,14 @@ def test_poison_path_commit_failure_does_not_mask_original_error(
 ) -> None:
     """Same guarantee as above, triggered by a commit failure instead of an ack failure.
 
-    Regression for round-2 #3930 review: an unguarded ``conn.commit()`` after
-    a successful ack could raise and mask ``handler_exc`` (the real dispatch
-    error) with an unrelated commit-failure exception by the time it reached
-    the worker's crash-retry re-raise.
+    Closes a coverage gap round-2 #3930 review flagged: the round-1 fix added
+    ``_commit_or_log`` (guarding ``conn.commit()`` so a failure there can't
+    mask ``handler_exc``, the real dispatch error, with an unrelated
+    commit-failure exception by the time it reaches the worker's crash-retry
+    re-raise) but shipped with no test exercising the failure branch itself —
+    only the round-2 ack-failure fix (the test above) was regression-tested.
+    This test exercises ``_ack_and_commit_or_log`` specifically (the at-cap
+    path); the sibling below asserts the same for below-cap's ``_commit_or_log``.
     """
     conn = FakeTxnConn(
         rows=[
@@ -356,8 +360,10 @@ def test_below_threshold_commit_failure_does_not_mask_original_error(
 ) -> None:
     """Below the cap, a failed bump-commit still lets the original dispatch error propagate.
 
-    Exercises ``_commit_or_log`` (not ``_ack_and_commit_or_log``): only the
-    attempts bump is committed below the poison cap.
+    Closes the same round-2-flagged coverage gap as the at-cap test above, for
+    ``_commit_or_log``'s below-cap call site (only the attempts bump is
+    committed below the poison cap; ``_ack_and_commit_or_log`` is not
+    involved here).
     """
     conn = FakeTxnConn(
         rows=[
