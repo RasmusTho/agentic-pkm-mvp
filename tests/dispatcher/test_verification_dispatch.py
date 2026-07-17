@@ -459,6 +459,55 @@ def test_promoted_legacy_v2_identical_replay_is_idempotent(tmp_path) -> None:
     assert _verification_state_snapshot(state) == snapshot_before_replay
     assert len(state.list()) == 1
 
+    conflicting_supporting = request(repaired_head)
+    conflicting_supporting["supporting_issues"] = [3626]
+    with pytest.raises(
+        ValueError,
+        match="idempotency authority conflict",
+    ):
+        state.ingest(
+            _live_observed_request(state, conflicting_supporting)
+        )
+    assert _verification_state_snapshot(state) == snapshot_before_replay
+
+    claimed = state.claim(run_id, "repair-host")
+    running = state.start(
+        run_id,
+        "repair-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000052",
+        {"head_sha": repaired_head},
+    )
+    terminal_head = "c" * 40
+    rebound = state.rebind_head(
+        run_id,
+        terminal_head,
+        expected_head_sha=repaired_head,
+        observed_repository=recovered.repository,
+        observed_pr_number=recovered.pr_number,
+        observed_head_sha=terminal_head,
+        holder="repair-host",
+        lease_id=running.lease_id or "",
+    )
+    terminal = state.terminal(
+        run_id,
+        "failed",
+        {"outcome": "blocked", "head_sha": terminal_head},
+        holder="repair-host",
+        lease_id=rebound.lease_id or "",
+    )
+    terminal_snapshot = _verification_state_snapshot(state)
+    with pytest.raises(
+        ValueError,
+        match="artifact head does not match canonical run",
+    ):
+        state.ingest(
+            _live_observed_request(state, promoted_request)
+        )
+    assert terminal.status == "failed"
+    assert terminal.current_head_sha == terminal_head
+    assert _verification_state_snapshot(state) == terminal_snapshot
+
 
 def test_migrated_repaired_head_v1_recovers_only_on_preserved_current_head(
     tmp_path,

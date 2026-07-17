@@ -1391,7 +1391,15 @@ class VerificationDispatchLedger:
                     existing, existing_request
                 )
                 incoming_closing = _request_closing_authority(request)
-                if set(incoming_closing) != set(stored_closing):
+                stored_supporting = _validated_supporting_authority(
+                    existing, existing_request
+                )
+                incoming_supporting = request.get("supporting_issues")
+                if (
+                    not isinstance(incoming_supporting, list)
+                    or set(incoming_supporting) != set(stored_supporting)
+                    or set(incoming_closing) != set(stored_closing)
+                ):
                     raise ValueError("verification idempotency authority conflict")
                 active_status = existing["status"] in {
                     "queued",
@@ -1413,11 +1421,7 @@ class VerificationDispatchLedger:
                             "verification canonical run governing issue mismatch"
                         )
                     raise ValueError("verification idempotency authority conflict")
-                if (
-                    active_status
-                    and existing["current_head_sha"]
-                    != request.get("current_head_sha")
-                ):
+                if existing["current_head_sha"] != request.get("current_head_sha"):
                     raise ValueError(
                         "verification artifact head does not match canonical run"
                     )

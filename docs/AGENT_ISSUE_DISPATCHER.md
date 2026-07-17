@@ -192,7 +192,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   immutable requested head or any unrelated head cannot create a parallel canonical run around a
   recoverable inert repaired-head chain. After promotion, an identical authenticated artifact
   replays against the stored recovered-request head rather than the immutable legacy requested
-  head; once the active chain rebinds again, the older recovered-head artifact fails closed.
+  head only while its exact durable supporting and closing authority still match. Once the active
+  chain rebinds again, the older recovered-head artifact fails closed in both active and terminal
+  states.
   Existing v1 recovery-audit receipts remain readable; ambiguity, drift, missing authentication,
   incompatible supporting authority, or any token mismatch is non-mutating and fail-closed.
   If normal stale-head handling supersedes a chain before the repaired-head artifact arrives, only
