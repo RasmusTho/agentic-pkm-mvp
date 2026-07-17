@@ -125,6 +125,11 @@ jobs:
   build-builderops-images:
     name: Build independent BuilderOps images
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -207,3 +212,30 @@ jobs:
           set -euo pipefail
           docker push "${{ steps.images.outputs.control_plane }}"
           docker push "${{ steps.images.outputs.postgres }}"
+
+      - name: Write the restore-proved candidate pair receipt
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          control_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "${{ steps.images.outputs.control_plane }}")"
+          postgres_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "${{ steps.images.outputs.postgres }}")"
+          python3 scripts/builderops/write_candidate_pair_receipt.py \
+            --output builderops-candidate-pair.json \
+            --source-sha "${GITHUB_SHA}" \
+            --control-plane-digest "${control_digest#*@}" \
+            --postgres-walg-digest "${postgres_digest#*@}"
+
+      - name: Attest the restore-proved candidate pair receipt
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: builderops-candidate-pair.json
+
+      - name: Upload the attested candidate pair receipt
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: builderops-candidate-pair-${{ github.sha }}
+          path: builderops-candidate-pair.json
+          if-no-files-found: error

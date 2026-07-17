@@ -40,6 +40,22 @@ _FORBIDDEN_DURABLE_KEYS = re.compile(
 _ALLOWED_SECRET_METADATA_KEYS = frozenset(
     {"secret_ref", "fingerprint", "scopes", "rotation_generation", "credential_id"}
 )
+_FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
+    {
+        "authorization",
+        "bearer",
+        "credential",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "apikey",
+        "privatekey",
+        "sessioncookie",
+        "databaseurl",
+        "dsn",
+    }
+)
 _SECRET_VALUE_PREFIXES = ("bearer ", "ghp_", "github_pat_", "sk-")
 _EMBEDDED_SECRET_VALUE = re.compile(
     r"(?:bearer\s+\S+|ghp_[A-Za-z0-9_=-]+|github_pat_[A-Za-z0-9_=-]+|"
@@ -144,7 +160,10 @@ def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, ke
     if (
         normalized_key
         and normalized_key not in _ALLOWED_SECRET_METADATA_KEYS
-        and _FORBIDDEN_DURABLE_KEYS.search(normalized_key)
+        and (
+            _FORBIDDEN_DURABLE_KEYS.search(normalized_key)
+            or normalized_key.replace("_", "") in _FORBIDDEN_COMPACT_DURABLE_KEYS
+        )
     ):
         raise ValueError("raw credential fields are forbidden in durable BuilderOps payloads")
     if isinstance(value, Mapping):

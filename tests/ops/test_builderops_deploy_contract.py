@@ -45,6 +45,24 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     source_sha = "a" * 40
     digest = "sha256:" + "b" * 64
     postgres_digest = "sha256:" + "e" * 64
+    candidate_receipt = tmp_path / "candidate-pair.json"
+    candidate_receipt.write_text(
+        json.dumps(
+            {
+                "receipt_version": 1,
+                "repository": "RasmusTho/agentic-pkm-mvp",
+                "workflow": ".github/workflows/app-image-build.yml",
+                "event_name": "push",
+                "source_ref": "refs/heads/main",
+                "source_sha": source_sha,
+                "control_plane_image_digest": digest,
+                "postgres_walg_image_digest": postgres_digest,
+                "restore_gate": "encrypted-full-backup-plus-archived-wal",
+                "platform": "linux/amd64",
+            }
+        ),
+        encoding="utf-8",
+    )
     token_file = tmp_path / "probe-token"
     token_file.write_text("probe-secret", encoding="utf-8")
     receipt_dir = tmp_path / "receipts"
@@ -66,6 +84,14 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
 
+    _write_executable(
+        bin_dir / "gh",
+        """#!/usr/bin/env bash
+set -eu
+printf 'gh %s\n' "$*" >> "$FAKE_EVENT_LOG"
+[ "${FAKE_FAIL_ATTESTATION:-0}" != 1 ]
+""",
+    )
     _write_executable(
         bin_dir / "docker",
         """#!/usr/bin/env bash
@@ -122,6 +148,7 @@ fi
             "BUILDEROPS_HEALTH_TIMEOUT_SECONDS": "1",
             "BUILDEROPS_SECRET_ROOT": str(secret_root),
             "BUILDEROPS_WALG_S3_PREFIX": "s3://offsite.example.invalid/builderops",
+            "BUILDEROPS_TEST_CANDIDATE_RECEIPT": str(candidate_receipt),
         }
     )
     return root, env, source_sha, digest, postgres_digest
@@ -134,9 +161,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
             "bash",
             "scripts/deploy_builderops.sh",
             "deploy",
-            source_sha,
-            digest,
-            postgres_digest,
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
         ],
         cwd=root,
         env=env,
@@ -206,9 +231,7 @@ def test_failed_deploy_restores_canonical_pin_and_preserves_rollback_target(
             "bash",
             "scripts/deploy_builderops.sh",
             "deploy",
-            source_sha,
-            digest,
-            postgres_digest,
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
         ],
         cwd=root,
         env=env,
@@ -233,9 +256,7 @@ def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> 
             "bash",
             "scripts/deploy_builderops.sh",
             "deploy",
-            source_sha,
-            digest,
-            postgres_digest,
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
         ],
         cwd=root,
         env=env,
@@ -252,16 +273,15 @@ def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> 
     assert "previous pin and live API/worker release restored" in failed.stderr
 
 
-def test_deploy_rejects_mutable_image_tag_before_docker(tmp_path: Path) -> None:
-    root, env, source_sha, _, postgres_digest = _harness(tmp_path)
+def test_deploy_rejects_unattested_candidate_pair_before_docker(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_FAIL_ATTESTATION"] = "1"
     result = subprocess.run(
         [
             "bash",
             "scripts/deploy_builderops.sh",
             "deploy",
-            source_sha,
-            "latest",
-            postgres_digest,
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
         ],
         cwd=root,
         env=env,
@@ -269,9 +289,10 @@ def test_deploy_rejects_mutable_image_tag_before_docker(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 2
-    assert "immutable sha256 digest" in result.stderr
-    assert not Path(env["FAKE_EVENT_LOG"]).exists()
+    assert result.returncode != 0
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "gh attestation verify" in events
+    assert "docker " not in events
 
 
 def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None:
@@ -283,9 +304,7 @@ def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None
             "bash",
             "scripts/deploy_builderops.sh",
             "deploy",
-            source_sha,
-            digest,
-            postgres_digest,
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
         ],
         cwd=root,
         env=env,
@@ -298,3 +317,32 @@ def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "tailscale serve status --json" in events
     assert "tailscale serve --bg" not in events
+    assert " pull " not in events
+    assert " up " not in events
+
+
+def test_candidate_pair_receipt_provenance_is_strict_before_docker(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    receipt_path = Path(env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["source_ref"] = "refs/heads/untrusted"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            str(receipt_path),
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "gh attestation verify" in events
+    assert "docker " not in events

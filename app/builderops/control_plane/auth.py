@@ -58,14 +58,20 @@ class CredentialRegistry:
             if not isinstance(raw, dict):
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata")
             try:
-                credential_id = str(raw["id"]).strip()
-                principal = str(raw["principal"]).strip()
-                secret_ref = str(raw["secret_ref"]).strip()
+                credential_id_raw = raw["id"]
+                principal_raw = raw["principal"]
+                secret_ref_raw = raw["secret_ref"]
                 scopes_raw = raw["scopes"]
                 raw_generation = raw["rotation_generation"]
-                if isinstance(raw_generation, bool):
+                if not all(
+                    type(value) is str
+                    for value in (credential_id_raw, principal_raw, secret_ref_raw)
+                ) or type(raw_generation) is not int:
                     raise ValueError
-                generation = int(raw_generation)
+                credential_id = credential_id_raw.strip()
+                principal = principal_raw.strip()
+                secret_ref = secret_ref_raw.strip()
+                generation = raw_generation
             except (KeyError, TypeError, ValueError) as exc:
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata") from exc
             if (
@@ -95,10 +101,17 @@ class CredentialRegistry:
                     "BuilderOps credential scopes must be unique bounded identifiers"
                 )
             scopes = frozenset(scopes_raw)
-            if bool(raw.get("revoked", False)):
+            revoked = raw.get("revoked", False)
+            if type(revoked) is not bool:
+                raise CredentialConfigurationError("invalid BuilderOps credential metadata")
+            if revoked:
                 continue
-            verifier = str(raw.get("verifier_sha256", "")).strip().lower()
-            secret_file_raw = str(raw.get("secret_file", "")).strip()
+            verifier_raw = raw.get("verifier_sha256", "")
+            secret_file_value = raw.get("secret_file", "")
+            if type(verifier_raw) is not str or type(secret_file_value) is not str:
+                raise CredentialConfigurationError("invalid BuilderOps credential metadata")
+            verifier = verifier_raw.strip().lower()
+            secret_file_raw = secret_file_value.strip()
             if verifier and secret_file_raw:
                 raise CredentialConfigurationError(
                     "credential metadata must use either a verifier or a secret file"
@@ -170,7 +183,30 @@ class CredentialRegistry:
             for token in re.split(r"[\s\"'`,;()\[\]{}<>]+", value)
             if token
         )
-        return any(self.is_registered_secret(candidate) for candidate in candidates)
+        if any(self.is_registered_secret(candidate) for candidate in candidates):
+            return True
+
+        # Verifier-only credentials can be checked only as complete candidates.
+        # Compatibility secret files permit a transient containment check so a
+        # registered bearer cannot be hidden behind punctuation or key/value
+        # delimiters in an otherwise ordinary durable string.
+        try:
+            document = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            raw_entries = document.get("credentials", [])
+            for raw in raw_entries:
+                if not isinstance(raw, dict) or type(raw.get("secret_file", "")) is not str:
+                    continue
+                secret_file = raw.get("secret_file", "").strip()
+                if not secret_file:
+                    continue
+                secret = Path(secret_file).read_text(encoding="utf-8").strip()
+                if secret and secret in value:
+                    return True
+        except (OSError, json.JSONDecodeError):
+            # _entries() remains the fail-closed authority for unusable
+            # credential configuration; never turn this scan into a bypass.
+            self._entries()
+        return False
 
     def status(self) -> dict[str, Any]:
         entries = [credential for credential, _secret in self._entries()]

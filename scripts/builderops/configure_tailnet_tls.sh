@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mode="${1:-configure}"
+if [ "${mode}" != configure ] && [ "${mode}" != --preflight ]; then
+  echo "usage: configure_tailnet_tls.sh [--preflight]" >&2
+  exit 64
+fi
+
 backend_port="${BUILDEROPS_API_PORT:-18100}"
 https_port="${BUILDEROPS_TAILNET_HTTPS_PORT:-443}"
 if [[ ! "$backend_port" =~ ^[1-9][0-9]{1,4}$ || "$backend_port" -gt 65535 ]]; then
@@ -44,6 +50,11 @@ def active_funnel(value):
 if active_funnel(status):
     raise SystemExit("public Funnel exposure is forbidden for BuilderOps")
 ' <<<"$serve_status"
+
+if [ "${mode}" = --preflight ]; then
+  echo "BuilderOps tailnet preflight passed without mutation"
+  exit 0
+fi
 
 tailscale serve --bg --yes --https="$https_port" "$target" >/dev/null
 serve_status="$(tailscale serve status --json)"

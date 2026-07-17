@@ -102,3 +102,10 @@ def test_builderops_publish_reuses_the_restore_proved_images() -> None:
     assert "docker build" not in builderops_job[publish:]
     assert 'docker push "${{ steps.images.outputs.control_plane }}"' in builderops_job[publish:]
     assert 'docker push "${{ steps.images.outputs.postgres }}"' in builderops_job[publish:]
+    receipt = builderops_job.index("Write the restore-proved candidate pair receipt")
+    attestation = builderops_job.index("Attest the restore-proved candidate pair receipt")
+    assert publish < receipt < attestation
+    assert "actions/attest-build-provenance@v2" in builderops_job
+    assert "subject-path: builderops-candidate-pair.json" in builderops_job
+    assert "id-token: write" in builderops_job
+    assert "attestations: write" in builderops_job

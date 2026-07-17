@@ -183,10 +183,13 @@ def test_scoped_api_auth_fails_closed(tmp_path: Path) -> None:
         {"github-token": "opaque-sensitive-value"},
         {"apiKey": "opaque-sensitive-value"},
         {"APIKey": "opaque-sensitive-value"},
+        {"apikey": "opaque-sensitive-value"},
+        {"privatekey": "opaque-sensitive-value"},
         {"session cookie": "opaque-sensitive-value"},
         {"fingerprint": "opaque-raw-database-password"},
         {"secret_ref": "inline:opaque-raw-provider-secret"},
         {"summary": "client-token"},
+        {"summary": "x=client-token&y"},
         {"database": "postgresql://app:raw-password@db/builderops"},
     ):
         rejected = client.post(
@@ -225,6 +228,10 @@ def test_database_dsn_resolves_from_secret_file(tmp_path: Path) -> None:
         lambda entry, _secret: entry.update(scopes=["records:write", "records:write"]),
         lambda entry, _secret: entry.update(scopes=["unbounded"]),
         lambda entry, _secret: entry.update(rotation_generation=True),
+        lambda entry, _secret: entry.update(rotation_generation=1.5),
+        lambda entry, _secret: entry.update(rotation_generation="1"),
+        lambda entry, _secret: entry.update(id=123),
+        lambda entry, _secret: entry.update(revoked="false"),
     ),
 )
 def test_malformed_credential_metadata_fails_secret_safe(

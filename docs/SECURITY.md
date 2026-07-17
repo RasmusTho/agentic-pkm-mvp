@@ -90,7 +90,9 @@ BuilderOps independent control-plane contract (#3790):
 - Candidate control-plane and PostgreSQL/WAL-G images must pass a real encrypted backup plus
   archived-WAL restore gate. The gate uses independent recovery-key material, binds verification to
   the restored PostgreSQL data directory, validates the recovery fence, and scans recovery material
-  and restored state for raw credentials.
+  and restored state for raw credentials. Main CI then emits and GitHub-attests one candidate-pair
+  receipt binding the source SHA to both exact `linux/amd64` digests; deployment rejects independent
+  digest arguments or an unattested/mismatched receipt.
 
 Remaining gaps:
 - ensure all externally exposed routers apply auth consistently

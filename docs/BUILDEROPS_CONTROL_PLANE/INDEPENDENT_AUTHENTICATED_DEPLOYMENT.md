@@ -133,20 +133,23 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - [ ] BuilderOps Compose uses a distinct project, PostgreSQL service/database/role/volume/secrets,
   migrations, API/worker, and release pin without importing Product Compose lifecycle.
   Verify: `tests/ops/test_builderops_compose_contract.py::test_builderops_compose_is_lifecycle_isolated`.
-- [ ] Product services can remain stopped while BuilderOps reaches ready, and BuilderOps can remain
-  stopped while Product reaches its own readiness without attempting to start it.
+- [ ] Repository lifecycle commands keep Product and BuilderOps projects independent: neither
+  start/stop path imports or attempts to start the other. Live two-engine lifecycle/load proof on
+  Demerzel remains an operator-gated successor receipt.
   Verify: `tests/ops/test_builderops_lifecycle_isolation.py::test_product_and_builderops_start_stop_independently`.
 - [ ] Readiness/status reports database/schema/authority epoch, outbox/dead-letter, lease, auth,
   rate-limit, and executor-heartbeat state without exposing secrets.
   Verify: `tests/builderops/control_plane/test_service_health.py::test_readiness_and_status_cover_required_dependencies_without_secrets`.
-- [ ] Deploy and rollback use a BuilderOps-specific immutable pin and emit receipts that identify
-  image SHA, schema version, and authority epoch without restoring an older authoritative snapshot.
+- [ ] Deploy accepts only a GitHub-attested main-workflow receipt binding one source SHA to both the
+  restore-proved `linux/amd64` control-plane and PostgreSQL/WAL-G digests. Rollback uses the prior
+  trusted dual pin; deployment receipts identify both digests, schema version, and authority epoch
+  without restoring an older authoritative snapshot.
   Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
-- [ ] The BuilderOps-only Compose project and database run on a separate VM/container engine from
-  the `pkm-*` stacks, and
-  stopping, restarting, or load-cycling the Product stacks leaves BuilderOps ready and mutating
-  normally; a co-resident recovery target fails `/readyz`, while a stalled backup/WAL-archiving
-  pipeline raises a loud alert/status condition without blocking acknowledgement.
+- [ ] Repository preflight and Compose contracts require a BuilderOps-only project, database, and
+  separate container-engine identity from the `pkm-*` stacks. A co-resident recovery target fails
+  `/readyz`, while a stalled backup/WAL-archiving pipeline raises a loud alert/status condition
+  without blocking acknowledgement. Live Product load-cycle survival is deferred to the same
+  operator-gated two-engine receipt.
   Verify: `tests/ops/test_builderops_failure_domain.py::test_builder_plane_survives_product_stack_lifecycle_and_alerts_on_stalled_archiving`.
 - [ ] With Demerzel's host secret store unavailable, independently recoverable key/KMS custody can
   decrypt an encrypted full backup plus archived WAL and restore a disposable database to the latest
@@ -169,9 +172,10 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 
 - render/validate Compose config under the dedicated project name;
 - run auth-negative, credential-redaction, durable-state, WAL, and restored-backup secret scans;
-- stop/restart the Product stacks and stall WAL archiving to prove builder-plane independence and
-  loud alerting, then execute full backup + archived-WAL restore to the latest archived point in an
-  isolated test project with Demerzel's host secret store unavailable; and
+- validate the repository lifecycle/failure-domain contracts and stall WAL archiving to prove loud
+  alerting; the later operator-gated host receipt owns Product load-cycle survival. Execute full
+  backup + archived-WAL restore to the latest archived point in an isolated test project with
+  Demerzel's host secret store unavailable; and
 - run `ruff check app tests` plus focused ops tests.
 
 ## Related Docs

@@ -12,7 +12,7 @@ export BUILDEROPS_PIN_FILE
 source "${ROOT}/scripts/lib/builderops_compose.sh"
 
 usage() {
-  echo "usage: scripts/deploy_builderops.sh deploy <source-sha> <control-plane-digest> <postgres-walg-digest> | rollback" >&2
+  echo "usage: scripts/deploy_builderops.sh deploy <attested-candidate-pair-receipt.json> | rollback" >&2
   exit 2
 }
 
@@ -49,6 +49,50 @@ validate_identity() {
   [[ "${1}" =~ ^[0-9a-f]{40}$ ]] || { echo "source SHA must be 40 lowercase hex characters" >&2; exit 2; }
   [[ "${2}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "image pin must be an immutable sha256 digest" >&2; exit 2; }
   [[ "${3}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "PostgreSQL/WAL-G image pin must be an immutable sha256 digest" >&2; exit 2; }
+}
+
+load_attested_candidate_pair() {
+  local receipt="${1:?candidate pair receipt required}"
+  local expected_repository="RasmusTho/agentic-pkm-mvp"
+  local expected_workflow="RasmusTho/agentic-pkm-mvp/.github/workflows/app-image-build.yml"
+  command -v gh >/dev/null 2>&1 || {
+    echo "gh CLI is required to verify the BuilderOps candidate pair attestation" >&2
+    exit 69
+  }
+  gh attestation verify "${receipt}" \
+    --repo "${expected_repository}" \
+    --signer-workflow "${expected_workflow}" >/dev/null
+  IFS=$'\t' read -r target_sha target_digest target_postgres_digest < <(
+    python3 - "${receipt}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "receipt_version": 1,
+    "repository": "RasmusTho/agentic-pkm-mvp",
+    "workflow": ".github/workflows/app-image-build.yml",
+    "event_name": "push",
+    "source_ref": "refs/heads/main",
+    "restore_gate": "encrypted-full-backup-plus-archived-wal",
+    "platform": "linux/amd64",
+}
+if not isinstance(payload, dict) or any(payload.get(key) != value for key, value in expected.items()):
+    raise SystemExit("candidate pair receipt has invalid trusted provenance")
+source_sha = payload.get("source_sha")
+control = payload.get("control_plane_image_digest")
+postgres = payload.get("postgres_walg_image_digest")
+if not isinstance(source_sha, str) or re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
+    raise SystemExit("candidate pair receipt has invalid source SHA")
+for name, value in (("control-plane", control), ("PostgreSQL/WAL-G", postgres)):
+    if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+        raise SystemExit(f"candidate pair receipt has invalid {name} digest")
+print(source_sha, control, postgres, sep="\t")
+PY
+  )
+  export target_sha target_digest target_postgres_digest
 }
 
 wait_ready() {
@@ -117,10 +161,8 @@ current_postgres_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGE
 
 case "${action}" in
   deploy)
-    [ "$#" -eq 4 ] || usage
-    target_sha="${2}"
-    target_digest="${3}"
-    target_postgres_digest="${4}"
+    [ "$#" -eq 2 ] || usage
+    load_attested_candidate_pair "${2}"
     ;;
   rollback)
     [ "$#" -eq 1 ] || usage
@@ -135,6 +177,7 @@ esac
 validate_identity "${target_sha}" "${target_digest}" "${target_postgres_digest}"
 builderops_assert_failure_domain
 builderops_validate_recovery_target "${ROOT}"
+"${ROOT}/scripts/builderops/configure_tailnet_tls.sh" --preflight
 
 placeholder_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000"
 pin_backup="$(mktemp "${PIN_FILE}.rollback.XXXXXX")"
