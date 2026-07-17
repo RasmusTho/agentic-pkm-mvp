@@ -138,6 +138,43 @@ def test_restored_positive_authority_epoch_is_ready(tmp_path: Path) -> None:
     assert response.json()["database"]["authority_epoch"] == 42
 
 
+def test_database_outage_cannot_escape_live_status_boundary(tmp_path: Path) -> None:
+    class OfflineStore(_Store):
+        def readiness(self) -> dict[str, int]:
+            raise RuntimeError("database offline: raw-password")
+
+        def service_heartbeat(self, service_name: str) -> dict[str, object] | None:
+            raise RuntimeError(f"database offline for {service_name}: raw-password")
+
+    registry = _registry(tmp_path)
+    store = OfflineStore()
+    operational = LiveOperationalStatusProvider(
+        store,  # type: ignore[arg-type]
+        recovery_target_file=tmp_path / "missing-target.json",
+        worker_heartbeat_file=tmp_path / "missing-worker.json",
+    )
+    client = TestClient(
+        create_app(
+            store=store,  # type: ignore[arg-type]
+            credentials=registry,
+            health=HealthService(store, registry, operational),  # type: ignore[arg-type]
+        )
+    )
+    headers = {"Authorization": "Bearer raw-client-secret"}
+
+    assert client.get("/readyz", headers=headers).status_code == 503
+    response = client.get("/status", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["database"] == {
+        "available": False,
+        "schema_version": None,
+        "authority_epoch": None,
+    }
+    assert response.json()["executor_heartbeat"] == {"state": "unknown"}
+    assert "raw-password" not in response.text
+
+
 def test_live_provider_validates_recovery_failure_domain_and_shared_worker_heartbeat(
     tmp_path: Path,
 ) -> None:

@@ -39,7 +39,8 @@ def test_restore_from_backup_without_demerzel_secret_store(tmp_path: Path) -> No
     _tool(
         bin_dir,
         "python",
-        'cat >/dev/null; printf \'{"authority_epoch": 2, "executor_enabled": false, '
+        'printf "python:%s\\n" "$*" >>"$CALLS"; cat >"$PYTHON_STDIN"; '
+        'printf \'{"authority_epoch": 2, "executor_enabled": false, '
         '"ok": true, "reconciliation_required": true, "schema_version": 2}\\n\'',
     )
 
@@ -54,6 +55,7 @@ def test_restore_from_backup_without_demerzel_secret_store(tmp_path: Path) -> No
         {
             "PATH": f"{bin_dir}:{env['PATH']}",
             "CALLS": str(calls),
+            "PYTHON_STDIN": str(tmp_path / "restore-verifier.py"),
             "WALG_S3_PREFIX": "s3://offsite.example.invalid/builderops",
             "BUILDEROPS_RECOVERY_ID": "drill-20260716",
             "BUILDEROPS_RESTORE_REPOSITORY": "RasmusTho/agentic-pkm-mvp",
@@ -80,10 +82,16 @@ def test_restore_from_backup_without_demerzel_secret_store(tmp_path: Path) -> No
     assert '"executor_enabled": false' in result.stdout
     assert "backup-fetch" in calls.read_text(encoding="utf-8")
     recovery_config = (restored / "postgresql.auto.conf").read_text(encoding="utf-8")
-    assert "wal_archive.sh fetch %f %p" in recovery_config
+    assert f"{REPO_ROOT}/scripts/builderops/wal_archive.sh fetch %f %p" in recovery_config
     assert "recovery_target_lsn = '0/1600000'" in recovery_config
     assert (restored / "recovery.signal").exists()
-    combined = result.stdout + result.stderr + calls.read_text(encoding="utf-8") + recovery_config
+    call_log = calls.read_text(encoding="utf-8")
+    assert "unix_socket_directories=" in call_log
+    assert str(restored) in call_log
+    verifier = Path(env["PYTHON_STDIN"]).read_text(encoding="utf-8")
+    assert 'identity_conn.execute("SHOW data_directory")' in verifier
+    assert "verification DSN is not bound" in verifier
+    combined = result.stdout + result.stderr + call_log + recovery_config
     assert all(value not in combined for value in secrets.values())
 
     rejected = subprocess.run(
@@ -95,6 +103,25 @@ def test_restore_from_backup_without_demerzel_secret_store(tmp_path: Path) -> No
     )
     assert rejected.returncode != 0
     assert "primary host secret store unavailable" in rejected.stderr
+
+
+def test_real_encrypted_restore_selftest_is_a_required_image_gate() -> None:
+    script = (REPO_ROOT / "scripts/builderops/real_restore_selftest.sh").read_text(
+        encoding="utf-8"
+    )
+    workflow = (REPO_ROOT / ".github/workflows/app-image-build.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "wal-g backup-push" in script
+    assert "wal-g backup-fetch" in script
+    assert "pg_switch_wal" in script
+    assert "wal-sentinel-3790" in script
+    assert "activate_recovered_epoch" in script
+    assert "reconciliation_required" in script
+    assert "raw database credential leaked" in script
+    assert "real_restore_selftest.sh" in workflow
+    assert "Prove encrypted full-backup plus archived-WAL restore" in workflow
 
 
 def _schema_dsn(dsn: str, schema: str) -> str:

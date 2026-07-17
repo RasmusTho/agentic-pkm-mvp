@@ -167,6 +167,8 @@ def test_scoped_api_auth_fails_closed(tmp_path: Path) -> None:
                 "summary": "credential rotation observed",
                 "secret_ref": "keychain:builderops/client",
                 "fingerprint": "f" * 64,
+                "credential_id": "builderops-client.2",
+                "scopes": ["records:write", "leases:write"],
                 "rotation_generation": 2,
             }
         ),
@@ -176,7 +178,10 @@ def test_scoped_api_auth_fails_closed(tmp_path: Path) -> None:
         {"github_token": "github_pat_RAW"},
         {"github-token": "opaque-sensitive-value"},
         {"apiKey": "opaque-sensitive-value"},
+        {"APIKey": "opaque-sensitive-value"},
         {"session cookie": "opaque-sensitive-value"},
+        {"fingerprint": "opaque-raw-database-password"},
+        {"secret_ref": "inline:opaque-raw-provider-secret"},
         {"summary": "client-token"},
         {"database": "postgresql://app:raw-password@db/builderops"},
     ):

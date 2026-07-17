@@ -142,12 +142,24 @@ activate_target() {
   builderops_compose "${ROOT}" up --abort-on-container-exit --exit-code-from migrate migrate || return
   builderops_compose "${ROOT}" up -d --force-recreate api worker || return
   wait_ready || return
+  "${ROOT}/scripts/builderops/configure_tailnet_tls.sh" || return
+}
+
+reactivate_previous_release() {
+  cp "${pin_backup}" "${PIN_FILE}" || return
+  builderops_compose "${ROOT}" pull api worker || return
+  builderops_compose "${ROOT}" up -d --force-recreate api worker || return
+  wait_ready || return
 }
 
 if ! activate_target; then
-  cp "${pin_backup}" "${PIN_FILE}"
+  if ! reactivate_previous_release; then
+    rm -f "${pin_backup}"
+    echo "CRITICAL: BuilderOps target activation failed and the previous live release could not be restored" >&2
+    exit 1
+  fi
   rm -f "${pin_backup}"
-  echo "BuilderOps activation gate failed; canonical pin restored and authoritative database was not rewound" >&2
+  echo "BuilderOps activation gate failed; previous pin and live API/worker release restored without rewinding the database" >&2
   exit 1
 fi
 

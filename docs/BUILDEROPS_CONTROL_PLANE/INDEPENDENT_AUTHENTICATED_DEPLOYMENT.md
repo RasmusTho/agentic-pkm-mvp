@@ -16,9 +16,12 @@ can_parallelize_with: [BCP-03]
 Implemented by #3790 at the repo/deployment-contract level: the independent FastAPI factory,
 scoped/revocable credential verifier, durable-payload secret guard, PostgreSQL migration gate,
 API/worker/DB Compose project, separate Docker-engine preflight, immutable image pins,
-authenticated probes, secret-safe live status/metrics, deploy/rollback receipts, WAL-G backup/WAL
-archive wrappers, structural recovery-target validation, and independently credentialed restore
-drill are present. Restore activation increments the database-owned authority epoch, invalidates
+authenticated probes, Tailscale Serve TLS termination, secret-safe live status/metrics,
+failure-safe deploy/rollback receipts, a dedicated PostgreSQL 16 + WAL-G image, WAL-G backup/WAL
+archive wrappers, structural recovery-target validation, and an image-level encrypted restore
+gate are present. The gate performs a real full backup, archived-WAL recovery into a disposable
+PostgreSQL instance, restored-data/integrity checks, and negative credential scans without using
+Demerzel host secrets. Restore activation increments the database-owned authority epoch, invalidates
 leases, marks claimed effects unknown, and keeps the executor fenced until reconciliation.
 
 No production authority or client cutover is claimed here. The committed zero digests are deliberate
@@ -38,6 +41,8 @@ Product ownership.
 - create a separate BuilderOps FastAPI/service entrypoint over the BCP-01 store port;
 - require encrypted tailnet transport and revocable, scoped client credentials; distinguish normal,
   privileged executor, and operator scopes;
+- terminate tailnet-only HTTPS with Tailscale Serve and verify that Funnel/public exposure is not
+  enabled before a deployment is accepted;
 - keep raw client/database/GitHub/model credentials in host secret stores only; persist only secret
   references, non-secret fingerprints, scopes, and rotation generations;
 - create a BuilderOps-only Compose project with its own API, outbox worker, migration gate,
@@ -54,6 +59,8 @@ Product ownership.
   retention, documented point-in-time restore, and an automated restore-from-backup drill with
   Demerzel's host secret store unavailable (ADR-0062 A1: recovery durability is asynchronous and
   never gates acknowledgement);
+- build the control-plane and PostgreSQL/WAL-G images in CI and run the encrypted full-backup plus
+  archived-WAL restore gate against those exact candidate images before publication;
 - run the BuilderOps-only Compose project and database on a separate VM/container engine on
   Demerzel, outside the `pkm-*` container-VM failure domain, so Product deploys, restarts, resource
   pressure, and container-VM lifecycle events cannot stop the builder plane (ADR-0062 A2);
@@ -109,6 +116,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - A persistent volume or snapshot alone is not accepted as recoverability. Full backup + archived
   WAL must restore to the latest archived point; backup/restore negative scans must also prove the
   credential exclusion boundary.
+- A candidate image is not publishable unless the image-level restore gate proves the real WAL-G,
+  PostgreSQL, migration, recovery-fence, and credential-exclusion paths together.
 - The BuilderOps-only Compose project and database run on a separate VM/container engine from the
   `pkm-*` stacks; no Product lifecycle event can stop, restart, or resource-starve the builder plane
   (ADR-0062 A2). A native host service is outside this task's selected deployment contract.

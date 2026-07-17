@@ -46,8 +46,39 @@ _SECRET_VALUE_PREFIXES = ("bearer ", "ghp_", "github_pat_", "sk-")
 def _canonical_durable_key(key: str) -> str:
     """Normalize common structured-key spellings before secret classification."""
 
-    camel_split = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key.strip())
+    acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key.strip())
+    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", acronym_split)
     return re.sub(r"[^A-Za-z0-9]+", "_", camel_split).strip("_").lower()
+
+
+def _assert_secret_metadata_shape(key: str, value: Any) -> None:
+    """Allow only non-secret reference/fingerprint/scope/rotation metadata."""
+
+    if key == "secret_ref":
+        if not isinstance(value, str) or re.fullmatch(
+            r"(?:host-secret|keychain):[A-Za-z0-9][A-Za-z0-9_./:@-]{0,255}", value
+        ) is None:
+            raise ValueError("secret_ref must use a supported opaque host-secret provider")
+    elif key == "fingerprint":
+        if not isinstance(value, str) or re.fullmatch(
+            r"(?:sha256:)?[0-9a-fA-F]{64}", value
+        ) is None:
+            raise ValueError("fingerprint must be a SHA-256 digest")
+    elif key == "scopes":
+        if not isinstance(value, (list, tuple)) or not all(
+            isinstance(scope, str)
+            and re.fullmatch(r"[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*", scope)
+            for scope in value
+        ):
+            raise ValueError("scopes must contain bounded scope identifiers")
+    elif key == "rotation_generation":
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("rotation_generation must be a positive integer")
+    elif key == "credential_id":
+        if not isinstance(value, str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}", value
+        ) is None:
+            raise ValueError("credential_id must be an opaque identifier")
 
 
 def _envelope(request: Any, credential: Credential) -> AuthorityEnvelope:
@@ -102,6 +133,8 @@ def _credential_dependency(
 def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, key: str = "") -> None:
     """Reject credential-shaped material before it can enter PostgreSQL/WAL/backups."""
     normalized_key = _canonical_durable_key(key)
+    if normalized_key in _ALLOWED_SECRET_METADATA_KEYS:
+        _assert_secret_metadata_shape(normalized_key, value)
     if (
         normalized_key
         and normalized_key not in _ALLOWED_SECRET_METADATA_KEYS
@@ -114,7 +147,11 @@ def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, ke
         return
     if isinstance(value, (list, tuple)):
         for child in value:
-            _assert_durable_payload_safe(child, registry, key=key)
+            # The collection shape above owns metadata validation. Children
+            # still receive the value scan without being mistaken for a whole
+            # `scopes` collection.
+            child_key = "" if normalized_key in _ALLOWED_SECRET_METADATA_KEYS else key
+            _assert_durable_payload_safe(child, registry, key=child_key)
         return
     if not isinstance(value, str):
         return

@@ -78,8 +78,16 @@ BuilderOps independent control-plane contract (#3790):
   broader scope merely to simplify the probe.
 - Tailnet TLS is the transport boundary, not authentication. Live activation still requires an
   operator-provided separate BuilderOps engine on the configured control-plane host, real immutable
-  pins, scoped host secrets, and the later BCP cutover gates; the repo configuration alone does not
-  claim a running production service.
+  pins, scoped host secrets, and the later BCP cutover gates. Deployment configures Tailscale Serve
+  for HTTPS termination to the loopback-only API port, verifies the expected mapping, and rejects
+  Funnel/public exposure; the repo configuration alone does not claim a running production service.
+- Durable metadata allowlists are shape-checked: fingerprints must be SHA-256 values, secret
+  references must identify a supported host-secret provider, and scope/rotation fields must have
+  their bounded canonical forms. Credential-like spelling variants such as `APIKey` remain denied.
+- Candidate control-plane and PostgreSQL/WAL-G images must pass a real encrypted backup plus
+  archived-WAL restore gate. The gate uses independent recovery-key material, binds verification to
+  the restored PostgreSQL data directory, validates the recovery fence, and scans recovery material
+  and restored state for raw credentials.
 
 Remaining gaps:
 - ensure all externally exposed routers apply auth consistently

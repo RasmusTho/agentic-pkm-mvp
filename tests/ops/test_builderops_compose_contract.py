@@ -109,3 +109,19 @@ def test_builderops_image_has_a_dedicated_non_root_entrypoint() -> None:
     assert "ALTER DEFAULT PRIVILEGES FOR ROLE builderops_owner" in roles
     assert "BUILDEROPS_DATABASE_APP_PASSWORD_FILE" in roles
     assert "PASSWORD %L" in roles
+
+
+def test_builderops_postgres_pin_has_a_checked_multiarch_image_producer() -> None:
+    dockerfile = (ROOT / "Dockerfile.builderops-postgres").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/app-image-build.yml").read_text(encoding="utf-8")
+
+    assert "FROM postgres:16-bookworm" in dockerfile
+    assert "WAL_G_VERSION=v3.0.8" in dockerfile
+    assert "sha256sum -c" in dockerfile
+    assert "wal-g-pg-20.04-amd64" not in dockerfile
+    assert "wal_g_arch=amd64" in dockerfile
+    assert "wal_g_arch=aarch64" in dockerfile
+    assert "Dockerfile.builderops-postgres" in workflow
+    assert "builderops-postgres:${GITHUB_SHA}" in workflow
+    assert "--platform linux/amd64,linux/arm64" in workflow
+    assert "docker run --rm --entrypoint wal-g" in workflow

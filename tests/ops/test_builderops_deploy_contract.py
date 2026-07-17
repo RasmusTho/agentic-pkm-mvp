@@ -20,6 +20,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str]:
     for relative in (
         "scripts/lib/builderops_compose.sh",
         "scripts/deploy_builderops.sh",
+        "scripts/builderops/configure_tailnet_tls.sh",
         "config/deploy/builderops.env",
         "docker-compose.builderops.yml",
         "app/builderops/control_plane/recovery.py",
@@ -87,7 +88,22 @@ fi
         """#!/usr/bin/env bash
 set -eu
 printf 'curl %s\n' "$*" >> "$FAKE_EVENT_LOG"
+if [ -n "${FAKE_FAIL_READY_DIGEST:-}" ] && grep -q "$FAKE_FAIL_READY_DIGEST" "$BUILDEROPS_PIN_FILE"; then
+  exit 22
+fi
 printf '{"ready":true,"database":{"schema_version":7,"authority_epoch":3}}\n'
+""",
+    )
+    _write_executable(
+        bin_dir / "tailscale",
+        """#!/usr/bin/env bash
+set -eu
+printf 'tailscale %s\n' "$*" >> "$FAKE_EVENT_LOG"
+if [ "${1:-}" = status ]; then
+  printf '{"BackendState":"Running"}\n'
+elif [ "${1:-}" = serve ] && [ "${2:-}" = status ]; then
+  printf '{"AllowFunnel":false,"TCP":{"443":{"HTTPS":true}},"Web":{"builder.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18100"}}}}}\n'
+fi
 """,
     )
 
@@ -134,6 +150,8 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert "Authorization: Bearer" not in events
     assert "-p builderops-control-plane" in events
     assert "up -d db" in events
+    assert "tailscale serve --bg --yes --https=443 http://127.0.0.1:18100" in events
+    assert "tailscale serve status --json" in events
     assert "up --abort-on-container-exit --exit-code-from migrate migrate" in events
     assert events.index("up -d db") < events.index(
         "up --abort-on-container-exit --exit-code-from migrate migrate"
@@ -182,6 +200,28 @@ def test_failed_deploy_restores_canonical_pin_and_preserves_rollback_target(
     assert failed.returncode != 0
     assert pin_path.read_text(encoding="utf-8") == before
     assert not previous_path.exists()
+
+
+def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> None:
+    root, env, source_sha, digest = _harness(tmp_path)
+    pin_path = root / "config/deploy/builderops.env"
+    before = pin_path.read_text(encoding="utf-8")
+    env["FAKE_FAIL_READY_DIGEST"] = digest
+
+    failed = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "deploy", source_sha, digest],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert failed.returncode != 0
+    assert pin_path.read_text(encoding="utf-8") == before
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert events.count("up -d --force-recreate api worker") == 2
+    assert "previous pin and live API/worker release restored" in failed.stderr
 
 
 def test_deploy_rejects_mutable_image_tag_before_docker(tmp_path: Path) -> None:

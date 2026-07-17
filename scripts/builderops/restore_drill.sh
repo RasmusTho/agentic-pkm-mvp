@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
 if [[ $# -ne 2 ]]; then
   echo "usage: restore_drill.sh <empty-disposable-pgdata> <target-lsn>" >&2
   exit 64
@@ -8,6 +10,11 @@ fi
 
 restore_data=$1
 target_lsn=$2
+restore_port="${BUILDEROPS_RESTORE_PORT:-55432}"
+if [[ ! "$restore_port" =~ ^[1-9][0-9]{1,4}$ || "$restore_port" -gt 65535 ]]; then
+  echo "BUILDEROPS_RESTORE_PORT must be a valid TCP port" >&2
+  exit 64
+fi
 if [[ ! "$target_lsn" =~ ^[0-9A-F]+/[0-9A-F]+$ ]]; then
   echo "target LSN must use canonical hexadecimal PostgreSQL syntax" >&2
   exit 64
@@ -51,16 +58,24 @@ export AWS_SECRET_ACCESS_KEY_FILE="$INDEPENDENT_AWS_SECRET_ACCESS_KEY_FILE"
 export WALG_LIBSODIUM_KEY_FILE="$INDEPENDENT_WALG_LIBSODIUM_KEY_FILE"
 
 wal-g backup-fetch "$restore_data" LATEST
+if [[ "$SCRIPT_DIR" == *"'"* ]]; then
+  echo "restore script path must not contain a single quote" >&2
+  exit 64
+fi
 cat >>"$restore_data/postgresql.auto.conf" <<EOF
-restore_command = '/bin/bash /app/scripts/builderops/wal_archive.sh fetch %f %p'
+restore_command = '/bin/bash $SCRIPT_DIR/wal_archive.sh fetch %f %p'
 recovery_target_lsn = '$target_lsn'
 recovery_target_action = 'promote'
 EOF
 touch "$restore_data/recovery.signal"
 
-pg_ctl -D "$restore_data" -w start
+restore_socket="$(mktemp -d "${TMPDIR:-/tmp}/builderops-restore-socket.XXXXXX")"
+pg_ctl -D "$restore_data" -o \
+  "-c listen_addresses='' -c unix_socket_directories='$restore_socket' -c port=$restore_port" \
+  -w start
 cleanup() {
   pg_ctl -D "$restore_data" -m fast -w stop >/dev/null 2>&1 || true
+  rmdir "$restore_socket" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -70,17 +85,39 @@ python - \
   "$target_lsn" \
   "$BUILDEROPS_RECOVERY_ID" \
   "$BUILDEROPS_RESTORE_REPOSITORY" \
-  "$BUILDEROPS_RESTORE_SENTINEL_RECORD_ID" <<'PY'
+  "$BUILDEROPS_RESTORE_SENTINEL_RECORD_ID" \
+  "$restore_socket" \
+  "$restore_port" \
+  "$restore_data" <<'PY'
 import json
 import os
 import sys
+from pathlib import Path
 
 import psycopg
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.builderops.control_plane import PostgresBuilderOpsStore
 
-target_lsn, recovery_id, repository, sentinel_record_id = sys.argv[1:]
-database_url = open(os.environ["BUILDEROPS_DATABASE_URL_FILE"], encoding="utf-8").read().strip()
+(
+    target_lsn,
+    recovery_id,
+    repository,
+    sentinel_record_id,
+    restore_socket,
+    restore_port,
+    restore_data,
+) = sys.argv[1:]
+credential_url = open(
+    os.environ["BUILDEROPS_DATABASE_URL_FILE"], encoding="utf-8"
+).read().strip()
+connection = conninfo_to_dict(credential_url)
+connection.update(host=restore_socket, port=restore_port)
+database_url = make_conninfo(**connection)
+with psycopg.connect(database_url) as identity_conn:
+    actual_data_directory = identity_conn.execute("SHOW data_directory").fetchone()[0]
+if Path(actual_data_directory).resolve() != Path(restore_data).resolve():
+    raise SystemExit("verification DSN is not bound to the disposable restored PGDATA")
 store = PostgresBuilderOpsStore(database_url)
 epoch = store.activate_recovered_epoch(recovery_id=recovery_id, restored_lsn=target_lsn)
 with psycopg.connect(database_url) as conn:

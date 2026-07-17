@@ -99,7 +99,9 @@ class LiveOperationalStatusProvider:
                 raw = json.loads(self.worker_heartbeat_file.read_text(encoding="utf-8"))
             observed = datetime.fromisoformat(str(raw["observed_at"]).replace("Z", "+00:00"))
             age = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
-        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        except Exception:
+            # Health is a fail-closed operational boundary. Driver-specific
+            # provider failures become an observable unknown state, never 500.
             return "unknown"
         return "healthy" if raw.get("state") == "running" and 0 <= age <= 45 else "stale"
 
@@ -173,7 +175,10 @@ class HealthService:
             }
         except Exception:
             database = {"available": False, "schema_version": None, "authority_epoch": None}
-        runtime = self.operational.snapshot()
+        try:
+            runtime = self.operational.snapshot()
+        except Exception:
+            runtime = OperationalStatus()
         expected_lineage = database["schema_version"] == SCHEMA_VERSION and bool(
             database["authority_epoch"] and database["authority_epoch"] > 0
         )
