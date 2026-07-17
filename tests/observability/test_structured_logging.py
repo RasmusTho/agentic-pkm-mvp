@@ -150,6 +150,30 @@ def test_configure_json_logging_is_idempotent(clean_root_logger):
     assert len(json_handlers) == 1
 
 
+def test_reconfigure_json_logging_replaces_closed_capture_stream(clean_root_logger):
+    from app.observability.logging_setup import (
+        JsonLogFormatter,
+        configure_json_logging,
+    )
+
+    closed_capture = io.StringIO()
+    handler = configure_json_logging(stream=closed_capture)
+    closed_capture.close()
+    replacement = io.StringIO()
+
+    rebound = configure_json_logging(stream=replacement)
+    logging.getLogger("app.test.closed.capture").info("rebound")
+
+    assert rebound is handler
+    assert json.loads(replacement.getvalue())["message"] == "rebound"
+    json_handlers = [
+        candidate
+        for candidate in logging.getLogger().handlers
+        if isinstance(candidate.formatter, JsonLogFormatter)
+    ]
+    assert json_handlers == [handler]
+
+
 # ---------------------------------------------------------------------------
 # Process entrypoint wiring: API, worker, watcher.
 # ---------------------------------------------------------------------------
