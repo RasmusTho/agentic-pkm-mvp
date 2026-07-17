@@ -38,7 +38,14 @@ _FORBIDDEN_DURABLE_KEYS = re.compile(
     re.IGNORECASE,
 )
 _ALLOWED_SECRET_METADATA_KEYS = frozenset(
-    {"secret_ref", "fingerprint", "scopes", "rotation_generation", "credential_id"}
+    {
+        "secret_ref",
+        "fingerprint",
+        "scopes",
+        "rotation_generation",
+        "credential_id",
+        "token_length",
+    }
 )
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
     {
@@ -101,6 +108,9 @@ def _assert_secret_metadata_shape(key: str, value: Any) -> None:
             r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}", value
         ) is None:
             raise ValueError("credential_id must be an opaque identifier")
+    elif key == "token_length":
+        if type(value) is not int or not 8 <= value <= 512:
+            raise ValueError("token_length must be a bounded positive integer")
 
 
 def _envelope(request: Any, credential: Credential) -> AuthorityEnvelope:

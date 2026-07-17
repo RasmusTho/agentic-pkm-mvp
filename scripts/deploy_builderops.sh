@@ -59,9 +59,6 @@ load_attested_candidate_pair() {
     echo "gh CLI is required to verify the BuilderOps candidate pair attestation" >&2
     exit 69
   }
-  gh attestation verify "${receipt}" \
-    --repo "${expected_repository}" \
-    --signer-workflow "${expected_workflow}" >/dev/null
   IFS=$'\t' read -r target_sha target_digest target_postgres_digest < <(
     python3 - "${receipt}" <<'PY'
 import json
@@ -92,6 +89,11 @@ for name, value in (("control-plane", control), ("PostgreSQL/WAL-G", postgres)):
 print(source_sha, control, postgres, sep="\t")
 PY
   )
+  gh attestation verify "${receipt}" \
+    --repo "${expected_repository}" \
+    --signer-workflow "${expected_workflow}" \
+    --source-ref refs/heads/main \
+    --source-digest "${target_sha}" >/dev/null
   export target_sha target_digest target_postgres_digest
 }
 

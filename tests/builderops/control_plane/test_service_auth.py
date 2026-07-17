@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -174,6 +175,7 @@ def test_scoped_api_auth_fails_closed(tmp_path: Path) -> None:
                 "credential_id": "builderops-client.2",
                 "scopes": ["records:write", "leases:write"],
                 "rotation_generation": 2,
+                "token_length": len("client-token"),
             }
         ),
     )
@@ -232,6 +234,7 @@ def test_database_dsn_resolves_from_secret_file(tmp_path: Path) -> None:
         lambda entry, _secret: entry.update(rotation_generation="1"),
         lambda entry, _secret: entry.update(id=123),
         lambda entry, _secret: entry.update(revoked="false"),
+        lambda entry, _secret: entry.update(token_length="13"),
     ),
 )
 def test_malformed_credential_metadata_fails_secret_safe(
@@ -284,6 +287,41 @@ def test_duplicate_credential_ids_and_verifiers_fail_closed(tmp_path: Path) -> N
         )
         with pytest.raises(CredentialConfigurationError):
             CredentialRegistry(manifest).status()
+
+
+def test_verifier_only_registered_bearer_cannot_be_embedded_in_durable_text(
+    tmp_path: Path,
+) -> None:
+    secret = "client-token"
+    manifest = tmp_path / "verifier-only.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "credentials": [
+                    {
+                        "id": "client",
+                        "principal": "client:one",
+                        "secret_ref": "host-secret:client",
+                        "verifier_sha256": hashlib.sha256(secret.encode()).hexdigest(),
+                        "token_length": len(secret),
+                        "scopes": ["records:write"],
+                        "rotation_generation": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = _Store()
+    client = TestClient(create_app(store=store, credentials=CredentialRegistry(manifest)))  # type: ignore[arg-type]
+
+    response = client.post(
+        "/v1/records",
+        headers={"Authorization": f"Bearer {secret}"},
+        json=_record_payload({"summary": f"x={secret}&y"}),
+    )
+
+    assert response.status_code == 400
 
 
 def test_raw_credentials_are_rejected_from_every_client_controlled_durable_field(

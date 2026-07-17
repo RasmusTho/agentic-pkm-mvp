@@ -274,7 +274,7 @@ def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> 
 
 
 def test_deploy_rejects_unattested_candidate_pair_before_docker(tmp_path: Path) -> None:
-    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    root, env, source_sha, _digest, _postgres_digest = _harness(tmp_path)
     env["FAKE_FAIL_ATTESTATION"] = "1"
     result = subprocess.run(
         [
@@ -292,6 +292,8 @@ def test_deploy_rejects_unattested_candidate_pair_before_docker(tmp_path: Path) 
     assert result.returncode != 0
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "gh attestation verify" in events
+    assert "--source-ref refs/heads/main" in events
+    assert f"--source-digest {source_sha}" in events
     assert "docker " not in events
 
 
@@ -343,6 +345,4 @@ def test_candidate_pair_receipt_provenance_is_strict_before_docker(tmp_path: Pat
     )
 
     assert result.returncode != 0
-    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
-    assert "gh attestation verify" in events
-    assert "docker " not in events
+    assert not Path(env["FAKE_EVENT_LOG"]).exists()

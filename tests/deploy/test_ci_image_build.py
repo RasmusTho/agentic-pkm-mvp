@@ -95,6 +95,9 @@ def test_single_image_artifact_per_commit() -> None:
 
 def test_builderops_publish_reuses_the_restore_proved_images() -> None:
     builderops_job = _workflow_text().split("\n  build-builderops-images:", maxsplit=1)[1]
+    build_job, attestation_job = builderops_job.split(
+        "\n  attest-builderops-candidate-pair:", maxsplit=1
+    )
     restore = builderops_job.index("Prove encrypted full-backup plus archived-WAL restore")
     publish = builderops_job.index("Publish the exact restore-proved BuilderOps images")
 
@@ -102,10 +105,13 @@ def test_builderops_publish_reuses_the_restore_proved_images() -> None:
     assert "docker build" not in builderops_job[publish:]
     assert 'docker push "${{ steps.images.outputs.control_plane }}"' in builderops_job[publish:]
     assert 'docker push "${{ steps.images.outputs.postgres }}"' in builderops_job[publish:]
-    receipt = builderops_job.index("Write the restore-proved candidate pair receipt")
-    attestation = builderops_job.index("Attest the restore-proved candidate pair receipt")
-    assert publish < receipt < attestation
-    assert "actions/attest-build-provenance@v2" in builderops_job
-    assert "subject-path: builderops-candidate-pair.json" in builderops_job
-    assert "id-token: write" in builderops_job
-    assert "attestations: write" in builderops_job
+    receipt = build_job.index("Write the restore-proved candidate pair receipt")
+    upload = build_job.index("Upload the restore-proved candidate pair receipt")
+    assert publish < receipt < upload
+    assert "id-token: write" not in build_job
+    assert "attestations: write" not in build_job
+    assert "needs: build-builderops-images" in attestation_job
+    assert "actions/attest-build-provenance@v2" in attestation_job
+    assert "subject-path: builderops-candidate-pair.json" in attestation_job
+    assert "id-token: write" in attestation_job
+    assert "attestations: write" in attestation_job

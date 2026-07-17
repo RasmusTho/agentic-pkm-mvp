@@ -64,8 +64,9 @@ BuilderOps independent control-plane contract (#3790):
   independent service requires a bearer credential on health, status, metrics, record, and lease
   routes even when the caller is on the tailnet or loopback.
 - The server-side credential manifest carries scope, revocation/rotation metadata, a non-secret
-  SHA-256 verifier, and references only. Raw bearer values may be supplied through host secret files
-  for compatibility bootstrap but are never returned or stored in BuilderOps PostgreSQL.
+  SHA-256 verifier, bounded token length, and references only. Token length permits verifier-only
+  substring scanning without retaining the bearer. Raw values may be supplied through host secret
+  files for compatibility bootstrap but are never returned or stored in BuilderOps PostgreSQL.
 - Complete durable request documents, including identifiers, envelope metadata, idempotency keys,
   and payloads, fail closed on registered bearer values, credential-shaped keys,
   credential-bearing database URLs, and known provider-token shapes. Secret references,
@@ -92,7 +93,9 @@ BuilderOps independent control-plane contract (#3790):
   the restored PostgreSQL data directory, validates the recovery fence, and scans recovery material
   and restored state for raw credentials. Main CI then emits and GitHub-attests one candidate-pair
   receipt binding the source SHA to both exact `linux/amd64` digests; deployment rejects independent
-  digest arguments or an unattested/mismatched receipt.
+  digest arguments or an unattested/mismatched receipt. Verification enforces the certificate's
+  `refs/heads/main` source ref and exact receipt source SHA. Only the push-only successor job receives
+  OIDC/attestation permissions, never the pull-request image job.
 
 Remaining gaps:
 - ensure all externally exposed routers apply auth consistently

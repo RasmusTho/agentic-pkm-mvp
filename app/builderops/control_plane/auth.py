@@ -25,6 +25,7 @@ class Credential:
     fingerprint: str
     scopes: frozenset[str]
     rotation_generation: int
+    token_length: int
 
 
 class CredentialRegistry:
@@ -119,6 +120,11 @@ class CredentialRegistry:
             if verifier:
                 if len(verifier) != 64 or any(char not in "0123456789abcdef" for char in verifier):
                     raise CredentialConfigurationError("invalid BuilderOps credential verifier")
+                token_length = raw.get("token_length")
+                if type(token_length) is not int or not 8 <= token_length <= 512:
+                    raise CredentialConfigurationError(
+                        "verifier-only credentials require a bounded token_length"
+                    )
             elif secret_file_raw:
                 try:
                     secret = Path(secret_file_raw).read_text(encoding="utf-8").strip()
@@ -128,6 +134,16 @@ class CredentialRegistry:
                     ) from exc
                 if not secret:
                     raise CredentialConfigurationError("BuilderOps credential secret is empty")
+                token_length = len(secret)
+                declared_length = raw.get("token_length", token_length)
+                if type(declared_length) is not int or declared_length != token_length:
+                    raise CredentialConfigurationError(
+                        "credential token_length does not match its secret file"
+                    )
+                if not 8 <= token_length <= 512:
+                    raise CredentialConfigurationError(
+                        "BuilderOps credential token length is outside the bounded range"
+                    )
                 verifier = self._fingerprint(secret)
             else:
                 raise CredentialConfigurationError("BuilderOps credential verifier is required")
@@ -143,6 +159,7 @@ class CredentialRegistry:
                         fingerprint=verifier,
                         scopes=scopes,
                         rotation_generation=generation,
+                        token_length=token_length,
                     ),
                     verifier,
                 )
@@ -183,29 +200,24 @@ class CredentialRegistry:
             for token in re.split(r"[\s\"'`,;()\[\]{}<>]+", value)
             if token
         )
-        if any(self.is_registered_secret(candidate) for candidate in candidates):
+        entries = self._entries()
+        if any(
+            hmac.compare_digest(self._fingerprint(candidate), verifier)
+            for candidate in candidates
+            for _credential, verifier in entries
+        ):
             return True
-
-        # Verifier-only credentials can be checked only as complete candidates.
-        # Compatibility secret files permit a transient containment check so a
-        # registered bearer cannot be hidden behind punctuation or key/value
-        # delimiters in an otherwise ordinary durable string.
-        try:
-            document = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-            raw_entries = document.get("credentials", [])
-            for raw in raw_entries:
-                if not isinstance(raw, dict) or type(raw.get("secret_file", "")) is not str:
-                    continue
-                secret_file = raw.get("secret_file", "").strip()
-                if not secret_file:
-                    continue
-                secret = Path(secret_file).read_text(encoding="utf-8").strip()
-                if secret and secret in value:
-                    return True
-        except (OSError, json.JSONDecodeError):
-            # _entries() remains the fail-closed authority for unusable
-            # credential configuration; never turn this scan into a bypass.
-            self._entries()
+        for credential, verifier in entries:
+            length = credential.token_length
+            if len(value) < length:
+                continue
+            if any(
+                hmac.compare_digest(
+                    self._fingerprint(value[offset : offset + length]), verifier
+                )
+                for offset in range(len(value) - length + 1)
+            ):
+                return True
         return False
 
     def status(self) -> dict[str, Any]:
@@ -224,6 +236,7 @@ class CredentialRegistry:
                     "fingerprint": entry.fingerprint,
                     "scopes": sorted(entry.scopes),
                     "rotation_generation": entry.rotation_generation,
+                    "token_length": entry.token_length,
                 }
                 for entry in entries
             ],

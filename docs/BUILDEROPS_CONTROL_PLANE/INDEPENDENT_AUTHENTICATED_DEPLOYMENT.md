@@ -44,7 +44,7 @@ Product ownership.
 - terminate tailnet-only HTTPS with Tailscale Serve and verify that Funnel/public exposure is not
   enabled before a deployment is accepted;
 - keep raw client/database/GitHub/model credentials in host secret stores only; persist only secret
-  references, non-secret fingerprints, scopes, and rotation generations;
+  references, non-secret fingerprints, bounded token lengths, scopes, and rotation generations;
 - create a BuilderOps-only Compose project with its own API, outbox worker, migration gate,
   PostgreSQL service/database/role/volume/secrets, and immutable release pin;
 - keep API, migration, and worker services on an internal-only network while granting outbound
@@ -157,8 +157,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   Verify: `tests/ops/test_builderops_backup_restore.py::test_restore_from_backup_without_demerzel_secret_store`.
 - [ ] Negative scans of PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, WAL,
   encrypted backup bytes, and a restored database find no raw client/database/GitHub/model/
-  recovery-decryption credential; only non-secret reference/fingerprint/scope/rotation metadata is
-  durable.
+  recovery-decryption credential; only non-secret reference/fingerprint/token-length/scope/rotation
+  metadata is durable.
   Verify: `tests/security/test_builderops_secret_persistence.py::test_raw_credentials_never_enter_durable_state_or_restored_backup`.
 
 ## Out of Scope
