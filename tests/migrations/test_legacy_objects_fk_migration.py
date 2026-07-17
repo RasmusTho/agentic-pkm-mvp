@@ -97,11 +97,11 @@ def test_legacy_objects_fk_migration_rejects_objects_uuid_fk_even_for_known_cons
 
     with psycopg.connect(scratch_dsn) as conn:
         target = conn.execute(
-            "SELECT referenced.attname FROM pg_constraint constraint "
-            "JOIN pg_attribute referenced ON referenced.attrelid = constraint.confrelid "
-            "AND referenced.attnum = constraint.confkey[1] "
-            "WHERE constraint.conrelid = 'public.decisions'::regclass "
-            "AND constraint.conname = 'decisions_object_id_fkey'"
+            "SELECT referenced.attname FROM pg_constraint c "
+            "JOIN pg_attribute referenced ON referenced.attrelid = c.confrelid "
+            "AND referenced.attnum = c.confkey[1] "
+            "WHERE c.conrelid = 'public.decisions'::regclass "
+            "AND c.conname = 'decisions_object_id_fkey'"
         ).fetchone()
     assert target == ("uuid",), "rejection must roll back before retargeting the child FK"
 
@@ -412,6 +412,7 @@ def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
         encoding="utf-8",
     )
     with psycopg.connect(scratch_dsn) as conn:
+        conn.execute("ALTER TABLE objects ADD COLUMN IF NOT EXISTS path text")
         conn.execute(
             "INSERT INTO objects (id, uuid, kind, payload, path) "
             "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
