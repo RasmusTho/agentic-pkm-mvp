@@ -450,14 +450,20 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Opt-in /metrics endpoint for the outbox worker; its coverage
             # lives in tests/workers/test_worker_metrics.py.
             "app/workers/metrics.py",
+            # The outbox service owns the queue's DB access (connection
+            # binding, idempotent writes, ack/bump) that the worker consumes
+            # (#3930); its regressions live in tests/services and tests/workers.
+            "app/services/outbox.py",
             "tests/workers/",
             "tests/worker/",
             "tests/services/test_outbox_idempotency.py",
+            "tests/services/test_outbox_conn_binding.py",
         ),
         (
             "tests/workers",
             "tests/worker",
             "tests/services/test_outbox_idempotency.py",
+            "tests/services/test_outbox_conn_binding.py",
             "tests/events",
         ),
     ),
