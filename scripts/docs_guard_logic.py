@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 TEMPORAL_DOCS = frozenset(
     {
         "docs/STATUS.md",
@@ -17,12 +19,14 @@ TEMPORAL_CODE_PREFIXES = ("app/", "scripts/", "config/", "docs/settings/")
 # doc. None means no doc has been assigned yet for that script: it falls back
 # to accepting any docs/development/ touch (the pre-existing, looser
 # behavior) instead of a false claim of a specific pairing that doesn't exist.
-GOVERNANCE_TEMPORAL_ENFORCEMENT: dict[str, str | None] = {
-    "scripts/docs_guard.py": None,
-    "scripts/docs_guard_logic.py": None,
-    "scripts/git_hygiene.py": None,
-    "scripts/select_pr_tests.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
-}
+GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
+    {
+        "scripts/docs_guard.py": None,
+        "scripts/docs_guard_logic.py": None,
+        "scripts/git_hygiene.py": None,
+        "scripts/select_pr_tests.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
+    }
+)
 
 
 def requires_temporal_owner_doc(changed: list[str]) -> bool:
@@ -51,7 +55,6 @@ def requires_temporal_owner_doc(changed: list[str]) -> bool:
     if not governance_only:
         return True
 
-    changed_set = set(changed)
     any_development_doc_touched = any(
         path.startswith("docs/development/") for path in changed
     )
@@ -60,7 +63,7 @@ def requires_temporal_owner_doc(changed: list[str]) -> bool:
         owner_doc = GOVERNANCE_TEMPORAL_ENFORCEMENT[path]
         if owner_doc is None:
             return any_development_doc_touched
-        return owner_doc in changed_set
+        return owner_doc in changed
 
     owner_docs_satisfied = all(owner_doc_satisfied(path) for path in temporal_paths)
     return not owner_docs_satisfied
