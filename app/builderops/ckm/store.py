@@ -299,8 +299,16 @@ class CkmStore:
             is_historical_pre_v5 = is_pre_v5 and str(row["id"]) != latest_by_capability[
                 str(row["capability_id"])
             ]
+            normalized_fingerprint = (
+                None
+                if is_historical_pre_v5
+                else CkmStore._normalized_assessment_fingerprint(conn, row)
+            )
+            is_unverified_latest_pre_v5 = (
+                is_pre_v5 and normalized_fingerprint is None
+            )
             identity_row: Mapping[str, Any] = row
-            if is_historical_pre_v5:
+            if is_historical_pre_v5 or is_unverified_latest_pre_v5:
                 historical_row = dict(row)
                 historical_row["edge_fingerprint"] = "legacy"
                 identity_row = historical_row
@@ -314,17 +322,12 @@ class CkmStore:
                     "rebuild-stable public identities"
                 )
             assessment_identity_owners[public_id] = str(row["id"])
-            normalized_fingerprint = (
-                None
-                if is_historical_pre_v5
-                else CkmStore._normalized_assessment_fingerprint(conn, row)
-            )
             conn.execute(
                 "UPDATE ckm_assessment SET public_id = ?, edge_fingerprint = ? WHERE id = ?",
                 (
                     public_id,
                     "legacy"
-                    if is_historical_pre_v5
+                    if is_historical_pre_v5 or is_unverified_latest_pre_v5
                     else normalized_fingerprint or row["edge_fingerprint"],
                     row["id"],
                 ),
@@ -688,7 +691,10 @@ class CkmStore:
         # Pre-v5 producers fingerprinted every active edge, including evidence
         # that no scoring formula selected and therefore omitted from citations.
         # Reconstruct the complete producer domain or fail the migration loudly.
-        from app.builderops.ckm.assess import assessment_fingerprint
+        from app.builderops.ckm.assess import (
+            assessment_fingerprint,
+            legacy_assessment_fingerprint,
+        )
 
         edge_rows = conn.execute(
             "SELECT * FROM ckm_evidence_edge WHERE capability_id = ? ORDER BY public_id",
@@ -717,6 +723,11 @@ class CkmStore:
             if isinstance(raw_watermarks, str)
             else raw_watermarks
         )
+        if legacy_assessment_fingerprint(edges, artifacts) != edge_fingerprint:
+            # Evidence changed after the old assertion. It is representable as
+            # a stable value/citation snapshot, but must remain stale so the
+            # normal engine appends a newly measured v2 assertion.
+            return None
         return assessment_fingerprint(
             edges, artifacts, watermark_set=watermark_set
         )

@@ -9,7 +9,11 @@ from threading import Barrier
 
 import pytest
 
-from app.builderops.ckm.assess import assess_capabilities, assessment_fingerprint
+from app.builderops.ckm.assess import (
+    assess_capabilities,
+    assessment_fingerprint,
+    legacy_assessment_fingerprint,
+)
 from app.builderops.ckm.contracts import (
     ACCESS_POLICY_VERSION,
     EFFECTIVE_AUDIENCE,
@@ -617,7 +621,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         basis="diagram:1",
         source_ref=unselected_artifact.source_ref,
     )
-    legacy.upsert_evidence_edge(
+    edge = legacy.upsert_evidence_edge(
         artifact_id=artifact.id,
         capability_id=capability.id,
         evidence_kind="doc",
@@ -636,11 +640,10 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         scores=scores,
         citations=citations,
         aggregate=0.5,
-        edge_fingerprint=hashlib.sha256(
-            f"{edge.id}:{artifact.id}:{unselected_edge.id}:{unselected_artifact.id}".encode(
-                "utf-8"
-            )
-        ).hexdigest(),
+        edge_fingerprint=legacy_assessment_fingerprint(
+            [edge, unselected_edge],
+            {artifact.id: artifact, unselected_artifact.id: unselected_artifact},
+        ),
         watermark_set={"repo": "commit:abc"},
         valid_from="2026-07-15T00:00:00Z",
         asserted_at="2026-07-15T00:00:00Z",
@@ -651,6 +654,16 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
             "SELECT * FROM ckm_assessment WHERE id = ?", (current_assessment.id,)
         ).fetchone()
         assert current_row is not None
+        conn.execute(
+            "UPDATE ckm_assessment SET functional_completeness = ?, aggregate = ?, "
+            "edge_fingerprint = ? WHERE id = ?",
+            (
+                0.4,
+                0.4,
+                hashlib.sha256(b"historical-pre-v5-evidence-domain").hexdigest(),
+                current_assessment.id,
+            ),
+        )
         historical = dict(zip(columns, current_row, strict=True))
         historical.update(
             {
@@ -658,11 +671,6 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
                 # generated id: migration must use runtime's rowid tie-break.
                 "id": "000_pre_v5_runtime_latest",
                 "public_id": "legacy-history-placeholder",
-                "functional_completeness": 0.4,
-                "aggregate": 0.4,
-                "edge_fingerprint": hashlib.sha256(
-                    b"historical-pre-v5-evidence-domain"
-                ).hexdigest(),
                 "valid_from": "2026-07-15T00:00:00Z",
                 "asserted_at": "2026-07-15T00:00:00Z",
             }
@@ -684,10 +692,52 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         scores=scores,
         citations={dimension: [] for dimension in MATURITY_DIMENSIONS},
         aggregate=0.5,
-        edge_fingerprint=hashlib.sha256(b"pre-v5-empty-domain").hexdigest(),
+        edge_fingerprint=legacy_assessment_fingerprint([], {}),
         watermark_set={"repo": "commit:abc"},
         valid_from="2026-07-15T00:00:00Z",
         asserted_at="2026-07-15T00:00:00Z",
+    )
+    stale_capability = legacy.upsert_capability(
+        identity_key="pre-v5-stale-after-link",
+        name="Stale pre-v5 capability",
+        definition="Evidence changes after its old assessment.",
+        existence_provenance="receipt:legacy-stale",
+    )
+    stale_current_artifact = _artifact(
+        legacy, source_ref="docs/pre-v5-stale-current.md"
+    )
+    stale_current_edge = _edge(
+        legacy,
+        stale_current_artifact.id,
+        stale_capability.id,
+        basis="stale-current:1",
+        source_ref=stale_current_artifact.source_ref,
+    )
+    stale_assessment = legacy.append_assessment(
+        capability_id=stale_capability.id,
+        scores=scores,
+        citations={
+            dimension: [stale_current_edge.to_dict()]
+            for dimension in MATURITY_DIMENSIONS
+        },
+        aggregate=0.5,
+        edge_fingerprint=legacy_assessment_fingerprint(
+            [stale_current_edge],
+            {stale_current_artifact.id: stale_current_artifact},
+        ),
+        watermark_set={"repo": "commit:abc"},
+        valid_from="2026-07-15T00:00:00Z",
+        asserted_at="2026-07-15T00:00:00Z",
+    )
+    post_assessment_artifact = _artifact(
+        legacy, source_ref="docs/pre-v5-post-assessment.md"
+    )
+    _edge(
+        legacy,
+        post_assessment_artifact.id,
+        stale_capability.id,
+        basis="post-assessment:1",
+        source_ref=post_assessment_artifact.source_ref,
     )
     legacy.upsert_finding(
         kind="gap",
@@ -715,7 +765,12 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     )
     assert legacy.delete_artifacts_not_in(
         "repo_artifact_ingestion",
-        {artifact.source_ref, unselected_artifact.source_ref},
+        {
+            artifact.source_ref,
+            unselected_artifact.source_ref,
+            stale_current_artifact.source_ref,
+            post_assessment_artifact.source_ref,
+        },
     ) == 1
 
     def strip_public_ids(value: object) -> object:
@@ -846,8 +901,14 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert zero_assessment is not None
     assert zero_assessment.edge_fingerprint.startswith("v2:")
     immediate_run = assess_capabilities(legacy)
-    assert immediate_run.assessed == 0
+    assert immediate_run.assessed == 1
     assert immediate_run.skipped == 2
+    stale_assessments = legacy.list_assessments_for_capability(stale_capability.id)
+    assert len(stale_assessments) == 2
+    assert stale_assessments[0].id == stale_assessment.id
+    assert stale_assessments[0].edge_fingerprint == "legacy"
+    assert stale_assessments[1].edge_fingerprint.startswith("v2:")
+    post_immediate_state = legacy.state_identity()
     assert all(
         citation.get("public_id")
         for assessment in assessments
@@ -884,7 +945,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert migrated_history_public_id == expected_history_public_id
 
     legacy.ensure_schema()
-    assert legacy.state_identity() == migrated_state
+    assert legacy.state_identity() == post_immediate_state
 
     repair_store = CkmStore(tmp_path / "citation-repair.sqlite3")
     repair_store.ensure_schema()

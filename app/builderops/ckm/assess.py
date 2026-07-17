@@ -385,6 +385,53 @@ def assessment_fingerprint(
     ).hexdigest()
 
 
+def legacy_assessment_fingerprint(
+    edges: Sequence[CkmEvidenceEdge],
+    artifacts: Mapping[str, CkmArtifact],
+) -> str:
+    """Reproduce the exact pre-v5 append trigger for migration authentication."""
+
+    edge_payload = [
+        {
+            "id": edge.id,
+            "artifact_id": edge.artifact_id,
+            "basis": edge.basis,
+            "kind": edge.evidence_kind,
+            "polarity": edge.polarity,
+            "dimension": edge.maturity_dimension,
+            "confidence": edge.confidence,
+            "method": edge.extraction_method,
+            "lifecycle": edge.lifecycle,
+            "model": edge.model,
+            "provider": edge.provider,
+            "artifact": {
+                "kind": artifacts[edge.artifact_id].artifact_kind,
+                "source_ref": artifacts[edge.artifact_id].source_ref,
+                "watermark": artifacts[edge.artifact_id].watermark,
+                "provenance": artifacts[edge.artifact_id].provenance,
+            },
+        }
+        for edge in sorted(
+            edges, key=lambda item: (item.artifact_id, item.basis, item.id)
+        )
+    ]
+    formula_payload = {
+        formula_id: {
+            "dimension": FORMULAS[formula_id].dimension,
+            "description": FORMULAS[formula_id].description,
+            "weight": FORMULAS[formula_id].weight,
+        }
+        for formula_id in (*_DIMENSION_FORMULA_IDS.values(), AGGREGATE_FORMULA_ID)
+    }
+    return hashlib.sha256(
+        json.dumps(
+            {"edges": edge_payload, "formulae": formula_payload},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _citation(edge: CkmEvidenceEdge, artifact: CkmArtifact) -> dict[str, object]:
     """Freeze the complete evidence input behind one historical score."""
 
