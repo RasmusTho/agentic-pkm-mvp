@@ -25,14 +25,10 @@ if status.get("BackendState") != "Running":
 ' <<<"$node_status"
 
 target="http://127.0.0.1:${backend_port}"
-tailscale serve --bg --yes --https="$https_port" "$target" >/dev/null
 serve_status="$(tailscale serve status --json)"
-TARGET="$target" HTTPS_PORT="$https_port" python3 -c '
+python3 -c '
 import json, os, sys
 status = json.load(sys.stdin)
-encoded = json.dumps(status, sort_keys=True)
-if os.environ["TARGET"] not in encoded or os.environ["HTTPS_PORT"] not in encoded:
-    raise SystemExit("tailscale HTTPS serve mapping was not installed")
 
 def active_funnel(value):
     if isinstance(value, dict):
@@ -47,6 +43,16 @@ def active_funnel(value):
 
 if active_funnel(status):
     raise SystemExit("public Funnel exposure is forbidden for BuilderOps")
+' <<<"$serve_status"
+
+tailscale serve --bg --yes --https="$https_port" "$target" >/dev/null
+serve_status="$(tailscale serve status --json)"
+TARGET="$target" HTTPS_PORT="$https_port" python3 -c '
+import json, os, sys
+status = json.load(sys.stdin)
+encoded = json.dumps(status, sort_keys=True)
+if os.environ["TARGET"] not in encoded or os.environ["HTTPS_PORT"] not in encoded:
+    raise SystemExit("tailscale HTTPS serve mapping was not installed")
 ' <<<"$serve_status"
 
 echo "BuilderOps tailnet HTTPS boundary maps :${https_port} to ${target}"

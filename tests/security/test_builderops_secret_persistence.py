@@ -92,6 +92,9 @@ def test_raw_credentials_never_enter_durable_state_or_restored_backup(tmp_path: 
     headers = {"Authorization": f"Bearer {canaries['client']}"}
     unsafe_payloads = (
         {"summary": canaries["client"]},
+        {"summary": f"prefix {canaries['client']} suffix"},
+        {"summary": "prefix github_pat_RAW-3790 suffix"},
+        {"summary": "database postgresql://app:RAW-3790@db/builderops value"},
         {"database_url": canaries["database"]},
         {"github_token": canaries["github"]},
         {"model_api_key": canaries["model"]},

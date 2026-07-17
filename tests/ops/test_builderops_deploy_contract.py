@@ -15,7 +15,7 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str]:
+def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     root = tmp_path / "repo"
     for relative in (
         "scripts/lib/builderops_compose.sh",
@@ -44,6 +44,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str]:
 
     source_sha = "a" * 40
     digest = "sha256:" + "b" * 64
+    postgres_digest = "sha256:" + "e" * 64
     token_file = tmp_path / "probe-token"
     token_file.write_text("probe-secret", encoding="utf-8")
     receipt_dir = tmp_path / "receipts"
@@ -102,7 +103,11 @@ printf 'tailscale %s\n' "$*" >> "$FAKE_EVENT_LOG"
 if [ "${1:-}" = status ]; then
   printf '{"BackendState":"Running"}\n'
 elif [ "${1:-}" = serve ] && [ "${2:-}" = status ]; then
-  printf '{"AllowFunnel":false,"TCP":{"443":{"HTTPS":true}},"Web":{"builder.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18100"}}}}}\n'
+  if [ "${FAKE_FUNNEL_ACTIVE:-0}" = 1 ]; then
+    printf '{"AllowFunnel":{"443":true}}\n'
+  else
+    printf '{"AllowFunnel":false,"TCP":{"443":{"HTTPS":true}},"Web":{"builder.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18100"}}}}}\n'
+  fi
 fi
 """,
     )
@@ -119,13 +124,20 @@ fi
             "BUILDEROPS_WALG_S3_PREFIX": "s3://offsite.example.invalid/builderops",
         }
     )
-    return root, env, source_sha, digest
+    return root, env, source_sha, digest, postgres_digest
 
 
 def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) -> None:
-    root, env, source_sha, digest = _harness(tmp_path)
+    root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
     deploy = subprocess.run(
-        ["bash", "scripts/deploy_builderops.sh", "deploy", source_sha, digest],
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            source_sha,
+            digest,
+            postgres_digest,
+        ],
         cwd=root,
         env=env,
         check=False,
@@ -141,6 +153,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert receipt["engine_id"] == "builder-engine"
     assert receipt["source_sha"] == source_sha
     assert receipt["image_digest"] == digest
+    assert receipt["postgres_walg_image_digest"] == postgres_digest
     assert receipt["schema_version"] == 7
     assert receipt["authority_epoch"] == 3
     assert receipt["database_restore_performed"] is False
@@ -182,14 +195,21 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
 def test_failed_deploy_restores_canonical_pin_and_preserves_rollback_target(
     tmp_path: Path,
 ) -> None:
-    root, env, source_sha, digest = _harness(tmp_path)
+    root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
     pin_path = root / "config/deploy/builderops.env"
     before = pin_path.read_text(encoding="utf-8")
     previous_path = root / "config/deploy/builderops.previous.env"
     env["FAKE_FAIL_PULL"] = "1"
 
     failed = subprocess.run(
-        ["bash", "scripts/deploy_builderops.sh", "deploy", source_sha, digest],
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            source_sha,
+            digest,
+            postgres_digest,
+        ],
         cwd=root,
         env=env,
         check=False,
@@ -203,13 +223,20 @@ def test_failed_deploy_restores_canonical_pin_and_preserves_rollback_target(
 
 
 def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> None:
-    root, env, source_sha, digest = _harness(tmp_path)
+    root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
     pin_path = root / "config/deploy/builderops.env"
     before = pin_path.read_text(encoding="utf-8")
     env["FAKE_FAIL_READY_DIGEST"] = digest
 
     failed = subprocess.run(
-        ["bash", "scripts/deploy_builderops.sh", "deploy", source_sha, digest],
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            source_sha,
+            digest,
+            postgres_digest,
+        ],
         cwd=root,
         env=env,
         check=False,
@@ -220,14 +247,22 @@ def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> 
     assert failed.returncode != 0
     assert pin_path.read_text(encoding="utf-8") == before
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
-    assert events.count("up -d --force-recreate api worker") == 2
+    assert events.count("up -d --force-recreate api worker") == 1
+    assert events.count("up -d --force-recreate db api worker") == 1
     assert "previous pin and live API/worker release restored" in failed.stderr
 
 
 def test_deploy_rejects_mutable_image_tag_before_docker(tmp_path: Path) -> None:
-    root, env, source_sha, _ = _harness(tmp_path)
+    root, env, source_sha, _, postgres_digest = _harness(tmp_path)
     result = subprocess.run(
-        ["bash", "scripts/deploy_builderops.sh", "deploy", source_sha, "latest"],
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            source_sha,
+            "latest",
+            postgres_digest,
+        ],
         cwd=root,
         env=env,
         check=False,
@@ -237,3 +272,29 @@ def test_deploy_rejects_mutable_image_tag_before_docker(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "immutable sha256 digest" in result.stderr
     assert not Path(env["FAKE_EVENT_LOG"]).exists()
+
+
+def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None:
+    root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
+    env["FAKE_FUNNEL_ACTIVE"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            source_sha,
+            digest,
+            postgres_digest,
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "tailscale serve status --json" in events
+    assert "tailscale serve --bg" not in events

@@ -12,7 +12,7 @@ export BUILDEROPS_PIN_FILE
 source "${ROOT}/scripts/lib/builderops_compose.sh"
 
 usage() {
-  echo "usage: scripts/deploy_builderops.sh deploy <source-sha> <sha256:digest> | rollback" >&2
+  echo "usage: scripts/deploy_builderops.sh deploy <source-sha> <control-plane-digest> <postgres-walg-digest> | rollback" >&2
   exit 2
 }
 
@@ -22,11 +22,10 @@ read_pin() {
 }
 
 write_pin() {
-  local file="${1:?pin file required}" source_sha="${2:?source SHA required}" digest="${3:?digest required}"
-  local repository postgres_repository postgres_digest tmp
+  local file="${1:?pin file required}" source_sha="${2:?source SHA required}" digest="${3:?digest required}" postgres_digest="${4:?postgres digest required}"
+  local repository postgres_repository tmp
   repository="$(read_pin "${PIN_FILE}" BUILDEROPS_IMAGE_REPOSITORY)"
   postgres_repository="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_REPOSITORY)"
-  postgres_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGEST)"
   tmp="$(mktemp "${file}.tmp.XXXXXX")"
   {
     printf 'BUILDEROPS_IMAGE_REPOSITORY=%s\n' "${repository}"
@@ -49,6 +48,7 @@ load_contexts() {
 validate_identity() {
   [[ "${1}" =~ ^[0-9a-f]{40}$ ]] || { echo "source SHA must be 40 lowercase hex characters" >&2; exit 2; }
   [[ "${2}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "image pin must be an immutable sha256 digest" >&2; exit 2; }
+  [[ "${3}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "PostgreSQL/WAL-G image pin must be an immutable sha256 digest" >&2; exit 2; }
 }
 
 wait_ready() {
@@ -73,12 +73,12 @@ wait_ready() {
 }
 
 record_receipt() {
-  local action="${1}" source_sha="${2}" digest="${3}" previous_digest="${4}" engine_id timestamp path
+  local action="${1}" source_sha="${2}" digest="${3}" postgres_digest="${4}" previous_digest="${5}" previous_postgres_digest="${6}" engine_id timestamp path
   engine_id="$(builderops_engine_id "${BUILDEROPS_DOCKER_CONTEXT}")"
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "${RECEIPT_DIR}"
   path="${RECEIPT_DIR}/${timestamp}-${action}.json"
-  ACTION="${action}" SOURCE_SHA="${source_sha}" IMAGE_DIGEST="${digest}" PREVIOUS_DIGEST="${previous_digest}" \
+  ACTION="${action}" SOURCE_SHA="${source_sha}" IMAGE_DIGEST="${digest}" POSTGRES_IMAGE_DIGEST="${postgres_digest}" PREVIOUS_DIGEST="${previous_digest}" PREVIOUS_POSTGRES_DIGEST="${previous_postgres_digest}" \
     ENGINE_ID="${engine_id}" RECORDED_AT="${timestamp}" python3 - "${path}" <<'PY'
 import json
 import os
@@ -94,7 +94,9 @@ payload = {
     "engine_id": os.environ["ENGINE_ID"],
     "source_sha": os.environ["SOURCE_SHA"],
     "image_digest": os.environ["IMAGE_DIGEST"],
+    "postgres_walg_image_digest": os.environ["POSTGRES_IMAGE_DIGEST"],
     "previous_image_digest": os.environ["PREVIOUS_DIGEST"],
+    "previous_postgres_walg_image_digest": os.environ["PREVIOUS_POSTGRES_DIGEST"],
     "schema_version": ready["database"]["schema_version"],
     "authority_epoch": ready["database"]["authority_epoch"],
     "recorded_at": os.environ["RECORDED_AT"],
@@ -111,23 +113,26 @@ action="${1:-}"
 load_contexts
 current_sha="$(read_pin "${PIN_FILE}" BUILDEROPS_SOURCE_SHA)"
 current_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_IMAGE_DIGEST)"
+current_postgres_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGEST)"
 
 case "${action}" in
   deploy)
-    [ "$#" -eq 3 ] || usage
+    [ "$#" -eq 4 ] || usage
     target_sha="${2}"
     target_digest="${3}"
+    target_postgres_digest="${4}"
     ;;
   rollback)
     [ "$#" -eq 1 ] || usage
     [ -f "${PREVIOUS_PIN_FILE}" ] || { echo "previous BuilderOps pin is unavailable" >&2; exit 2; }
     target_sha="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_SOURCE_SHA)"
     target_digest="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_IMAGE_DIGEST)"
+    target_postgres_digest="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGEST)"
     ;;
   *) usage ;;
 esac
 
-validate_identity "${target_sha}" "${target_digest}"
+validate_identity "${target_sha}" "${target_digest}" "${target_postgres_digest}"
 builderops_assert_failure_domain
 builderops_validate_recovery_target "${ROOT}"
 
@@ -136,7 +141,7 @@ pin_backup="$(mktemp "${PIN_FILE}.rollback.XXXXXX")"
 cp "${PIN_FILE}" "${pin_backup}"
 
 activate_target() {
-  write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" || return
+  write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" || return
   builderops_compose "${ROOT}" pull db api worker migrate || return
   builderops_compose "${ROOT}" up -d db || return
   builderops_compose "${ROOT}" up --abort-on-container-exit --exit-code-from migrate migrate || return
@@ -147,8 +152,8 @@ activate_target() {
 
 reactivate_previous_release() {
   cp "${pin_backup}" "${PIN_FILE}" || return
-  builderops_compose "${ROOT}" pull api worker || return
-  builderops_compose "${ROOT}" up -d --force-recreate api worker || return
+  builderops_compose "${ROOT}" pull db api worker || return
+  builderops_compose "${ROOT}" up -d --force-recreate db api worker || return
   wait_ready || return
 }
 
@@ -167,4 +172,4 @@ if [ "${action}" = deploy ] && [ "${current_digest}" != "${placeholder_digest}" 
   cp "${pin_backup}" "${PREVIOUS_PIN_FILE}"
 fi
 rm -f "${pin_backup}"
-record_receipt "${action}" "${target_sha}" "${target_digest}" "${current_digest}"
+record_receipt "${action}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" "${current_digest}" "${current_postgres_digest}"

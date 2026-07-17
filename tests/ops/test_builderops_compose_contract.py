@@ -111,7 +111,7 @@ def test_builderops_image_has_a_dedicated_non_root_entrypoint() -> None:
     assert "PASSWORD %L" in roles
 
 
-def test_builderops_postgres_pin_has_a_checked_multiarch_image_producer() -> None:
+def test_builderops_postgres_pin_has_an_exact_restore_checked_image_producer() -> None:
     dockerfile = (ROOT / "Dockerfile.builderops-postgres").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/app-image-build.yml").read_text(encoding="utf-8")
 
@@ -123,5 +123,10 @@ def test_builderops_postgres_pin_has_a_checked_multiarch_image_producer() -> Non
     assert "wal_g_arch=aarch64" in dockerfile
     assert "Dockerfile.builderops-postgres" in workflow
     assert "builderops-postgres:${GITHUB_SHA}" in workflow
-    assert "--platform linux/amd64,linux/arm64" in workflow
+    assert "platforms: linux/amd64" in workflow
+    assert "Prove encrypted full-backup plus archived-WAL restore" in workflow
+    assert "Publish the exact restore-proved BuilderOps images" in workflow
+    publish = workflow.split("Publish the exact restore-proved BuilderOps images", maxsplit=1)[1]
+    assert "docker build" not in publish
+    assert 'docker push "${{ steps.images.outputs.postgres }}"' in publish
     assert "docker run --rm --entrypoint wal-g" in workflow

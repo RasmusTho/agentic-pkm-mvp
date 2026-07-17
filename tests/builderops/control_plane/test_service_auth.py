@@ -4,10 +4,14 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.builderops.control_plane import AuthorityObjectResult, Lease, TransactionResult
-from app.builderops.control_plane.auth import CredentialRegistry
+from app.builderops.control_plane.auth import (
+    CredentialConfigurationError,
+    CredentialRegistry,
+)
 from app.builderops.control_plane.health import HealthService, OperationalStatus
 from app.builderops.control_plane.service import create_app, database_environment
 
@@ -210,6 +214,69 @@ def test_database_dsn_resolves_from_secret_file(tmp_path: Path) -> None:
     resolved = database_environment({"BUILDEROPS_DATABASE_URL_FILE": str(dsn_file)})
     assert resolved["BUILDEROPS_DATABASE_URL"].endswith("@db/builderops")
     assert resolved["BUILDEROPS_DATABASE_URL_FILE"] == str(dsn_file)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda entry, secret: entry.update(secret_ref=secret),
+        lambda entry, _secret: entry.update(id="bad id"),
+        lambda entry, _secret: entry.update(principal="bad principal!"),
+        lambda entry, _secret: entry.update(scopes=["records:write", "records:write"]),
+        lambda entry, _secret: entry.update(scopes=["unbounded"]),
+        lambda entry, _secret: entry.update(rotation_generation=True),
+    ),
+)
+def test_malformed_credential_metadata_fails_secret_safe(
+    tmp_path: Path, mutation
+) -> None:  # type: ignore[no-untyped-def]
+    secret = "bcp-client-RAW-MANIFEST-3790"
+    secret_file = tmp_path / "secret"
+    secret_file.write_text(secret, encoding="utf-8")
+    entry = {
+        "id": "client",
+        "principal": "client:one",
+        "secret_ref": "host-secret:client",
+        "secret_file": str(secret_file),
+        "scopes": ["records:write"],
+        "rotation_generation": 1,
+    }
+    mutation(entry, secret)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"credentials": [entry]}), encoding="utf-8")
+    registry = CredentialRegistry(manifest)
+
+    with pytest.raises(CredentialConfigurationError) as raised:
+        registry.status()
+    assert secret not in str(raised.value)
+
+
+def test_duplicate_credential_ids_and_verifiers_fail_closed(tmp_path: Path) -> None:
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("shared-secret", encoding="utf-8")
+    base = {
+        "id": "client",
+        "principal": "client:one",
+        "secret_ref": "host-secret:client",
+        "secret_file": str(secret_file),
+        "scopes": ["records:write"],
+        "rotation_generation": 1,
+    }
+    manifest = tmp_path / "manifest.json"
+    for second in (
+        {**base, "principal": "client:two", "secret_ref": "host-secret:two"},
+        {
+            **base,
+            "id": "client-two",
+            "principal": "client:two",
+            "secret_ref": "host-secret:two",
+        },
+    ):
+        manifest.write_text(
+            json.dumps({"credentials": [base, second]}), encoding="utf-8"
+        )
+        with pytest.raises(CredentialConfigurationError):
+            CredentialRegistry(manifest).status()
 
 
 def test_raw_credentials_are_rejected_from_every_client_controlled_durable_field(

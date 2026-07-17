@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ class CredentialRegistry:
         if not isinstance(raw_entries, list) or not raw_entries:
             raise CredentialConfigurationError("BuilderOps credential manifest has no credentials")
         entries: list[tuple[Credential, str]] = []
+        credential_ids: set[str] = set()
+        verifiers: set[str] = set()
         for raw in raw_entries:
             if not isinstance(raw, dict):
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata")
@@ -59,16 +62,39 @@ class CredentialRegistry:
                 principal = str(raw["principal"]).strip()
                 secret_ref = str(raw["secret_ref"]).strip()
                 scopes_raw = raw["scopes"]
-                generation = int(raw["rotation_generation"])
+                raw_generation = raw["rotation_generation"]
+                if isinstance(raw_generation, bool):
+                    raise ValueError
+                generation = int(raw_generation)
             except (KeyError, TypeError, ValueError) as exc:
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata") from exc
-            if not credential_id or not principal or not secret_ref or generation < 1:
+            if (
+                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}", credential_id)
+                is None
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}", principal)
+                is None
+                or re.fullmatch(
+                    r"(?:host-secret|keychain):[A-Za-z0-9][A-Za-z0-9_./:@-]{0,255}",
+                    secret_ref,
+                )
+                is None
+                or generation < 1
+            ):
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata")
+            if credential_id in credential_ids:
+                raise CredentialConfigurationError("duplicate BuilderOps credential id")
+            credential_ids.add(credential_id)
             if not isinstance(scopes_raw, list) or not scopes_raw:
                 raise CredentialConfigurationError("BuilderOps credential scopes are required")
-            scopes = frozenset(str(scope).strip() for scope in scopes_raw)
-            if "" in scopes:
-                raise CredentialConfigurationError("BuilderOps credential scopes must be non-empty")
+            if not all(
+                isinstance(scope, str)
+                and re.fullmatch(r"[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*", scope)
+                for scope in scopes_raw
+            ) or len(set(scopes_raw)) != len(scopes_raw):
+                raise CredentialConfigurationError(
+                    "BuilderOps credential scopes must be unique bounded identifiers"
+                )
+            scopes = frozenset(scopes_raw)
             if bool(raw.get("revoked", False)):
                 continue
             verifier = str(raw.get("verifier_sha256", "")).strip().lower()
@@ -92,6 +118,9 @@ class CredentialRegistry:
                 verifier = self._fingerprint(secret)
             else:
                 raise CredentialConfigurationError("BuilderOps credential verifier is required")
+            if verifier in verifiers:
+                raise CredentialConfigurationError("duplicate BuilderOps credential verifier")
+            verifiers.add(verifier)
             entries.append(
                 (
                     Credential(
@@ -131,6 +160,17 @@ class CredentialRegistry:
             hmac.compare_digest(fingerprint, verifier)
             for _credential, verifier in self._entries()
         )
+
+    def contains_registered_secret(self, value: str) -> bool:
+        """Detect registered bearer tokens embedded as ordinary scalar text."""
+
+        candidates = {value.strip()}
+        candidates.update(
+            token
+            for token in re.split(r"[\s\"'`,;()\[\]{}<>]+", value)
+            if token
+        )
+        return any(self.is_registered_secret(candidate) for candidate in candidates)
 
     def status(self) -> dict[str, Any]:
         entries = [credential for credential, _secret in self._entries()]

@@ -155,8 +155,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build BuilderOps control-plane image (PR)
-        if: github.event_name == 'pull_request'
+      - name: Build BuilderOps control-plane candidate image
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -166,11 +166,11 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.images.outputs.control_plane }}
           build-args: |
-            VCS_REF=${{ github.event.pull_request.head.sha }}
+            VCS_REF=${{ github.sha }}
             BUILT_AT=${{ env.BUILT_AT }}
 
-      - name: Build BuilderOps PostgreSQL plus WAL-G image (PR)
-        if: github.event_name == 'pull_request'
+      - name: Build BuilderOps PostgreSQL plus WAL-G candidate image
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -181,7 +181,7 @@ jobs:
           tags: ${{ steps.images.outputs.postgres }}
 
       - name: Verify BuilderOps image runtimes
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         shell: bash
         run: |
           set -euo pipefail
@@ -192,7 +192,7 @@ jobs:
             "${{ steps.images.outputs.postgres }}" --version
 
       - name: Prove encrypted full-backup plus archived-WAL restore
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         shell: bash
         run: |
           set -euo pipefail
@@ -200,16 +200,10 @@ jobs:
             "${{ steps.images.outputs.control_plane }}" \
             "${{ steps.images.outputs.postgres }}"
 
-      - name: Build and push independent BuilderOps images (main multi-arch)
+      - name: Publish the exact restore-proved BuilderOps images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx build --push --platform linux/amd64,linux/arm64 \
-            --file Dockerfile.builderops \
-            --build-arg "VCS_REF=${GITHUB_SHA}" \
-            --build-arg "BUILT_AT=${BUILT_AT}" \
-            --tag "${{ steps.images.outputs.control_plane }}" .
-          docker buildx build --push --platform linux/amd64,linux/arm64 \
-            --file Dockerfile.builderops-postgres \
-            --tag "${{ steps.images.outputs.postgres }}" .
+          docker push "${{ steps.images.outputs.control_plane }}"
+          docker push "${{ steps.images.outputs.postgres }}"

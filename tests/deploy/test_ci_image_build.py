@@ -39,7 +39,11 @@ def test_ci_builds_sha_tagged_image() -> None:
     assert "tags: ${{ steps.build-identity.outputs.image }}" in workflow
     assert "if: github.event_name == 'pull_request'" in workflow
     assert "platforms: linux/amd64" in workflow
-    assert "platforms: linux/amd64,linux/arm64" in workflow
+    assert "Publish the exact restore-proved BuilderOps images" in workflow
+    assert 'docker push "${{ steps.images.outputs.control_plane }}"' in workflow
+    assert 'docker push "${{ steps.images.outputs.postgres }}"' in workflow
+    publish = workflow.split("Publish the exact restore-proved BuilderOps images", maxsplit=1)[1]
+    assert "docker build" not in publish
     assert "load: true" in workflow
     assert "push: false" in workflow
 
@@ -87,3 +91,14 @@ def test_single_image_artifact_per_commit() -> None:
     assert "matrix:" not in product_image_job
     assert "CHANNEL" not in product_image_job
     assert "ENVIRONMENT" not in product_image_job
+
+
+def test_builderops_publish_reuses_the_restore_proved_images() -> None:
+    builderops_job = _workflow_text().split("\n  build-builderops-images:", maxsplit=1)[1]
+    restore = builderops_job.index("Prove encrypted full-backup plus archived-WAL restore")
+    publish = builderops_job.index("Publish the exact restore-proved BuilderOps images")
+
+    assert restore < publish
+    assert "docker build" not in builderops_job[publish:]
+    assert 'docker push "${{ steps.images.outputs.control_plane }}"' in builderops_job[publish:]
+    assert 'docker push "${{ steps.images.outputs.postgres }}"' in builderops_job[publish:]

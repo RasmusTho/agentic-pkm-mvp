@@ -49,8 +49,9 @@ Product ownership.
   PostgreSQL service/database/role/volume/secrets, and immutable release pin;
 - keep API, migration, and worker services on an internal-only network while granting outbound
   recovery-target access only to the PostgreSQL WAL archiver and scheduled backup service;
-- provide independent deploy/rollback receipts and a host probe with separate least-privilege
-  readiness and status credentials;
+- provide independent deploy/rollback receipts that bind both the control-plane and
+  PostgreSQL/WAL-G image digests, plus a host probe with separate least-privilege readiness and
+  status credentials;
 - implement `/healthz`, `/readyz`, and secret-safe status/metrics for database/schema, outbox age and
   dead letters, lease conflicts, auth failures, rate limits/credential state, and executor heartbeat;
 - provide scheduled encrypted full backups plus WAL archiving on an operator-chosen cadence to an
@@ -60,10 +61,11 @@ Product ownership.
   Demerzel's host secret store unavailable (ADR-0062 A1: recovery durability is asynchronous and
   never gates acknowledgement);
 - build the control-plane and PostgreSQL/WAL-G images in CI and run the encrypted full-backup plus
-  archived-WAL restore gate against those exact candidate images before publication;
-- run the BuilderOps-only Compose project and database on a separate VM/container engine on
-  Demerzel, outside the `pkm-*` container-VM failure domain, so Product deploys, restarts, resource
-  pressure, and container-VM lifecycle events cannot stop the builder plane (ADR-0062 A2);
+  archived-WAL restore gate against those exact candidate images before publication, with no
+  post-gate rebuild;
+- deliver the fail-closed separate-engine preflight and deployment tooling for the BuilderOps-only
+  project on Demerzel, outside the `pkm-*` container-VM failure domain; live host activation and
+  Product-load/BuilderOps-readiness proof remain an operator-gated successor (ADR-0062 A2);
 - wire BuilderOps `/healthz` into the operator alerting path so control-plane outages are observed
   rather than discovered (ADR-0062 A2); and
 - prove Product Compose and Product credentials/config are not dependencies.
@@ -71,12 +73,12 @@ Product ownership.
 ## Concretely
 
 The slice adds a BuilderOps-only Compose invocation and service entrypoint such that an operator can
-deploy a pinned image, wait for migrations, call authenticated `/healthz` and `/readyz`, inspect
-secret-safe status, take a full backup, independently recover its decryption capability, restore it
-plus archived WAL to the latest archived point in an isolated project while Demerzel's host secret
-store is unavailable, and change to a compatible BuilderOps image without rewinding authoritative
-data or running a `pkm-*` Compose command — while the `pkm-*` stacks stay stopped, restarted, or
-under load without affecting any of it.
+deploy a pinned pair of restore-proved images, wait for migrations, call authenticated `/healthz`
+and `/readyz`, inspect secret-safe status, take a full backup, independently recover its decryption
+capability, restore it plus archived WAL to the latest archived point in an isolated project while
+Demerzel's host secret store is unavailable, and change to compatible BuilderOps images without
+rewinding authoritative data or running a `pkm-*` Compose command. This repository slice proves the
+deployment and failure-domain contracts; it does not claim the later live two-engine/load receipt.
 
 ## Why This Matters
 

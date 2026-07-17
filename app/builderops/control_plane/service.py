@@ -41,6 +41,12 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
     {"secret_ref", "fingerprint", "scopes", "rotation_generation", "credential_id"}
 )
 _SECRET_VALUE_PREFIXES = ("bearer ", "ghp_", "github_pat_", "sk-")
+_EMBEDDED_SECRET_VALUE = re.compile(
+    r"(?:bearer\s+\S+|ghp_[A-Za-z0-9_=-]+|github_pat_[A-Za-z0-9_=-]+|"
+    r"sk-[A-Za-z0-9_=-]+|bcp-(?:client|db|github|model|recovery)-[A-Za-z0-9._~+/=-]+|"
+    r"postgres(?:ql)?://[^\s]+@[^\s]+)",
+    re.IGNORECASE,
+)
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -156,10 +162,12 @@ def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, ke
     if not isinstance(value, str):
         return
     lowered = value.strip().lower()
-    if lowered.startswith(_SECRET_VALUE_PREFIXES) or registry.is_registered_secret(value):
+    if (
+        lowered.startswith(_SECRET_VALUE_PREFIXES)
+        or _EMBEDDED_SECRET_VALUE.search(value)
+        or registry.contains_registered_secret(value)
+    ):
         raise ValueError("raw credential values are forbidden in durable BuilderOps payloads")
-    if lowered.startswith(("postgresql://", "postgres://")) and "@" in lowered:
-        raise ValueError("database credentials are forbidden in durable BuilderOps payloads")
 
 
 def _control_plane_error(exc: Exception) -> HTTPException:
