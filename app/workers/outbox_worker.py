@@ -1252,13 +1252,15 @@ def _record_failed_dispatch(
                 error=str(error),
                 conn=conn,
             )
-            ack_outbox(conn, message_id)
-            # A commit failure here leaves nothing durable on this connection,
-            # so fall through to the same "not resolved" signal the below-cap
-            # path returns: the caller re-raises the original dispatch error
-            # for crash-retry, instead of a new commit-failure exception
-            # masking it.
-            return _commit_or_log(conn, topic=topic, message_id=message_id)
+            # Ack and commit share one guard: either can raise on the same
+            # broken-connection fault that would make the other fail too, and
+            # nothing durable happens on this connection unless both succeed
+            # (the ack itself rolls back with the rest of the transaction if
+            # only commit fails) — fall through to the same "not resolved"
+            # signal the below-cap path returns: the caller re-raises the
+            # original dispatch error for crash-retry, instead of a new
+            # ack/commit-failure exception masking it.
+            return _ack_and_commit_or_log(conn, message_id, topic=topic)
         _commit_or_log(conn, topic=topic, message_id=message_id)
         return False
     finally:
@@ -1282,6 +1284,29 @@ def _commit_or_log(conn: Any, *, topic: str | None, message_id: Any) -> bool:
     except Exception:
         logger.exception(
             "worker failed to commit dispatch-failure bookkeeping topic=%s id=%s",
+            topic,
+            message_id,
+        )
+        return False
+    return True
+
+
+def _ack_and_commit_or_log(conn: Any, message_id: Any, *, topic: str | None) -> bool:
+    """Ack ``message_id`` and commit ``conn``, logging (not raising) on failure.
+
+    Same rationale as :func:`_commit_or_log`, extended to the ack call: a bare
+    `ack_outbox(conn, message_id)` before the commit shares the identical
+    broken-connection failure surface as `conn.commit()` and can equally raise
+    and mask the caller's original dispatch error (#3930 round-2 review) —
+    both statements are guarded by the same try so either failure degrades to
+    the same "not resolved" bool instead of propagating.
+    """
+    try:
+        ack_outbox(conn, message_id)
+        conn.commit()
+    except Exception:
+        logger.exception(
+            "worker failed to ack/commit dispatch-failure bookkeeping topic=%s id=%s",
             topic,
             message_id,
         )

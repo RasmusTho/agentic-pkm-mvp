@@ -122,3 +122,50 @@ def test_open_outbox_txn_conn_degrades_to_none_on_connect_failure(
     monkeypatch.setattr(outbox_service, "conn_rw", _raise)
 
     assert outbox_service.open_outbox_txn_conn() is None
+
+
+def test_open_outbox_txn_conn_logs_when_db_configured_but_conn_rw_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A conn_rw() failure with DB explicitly configured is logged (#3930 round-2 review).
+
+    Distinguishes this case from the silent, expected short-circuit below: a
+    live worker whose canonical helper breaks while its DSN stays reachable
+    (poll/ack still succeed via `_open_conn`'s fallback) would otherwise
+    silently and permanently revert to the non-atomic per-call bookkeeping
+    this module exists to eliminate, indistinguishable from "DB unconfigured".
+    """
+
+    def _raise() -> Any:
+        raise RuntimeError("simulated connect failure")
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused-in-test")
+    monkeypatch.setattr(outbox_service, "conn_rw", _raise)
+
+    with caplog.at_level("WARNING", logger="app.services.outbox"):
+        assert outbox_service.open_outbox_txn_conn() is None
+
+    assert any("conn_rw" in record.message for record in caplog.records)
+
+
+def test_open_outbox_txn_conn_env_unconfigured_short_circuit_is_silent(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The expected 'DB not configured' short-circuit stays silent (no log spam).
+
+    Guards against the logging fix above firing on every non-pg test run,
+    where DATABASE_URL/DB_DSN are deliberately unset.
+    """
+
+    def _boom() -> Any:  # pragma: no cover - the assertion is that this never runs
+        raise AssertionError("conn_rw must not be called when the env gate short-circuits")
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(outbox_service, "conn_rw", _boom)
+
+    with caplog.at_level("WARNING", logger="app.services.outbox"):
+        assert outbox_service.open_outbox_txn_conn() is None
+
+    assert caplog.records == []

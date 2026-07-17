@@ -119,6 +119,8 @@ class FakeTxnConn:
 
     def commit(self) -> None:
         self.ops.append("commit")
+        if "commit" in self.fail_on:
+            raise RuntimeError("injected commit failure")
         self.commits += 1
         if self.pending is not None:
             self.committed = self.pending
@@ -268,6 +270,14 @@ def test_poison_path_crash_before_commit_leaves_no_partial_state(
     With the historical per-call autocommit connections this scenario left the
     row durably ``attempts == max`` yet undelivered and, on the next cycle,
     produced a second dead-letter audit row under ``poison:<n+1>``.
+
+    The ack itself is the injected failure here (round-2 #3930 review): an
+    unguarded ``ack_outbox(conn, message_id)`` would previously let this
+    "injected ack failure" propagate and mask the real dispatch error
+    (``ValueError("permanent poison payload")``) by the time it reached the
+    worker's crash-retry re-raise. The fix (``_ack_and_commit_or_log``) logs
+    the ack failure and lets the original dispatch error propagate instead —
+    asserted below by matching on that original error, not the ack failure.
     """
     conn = FakeTxnConn(
         rows=[
@@ -289,7 +299,7 @@ def test_poison_path_crash_before_commit_leaves_no_partial_state(
 
     monkeypatch.setattr(outbox_worker, "_dispatch_topic", _permanent_failure)
 
-    with pytest.raises(RuntimeError, match="injected ack failure"):
+    with pytest.raises(ValueError, match="permanent poison payload"):
         _run_one_tick(monkeypatch, _poison_message())
 
     # Nothing became durable: no commit, bump rolled back, no dead-letter row,
@@ -299,6 +309,82 @@ def test_poison_path_crash_before_commit_leaves_no_partial_state(
     assert row["attempts"] == 0
     assert row["delivered_at"] is None
     assert conn.committed_dead_letters() == []
+
+
+def test_poison_path_commit_failure_does_not_mask_original_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same guarantee as above, triggered by a commit failure instead of an ack failure.
+
+    Regression for round-2 #3930 review: an unguarded ``conn.commit()`` after
+    a successful ack could raise and mask ``handler_exc`` (the real dispatch
+    error) with an unrelated commit-failure exception by the time it reached
+    the worker's crash-retry re-raise.
+    """
+    conn = FakeTxnConn(
+        rows=[
+            {
+                "id": "row-poison",
+                "topic": INGEST_VAULT_CHANGED,
+                "payload": "{}",
+                "created_at": "t0",
+                "delivered_at": None,
+                "attempts": 0,
+            }
+        ]
+    )
+    conn.fail_on = {"commit"}
+    _wire_worker_env(monkeypatch, tmp_path, conn, max_attempts=1)
+
+    def _permanent_failure(*_a: Any, **_k: Any) -> None:
+        raise ValueError("permanent poison payload")
+
+    monkeypatch.setattr(outbox_worker, "_dispatch_topic", _permanent_failure)
+
+    with pytest.raises(ValueError, match="permanent poison payload"):
+        _run_one_tick(monkeypatch, _poison_message())
+
+    assert conn.commits == 0
+    row = conn.committed_row("row-poison")
+    assert row["attempts"] == 0
+    assert row["delivered_at"] is None
+    assert conn.committed_dead_letters() == []
+
+
+def test_below_threshold_commit_failure_does_not_mask_original_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Below the cap, a failed bump-commit still lets the original dispatch error propagate.
+
+    Exercises ``_commit_or_log`` (not ``_ack_and_commit_or_log``): only the
+    attempts bump is committed below the poison cap.
+    """
+    conn = FakeTxnConn(
+        rows=[
+            {
+                "id": "row-poison",
+                "topic": INGEST_VAULT_CHANGED,
+                "payload": "{}",
+                "created_at": "t0",
+                "delivered_at": None,
+                "attempts": 0,
+            }
+        ]
+    )
+    conn.fail_on = {"commit"}
+    _wire_worker_env(monkeypatch, tmp_path, conn, max_attempts=3)
+
+    def _permanent_failure(*_a: Any, **_k: Any) -> None:
+        raise ValueError("permanent poison payload")
+
+    monkeypatch.setattr(outbox_worker, "_dispatch_topic", _permanent_failure)
+
+    with pytest.raises(ValueError, match="permanent poison payload"):
+        _run_one_tick(monkeypatch, _poison_message())
+
+    assert conn.commits == 0
+    row = conn.committed_row("row-poison")
+    assert row["attempts"] == 0
 
 
 def test_below_threshold_bump_commits_before_reraise(
