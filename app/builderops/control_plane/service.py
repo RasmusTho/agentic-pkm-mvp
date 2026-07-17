@@ -72,6 +72,7 @@ _EMBEDDED_SECRET_VALUE = re.compile(
 )
 _MAX_DURABLE_TEXT_LENGTH = 16_384
 _MAX_DURABLE_TEXT_SCAN_CHARS = 262_144
+_MAX_DURABLE_VALUE_NODES = 10_000
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -170,6 +171,7 @@ def _assert_durable_payload_safe(
     *,
     key: str = "",
     _remaining_chars: list[int] | None = None,
+    _remaining_nodes: list[int] | None = None,
 ) -> None:
     """Reject credential-shaped material before it can enter PostgreSQL/WAL/backups."""
     remaining_chars = (
@@ -177,6 +179,14 @@ def _assert_durable_payload_safe(
         if _remaining_chars is None
         else _remaining_chars
     )
+    remaining_nodes = (
+        [_MAX_DURABLE_VALUE_NODES]
+        if _remaining_nodes is None
+        else _remaining_nodes
+    )
+    remaining_nodes[0] -= 1
+    if remaining_nodes[0] < 0:
+        raise ValueError("durable BuilderOps request exceeds the value node limit")
     normalized_key = _canonical_durable_key(key)
     if normalized_key in _ALLOWED_SECRET_METADATA_KEYS:
         _assert_secret_metadata_shape(normalized_key, value)
@@ -195,13 +205,17 @@ def _assert_durable_payload_safe(
             # JSON object keys are durable client-controlled text too. Scan the
             # key as a value before using it to classify its child value.
             _assert_durable_payload_safe(
-                durable_key, registry, _remaining_chars=remaining_chars
+                durable_key,
+                registry,
+                _remaining_chars=remaining_chars,
+                _remaining_nodes=remaining_nodes,
             )
             _assert_durable_payload_safe(
                 child,
                 registry,
                 key=durable_key,
                 _remaining_chars=remaining_chars,
+                _remaining_nodes=remaining_nodes,
             )
         return
     if isinstance(value, (list, tuple)):
@@ -215,6 +229,7 @@ def _assert_durable_payload_safe(
                 registry,
                 key=child_key,
                 _remaining_chars=remaining_chars,
+                _remaining_nodes=remaining_nodes,
             )
         return
     if not isinstance(value, str):

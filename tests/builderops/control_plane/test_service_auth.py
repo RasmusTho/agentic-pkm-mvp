@@ -327,8 +327,27 @@ def test_verifier_only_registered_bearer_cannot_be_embedded_in_durable_text(
 def test_verifier_only_registered_bearer_cannot_be_a_nested_mapping_key(
     tmp_path: Path,
 ) -> None:
-    secret = "client-token"
-    registry = _registry(tmp_path)
+    secret = "A7z9Q2m4K8p6"
+    manifest = tmp_path / "opaque-verifier-only.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "credentials": [
+                    {
+                        "id": "opaque-client",
+                        "principal": "client:opaque",
+                        "secret_ref": "host-secret:opaque-client",
+                        "verifier_sha256": hashlib.sha256(secret.encode()).hexdigest(),
+                        "token_length": len(secret),
+                        "scopes": ["records:write", "leases:write"],
+                        "rotation_generation": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = CredentialRegistry(manifest)
     store = _Store()
     client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {secret}"}
@@ -368,9 +387,15 @@ def test_durable_text_scanning_has_per_field_and_request_work_bounds(
         headers=headers,
         json=_record_payload({f"field-{index}": "x" * 16_000 for index in range(17)}),
     )
+    oversized_node_tree = client.post(
+        "/v1/records",
+        headers=headers,
+        json=_record_payload({"values": list(range(10_001))}),
+    )
 
     assert oversized_field.status_code == 400
     assert oversized_request.status_code == 400
+    assert oversized_node_tree.status_code == 400
     assert store.last_actor is None
 
 
