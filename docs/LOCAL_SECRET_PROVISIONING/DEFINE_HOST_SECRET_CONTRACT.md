@@ -29,10 +29,10 @@ accidental secret manager.
 ## Operator runbook
 
 Create or inspect a Keychain item only through the logical identifier and its declared channel and
-consumer. Never paste a value into a shell history, repository file, issue, or receipt. HSP-02 will
-own non-interactive retrieval and temporary runtime material. A raw-store key is generated only when
-the governed preflight proves no encrypted records require an existing key; rotation is a separate
-migration, never a bootstrap retry.
+consumer; its account is deterministically `{channel}:{consumer}:{secret}`. Never paste a value into
+a shell history, repository file, issue, or receipt. HSP-02 will own non-interactive retrieval and
+temporary runtime material. A raw-store key is generated only when the governed preflight proves no
+encrypted records require an existing key; rotation is a separate migration, never a bootstrap retry.
 
 ## Acceptance criteria
 

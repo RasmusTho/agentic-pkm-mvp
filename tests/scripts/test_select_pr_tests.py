@@ -83,6 +83,16 @@ def test_deploy_pin_file_selects_ops_deploy() -> None:
     assert "tests/deploy" in selection.targets
 
 
+def test_ops_contract_change_selects_ops_coverage() -> None:
+    selection = select_tests(["app/ops/host_secret_contract.py", "tests/ops/test_host_secret_contract.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("ops",)
+    assert selection.unowned_paths == ()
+    assert "tests/ops" in selection.targets
+    assert "tests/ops/test_host_secret_contract.py" in selection.targets
+
+
 def test_deploy_pin_cannot_mask_an_unowned_runtime_path() -> None:
     selection = select_tests(["config/deploy/dev.env", "app/new_surface/example.py"])
 
