@@ -563,10 +563,13 @@ class CkmStore:
             conn, "ckm_capability", str(row["capability_id"])
         )
         edge_fingerprint = str(row["edge_fingerprint"])
-        is_engine_fingerprint = len(edge_fingerprint) == 64 and all(
-            character in "0123456789abcdef" for character in edge_fingerprint
+        fingerprint_payload = edge_fingerprint.removeprefix("v2:")
+        is_engine_fingerprint = edge_fingerprint.startswith("v2:") and len(
+            fingerprint_payload
+        ) == 64 and all(
+            character in "0123456789abcdef" for character in fingerprint_payload
         )
-        if not is_engine_fingerprint and edge_fingerprint.startswith("legacy:"):
+        if not is_engine_fingerprint and edge_fingerprint != "legacy":
             # Identity-revision fixtures and pre-Q1 rows may carry internal ids
             # in their old fingerprint.  Normalize those producers through the
             # active public evidence graph so their migrated identity matches a
@@ -599,7 +602,15 @@ class CkmStore:
                 for artifact in (CkmArtifact.from_row(artifact_row),)
             }
             if len(artifacts) == len(artifact_ids):
-                edge_fingerprint = assessment_fingerprint(edges, artifacts)
+                raw_watermarks = row["watermark_set"]
+                watermark_set = (
+                    _loads(raw_watermarks)
+                    if isinstance(raw_watermarks, str)
+                    else raw_watermarks
+                )
+                edge_fingerprint = assessment_fingerprint(
+                    edges, artifacts, watermark_set=watermark_set
+                )
                 is_engine_fingerprint = True
         if is_engine_fingerprint:
             # The assessment engine uses this exact rebuild-stable fingerprint

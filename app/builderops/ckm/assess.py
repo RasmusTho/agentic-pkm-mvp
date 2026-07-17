@@ -342,6 +342,8 @@ def compute_aggregate(scores: Mapping[str, float]) -> float:
 def assessment_fingerprint(
     edges: Sequence[CkmEvidenceEdge],
     artifacts: Mapping[str, CkmArtifact],
+    *,
+    watermark_set: Mapping[str, str],
 ) -> str:
     edge_payload = [
         {
@@ -376,8 +378,9 @@ def assessment_fingerprint(
     payload = {
         "edges": edge_payload,
         "formulae": formula_payload,
+        "watermark_set": dict(sorted(watermark_set.items())),
     }
-    return hashlib.sha256(
+    return "v2:" + hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
@@ -409,7 +412,9 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
     skipped = 0
     for capability in store.list_capabilities():
         edges = store.list_evidence_edges_for_capability(capability.id)
-        fingerprint = assessment_fingerprint(edges, artifacts)
+        fingerprint = assessment_fingerprint(
+            edges, artifacts, watermark_set=watermarks
+        )
         latest = store.latest_assessment_for_capability(capability.id)
         if latest is not None and latest.edge_fingerprint == fingerprint:
             skipped += 1

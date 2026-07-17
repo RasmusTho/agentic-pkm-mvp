@@ -263,9 +263,12 @@ def test_staleness_detectable_from_projection_read_path(store: CkmStore) -> None
     assert stale.assessment.id == first.id
     assert stale.stale_relative_to_evidence is True
     watermark_only_run = assess_capabilities(store)
-    assert watermark_only_run.assessed == 0
-    assert watermark_only_run.skipped == 1
-    assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is True
+    assert watermark_only_run.assessed == 1
+    assert watermark_only_run.skipped == 0
+    watermark_refresh = store.latest_assessment_for_capability(capability.id)
+    assert watermark_refresh is not None
+    assert watermark_refresh.id != first.id
+    assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is False
 
     _edge(
         store,
@@ -278,7 +281,7 @@ def test_staleness_detectable_from_projection_read_path(store: CkmStore) -> None
     second_run = assess_capabilities(store)
     history = store.list_assessments_for_capability(capability.id)
     assert second_run.assessed == 1
-    assert len(history) == 2
+    assert len(history) == 3
     assert history[0].id == first.id
     assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is False
 
@@ -429,6 +432,27 @@ def test_formula_unselected_evidence_appends_distinct_assessment(
     assert second is not None
     assert second.scores == first.scores
     assert second.citations == first.citations
+    assert second.public_id != first.public_id
+    assert second.edge_fingerprint != first.edge_fingerprint
+
+
+def test_changed_measurement_watermark_appends_distinct_assessment(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    _fully_evidenced(store, capability.id)
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    store.set_watermark("docs", "docs-two")
+    assert assess_capabilities(store).assessed == 1
+    second = store.latest_assessment_for_capability(capability.id)
+
+    assert second is not None
+    assert second.scores == first.scores
+    assert second.citations == first.citations
+    assert second.watermark_set != first.watermark_set
     assert second.public_id != first.public_id
     assert second.edge_fingerprint != first.edge_fingerprint
 

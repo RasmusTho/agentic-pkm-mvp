@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -128,7 +129,9 @@ def test_public_identity_lifecycle_policy(
     edge = _edge(store, artifact.id, rebuilt.id)
     scores = {dimension: 0.5 for dimension in MATURITY_DIMENSIONS}
     citations = {dimension: [edge.to_dict()] for dimension in MATURITY_DIMENSIONS}
-    fingerprint = assessment_fingerprint([edge], {artifact.id: artifact})
+    fingerprint = assessment_fingerprint(
+        [edge], {artifact.id: artifact}, watermark_set={"repo": "commit:abc"}
+    )
     assessment = store.append_assessment(
         capability_id=rebuilt.id,
         scores=scores,
@@ -145,7 +148,9 @@ def test_public_identity_lifecycle_policy(
     rebuilt_artifact = _artifact(store)
     rebuilt_edge = _edge(store, rebuilt_artifact.id, rebuilt_again.id)
     rebuilt_fingerprint = assessment_fingerprint(
-        [rebuilt_edge], {rebuilt_artifact.id: rebuilt_artifact}
+        [rebuilt_edge],
+        {rebuilt_artifact.id: rebuilt_artifact},
+        watermark_set={"repo": "commit:abc"},
     )
     rebuilt_assessment = store.append_assessment(
         capability_id=rebuilt_again.id,
@@ -421,7 +426,11 @@ def test_assessed_capability_tombstone_atomically_retires_public_dependents(
         scores=scores,
         citations={dimension: [edge.to_dict()] for dimension in MATURITY_DIMENSIONS},
         aggregate=0.5,
-        edge_fingerprint=assessment_fingerprint([edge], {artifact.id: artifact}),
+        edge_fingerprint=assessment_fingerprint(
+            [edge],
+            {artifact.id: artifact},
+            watermark_set={"repo": "commit:assessed"},
+        ),
         watermark_set={"repo": "commit:assessed"},
     )
     finding = store.upsert_finding(
@@ -616,7 +625,9 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         scores=scores,
         citations=citations,
         aggregate=0.5,
-        edge_fingerprint=f"legacy:{edge.id}:{artifact.id}",
+        edge_fingerprint=hashlib.sha256(
+            f"{edge.id}:{artifact.id}".encode("utf-8")
+        ).hexdigest(),
         watermark_set={"repo": "commit:abc"},
         valid_from="2026-07-15T00:00:00Z",
         asserted_at="2026-07-15T00:00:00Z",
@@ -842,7 +853,9 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         },
         aggregate=0.5,
         edge_fingerprint=assessment_fingerprint(
-            [rebuilt_edge], {rebuilt_artifact.id: rebuilt_artifact}
+            [rebuilt_edge],
+            {rebuilt_artifact.id: rebuilt_artifact},
+            watermark_set={"repo": "commit:abc"},
         ),
         watermark_set={"repo": "commit:abc"},
         valid_from="2026-07-15T00:00:00Z",
