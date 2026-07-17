@@ -232,6 +232,22 @@ class ModelInquiryService:
                 raise BuilderOpsConflictError(
                     f"turn sequence already exists for {committed['turn_id']}: {sequence}"
                 )
+        reservation_path = directory / "turn-ids" / f"{turn_id}.json"
+        existing_reservation = self._read_optional(reservation_path)
+        # An orphaned reservation (process loss between reserving the turn id and
+        # committing the turn artifact -- see _reconcile_failed_turn_reservation)
+        # already fixed this turn's identity, including its created_at. An exact
+        # retry must reproduce that identity byte-for-byte so it recomputes the
+        # SAME artifact_hash the reservation already holds, instead of minting a
+        # fresh utc_now() that can cross a wall-clock second boundary and drift
+        # the hash. A retry that is not exact (different content, sequence, role,
+        # input refs, or provenance) still lands on a different artifact_hash (or
+        # a different reservation "sequence" value) and fails closed at the
+        # reservation write below, exactly like a rewrite of a committed turn.
+        created_at = _existing_timestamp(
+            existing,
+            fallback=_reservation_timestamp(existing_reservation),
+        )
         payload = {
             "schema": TURN_SCHEMA,
             "artifact_id": turn_id,
@@ -243,20 +259,30 @@ class ModelInquiryService:
             "content_hash": _content_hash(content),
             "input_artifact_refs": input_artifact_refs,
             "source_refs": source_refs,
-            "created_at": _existing_timestamp(existing),
+            "created_at": created_at,
         }
         payload.update(normalized_provider_metadata)
         payload["artifact_hash"] = _artifact_hash(payload)
-        reservation_path = directory / "turn-ids" / f"{turn_id}.json"
+        new_reservation: dict[str, Any] = {
+            "schema": "builderops.model-inquiry-turn-reservation.v1",
+            "inquiry_id": inquiry_id,
+            "turn_id": turn_id,
+            "sequence": sequence,
+            "artifact_hash": payload["artifact_hash"],
+        }
+        # A reservation that crashed before this fix shipped has no created_at key.
+        # Unconditionally writing one here would make every retry against it --
+        # even an exact one -- fail strict dict-equality forever (new_reservation
+        # can never equal a 5-key legacy record), permanently stranding a
+        # genuinely pre-fix orphan instead of merely inheriting its old
+        # same-second-luck retry odds. Only add created_at when there is no
+        # legacy shape to stay compatible with: a brand-new reservation, or one
+        # this fix already wrote.
+        if existing_reservation is None or "created_at" in existing_reservation:
+            new_reservation["created_at"] = created_at
         _, reservation_created = self._write_immutable_status(
             reservation_path,
-            {
-                "schema": "builderops.model-inquiry-turn-reservation.v1",
-                "inquiry_id": inquiry_id,
-                "turn_id": turn_id,
-                "sequence": sequence,
-                "artifact_hash": payload["artifact_hash"],
-            },
+            new_reservation,
             label="immutable turn id reservation",
         )
         try:
@@ -267,6 +293,7 @@ class ModelInquiryService:
                 reservation_path,
                 turn_id=turn_id,
                 sequence=sequence,
+                created_at=created_at,
                 artifact_hash=cast(str, payload["artifact_hash"]),
                 created_by_this_attempt=reservation_created,
             )
@@ -1078,6 +1105,13 @@ class ModelInquiryService:
                 "sequence": sequence,
                 "artifact_hash": turn["artifact_hash"],
             }
+            # created_at joined the reservation payload to make exact-retry recovery
+            # deterministic (see _commit_turn_locked). Reservations written before that
+            # change have no created_at key; require it to match the committed turn's
+            # own created_at when present, without breaking pre-existing durable data
+            # that predates the field.
+            if "created_at" in reservation:
+                expected_reservation["created_at"] = turn["created_at"]
             if reservation != expected_reservation:
                 raise BuilderOpsValidationError(f"turn id reservation mismatch: {turn_id}")
             seen_ids.add(turn_id)
@@ -1517,17 +1551,24 @@ class ModelInquiryService:
         *,
         turn_id: str,
         sequence: int,
+        created_at: str,
         artifact_hash: str,
         created_by_this_attempt: bool,
     ) -> None:
-        expected = {
+        existing = self._read_optional(reservation_path)
+        expected: dict[str, Any] = {
             "schema": "builderops.model-inquiry-turn-reservation.v1",
             "inquiry_id": directory.name,
             "turn_id": turn_id,
             "sequence": sequence,
             "artifact_hash": artifact_hash,
         }
-        existing = self._read_optional(reservation_path)
+        # Mirrors the write-side and _read_turns backward-compat rule: only
+        # require created_at when the on-disk reservation actually carries it, so
+        # a legacy (pre-fix) orphan this attempt just matched or wrote is still
+        # recognized and cleaned up.
+        if existing is not None and "created_at" in existing:
+            expected["created_at"] = created_at
         committed = any(
             turn.get("turn_id") == turn_id
             for turn in self._read_turn_files_without_reservations(directory)
@@ -1628,6 +1669,19 @@ def _existing_timestamp(
     if existing is not None and isinstance(existing.get("created_at"), str):
         return existing["created_at"]
     return fallback or utc_now()
+
+
+def _reservation_timestamp(reservation: Mapping[str, Any] | None) -> str | None:
+    """Recover the created_at an orphaned turn-id reservation already fixed.
+
+    Returns None for a reservation written before created_at joined the
+    reservation payload (or when no reservation exists yet), which falls
+    _existing_timestamp back to a fresh utc_now() -- the pre-fix behavior --
+    for that narrow pre-existing-data case only.
+    """
+    if reservation is not None and isinstance(reservation.get("created_at"), str):
+        return reservation["created_at"]
+    return None
 
 
 def _validate_sequence(value: Any) -> None:

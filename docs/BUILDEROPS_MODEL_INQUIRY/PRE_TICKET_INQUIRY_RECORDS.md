@@ -86,6 +86,23 @@ devices still introduce a conflicting graph, trace fails closed instead of choos
 An orphaned reservation from process loss makes trace incomplete until an exact turn retry
 reconciles it.
 
+The turn-id reservation durably fixes the turn's `created_at` the moment it is written, before the
+turn artifact itself is committed, so an orphaned reservation carries the turn's complete identity
+rather than only its `artifact_hash`. An exact retry after process loss reads that reservation first
+and reuses its `created_at` instead of minting a fresh timestamp, so it recomputes the identical
+`artifact_hash` the reservation already holds even when the retry lands on a later wall-clock second
+than the crashed attempt. A retry that is not exact -- different content, sequence, role, input refs,
+or provenance -- still recomputes a different `artifact_hash` (or targets a reservation whose
+`sequence` disagrees) and fails closed against the durable reservation, exactly like a conflicting
+rewrite of an already-committed turn. Reservations written before this mechanism existed have no
+`created_at` field; trace validation accepts that legacy shape unchanged and only requires the field
+to match the committed turn's own `created_at` when the reservation carries one. The retry write path
+mirrors that same rule: it only adds `created_at` to the reservation payload it writes when no
+reservation exists yet or the existing one already carries the field, so a retry against a genuinely
+pre-fix (legacy, five-key) orphan can still match and recover -- reproducing that orphan's pre-fix
+same-timestamp-luck retry odds -- instead of being permanently stranded by an unconditional field the
+legacy record can never equal.
+
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/builderops/test_model_inquiry_cli.py tests/builderops/test_model_inquiry_trace.py tests/builderops/test_model_inquiry_resume.py tests/api/test_builderops_inquiry_api.py`

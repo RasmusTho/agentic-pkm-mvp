@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty
-from threading import Event
+from threading import Barrier, Event
 from typing import Any, Mapping
 
 import pytest
@@ -507,6 +507,20 @@ def test_crashed_turn_reservation_is_visible_and_retryable(tmp_path: Path, monke
         return original(path, payload, label=label)
 
     monkeypatch.setattr(service, "_write_immutable", crash_before_turn)
+
+    # Force a real wall-clock second boundary between the crashed reservation and
+    # the exact retry -- the PR #3822 CI failure mode. utc_now() truncates to
+    # whole seconds, so a retry that mints a fresh timestamp only sometimes lands
+    # on a different second than the original attempt; pinning two distinct
+    # values here makes the crossing happen on every run instead of by luck.
+    reservation_timestamp = "2026-01-01T00:00:00Z"
+    retry_timestamp = "2026-01-01T00:00:05Z"
+    boundary_timestamps = iter([reservation_timestamp, retry_timestamp])
+    monkeypatch.setattr(
+        "app.builderops.model_inquiry.utc_now",
+        lambda: next(boundary_timestamps),
+    )
+
     with pytest.raises(KeyboardInterrupt, match="simulated process loss"):
         service.commit_turn(
             "inq_test_crash_reservation",
@@ -531,6 +545,91 @@ def test_crashed_turn_reservation_is_visible_and_retryable(tmp_path: Path, monke
         source_refs=refs,
     )
     assert service.trace("inq_test_crash_reservation")["turns"] == [recovered]
+    # The retry reproduces the reservation's original identity -- it must not
+    # observe the later timestamp a fresh utc_now() call would have minted.
+    assert recovered["created_at"] == reservation_timestamp
+
+
+def test_legacy_orphaned_reservation_without_created_at_is_retryable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A reservation written before created_at joined the schema (pre-#3833 fix)
+    has only 5 keys, with no way to recover its original created_at from the
+    one-way artifact_hash it already committed to. Unconditionally requiring
+    created_at on every retry write would make such a reservation permanently
+    unretryable the instant this fix ships -- worse than its pre-fix odds. An
+    exact retry must still be able to succeed (reproducing the pre-fix
+    same-timestamp-luck outcome), not fail closed forever."""
+    env = _env(tmp_path)
+    service = ModelInquiryService.from_env(env)
+    refs = [{"ref_type": "github_issue", "ref": "#3290"}]
+    service.start(
+        question="Recover a legacy reservation",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_legacy_orphan",
+        source_refs=refs,
+    )
+    original = service._write_immutable
+
+    def crash_before_turn(path, payload, *, label):
+        if label == "immutable turn artifact":
+            raise KeyboardInterrupt("simulated process loss")
+        return original(path, payload, label=label)
+
+    # Freeze utc_now() so the crash attempt and the later retry compute the same
+    # created_at -- reproducing the pre-fix "got lucky, same timestamp" case this
+    # test isolates, rather than re-testing the separate timestamp-boundary bug
+    # AC1's regression already covers.
+    frozen_timestamp = "2020-01-01T00:00:00Z"
+    monkeypatch.setattr(service, "_write_immutable", crash_before_turn)
+    monkeypatch.setattr("app.builderops.model_inquiry.utc_now", lambda: frozen_timestamp)
+    with pytest.raises(KeyboardInterrupt, match="simulated process loss"):
+        service.commit_turn(
+            "inq_test_legacy_orphan",
+            turn_id="turn-legacy",
+            sequence=0,
+            role="reviewer",
+            content="Recovered legacy content",
+            input_artifact_refs=["question"],
+            source_refs=refs,
+        )
+    monkeypatch.setattr(service, "_write_immutable", original)
+
+    # Downgrade the fix-shipped reservation to the pre-#3833 shape: strip
+    # created_at but keep the artifact_hash that already encodes it, exactly
+    # what a genuinely pre-fix crash would have left on disk.
+    reservation_path = (
+        Path(env["BUILDEROPS_VAULT_ROOT"])
+        / "model-inquiries"
+        / "inq_test_legacy_orphan"
+        / "turn-ids"
+        / "turn-legacy.json"
+    )
+    legacy_reservation = json.loads(reservation_path.read_text(encoding="utf-8"))
+    assert "created_at" in legacy_reservation
+    del legacy_reservation["created_at"]
+    reservation_path.write_text(
+        json.dumps(legacy_reservation, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BuilderOpsValidationError, match=r"orphaned=\['turn-legacy'\]"):
+        service.trace("inq_test_legacy_orphan")
+
+    recovered = service.commit_turn(
+        "inq_test_legacy_orphan",
+        turn_id="turn-legacy",
+        sequence=0,
+        role="reviewer",
+        content="Recovered legacy content",
+        input_artifact_refs=["question"],
+        source_refs=refs,
+    )
+    assert service.trace("inq_test_legacy_orphan")["turns"] == [recovered]
+    # The reservation stays in its legacy 5-key shape -- this fix does not
+    # retroactively upgrade pre-existing durable data.
+    committed_reservation = json.loads(reservation_path.read_text(encoding="utf-8"))
+    assert "created_at" not in committed_reservation
 
 
 def test_turn_transaction_is_serialized_across_service_instances(tmp_path: Path, monkeypatch) -> None:
@@ -589,6 +688,96 @@ def test_turn_transaction_is_serialized_across_service_instances(tmp_path: Path,
     inquiry = Path(env["BUILDEROPS_VAULT_ROOT"]) / "model-inquiries" / "inq_test_serialized"
     assert len(list((inquiry / "turn-ids").glob("*.json"))) == 1
     assert len(first.trace("inq_test_serialized")["turns"]) == 1
+
+    # A distinct service instance retains exactly one committed turn per
+    # identity/sequence even across an orphaned reservation: a non-exact retry
+    # (same turn_id/sequence, different content) against the other instance's
+    # orphaned reservation still fails closed, while an exact retry from that
+    # other instance reproduces the durably reserved artifact. Proven under
+    # genuine concurrent contention -- a Barrier-released real-thread race, not
+    # one fixed sequential event order -- so the flock's serialization is what
+    # is exercised, not just the state machine's logic for a chosen ordering.
+    orphan_turn_id = "turn-c"
+    orphan_sequence = 1
+    original_write_immutable = first._write_immutable
+
+    def crash_before_turn(path, payload, *, label):
+        if label == "immutable turn artifact":
+            raise KeyboardInterrupt("simulated process loss")
+        return original_write_immutable(path, payload, label=label)
+
+    # Frozen (not advancing) on purpose: this sub-test's job is to prove
+    # cross-instance retry safety under a genuine race, a concern orthogonal to
+    # timestamp-boundary determinism, which test_crashed_turn_reservation_is_
+    # visible_and_retryable already covers. A single frozen value also removes
+    # any dependency on which racing thread's utc_now() call runs first.
+    reservation_timestamp = "2026-02-01T00:00:00Z"
+    monkeypatch.setattr(first, "_write_immutable", crash_before_turn)
+    monkeypatch.setattr("app.builderops.model_inquiry.utc_now", lambda: reservation_timestamp)
+    with pytest.raises(KeyboardInterrupt, match="simulated process loss"):
+        first.commit_turn(
+            "inq_test_serialized",
+            turn_id=orphan_turn_id,
+            sequence=orphan_sequence,
+            role="reviewer",
+            content="Original candidate",
+            input_artifact_refs=["question"],
+            source_refs=refs,
+        )
+    monkeypatch.setattr(first, "_write_immutable", original_write_immutable)
+
+    race_barrier = Barrier(2)
+    race_results: dict[str, object] = {}
+
+    def race_exact() -> None:
+        race_barrier.wait(timeout=2)
+        try:
+            race_results["exact"] = second.commit_turn(
+                "inq_test_serialized",
+                turn_id=orphan_turn_id,
+                sequence=orphan_sequence,
+                role="reviewer",
+                content="Original candidate",
+                input_artifact_refs=["question"],
+                source_refs=refs,
+            )
+        except BuilderOpsConflictError as exc:
+            race_results["exact"] = exc
+
+    def race_divergent() -> None:
+        race_barrier.wait(timeout=2)
+        try:
+            race_results["divergent"] = first.commit_turn(
+                "inq_test_serialized",
+                turn_id=orphan_turn_id,
+                sequence=orphan_sequence,
+                role="reviewer",
+                content="Different candidate",
+                input_artifact_refs=["question"],
+                source_refs=refs,
+            )
+        except BuilderOpsConflictError as exc:
+            race_results["divergent"] = exc
+
+    # Both threads block on the barrier and are released at the same instant,
+    # so their flock/RLock acquisition attempts genuinely overlap regardless of
+    # which one the scheduler happens to grant the lock to first -- both
+    # possible orderings must converge on the same correct outcome.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pending_exact = executor.submit(race_exact)
+        pending_divergent = executor.submit(race_divergent)
+        pending_exact.result(timeout=5)
+        pending_divergent.result(timeout=5)
+
+    assert isinstance(race_results["divergent"], BuilderOpsConflictError)
+    recovered = race_results["exact"]
+    assert isinstance(recovered, dict)
+    assert recovered["turn_id"] == orphan_turn_id
+    assert recovered["created_at"] == reservation_timestamp
+    committed_turns = second.trace("inq_test_serialized")["turns"]
+    assert [turn["turn_id"] for turn in committed_turns].count(orphan_turn_id) == 1
+    orphan_turn = next(turn for turn in committed_turns if turn["turn_id"] == orphan_turn_id)
+    assert orphan_turn["content"] == "Original candidate"
 
 
 def test_turn_transaction_is_serialized_across_processes(tmp_path: Path) -> None:
