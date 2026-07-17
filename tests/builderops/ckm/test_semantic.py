@@ -399,7 +399,7 @@ def test_retired_inferred_edge_cannot_be_confirmed(store: CkmStore) -> None:
     assert store.list_builderops_receipts("ckm_edge_confirmed") == []
 
 
-def test_retired_confirmed_edge_is_not_resurrected_but_rebuild_restores(
+def test_retired_confirmed_edge_stays_tombstoned_across_rebuild(
     store: CkmStore,
 ) -> None:
     capability = _capability(store)
@@ -422,16 +422,13 @@ def test_retired_confirmed_edge_is_not_resurrected_but_rebuild_restores(
     assert store.list_evidence_edges() == []
 
     store.rebuild()
-    rebuilt_capability = _capability(store)
-    rebuilt_artifact = _artifact(store)
+    _capability(store)
+    _artifact(store)
 
     assert store.has_retired_evidence_edge(edge.id) is False
-    assert reapply_confirmation_receipts(store) == 1
-    restored = store.list_evidence_edges()
-    assert len(restored) == 1
-    assert restored[0].artifact_id == rebuilt_artifact.id
-    assert restored[0].capability_id == rebuilt_capability.id
-    assert restored[0].lifecycle == "confirmed"
+    assert reapply_confirmation_receipts(store) == 0
+    assert store.list_evidence_edges() == []
+    assert store.identity_lifecycle(edge.public_id)["status"] == "tombstone"
 
 
 @pytest.mark.parametrize(

@@ -993,7 +993,7 @@ class CkmStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                "SELECT id, source_ref FROM ckm_artifact WHERE source = ?", (source,)
+                "SELECT id, public_id, source_ref FROM ckm_artifact WHERE source = ?", (source,)
             ).fetchall()
             stale = [row for row in rows if row["source_ref"] not in source_refs]
             for row in stale:
@@ -1001,8 +1001,11 @@ class CkmStore:
                     "SELECT * FROM ckm_evidence_edge WHERE artifact_id = ?", (row["id"],)
                 ).fetchall()
                 self._archive_evidence_edges(conn, edge_rows)
+                for edge_row in edge_rows:
+                    self._tombstone_public_identity(conn, str(edge_row["public_id"]))
                 conn.execute("DELETE FROM ckm_evidence_edge WHERE artifact_id = ?", (row["id"],))
                 conn.execute("DELETE FROM ckm_artifact WHERE id = ?", (row["id"],))
+                self._tombstone_public_identity(conn, str(row["public_id"]))
             if stale:
                 self._advance_state_revision(conn)
             conn.commit()
@@ -1402,7 +1405,7 @@ class CkmStore:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """
-                SELECT id, artifact_id, capability_id, basis
+                SELECT id, public_id, artifact_id, capability_id, basis
                 FROM ckm_evidence_edge
                 WHERE extraction_method = 'deterministic'
                 """
@@ -1424,6 +1427,7 @@ class CkmStore:
             self._archive_evidence_edges(conn, [row for row in archived if row is not None])
             for row in stale:
                 conn.execute("DELETE FROM ckm_evidence_edge WHERE id = ?", (row["id"],))
+                self._tombstone_public_identity(conn, str(row["public_id"]))
             if stale:
                 self._advance_state_revision(conn)
             conn.commit()
@@ -1439,6 +1443,7 @@ class CkmStore:
                 self._archive_evidence_edges(conn, [row])
             conn.execute("DELETE FROM ckm_evidence_edge WHERE id = ?", (edge_id,))
             if row is not None:
+                self._tombstone_public_identity(conn, str(row["public_id"]))
                 self._advance_state_revision(conn)
             conn.commit()
 
@@ -1709,6 +1714,10 @@ class CkmStore:
             }
             changed = bool(set(existing) ^ set(candidates))
             for kind, capability_id, dimension in set(existing) - set(candidates):
+                self._tombstone_public_identity(
+                    conn,
+                    str(existing[(kind, capability_id, dimension)]["public_id"]),
+                )
                 conn.execute(
                     """
                     DELETE FROM ckm_finding

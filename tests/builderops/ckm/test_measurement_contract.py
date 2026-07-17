@@ -185,6 +185,92 @@ def test_public_identity_lifecycle_policy(
             existence_provenance="receipt:reuse",
         )
 
+    deleted_artifact = _artifact(store, source_ref="docs/deleted-artifact.md")
+    cascade_edge = _edge(
+        store,
+        deleted_artifact.id,
+        rebuilt_again.id,
+        basis="cascade-delete:1",
+        source_ref=deleted_artifact.source_ref,
+    )
+    assert store.delete_artifacts_not_in(
+        "repo_artifact_ingestion", {rebuilt_artifact.source_ref}
+    ) == 1
+    for public_id, resource_type in (
+        (deleted_artifact.public_id, "artifact"),
+        (cascade_edge.public_id, "evidence_edge"),
+    ):
+        assert store.identity_lifecycle(public_id) == {
+            "public_id": public_id,
+            "resource_type": resource_type,
+            "status": "tombstone",
+            "successors": [],
+        }
+    with pytest.raises(CkmValidationError, match="tombstoned and cannot be reused"):
+        _artifact(store, source_ref=deleted_artifact.source_ref)
+
+    edge_owner = _artifact(store, source_ref="docs/deleted-edges.md")
+    deleted_edge = _edge(
+        store,
+        edge_owner.id,
+        rebuilt_again.id,
+        basis="direct-delete:1",
+        source_ref=edge_owner.source_ref,
+    )
+    store.delete_evidence_edge(deleted_edge.id)
+    assert store.identity_lifecycle(deleted_edge.public_id)["status"] == "tombstone"
+    with pytest.raises(CkmValidationError, match="tombstoned and cannot be reused"):
+        _edge(
+            store,
+            edge_owner.id,
+            rebuilt_again.id,
+            basis=deleted_edge.basis,
+            source_ref=edge_owner.source_ref,
+        )
+
+    reconciled_edge = _edge(
+        store,
+        edge_owner.id,
+        rebuilt_again.id,
+        basis="deterministic:removed",
+        source_ref=edge_owner.source_ref,
+    )
+    assert store.delete_deterministic_edges_not_in(
+        set(), owned_basis_prefixes=("deterministic:",)
+    ) == 1
+    assert store.identity_lifecycle(reconciled_edge.public_id)["status"] == "tombstone"
+    with pytest.raises(CkmValidationError, match="tombstoned and cannot be reused"):
+        _edge(
+            store,
+            edge_owner.id,
+            rebuilt_again.id,
+            basis=reconciled_edge.basis,
+            source_ref=edge_owner.source_ref,
+        )
+
+    deleted_finding = store.upsert_finding(
+        kind="gap",
+        capability_id=rebuilt_again.id,
+        dimension="documentation_quality",
+        statement="Temporary finding.",
+        citations=[{"artifact": edge_owner.to_dict()}],
+    )
+    store.replace_findings([])
+    assert store.identity_lifecycle(deleted_finding.public_id) == {
+        "public_id": deleted_finding.public_id,
+        "resource_type": "finding",
+        "status": "tombstone",
+        "successors": [],
+    }
+    with pytest.raises(CkmValidationError, match="tombstoned and cannot be reused"):
+        store.upsert_finding(
+            kind="gap",
+            capability_id=rebuilt_again.id,
+            dimension="documentation_quality",
+            statement="Reused finding.",
+            citations=[{"artifact": edge_owner.to_dict()}],
+        )
+
     split_source = store.upsert_capability(
         identity_key="inferred:split-source",
         name="Split source",
