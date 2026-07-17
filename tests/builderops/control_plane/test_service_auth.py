@@ -324,6 +324,56 @@ def test_verifier_only_registered_bearer_cannot_be_embedded_in_durable_text(
     assert response.status_code == 400
 
 
+def test_verifier_only_registered_bearer_cannot_be_a_nested_mapping_key(
+    tmp_path: Path,
+) -> None:
+    secret = "client-token"
+    registry = _registry(tmp_path)
+    store = _Store()
+    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    headers = {"Authorization": f"Bearer {secret}"}
+
+    record = client.post(
+        "/v1/records",
+        headers=headers,
+        json=_record_payload({"nested": {secret: "safe"}}),
+    )
+    lease_body = _lease_payload()
+    lease_body["request"] = {"nested": {secret: "safe"}}
+    lease = client.post("/v1/leases/claim", headers=headers, json=lease_body)
+
+    assert record.status_code == 400
+    assert lease.status_code == 400
+    assert secret not in record.text
+    assert secret not in lease.text
+    assert store.claims == {}
+    assert store.last_actor is None
+
+
+def test_durable_text_scanning_has_per_field_and_request_work_bounds(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path)
+    store = _Store()
+    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer client-token"}
+
+    oversized_field = client.post(
+        "/v1/records",
+        headers=headers,
+        json=_record_payload({"summary": "x" * 16_385}),
+    )
+    oversized_request = client.post(
+        "/v1/records",
+        headers=headers,
+        json=_record_payload({f"field-{index}": "x" * 16_000 for index in range(17)}),
+    )
+
+    assert oversized_field.status_code == 400
+    assert oversized_request.status_code == 400
+    assert store.last_actor is None
+
+
 def test_raw_credentials_are_rejected_from_every_client_controlled_durable_field(
     tmp_path: Path,
 ) -> None:

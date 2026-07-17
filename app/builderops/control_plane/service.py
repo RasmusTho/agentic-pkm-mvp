@@ -70,6 +70,8 @@ _EMBEDDED_SECRET_VALUE = re.compile(
     r"postgres(?:ql)?://[^\s]+@[^\s]+)",
     re.IGNORECASE,
 )
+_MAX_DURABLE_TEXT_LENGTH = 16_384
+_MAX_DURABLE_TEXT_SCAN_CHARS = 262_144
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -162,8 +164,19 @@ def _credential_dependency(
     return require_credential
 
 
-def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, key: str = "") -> None:
+def _assert_durable_payload_safe(
+    value: Any,
+    registry: CredentialRegistry,
+    *,
+    key: str = "",
+    _remaining_chars: list[int] | None = None,
+) -> None:
     """Reject credential-shaped material before it can enter PostgreSQL/WAL/backups."""
+    remaining_chars = (
+        [_MAX_DURABLE_TEXT_SCAN_CHARS]
+        if _remaining_chars is None
+        else _remaining_chars
+    )
     normalized_key = _canonical_durable_key(key)
     if normalized_key in _ALLOWED_SECRET_METADATA_KEYS:
         _assert_secret_metadata_shape(normalized_key, value)
@@ -178,7 +191,18 @@ def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, ke
         raise ValueError("raw credential fields are forbidden in durable BuilderOps payloads")
     if isinstance(value, Mapping):
         for child_key, child in value.items():
-            _assert_durable_payload_safe(child, registry, key=str(child_key))
+            durable_key = str(child_key)
+            # JSON object keys are durable client-controlled text too. Scan the
+            # key as a value before using it to classify its child value.
+            _assert_durable_payload_safe(
+                durable_key, registry, _remaining_chars=remaining_chars
+            )
+            _assert_durable_payload_safe(
+                child,
+                registry,
+                key=durable_key,
+                _remaining_chars=remaining_chars,
+            )
         return
     if isinstance(value, (list, tuple)):
         for child in value:
@@ -186,10 +210,20 @@ def _assert_durable_payload_safe(value: Any, registry: CredentialRegistry, *, ke
             # still receive the value scan without being mistaken for a whole
             # `scopes` collection.
             child_key = "" if normalized_key in _ALLOWED_SECRET_METADATA_KEYS else key
-            _assert_durable_payload_safe(child, registry, key=child_key)
+            _assert_durable_payload_safe(
+                child,
+                registry,
+                key=child_key,
+                _remaining_chars=remaining_chars,
+            )
         return
     if not isinstance(value, str):
         return
+    if len(value) > _MAX_DURABLE_TEXT_LENGTH:
+        raise ValueError("durable BuilderOps text field exceeds the size limit")
+    remaining_chars[0] -= len(value)
+    if remaining_chars[0] < 0:
+        raise ValueError("durable BuilderOps request exceeds the text scan limit")
     lowered = value.strip().lower()
     if (
         lowered.startswith(_SECRET_VALUE_PREFIXES)
