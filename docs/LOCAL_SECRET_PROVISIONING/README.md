@@ -52,6 +52,8 @@ colon-joining the declared
 tuple, so distinct tuples cannot collide and each channel resolves a distinct item.
 The v1 loader accepts only those three channels, that consumer, and the named logical identifier;
 any other identifier-bearing string is rejected rather than treated as a potential secret value.
+Contract JSON must use unique object keys; a duplicate declaration fails closed rather than allowing a
+value to be hidden behind a later canonical field.
 HSP-02 is the only future component permitted to resolve that declaration into a process-local
 environment variable.
 

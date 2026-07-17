@@ -22,6 +22,15 @@ class UndeclaredSecretConsumerError(ValueError):
     """Raised without secret material when a consumer requests an undeclared key."""
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("duplicate host secret contract key")
+        payload[key] = value
+    return payload
+
+
 @dataclass(frozen=True)
 class HostSecretContract:
     keychain_service: str
@@ -45,7 +54,7 @@ class HostSecretContract:
 
 
 def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretContract:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
     if not isinstance(payload, dict) or set(payload) != _CONTRACT_FIELDS:
         raise ValueError("invalid host secret contract")
     if (

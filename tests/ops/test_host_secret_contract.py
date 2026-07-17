@@ -113,6 +113,20 @@ def test_contract_rejects_noncanonical_top_level_values(
         load_host_secret_contract(contract_path)
 
 
+def test_contract_rejects_duplicate_json_key_that_hides_secret_material(tmp_path: Path) -> None:
+    text = Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8")
+    text = text.replace(
+        '"keychain_service": "yggdrasil.host-secrets",',
+        '"keychain_service": "actual-secret-material",\n'
+        '  "keychain_service": "yggdrasil.host-secrets",',
+    )
+    contract_path = tmp_path / "host_secret_contract.json"
+    contract_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate host secret contract key"):
+        load_host_secret_contract(contract_path)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("channel", "secret-value"), ("consumer", "secret-value")],
