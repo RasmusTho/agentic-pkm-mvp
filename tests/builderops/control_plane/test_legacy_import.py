@@ -9,6 +9,7 @@ adapter, and reads real on-disk legacy fixture sources.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -29,8 +30,10 @@ from app.builderops.control_plane.legacy_migration import (
     import_records,
     normalize_sources,
     read_builderops_sqlite,
+    read_dispatcher_events_jsonl,
     read_dispatcher_sqlite,
     read_epic_run_json,
+    read_model_inquiry_files,
     run_migration,
 )
 
@@ -626,3 +629,218 @@ def test_authority_ambiguity_requires_resolution_or_duplicate_preventing_tombsto
     assert quarantined.dispositions[evidence_only.source_ref] == Disposition.EVIDENCE_QUARANTINED
     item = sink_q.quarantines[evidence_only.source_ref]
     assert item.authorizes_effect() is False
+
+
+# ---------------------------------------------------------------------------
+# G2: one corrupted legacy JSON file quarantines only itself, never crashes
+# the whole read (F6's established pattern, extended to the previously
+# unguarded json.loads sites).
+# ---------------------------------------------------------------------------
+
+
+def test_dispatcher_events_jsonl_quarantines_corrupted_lines(tmp_path: Path) -> None:
+    events_path = tmp_path / "runtime/dispatcher/events.jsonl"
+    fx.write_dispatcher_events_jsonl(events_path)  # writes valid jsonl-1, jsonl-2
+    with events_path.open("a", encoding="utf-8") as fh:
+        fh.write("{not valid json at all\n")  # malformed JSON syntax
+        fh.write('["a", "json", "array", "not", "an", "object"]\n')  # valid JSON, wrong shape
+
+    root = _expected_root_for(
+        events_path,
+        producer="dispatcher_events",
+        source_class="dispatcher_events_jsonl",
+        repo=fx.REPO,
+    )
+    probe = fx.make_probe(freshness_at=fx.iso_now())
+    records = read_dispatcher_events_jsonl(probe(root))
+
+    valid = [r for r in records if r.invalid_reason is None]
+    invalid = [r for r in records if r.invalid_reason is not None]
+    assert len(valid) == 2  # jsonl-1, jsonl-2 unaffected
+    assert len(invalid) == 2  # the malformed line AND the wrong-shape line
+    assert all("not valid JSON" in r.invalid_reason for r in invalid)
+
+    # The rest of the pass completes -- one corrupted line never crashes the
+    # whole audit-log read, and each item is independently accounted for.
+    sink = InMemoryAuthoritySink()
+    result = import_records(records, sink=sink, epoch_id="e1")
+    assert not result.cutover_blocked
+    for record in valid:
+        assert result.dispositions[record.source_ref] == Disposition.IMPORTED
+    for record in invalid:
+        assert result.dispositions[record.source_ref] == Disposition.EVIDENCE_QUARANTINED
+
+
+def test_model_inquiry_corrupted_manifest_quarantines_only_that_inquiry(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    fx.write_model_inquiry(vault_root / "model-inquiries", inquiry_id="inq-good")
+    bad_dir = vault_root / "model-inquiries" / "inq-bad"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "manifest.json").write_text("{not valid json at all", encoding="utf-8")
+
+    root = _expected_root_for(
+        vault_root / "model-inquiries",
+        producer="model_inquiry",
+        source_class="model_inquiry_files",
+        repo=fx.REPO,
+    )
+    probe = fx.make_probe(freshness_at=fx.iso_now())
+    records = read_model_inquiry_files(probe(root))
+
+    inquiries = [r for r in records if r.object_kind == "model_inquiry"]
+    good = [r for r in inquiries if r.invalid_reason is None]
+    bad = [r for r in inquiries if r.invalid_reason is not None]
+    assert len(good) == 1  # inq-good still reads cleanly
+    assert len(bad) == 1  # inq-bad quarantines, does not crash the loop
+    assert "inq-bad" in bad[0].source_ref
+    assert "manifest.json" in bad[0].invalid_reason
+
+    sink = InMemoryAuthoritySink()
+    result = import_records(records, sink=sink, epoch_id="e1")
+    assert not result.cutover_blocked
+    assert result.dispositions[good[0].source_ref] == Disposition.IMPORTED
+    assert result.dispositions[bad[0].source_ref] == Disposition.EVIDENCE_QUARANTINED
+
+
+def test_model_inquiry_corrupted_receipt_quarantines_only_that_receipt(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    written = fx.write_model_inquiry(vault_root / "model-inquiries")
+    receipts_dir = vault_root / "model-inquiries" / written["inquiry_id"] / "receipts"
+    (receipts_dir / "corrupted-receipt.json").write_text("[1, 2, 3]", encoding="utf-8")
+
+    root = _expected_root_for(
+        vault_root / "model-inquiries",
+        producer="model_inquiry",
+        source_class="model_inquiry_files",
+        repo=fx.REPO,
+    )
+    probe = fx.make_probe(freshness_at=fx.iso_now())
+    records = read_model_inquiry_files(probe(root))
+
+    manifest_records = [r for r in records if r.object_kind == "model_inquiry"]
+    receipt_records = [r for r in records if r.object_kind == "model_inquiry_receipt"]
+    assert len(manifest_records) == 1
+    assert manifest_records[0].invalid_reason is None  # manifest itself is fine
+
+    good_receipts = [r for r in receipt_records if r.invalid_reason is None]
+    bad_receipts = [r for r in receipt_records if r.invalid_reason is not None]
+    assert len(good_receipts) == 2  # inquiry-started + inquiry-run-terminal
+    assert len(bad_receipts) == 1
+    assert "corrupted-receipt" in bad_receipts[0].provenance["path"]
+    assert "not valid JSON" in bad_receipts[0].invalid_reason
+
+    sink = InMemoryAuthoritySink()
+    result = import_records(records, sink=sink, epoch_id="e1")
+    assert not result.cutover_blocked
+    for record in good_receipts + manifest_records:
+        assert result.dispositions[record.source_ref] == Disposition.IMPORTED
+    assert result.dispositions[bad_receipts[0].source_ref] == Disposition.EVIDENCE_QUARANTINED
+
+
+# ---------------------------------------------------------------------------
+# G3: the sink itself rejects same-identity-different-content instead of
+# silently overwriting -- the last line of defense past import_records'
+# grouping/conflict-resolution.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_authority_record_rejects_divergent_content_same_identity() -> None:
+    sink = InMemoryAuthoritySink()
+    record_a = _authority_record(
+        "src-a#task:1", identity_key="dispatcher_task:same-id", content_hash="hash-a"
+    )
+    record_a_replay = _authority_record(
+        "src-a#task:1", identity_key="dispatcher_task:same-id", content_hash="hash-a"
+    )
+    record_b_diverged = _authority_record(
+        "src-b#task:1", identity_key="dispatcher_task:same-id", content_hash="hash-b"
+    )
+
+    assert sink.apply_authority_record(record_a) is True
+    # Same identity + SAME content -> idempotent no-op replay (F9's idiom).
+    assert sink.apply_authority_record(record_a_replay) is False
+    # Same identity + DIFFERENT content -> raises, never silently overwrites.
+    with pytest.raises(AuthorityReplayError):
+        sink.apply_authority_record(record_b_diverged)
+    assert sink.applied[("dispatcher_task", "dispatcher_task:same-id")] == "hash-a"
+
+
+# ---------------------------------------------------------------------------
+# G4: a self-reported declared_hash is verified against a fresh recomputation,
+# never trusted verbatim.
+# ---------------------------------------------------------------------------
+
+
+def test_model_inquiry_stale_declared_hash_quarantines_the_inquiry(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    written = fx.write_model_inquiry(vault_root / "model-inquiries")
+    inquiry_dir = vault_root / "model-inquiries" / written["inquiry_id"]
+    question_path = inquiry_dir / "question.json"
+
+    # Tamper the CONTENT without updating the self-reported artifact_hash: the
+    # file now declares a hash that no longer matches a recomputation over its
+    # own current bytes (a stale or forged self-report).
+    question = json.loads(question_path.read_text("utf-8"))
+    stale_declared_hash = question["artifact_hash"]
+    question["text"] = "tampered content"
+    question_path.write_text(json.dumps(question, sort_keys=True), encoding="utf-8")
+    assert stale_declared_hash != fx.model_inquiry_artifact_hash(question)  # sanity: genuinely stale
+
+    root = _expected_root_for(
+        vault_root / "model-inquiries",
+        producer="model_inquiry",
+        source_class="model_inquiry_files",
+        repo=fx.REPO,
+    )
+    probe = fx.make_probe(freshness_at=fx.iso_now())
+    records = read_model_inquiry_files(probe(root))
+
+    inquiry_record = next(r for r in records if r.object_kind == "model_inquiry")
+    assert inquiry_record.invalid_reason is not None
+    assert "declared artifact_hash" in inquiry_record.invalid_reason
+    assert "question" in inquiry_record.invalid_reason
+
+    # The artifact ref itself still carries a VALID content_hash (computed from
+    # current bytes) and the STALE declared_hash preserved as evidence (not
+    # silently dropped, just no longer trusted for the record's fate).
+    question_ref = next(a for a in inquiry_record.artifact_refs if a.artifact_id == "question")
+    assert question_ref.content_hash == hashlib.sha256(question_path.read_bytes()).hexdigest()
+    assert question_ref.declared_hash == stale_declared_hash
+
+    # Receipts for the SAME inquiry are unaffected -- they are separate records
+    # whose own content was never tampered.
+    receipt_records = [r for r in records if r.object_kind == "model_inquiry_receipt"]
+    assert receipt_records and all(r.invalid_reason is None for r in receipt_records)
+
+    sink = InMemoryAuthoritySink()
+    result = import_records(records, sink=sink, epoch_id="e1")
+    assert not result.cutover_blocked  # quarantine, not a cutover block
+    assert result.dispositions[inquiry_record.source_ref] == Disposition.EVIDENCE_QUARANTINED
+    for record in receipt_records:
+        assert result.dispositions[record.source_ref] == Disposition.IMPORTED
+
+
+def test_model_inquiry_matching_declared_hash_imports_cleanly(tmp_path: Path) -> None:
+    """Control case for G4: an UNTAMPERED artifact (declared_hash matches a
+    fresh recomputation) must still import as authority -- the verification
+    must not false-positive on legitimate, unmodified fixtures."""
+
+    vault_root = tmp_path / "vault"
+    fx.write_model_inquiry(vault_root / "model-inquiries")
+    root = _expected_root_for(
+        vault_root / "model-inquiries",
+        producer="model_inquiry",
+        source_class="model_inquiry_files",
+        repo=fx.REPO,
+    )
+    probe = fx.make_probe(freshness_at=fx.iso_now())
+    records = read_model_inquiry_files(probe(root))
+    inquiry_record = next(r for r in records if r.object_kind == "model_inquiry")
+    assert inquiry_record.invalid_reason is None
+    for artifact in inquiry_record.artifact_refs:
+        assert artifact.declared_hash is not None
+
+    sink = InMemoryAuthoritySink()
+    result = import_records(records, sink=sink, epoch_id="e1")
+    assert not result.cutover_blocked
+    assert result.dispositions[inquiry_record.source_ref] == Disposition.IMPORTED

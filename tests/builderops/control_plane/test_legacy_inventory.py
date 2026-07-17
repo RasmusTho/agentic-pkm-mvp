@@ -226,6 +226,103 @@ def test_env_overrides_pin_producers_and_record_consulted_keys(tmp_path: Path) -
     assert remote_universe and all(r.env_known is False for r in remote_universe)
 
 
+def test_dispatcher_sibling_env_key_poisons_state_dir_default(tmp_path: Path) -> None:
+    """G1: app/dispatcher/config.py::_default_state_dir poisons state_dir's OWN
+    fallback (from primary-worktree-relative to the BARE CWD-relative default)
+    whenever ANY of DISPATCHER_STATE_DIR/DISPATCHER_DB_PATH/DISPATCHER_EVENTS_PATH
+    is present -- even a SIBLING key unrelated to the field being resolved.
+    Setting only DISPATCHER_EVENTS_PATH must still move dispatcher_store's
+    resolution off the clone-set primary onto per-root (CWD-relative)
+    derivation, and vice versa for dispatcher_events with only
+    DISPATCHER_DB_PATH set. Cross-checked empirically against the real
+    app.dispatcher.config.load_paths resolver, the same way the review found
+    the bug: side-by-side against derive_expected_universe's output.
+    """
+
+    from app.dispatcher.config import load_paths as real_load_paths
+
+    primary = tmp_path / "clone-a" / "wt-primary"
+    linked = tmp_path / "clone-a" / "wt-linked"
+    fx.write_state_producers(primary)
+    fx.write_state_producers(linked, dispatcher=False)
+
+    def _hosts_for(env: dict[str, str]) -> tuple[HostContext, ...]:
+        return (
+            HostContext(
+                host="macbook",
+                user=fx.OPERATOR,
+                roots=(
+                    EnumeratedRoot(RootKind.GIT_WORKTREE, str(primary), repo_identity=fx.REPO),
+                    EnumeratedRoot(
+                        RootKind.GIT_WORKTREE,
+                        str(linked),
+                        repo_identity=fx.REPO,
+                        primary_worktree=str(primary),
+                    ),
+                ),
+                env=env,
+            ),
+        )
+
+    # --- Scenario A: only DISPATCHER_EVENTS_PATH set. ----------------------
+    events_override = tmp_path / "custom-events" / "events.jsonl"
+    env_a = {"DISPATCHER_EVENTS_PATH": str(events_override)}
+
+    # Sanity: confirm the REAL resolver is actually poisoned for this env
+    # (db_path stays a bare relative path, never touching cwd/primary at all).
+    real_a = real_load_paths(env=dict(env_a), cwd=primary)
+    assert not real_a.db_path.is_absolute()
+    assert real_a.events_path == events_override
+
+    universe_a = derive_expected_universe(_hosts_for(env_a))
+
+    # dispatcher_events: its OWN key is set -> one absolute override, unaffected
+    # by poisoning (own key always wins).
+    events_roots = [r for r in universe_a if r.producer == "dispatcher_events"]
+    assert len(events_roots) == 1
+    assert events_roots[0].path == str(events_override)
+    assert events_roots[0].root_kind == RootKind.PRODUCER_DEFAULT
+
+    # dispatcher_store: neither its own key nor DISPATCHER_STATE_DIR is set, but
+    # the sibling DISPATCHER_EVENTS_PATH poisons state_dir -> per-root
+    # (CWD-relative) resolution, NOT collapsed onto the clone-set primary. Two
+    # enumerated worktrees now produce TWO expected dispatcher_store roots.
+    dispatcher_roots = {r.path: r for r in universe_a if r.producer == "dispatcher_store"}
+    assert len(dispatcher_roots) == 2
+    for worktree in (primary, linked):
+        real = real_load_paths(env=dict(env_a), cwd=worktree)
+        expected_path = str(worktree / real.db_path)
+        assert expected_path in dispatcher_roots
+        root = dispatcher_roots[expected_path]
+        assert root.root_kind == RootKind.GIT_WORKTREE
+        assert "DISPATCHER_EVENTS_PATH" in root.env_keys_consulted
+        assert root.env_known is True
+
+    # --- Scenario B: only DISPATCHER_DB_PATH set (symmetric direction). ----
+    db_override = tmp_path / "custom-db" / "dispatcher.sqlite3"
+    env_b = {"DISPATCHER_DB_PATH": str(db_override)}
+
+    real_b = real_load_paths(env=dict(env_b), cwd=primary)
+    assert not real_b.events_path.is_absolute()
+    assert real_b.db_path == db_override
+
+    universe_b = derive_expected_universe(_hosts_for(env_b))
+
+    dispatcher_roots_b = [r for r in universe_b if r.producer == "dispatcher_store"]
+    assert len(dispatcher_roots_b) == 1
+    assert dispatcher_roots_b[0].path == str(db_override)
+    assert dispatcher_roots_b[0].root_kind == RootKind.PRODUCER_DEFAULT
+
+    events_roots_b = {r.path: r for r in universe_b if r.producer == "dispatcher_events"}
+    assert len(events_roots_b) == 2
+    for worktree in (primary, linked):
+        real = real_load_paths(env=dict(env_b), cwd=worktree)
+        expected_path = str(worktree / real.events_path)
+        assert expected_path in events_roots_b
+        assert events_roots_b[expected_path].root_kind == RootKind.GIT_WORKTREE
+        assert "DISPATCHER_DB_PATH" in events_roots_b[expected_path].env_keys_consulted
+
+
 def test_producer_authority_flag_is_load_bearing_for_readers(tmp_path: Path) -> None:
     """Flipping the producer authority flag flows through to every record the
     reader emits (F10): table refinements may only narrow, never exceed it."""

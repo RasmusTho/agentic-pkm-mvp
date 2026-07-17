@@ -21,6 +21,11 @@ Design constraints held here (all from the task spec):
   ``DISPATCHER_EVENTS_PATH``, ``BUILDEROPS_STATE_DIR``/``BUILDEROPS_DB_PATH``,
   ``BUILDEROPS_VAULT_ROOT``) are consulted from each host's environment snapshot
   at derivation time; the consulted keys are recorded per manifest entry.
+  Dispatcher resolution additionally mirrors ``app/dispatcher/config.py``'s
+  sibling-poisoning rule: presence of ANY of the three dispatcher path keys
+  (even one whose own field is unrelated, e.g. only ``DISPATCHER_EVENTS_PATH``
+  set) flips the *other* dispatcher producer off the clone-set primary onto
+  per-root resolution, exactly like the real resolver's ``state_dir`` fallback.
   **Remote-env limitation:** environment snapshots are only available for hosts
   the operator can introspect. A ``HostContext`` without an ``env`` mapping is
   derived from default paths alone, its manifest entries record
@@ -86,6 +91,22 @@ def _hash(value: Any) -> str:
 
 def _hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _model_inquiry_declared_hash(payload: Mapping[str, Any]) -> str:
+    """Recompute ``model_inquiry.py``'s own ``_artifact_hash`` scheme (sha256 of
+    the canonical JSON of the payload minus its own ``artifact_hash`` field) so a
+    self-reported ``declared_hash`` can be verified against the artifact's
+    CURRENT content rather than trusted verbatim -- mirrors the real store's own
+    ``_validate_artifact_hash``. ``_content_hash``'s encoding
+    (``json.dumps(..., ensure_ascii=False, sort_keys=True, separators=(",", ":"))``
+    then sha256-hex of the UTF-8 bytes) is identical to this module's own
+    ``_hash``, so this is exactly ``_hash`` applied to the hash-field-stripped
+    payload.
+    """
+
+    canonical = {key: value for key, value in payload.items() if key != "artifact_hash"}
+    return _hash(canonical)
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -248,7 +269,12 @@ PRODUCER_MANIFEST: tuple[ProducerSpec, ...] = (
         authority_bearing=True,
         root_scope=_SCOPE_PER_WORKTREE,
         resolution=_RESOLVE_PRIMARY_WORKTREE,
-        env_override_keys=("DISPATCHER_DB_PATH", "DISPATCHER_STATE_DIR"),
+        # All three dispatcher path keys are listed (not just this producer's own
+        # DISPATCHER_DB_PATH/DISPATCHER_STATE_DIR): app/dispatcher/config.py's
+        # _default_state_dir poisons state_dir's own fallback whenever ANY of the
+        # three is present, even DISPATCHER_EVENTS_PATH alone -- see
+        # _dispatcher_resolution_is_poisoned.
+        env_override_keys=("DISPATCHER_DB_PATH", "DISPATCHER_EVENTS_PATH", "DISPATCHER_STATE_DIR"),
         description="Dispatcher tasks, leases, and verification runs/attempts/exceptions.",
     ),
     ProducerSpec(
@@ -258,7 +284,8 @@ PRODUCER_MANIFEST: tuple[ProducerSpec, ...] = (
         authority_bearing=False,
         root_scope=_SCOPE_PER_WORKTREE,
         resolution=_RESOLVE_PRIMARY_WORKTREE,
-        env_override_keys=("DISPATCHER_EVENTS_PATH", "DISPATCHER_STATE_DIR"),
+        # Same sibling-poisoning rule as dispatcher_store, mirrored below.
+        env_override_keys=("DISPATCHER_DB_PATH", "DISPATCHER_EVENTS_PATH", "DISPATCHER_STATE_DIR"),
         description="Append-only dispatcher event audit log (evidence).",
     ),
     ProducerSpec(
@@ -321,6 +348,37 @@ def _env_override_path(spec: ProducerSpec, env: Mapping[str, str]) -> str | None
         if env.get("BUILDEROPS_VAULT_ROOT"):
             return str(Path(env["BUILDEROPS_VAULT_ROOT"]).expanduser() / "model-inquiries")
     return None
+
+
+# The full sibling set app/dispatcher/config.py::_default_state_dir checks via
+# ``any(key in env for key in _PATH_ENV_KEYS)`` -- presence of ANY of the three,
+# not just a producer's own key, flips state_dir's fallback.
+_DISPATCHER_PATH_ENV_KEYS = frozenset(
+    {"DISPATCHER_STATE_DIR", "DISPATCHER_DB_PATH", "DISPATCHER_EVENTS_PATH"}
+)
+
+
+def _dispatcher_resolution_is_poisoned(spec: ProducerSpec, env: Mapping[str, str]) -> bool:
+    """True when a sibling dispatcher path env key is present without directly
+    pinning THIS producer's own absolute location.
+
+    Mirrors ``app/dispatcher/config.py::_default_state_dir``'s rule: presence of
+    ANY of ``DISPATCHER_STATE_DIR``/``DISPATCHER_DB_PATH``/
+    ``DISPATCHER_EVENTS_PATH`` flips ``state_dir``'s fallback from
+    primary-worktree-relative to the BARE CWD-relative default -- even for a
+    field whose own key is unset. Setting only ``DISPATCHER_EVENTS_PATH`` still
+    moves ``dispatcher_store``'s resolution off the clone-set primary worktree,
+    onto per-root (CWD-relative) derivation, exactly like the real resolver
+    moves its ``db_path`` fallback. Callers invoke this ONLY after confirming
+    :func:`_env_override_path` returned ``None`` for this producer (i.e. neither
+    the producer's own key nor ``DISPATCHER_STATE_DIR`` is set), at which point
+    "any of the three present" can only mean a sibling key is doing the
+    poisoning. Only meaningful for ``dispatcher_store``/``dispatcher_events``;
+    no other producer's real resolver has this any-of-siblings rule.
+    """
+    if spec.name not in ("dispatcher_store", "dispatcher_events"):
+        return False
+    return any(key in env for key in _DISPATCHER_PATH_ENV_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +482,18 @@ def derive_expected_universe(
                 )
                 derived[expected.key] = expected
                 continue
+            # Reached only when override is None, i.e. this producer's own key
+            # (and, for dispatcher_store/dispatcher_events, DISPATCHER_STATE_DIR)
+            # is absent -- so "poisoned" here can only mean a SIBLING key is set.
+            poisoned = _dispatcher_resolution_is_poisoned(spec, env_map)
             for root in host.roots:
                 if not spec.applies_to(root.kind):
                     continue
-                if spec.resolution == _RESOLVE_PRIMARY_WORKTREE and root.primary_worktree:
+                if (
+                    spec.resolution == _RESOLVE_PRIMARY_WORKTREE
+                    and root.primary_worktree
+                    and not poisoned
+                ):
                     base = Path(root.primary_worktree)
                 else:
                     base = Path(root.path)
@@ -956,11 +1022,40 @@ def read_dispatcher_events_jsonl(observed: ObservedSource) -> list[NormalizedRec
         stripped = line.strip()
         if not stripped:
             continue
-        event = json.loads(stripped)
+        scope, stack = _scope_stack_for(expected.producer, "dispatcher_event")
+        try:
+            event = json.loads(stripped)
+            if not isinstance(event, Mapping):
+                raise ValueError("dispatcher event line is not a JSON object")
+        except (json.JSONDecodeError, ValueError) as exc:
+            # One corrupted line quarantines only itself (F6's pattern): the
+            # rest of the audit log still reads and the pass does not crash.
+            records.append(
+                NormalizedRecord(
+                    source_ref=f"{expected.key}#event:invalid:{index}",
+                    object_kind="dispatcher_event",
+                    identity_key=f"{expected.key}#dispatcher_event_invalid:{index}",
+                    authority_bearing=False,
+                    content_hash=_hash_bytes(stripped.encode("utf-8")),
+                    repo_ref=expected.repo_identity,
+                    scope=scope,
+                    stack=stack,
+                    provenance={
+                        "producer": expected.producer,
+                        "host": expected.host,
+                        "user": expected.user,
+                        "path": expected.path,
+                        "root_kind": expected.root_kind,
+                        "line_index": index,
+                    },
+                    payload={"raw_line": stripped},
+                    invalid_reason=f"dispatcher event line is not valid JSON: {exc}",
+                )
+            )
+            continue
         identity = str(event.get("event_id", index))
         payload_map = event.get("payload")
         payload_repo = _repo_from_row(payload_map) if isinstance(payload_map, Mapping) else None
-        scope, stack = _scope_stack_for(expected.producer, "dispatcher_event")
         records.append(
             NormalizedRecord(
                 source_ref=f"{expected.key}#event:{identity}",
@@ -995,6 +1090,12 @@ def read_epic_run_json(observed: ObservedSource) -> list[NormalizedRecord]:
     authority-divergence block. Files the producer itself rejects import only as
     quarantined evidence (``invalid_reason``), never as authority. The freeze
     hash stays raw bytes: any byte change still trips SourceChangedError.
+
+    Known limitation: an invalid file's ``identity_key`` lives in a permanently
+    disjoint namespace from a valid record's (``#epic_run_invalid:<file stem>``
+    vs. ``epic_run:<run_id>``), so it never groups with a validly-imported
+    record for the same ``run_id`` and cannot currently corroborate or
+    contradict a valid sibling for that run. Not addressed this round.
     """
 
     from app.builderops.epic_run_state import EpicRunStateError, deserialize_epic_run_state
@@ -1065,7 +1166,15 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
     filename prefix) normalize into the sink; the large question/turn artifacts
     stay external and are referenced by a content hash COMPUTED from their bytes
     (never trusted from the file's own ``artifact_hash`` field), so no terminal
-    authority state remains file-only.
+    authority state remains file-only. Each artifact's self-reported
+    ``declared_hash`` is separately recomputed against the store's own hash
+    scheme (:func:`_model_inquiry_declared_hash`) and a mismatch marks the
+    whole inquiry identity ``invalid_reason``-quarantined -- a corrupted or
+    tampered self-report is never silently trusted as evidence, mirroring
+    ``model_inquiry.py``'s own ``_validate_artifact_hash``. A malformed
+    ``manifest.json`` quarantines only that inquiry directory (the identity
+    anchor is unrecoverable without it); a malformed receipt file quarantines
+    only that one receipt. Neither crashes the rest of the read.
     """
 
     expected = observed.expected
@@ -1075,10 +1184,41 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
         manifest_path = inquiry_dir / "manifest.json"
         if not manifest_path.exists():
             continue
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        scope, stack = _scope_stack_for(expected.producer, "model_inquiry")
+        manifest_text = manifest_path.read_text(encoding="utf-8")
+        try:
+            manifest = json.loads(manifest_text)
+            if not isinstance(manifest, Mapping):
+                raise ValueError("model inquiry manifest.json is not a JSON object")
+        except (json.JSONDecodeError, ValueError) as exc:
+            # A corrupted manifest is an unrecoverable identity anchor for THIS
+            # inquiry only -- quarantine it and keep reading the other inquiries.
+            records.append(
+                NormalizedRecord(
+                    source_ref=f"{expected.key}#inquiry:invalid:{inquiry_dir.name}",
+                    object_kind="model_inquiry",
+                    identity_key=f"{expected.key}#model_inquiry_invalid:{inquiry_dir.name}",
+                    authority_bearing=False,
+                    content_hash=_hash_bytes(manifest_text.encode("utf-8")),
+                    repo_ref=expected.repo_identity,
+                    scope=scope,
+                    stack=stack,
+                    provenance={
+                        "producer": expected.producer,
+                        "host": expected.host,
+                        "user": expected.user,
+                        "path": str(manifest_path),
+                        "root_kind": expected.root_kind,
+                    },
+                    payload={"raw_text": manifest_text},
+                    invalid_reason=f"model inquiry manifest.json is not valid JSON: {exc}",
+                )
+            )
+            continue
         inquiry_id = str(manifest.get("inquiry_id", inquiry_dir.name))
         receipts_dir = inquiry_dir / "receipts"
         artifact_refs: list[ArtifactRef] = []
+        declared_hash_mismatches: list[str] = []
         for artifact_path in sorted(inquiry_dir.rglob("*.json")):
             if artifact_path == manifest_path:
                 continue
@@ -1095,6 +1235,13 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
             artifact_id = (
                 artifact.get("artifact_id") if isinstance(artifact, Mapping) else None
             )
+            declared_hash = str(declared) if isinstance(declared, str) else None
+            if (
+                declared_hash is not None
+                and isinstance(artifact, Mapping)
+                and declared_hash != _model_inquiry_declared_hash(artifact)
+            ):
+                declared_hash_mismatches.append(str(artifact_id or artifact_path.stem))
             artifact_refs.append(
                 ArtifactRef(
                     artifact_id=str(artifact_id or artifact_path.stem),
@@ -1105,11 +1252,16 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
                         if artifact_path.parent != inquiry_dir
                         else "root"
                     ),
-                    declared_hash=str(declared) if isinstance(declared, str) else None,
+                    declared_hash=declared_hash,
                 )
             )
-        scope, stack = _scope_stack_for(expected.producer, "model_inquiry")
         repo_ref = str(manifest.get("repo")) if manifest.get("repo") else expected.repo_identity
+        invalid_reason = (
+            "declared artifact_hash does not match recomputation for: "
+            + ", ".join(sorted(declared_hash_mismatches))
+            if declared_hash_mismatches
+            else None
+        )
         records.append(
             NormalizedRecord(
                 source_ref=f"{expected.key}#inquiry:{inquiry_id}",
@@ -1129,11 +1281,48 @@ def read_model_inquiry_files(observed: ObservedSource) -> list[NormalizedRecord]
                 },
                 payload=manifest,
                 artifact_refs=tuple(artifact_refs),
+                invalid_reason=invalid_reason,
             )
         )
         if receipts_dir.is_dir():
             for receipt_path in sorted(receipts_dir.glob("*.json")):
-                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt_text = receipt_path.read_text(encoding="utf-8")
+                try:
+                    receipt = json.loads(receipt_text)
+                    if not isinstance(receipt, Mapping):
+                        raise ValueError("model inquiry receipt is not a JSON object")
+                except (json.JSONDecodeError, ValueError) as exc:
+                    records.append(
+                        NormalizedRecord(
+                            source_ref=(
+                                f"{expected.key}#receipt:invalid:{inquiry_id}:"
+                                f"{receipt_path.stem}"
+                            ),
+                            object_kind="model_inquiry_receipt",
+                            identity_key=(
+                                f"{expected.key}#model_inquiry_receipt_invalid:"
+                                f"{inquiry_id}:{receipt_path.stem}"
+                            ),
+                            authority_bearing=False,
+                            content_hash=_hash_bytes(receipt_text.encode("utf-8")),
+                            repo_ref=repo_ref,
+                            scope=scope,
+                            stack=stack,
+                            provenance={
+                                "producer": expected.producer,
+                                "host": expected.host,
+                                "user": expected.user,
+                                "path": str(receipt_path),
+                                "root_kind": expected.root_kind,
+                                "inquiry_id": inquiry_id,
+                            },
+                            payload={"raw_text": receipt_text},
+                            invalid_reason=(
+                                f"model inquiry receipt is not valid JSON: {exc}"
+                            ),
+                        )
+                    )
+                    continue
                 receipt_id = str(receipt.get("id", receipt_path.stem))
                 records.append(
                     NormalizedRecord(
@@ -1413,10 +1602,23 @@ class InMemoryAuthoritySink:
                 )
         slot = (record.object_kind, record.identity_key)
         existing = self.applied.get(slot)
+        if existing is None:
+            self.applied[slot] = record.content_hash
+            return True
         if existing == record.content_hash:
-            return False  # idempotent no-op
-        self.applied[slot] = record.content_hash
-        return True
+            return False  # idempotent no-op replay (F9's replay idiom)
+        # The sink is the LAST line of defense against a divergent authority
+        # write reaching a live identity: import_records' grouping/conflict
+        # resolution should never let two different-content records for the
+        # same identity reach here, but the sink must not silently overwrite if
+        # it ever does (a resolution bug, a differently-ordered future adapter,
+        # or a mutated crash-resume input). This is the exact
+        # authority-replay-ambiguity case the whole module exists to catch.
+        raise AuthorityReplayError(
+            f"identity {record.identity_key!r} already applied with a different "
+            f"content hash (existing={existing}, incoming={record.content_hash}); "
+            "the sink never silently overwrites a divergent authority-bearing record"
+        )
 
     def record_tombstone(self, tombstone: AuthorityTombstone) -> None:
         self.tombstones[(tombstone.object_kind, tombstone.identity_key)] = tombstone
