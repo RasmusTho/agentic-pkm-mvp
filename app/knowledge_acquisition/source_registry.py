@@ -267,6 +267,15 @@ def _validate_media_policy(media: Any) -> None:
                 raise SourceRegistryValidationError(
                     f"acquisition_policy.media.{key} must be a finite number or null"
                 )
+            # Contract lower bounds (AC6): a negative free-space floor makes
+            # the future media guard vacuous, and retention below one day has
+            # no lifecycle meaning; ``min_free_gb=0`` legitimately means "no
+            # reserved floor" while ``null`` means "unset".
+            lower_bound = 0 if key == "min_free_gb" else 1
+            if number < lower_bound:
+                raise SourceRegistryValidationError(
+                    f"acquisition_policy.media.{key} must be >= {lower_bound} or null"
+                )
     if "checksum" in media and not isinstance(media["checksum"], bool):
         raise SourceRegistryValidationError("acquisition_policy.media.checksum must be a boolean")
 
@@ -324,11 +333,33 @@ def _build_acquisition_policy(collection_kind: str, override: dict[str, Any] | N
     return merged
 
 
+def _check_portable_string(text: str, path: str) -> None:
+    """Reject strings PostgreSQL ``jsonb`` cannot store (NUL, unpaired surrogates).
+
+    ``json.dumps`` and the memory backend both accept these, so without this
+    shared check they would surface as raw backend failures on Postgres only,
+    breaking the identical memory/PG validation contract.
+    """
+    if "\x00" in text:
+        raise SourceRegistryValidationError(
+            f"{path} must not contain NUL (\\u0000): PostgreSQL jsonb cannot store it"
+        )
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise SourceRegistryValidationError(
+            f"{path} must be valid Unicode without unpaired surrogates"
+        ) from exc
+
+
 def _portable_json_copy(value: Any, *, field: str) -> Any:
     """Reject Python-only/non-finite values and return a detached JSON value."""
 
     def _validate(item: Any, path: str, active: set[int]) -> None:
-        if item is None or isinstance(item, str | bool | int):
+        if item is None or isinstance(item, bool | int):
+            return
+        if isinstance(item, str):
+            _check_portable_string(item, path)
             return
         if isinstance(item, float):
             if not math.isfinite(item):
@@ -351,6 +382,7 @@ def _portable_json_copy(value: Any, *, field: str) -> Any:
             for key, child in item.items():
                 if not isinstance(key, str):
                     raise SourceRegistryValidationError(f"{path} object keys must be strings")
+                _check_portable_string(key, f"{path} object key")
                 _validate(child, f"{path}.{key}", active)
             active.remove(identity)
             return
@@ -363,6 +395,29 @@ def _portable_json_copy(value: Any, *, field: str) -> Any:
         return json.loads(json.dumps(value, allow_nan=False))
     except (TypeError, ValueError, OverflowError) as exc:
         raise SourceRegistryValidationError(f"{field} must be portable JSON: {exc}") from exc
+
+
+def _canonicalize_provenance_at(at: Any) -> str:
+    """Parse ``provenance.at`` as RFC 3339 / ISO-8601 and canonicalize to UTC.
+
+    ``at`` is the provenance timestamp: temporal lineage must be orderable and
+    auditable, so an arbitrary string is refused, a timestamp without an
+    explicit UTC offset is refused (its instant is ambiguous), and every
+    accepted value is stored in one canonical form (UTC, ``+00:00``).
+    """
+    if not isinstance(at, str) or not at.strip():
+        raise SourceRegistryValidationError("provenance.at must be a non-empty string")
+    try:
+        parsed = datetime.fromisoformat(at.strip())
+    except ValueError as exc:
+        raise SourceRegistryValidationError(
+            f"provenance.at must be an RFC 3339 / ISO-8601 timestamp, got {at!r}"
+        ) from exc
+    if parsed.tzinfo is None:
+        raise SourceRegistryValidationError(
+            "provenance.at must carry an explicit UTC offset; a naive timestamp is not orderable"
+        )
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _build_provenance(now: str, override: dict[str, Any] | None) -> dict[str, Any]:
@@ -381,9 +436,7 @@ def _build_provenance(now: str, override: dict[str, Any] | None) -> dict[str, An
     detail = override.get("detail", {})
     if not isinstance(detail, dict):
         raise SourceRegistryValidationError("provenance.detail must be an object")
-    at = override.get("at", now)
-    if not isinstance(at, str) or not at.strip():
-        raise SourceRegistryValidationError("provenance.at must be a non-empty string")
+    at = _canonicalize_provenance_at(override["at"]) if "at" in override else now
     portable = _portable_json_copy(
         {"origin": origin, "at": at, "detail": detail},
         field="provenance",

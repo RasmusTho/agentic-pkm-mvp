@@ -484,6 +484,17 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "legacy non-gating paths.md and settings/youtube.md. Line drifted 561 -> 558 "
         "while broadening the YSS-01 #3916 review repair to every static seed."
     ),
+    ("app/watcher/settings_delta.py", 309): (
+        "guarded: _revert_denied_gating_keys writes only after "
+        "SettingsService.update_setting raised SettingsWriteError for a "
+        "runtime-gating key -- i.e. after the same seam's "
+        "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
+        "already DENIED the transition. The write restores the owner file to "
+        "its last accepted state so resolution cannot surface the denied "
+        "value (YSS-01 #3916 final-review P1); it is the gate's enforcement "
+        "of a denial, not a new gated settings write, and never persists a "
+        "value the guard has not previously accepted."
+    ),
     ("app/instance/vault_registry.py", 1088): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "

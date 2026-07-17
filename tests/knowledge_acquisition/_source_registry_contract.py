@@ -355,10 +355,11 @@ def assert_invalid_interval_and_policy_fail_loud(make_registry: RegistryFactory)
                 acquisition_policy={"media": bad_media},
             )
     # bool is an int subclass, while NaN/+/-infinity would serialize in the
-    # memory backend but fail differently in PostgreSQL jsonb. Validation must
-    # reject each at the shared service boundary.
+    # memory backend but fail differently in PostgreSQL jsonb, and negative
+    # bounds make free-space protection / retention lifecycle meaningless.
+    # Validation must reject each at the shared service boundary.
     for media_key in ("min_free_gb", "retention_days"):
-        for bad_number in (True, float("nan"), float("inf"), float("-inf")):
+        for bad_number in (True, float("nan"), float("inf"), float("-inf"), -1, -0.5):
             with pytest.raises(SourceRegistryValidationError):
                 reg.register(
                     collection_kind="owned_playlist",
@@ -367,6 +368,16 @@ def assert_invalid_interval_and_policy_fail_loud(make_registry: RegistryFactory)
                     title="Invalid media number",
                     acquisition_policy={"media": {media_key: bad_number}},
                 )
+    # Zero-day retention has no lifecycle meaning either (delete-immediately
+    # is not a retention policy; "unset" is null).
+    with pytest.raises(SourceRegistryValidationError):
+        reg.register(
+            collection_kind="owned_playlist",
+            collection_ref="PLfixtureZERORETENTION",
+            account_binding_id=acct,
+            title="Zero retention",
+            acquisition_policy={"media": {"retention_days": 0}},
+        )
     with pytest.raises(SourceRegistryValidationError):
         reg.register(
             collection_kind="not_a_real_kind",
@@ -395,6 +406,18 @@ def assert_invalid_interval_and_policy_fail_loud(make_registry: RegistryFactory)
         poll_interval_seconds=60,
     )
     assert boundary.poll_interval_seconds == 60
+
+    # Media-policy lower bounds are inclusive: 0 GB free-space floor ("no
+    # floor") and 1-day retention are both valid explicit values.
+    media_boundary = reg.register(
+        collection_kind="owned_playlist",
+        collection_ref="PLfixtureMEDIABOUNDARYOK",
+        account_binding_id=acct,
+        title="Media boundary",
+        acquisition_policy={"media": {"min_free_gb": 0, "retention_days": 1}},
+    )
+    assert media_boundary.acquisition_policy["media"]["min_free_gb"] == 0
+    assert media_boundary.acquisition_policy["media"]["retention_days"] == 1
 
 
 def assert_memory_json_isolation(make_registry: RegistryFactory) -> None:
@@ -459,6 +482,16 @@ def assert_provenance_is_strict_portable_json(make_registry: RegistryFactory) ->
         {"origin": "manual_add", "detail": {1: "non-string key"}},
         {"origin": "manual_add", "unexpected": True},
         {"origin": "manual_add", "at": object()},
+        # ``at`` is the provenance timestamp: arbitrary strings and naive
+        # (offset-less) timestamps cannot be ordered or audited.
+        {"origin": "manual_add", "at": "not-a-timestamp"},
+        {"origin": "manual_add", "at": "2026-07-18T10:00:00"},
+        {"origin": "manual_add", "at": ""},
+        # Strings PostgreSQL jsonb cannot store must be refused before
+        # backend selection: NUL and unpaired surrogates.
+        {"origin": "manual_add", "detail": {"text": "a\x00b"}},
+        {"origin": "manual_add", "detail": {"text": "\ud800"}},
+        {"origin": "manual_add", "detail": {"a\x00key": "value"}},
     )
     for index, provenance in enumerate(invalid_provenance):
         with pytest.raises(SourceRegistryValidationError, match="provenance"):
@@ -470,6 +503,25 @@ def assert_provenance_is_strict_portable_json(make_registry: RegistryFactory) ->
                 provenance=provenance,
             )
     assert {binding.binding_id for binding in reg.list_all()} == before_ids
+
+    # Accepted timestamps are canonicalized to one auditable form: UTC with
+    # an explicit offset, regardless of the offset the caller supplied.
+    canonical = reg.register(
+        collection_kind="owned_playlist",
+        collection_ref="PLfixtureCANONICALAT",
+        account_binding_id=acct,
+        title="Canonical at",
+        provenance={"origin": "user_pick", "at": "2026-07-18T10:00:00+02:00"},
+    )
+    assert canonical.provenance["at"] == "2026-07-18T08:00:00+00:00"
+    zulu = reg.register(
+        collection_kind="owned_playlist",
+        collection_ref="PLfixtureZULUAT",
+        account_binding_id=acct,
+        title="Zulu at",
+        provenance={"origin": "user_pick", "at": "2026-07-18T08:00:00Z"},
+    )
+    assert zulu.provenance["at"] == "2026-07-18T08:00:00+00:00"
 
 
 ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (

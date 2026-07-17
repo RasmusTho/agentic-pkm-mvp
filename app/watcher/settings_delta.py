@@ -146,8 +146,13 @@ def handle_settings_local_delta(
 
     The historical function name is retained for callers, but the seam covers
     both the vault-local runtime controls and the vault-shared YouTube master
-    switch. A blocked edit remains on disk as human-authored input while the
-    returned accepted runtime values stay at the last guarded state.
+    switch. A blocked edit is REVERTED on disk to the last accepted state:
+    the gating seam controls the settings source of truth, and any consumer
+    that calls ``SettingsService.resolve`` re-reads the owner file directly,
+    so a denied value left on disk would become effective through resolution
+    and bypass the gate. The denial (and the revert) surface via ``errors``
+    with no success receipt; the human re-applies the edit once the guard
+    allows writes again.
     """
 
     gating_keys = _RUNTIME_GATING_KEYS_BY_FILE.get(rel_path)
@@ -225,6 +230,7 @@ def handle_settings_local_delta(
 
     receipts: list[SettingsWriteReceipt] = []
     accepted_values = dict(current_values)
+    denied_keys: list[str] = []
     for key in changed_keys:
         try:
             persist = key in current_keys
@@ -240,6 +246,7 @@ def handle_settings_local_delta(
                 )
         except SettingsWriteError as exc:
             errors.append(str(exc))
+            denied_keys.append(key)
             if key in previous_values:
                 accepted_values[key] = previous_values[key]
             else:
@@ -247,10 +254,65 @@ def handle_settings_local_delta(
             continue
         receipts.append(receipt)
 
+    if denied_keys:
+        _revert_denied_gating_keys(
+            store=store,
+            path=path,
+            accepted=accepted_values,
+            denied_keys=denied_keys,
+            errors=errors,
+        )
+
     return SettingsDeltaResult(
         values=accepted_values,
         receipts=tuple(receipts),
         errors=tuple(errors),
+    )
+
+
+def _revert_denied_gating_keys(
+    *,
+    store: MarkdownSettingsStore,
+    path: Path,
+    accepted: Mapping[str, Any],
+    denied_keys: list[str],
+    errors: list[str],
+) -> None:
+    """Restore denied runtime-gating keys in their owner file to the accepted state.
+
+    The gating seam controls the settings source of truth: a WriteGuard-denied
+    file edit must not stay on disk where ``SettingsService.resolve`` (or any
+    other reader of the owner file) would surface the denied value as
+    effective. Reverting is the gate's own enforcement of an already-denied
+    write — not a new gated settings write — so it also runs while WriteGuard
+    blocks writes. A key absent from the accepted state is removed from the
+    file; a revert failure is surfaced loudly and the denial errors remain.
+    """
+    try:
+        document = store.read(path)
+    except (FileNotFoundError, OSError, MarkdownSettingsError) as exc:
+        errors.append(f"failed to revert denied gating edit in {path.name}: {exc}")
+        return
+    frontmatter = dict(document.frontmatter)
+    reverted: list[str] = []
+    for key in denied_keys:
+        if key in accepted:
+            if frontmatter.get(key) != accepted[key]:
+                frontmatter[key] = accepted[key]
+                reverted.append(key)
+        elif key in frontmatter:
+            del frontmatter[key]
+            reverted.append(key)
+    if not reverted:
+        return
+    try:
+        store.write_frontmatter(path, frontmatter, body=document.body)
+    except (OSError, MarkdownSettingsError) as exc:
+        errors.append(f"failed to revert denied gating edit in {path.name}: {exc}")
+        return
+    errors.append(
+        f"{path.name}: denied runtime-gating edit reverted to last accepted state: "
+        + ", ".join(sorted(reverted))
     )
 
 

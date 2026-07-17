@@ -139,6 +139,16 @@ def test_youtube_master_switch_file_delta_is_guarded_and_receipted(
         if row.key == "youtubeSync.enabled"
     ]
 
+    # The denial controls the settings source of truth: the owner file is
+    # reverted to the accepted state, so SettingsService.resolve (which
+    # re-reads youtube.md) can never surface the denied value as effective.
+    store = MarkdownSettingsStore()
+    youtube_md = vault_root / SETTINGS_YOUTUBE_REL
+    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is False
+    assert any("reverted" in error for error in blocked.errors)
+
+    # Once the guard clears, the human re-applies the edit and it activates.
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
     with patch.object(
         _wg_module.DEFAULT_WRITE_GUARD,
         "snapshot_fn",
@@ -164,6 +174,27 @@ def test_youtube_master_switch_file_delta_is_guarded_and_receipted(
     )
     assert row.old_value is False
     assert row.new_value is True
+
+    # Reverse direction: deleting the enabling key while blocked is denied
+    # AND reverted — the accepted True value returns to the file, so a
+    # safe-mode file edit cannot silently disarm the gate either.
+    document = store.read(youtube_md)
+    frontmatter = dict(document.frontmatter)
+    del frontmatter["youtubeSync.enabled"]
+    store.write_frontmatter(youtube_md, frontmatter, body=document.body)
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance window"},
+    ):
+        removal_blocked = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values={"youtubeSync.enabled": True},
+        )
+    assert removal_blocked.values == {"youtubeSync.enabled": True}
+    assert removal_blocked.receipts == ()
+    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is True
 
 
 def test_local_file_cannot_override_youtube_master_switch(
@@ -229,6 +260,17 @@ def test_first_seen_youtube_activation_is_guarded_and_receipted(
         if row.key == "youtubeSync.enabled"
     ]
 
+    # The denied first-seen activation is reverted on disk to the accepted
+    # baseline: with watcher state lost, resolution must not surface the
+    # untrusted on-disk true either (same source-of-truth rule as the
+    # tracked-state denial). The vault-shared file is Git-tracked, so the
+    # human's edit stays recoverable from history.
+    store = MarkdownSettingsStore()
+    youtube_md = vault_root / SETTINGS_YOUTUBE_REL
+    assert store.read(youtube_md).frontmatter["youtubeSync.enabled"] is False
+
+    # After the guard clears, the human re-applies the activation.
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
     with patch.object(
         _wg_module.DEFAULT_WRITE_GUARD,
         "snapshot_fn",
