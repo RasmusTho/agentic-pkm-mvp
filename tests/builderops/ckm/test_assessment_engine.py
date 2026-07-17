@@ -337,6 +337,40 @@ def test_artifact_or_watermark_change_reassesses(store: CkmStore) -> None:
     assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is False
 
 
+def test_equal_scores_with_replaced_evidence_append_distinct_assessments(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    first_edge = _edge(
+        store,
+        capability.id,
+        source_ref="docs/FIRST.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+    )
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    store.delete_evidence_edge(first_edge.id)
+    _edge(
+        store,
+        capability.id,
+        source_ref="docs/SECOND.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+    )
+    assert assess_capabilities(store).assessed == 1
+    history = store.list_assessments_for_capability(capability.id)
+
+    assert len(history) == 2
+    assert history[0].scores == history[1].scores
+    assert history[0].public_id != history[1].public_id
+    assert history[0].edge_fingerprint != history[1].edge_fingerprint
+
+
 def test_historical_citations_survive_edge_change_and_artifact_cleanup(
     store: CkmStore,
 ) -> None:

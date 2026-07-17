@@ -984,6 +984,39 @@ def test_snapshot_manifest_accounts_for_complete_scope(store: CkmStore) -> None:
             read_set={"capability": []},
         )
 
+    immutable = SnapshotManifest.build(
+        state=store.state_identity(),
+        taxonomy_digest="taxonomy-v1",
+        watermarks={"repo": "commit:abc"},
+        provenance=[{"ref_type": "repo", "ref": "fixture@abc"}],
+        completeness=complete,
+        read_set={"capability": ["capability-one"]},
+    )
+    original_digest = immutable.read_set_digest
+    with pytest.raises(TypeError):
+        immutable.read_set["capability"] = ()  # type: ignore[index]
+    assert immutable.read_set == {"capability": ("capability-one",)}
+    assert immutable.read_set_digest == original_digest
+
+    artifact_only = SnapshotManifest.build(
+        state=store.state_identity(),
+        taxonomy_digest="taxonomy-v1",
+        watermarks={"repo": "commit:abc"},
+        provenance=[{"ref_type": "repo", "ref": "fixture@abc"}],
+        completeness=CompletenessManifest(
+            object_classes=[ObjectClassCompleteness("artifact", included=0)],
+            complete=True,
+        ),
+        read_set={"artifact": []},
+    )
+    with pytest.raises(ValueError, match="resource type must be declared"):
+        ResultEnvelope(
+            resource_type="capability",
+            query_digest=canonical_query_digest({"resource": "capability"}),
+            snapshot=artifact_only,
+            resources=[],
+        )
+
 
 def test_unsupported_versions_and_semantics_are_typed() -> None:
     cases = (

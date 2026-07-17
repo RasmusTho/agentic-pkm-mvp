@@ -269,6 +269,7 @@ class CkmStore:
                 "UPDATE ckm_evidence_edge_history SET public_id = ? WHERE history_id = ?",
                 (public_id, row["history_id"]),
             )
+        citations_changed = CkmStore._backfill_serialized_citation_identities(conn)
         for row in conn.execute("SELECT * FROM ckm_assessment ORDER BY id").fetchall():
             public_id = str(row["public_id"] or "") or CkmStore._assessment_public_id(conn, row)
             conn.execute(
@@ -279,7 +280,7 @@ class CkmStore:
                 conn, row["kind"], row["capability_id"], row["dimension"]
             )
             conn.execute("UPDATE ckm_finding SET public_id = ? WHERE id = ?", (public_id, row["id"]))
-        return CkmStore._backfill_serialized_citation_identities(conn)
+        return citations_changed
 
     @staticmethod
     def _backfill_serialized_citation_identities(conn: sqlite3.Connection) -> bool:
@@ -553,10 +554,26 @@ class CkmStore:
 
     @staticmethod
     def _assessment_public_id(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
+        def public_ids(value: Any) -> set[str]:
+            if isinstance(value, list):
+                return set().union(*(public_ids(item) for item in value)) if value else set()
+            if not isinstance(value, dict):
+                return set()
+            found = {str(value["public_id"])} if value.get("public_id") else set()
+            for item in value.values():
+                found.update(public_ids(item))
+            return found
+
+        evidence: dict[str, tuple[str, ...]] = {}
+        for dimension in MATURITY_DIMENSIONS:
+            raw = row[f"{dimension}_citations"]
+            citations = _loads(raw) if isinstance(raw, str) else raw
+            evidence[dimension] = tuple(sorted(public_ids(citations)))
         identity = {
             "capability": CkmStore._referenced_public_id(
                 conn, "ckm_capability", str(row["capability_id"])
             ),
+            "evidence": evidence,
             "scores": {dimension: row[dimension] for dimension in MATURITY_DIMENSIONS},
             "candidate_shares": row["candidate_shares"],
             "formula_ids": row["formula_ids"],
@@ -1580,6 +1597,10 @@ class CkmStore:
             identity_row: JsonDict = {
                 "capability_id": capability_id,
                 **{dimension: scores[dimension] for dimension in MATURITY_DIMENSIONS},
+                **{
+                    f"{dimension}_citations": _dumps(citations[dimension])
+                    for dimension in MATURITY_DIMENSIONS
+                },
                 "candidate_shares": _dumps(resolved_candidate_shares),
                 "formula_ids": _dumps(resolved_formula_ids),
                 "aggregate": aggregate,

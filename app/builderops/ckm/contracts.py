@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from app.builderops.ckm.schema import CKM_SCHEMA_VERSION
@@ -245,15 +246,23 @@ class SnapshotManifest:
         return cls(
             **{key: value for key, value in unsigned.items() if key != "completeness"},
             completeness=completeness,
-            read_set=canonical_read_set,
+            read_set=MappingProxyType(canonical_read_set),
             snapshot_digest=canonical_digest(unsigned),
         )
 
     def to_dict(self) -> JsonDict:
-        payload = asdict(self)
-        payload.pop("read_set")
         return {
-            **payload,
+            "epoch": self.epoch,
+            "state_revision": self.state_revision,
+            "ckm_schema_version": self.ckm_schema_version,
+            "envelope_schema_version": self.envelope_schema_version,
+            "resource_schema_version": self.resource_schema_version,
+            "taxonomy_digest": self.taxonomy_digest,
+            "effective_audience": self.effective_audience,
+            "access_policy_version": self.access_policy_version,
+            "redaction_profile": self.redaction_profile,
+            "read_set_digest": self.read_set_digest,
+            "snapshot_digest": self.snapshot_digest,
             "watermarks": dict(sorted(self.watermarks.items())),
             "provenance": [dict(item) for item in self.provenance],
             "completeness": self.completeness.to_dict(),
@@ -312,6 +321,8 @@ class ResultEnvelope:
             raise ValueError("every resource must match the envelope resource type")
         if not self.snapshot.completeness.complete:
             raise ValueError("result envelopes cannot contain an incomplete snapshot")
+        if self.resource_type not in self.snapshot.read_set:
+            raise ValueError("envelope resource type must be declared in the snapshot read set")
         keys = [resource.total_order_key for resource in self.resources]
         if keys != sorted(keys):
             raise ValueError("resources must use the stable public total order")

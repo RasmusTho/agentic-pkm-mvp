@@ -35,8 +35,11 @@ watermarks, provenance, `effective_audience=single_operator_local`, the versione
 security machinery. Rebuild callers declare the exact active public-ID keep-set before content is
 dropped; identities absent from that set become content-free tombstones atomically. Assessment
 identity binds the measured state and watermark set, not rebuild-time `valid_from`/`asserted_at`
-timestamps. A complete manifest's declared object classes and included counts must exactly match
-the canonical read set, and a result envelope must carry exactly that read set. Schema ensure
+timestamps; it also binds the rebuild-stable public identities of the cited evidence, so a changed
+evidence state with identical scores remains a distinct assertion. A complete manifest's declared
+object classes and included counts must exactly match the canonical, immutable read set. A result
+envelope must declare its own resource type in that scope and carry exactly that type's read set.
+Schema ensure
 authenticates pre-v5 human-confirmation receipts against their original signed envelope and emits
 one idempotent public-ID-bound successor receipt before rebuild can discard mutable legacy refs.
 
