@@ -1403,7 +1403,8 @@ class VerificationDispatchLedger:
                     existing["repository"] != request["repository"]
                     or existing["pr_number"] != request["pr_number"]
                     or existing["stage"] != request["stage"]
-                    or existing["head_sha"] != request["current_head_sha"]
+                    or existing_request["current_head_sha"]
+                    != request["current_head_sha"]
                 ):
                     raise ValueError("verification idempotency authority conflict")
                 if existing_request.get("linked_issue") != request.get("linked_issue"):

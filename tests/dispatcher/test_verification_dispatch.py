@@ -402,6 +402,64 @@ def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) ->
     assert audit["quarantined_exceptions"] == []
 
 
+def test_promoted_legacy_v2_identical_replay_is_idempotent(tmp_path) -> None:
+    requested_head = request()["current_head_sha"]
+    assert isinstance(requested_head, str)
+    repaired_head = "b" * 40
+    initial = ledger(tmp_path)
+    run_id, _legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[]
+    )
+    with sqlite3.connect(initial.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=?, status='backoff', "
+            "terminal_receipt_json=?, retry_after=? WHERE run_id=?",
+            (
+                repaired_head,
+                json.dumps(
+                    {
+                        "outcome": "deferred",
+                        "reason": "checks_not_green",
+                        "head_sha": repaired_head,
+                    },
+                    sort_keys=True,
+                ),
+                "2030-01-01T00:00:00+00:00",
+                run_id,
+            ),
+        )
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    state = ledger(tmp_path)
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+    promoted_request = request(repaired_head)
+    recovered = state.ingest(
+        _live_observed_request(state, promoted_request)
+    )
+    snapshot_before_replay = _verification_state_snapshot(state)
+
+    replayed = state.ingest(
+        _live_observed_request(state, promoted_request)
+    )
+
+    assert replayed == recovered
+    assert replayed.run_id == run_id
+    assert replayed.requested_head_sha == requested_head
+    assert replayed.request["current_head_sha"] == repaired_head
+    assert replayed.current_head_sha == repaired_head
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+    assert _verification_state_snapshot(state) == snapshot_before_replay
+    assert len(state.list()) == 1
+
+
 def test_migrated_repaired_head_v1_recovers_only_on_preserved_current_head(
     tmp_path,
 ) -> None:
@@ -513,6 +571,16 @@ def test_migrated_repaired_head_v1_recovers_only_on_preserved_current_head(
     assert state.get(run_id) == rebound
     assert state.attempts(run_id) == attempts_before
     assert state.repair_budget_projection(run_id) == budget_before
+
+    before_stale_replay = snapshot()
+    with pytest.raises(
+        ValueError,
+        match="artifact head does not match canonical run",
+    ):
+        state.ingest(
+            _live_observed_request(state, request(repaired_head))
+        )
+    assert snapshot() == before_stale_replay
 
     deferred = state.backoff(
         run_id,
