@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 TEMPORAL_DOCS = frozenset(
     {
         "docs/STATUS.md",
@@ -13,11 +15,16 @@ TEMPORAL_DOCS = frozenset(
     }
 )
 TEMPORAL_CODE_PREFIXES = ("app/", "scripts/", "config/", "docs/settings/")
-GOVERNANCE_TEMPORAL_ENFORCEMENT = frozenset(
+# Maps each governance-only enforcement script to its docs/development/ owner
+# doc. None means no doc has been assigned yet for that script: it falls back
+# to accepting any docs/development/ touch (the pre-existing, looser
+# behavior) instead of a false claim of a specific pairing that doesn't exist.
+GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
     {
-        "scripts/docs_guard.py",
-        "scripts/docs_guard_logic.py",
-        "scripts/git_hygiene.py",
+        "scripts/docs_guard.py": None,
+        "scripts/docs_guard_logic.py": None,
+        "scripts/git_hygiene.py": None,
+        "scripts/select_pr_tests.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
     }
 )
 
@@ -25,10 +32,13 @@ GOVERNANCE_TEMPORAL_ENFORCEMENT = frozenset(
 def requires_temporal_owner_doc(changed: list[str]) -> bool:
     """Return true unless a changed temporal surface has an owner-doc writeback.
 
-    A governance-only change to one of the two enforcement scripts may use its
+    A governance-only change to one of these enforcement scripts may use its
     `docs/development/` contract as the owner writeback. Presence of governance
     files is insufficient: every changed temporal surface must be one of those
-    scripts, so a mixed runtime/config PR cannot inherit the exception.
+    scripts, so a mixed runtime/config PR cannot inherit the exception. A
+    script with an explicit paired doc in GOVERNANCE_TEMPORAL_ENFORCEMENT
+    requires that exact doc; a script mapped to None accepts any
+    docs/development/ touch until its own contract doc is assigned.
     """
 
     temporal_paths = [
@@ -42,7 +52,18 @@ def requires_temporal_owner_doc(changed: list[str]) -> bool:
     governance_only = all(
         path in GOVERNANCE_TEMPORAL_ENFORCEMENT for path in temporal_paths
     )
-    governance_owner_doc_touched = any(
+    if not governance_only:
+        return True
+
+    any_development_doc_touched = any(
         path.startswith("docs/development/") for path in changed
     )
-    return not (governance_only and governance_owner_doc_touched)
+
+    def owner_doc_satisfied(path: str) -> bool:
+        owner_doc = GOVERNANCE_TEMPORAL_ENFORCEMENT[path]
+        if owner_doc is None:
+            return any_development_doc_touched
+        return owner_doc in changed
+
+    owner_docs_satisfied = all(owner_doc_satisfied(path) for path in temporal_paths)
+    return not owner_docs_satisfied
