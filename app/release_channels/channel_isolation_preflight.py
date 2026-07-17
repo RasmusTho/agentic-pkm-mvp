@@ -692,6 +692,109 @@ def _check_db_dsn(
 
 
 # ---------------------------------------------------------------------------
+# Effective-value accessor (#3903)
+# ---------------------------------------------------------------------------
+
+def resolve_effective_dsn(
+    compose_path: Path,
+    service: str,
+    key: str,
+    base_compose_path: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    load_dotenv: bool = True,
+) -> str | None:
+    """Return the effective value of one env key for one compose service.
+
+    Same resolution :func:`check_compose_channel_isolation` performs internally
+    (explicit ``environment:`` wins; an omitted key falls back to the merged
+    ``env_file`` chain, later files win) — the accessor form, for a caller that
+    needs *the value* rather than a pass/fail verdict. ``check_compose_channel_isolation``
+    only ever exposes a resolved value via ``BindingViolation.actual``, and only
+    when that value is a channel mismatch; this function returns it
+    unconditionally, independent of whether it happens to be channel-correct.
+
+    No channel-correctness check is performed here (there is no ``channel``
+    parameter): the caller supplied *compose_path* already pins the intended
+    overlay, and the whole point of asking is to find out what is actually
+    bound, not to validate it. This is intended for a live preflight that needs
+    to connect using the *real* effective binding — e.g. #3903's PROD
+    deploy-time outbox inspection, which must never independently re-derive
+    Compose's ``environment:``-over-``env_file`` precedence (see the module
+    docstring; that reinvention is exactly what broke round 2/3 of #3903's
+    review).
+
+    **Deliberate divergence from** :func:`_check_db_dsn`: when *key* is set
+    explicitly in ``environment:``, this function returns that value
+    immediately and never calls :func:`_env_file_chain_error` — unlike
+    ``_check_db_dsn``, which flags a violation for a structurally broken
+    env_file chain (missing required layer, unreadable layer, unresolvable
+    path expression) even when the DSN itself is explicit, because Compose
+    still has to load that chain to start the service at all. That check is
+    a static-analysis FITNESS concern (would this compose file let the
+    service start), not a value-resolution one: once a key is explicit, its
+    *value* does not depend on the env_file chain in any way, so an
+    accessor whose only job is "what does this key resolve to" gains
+    nothing by inspecting it. A caller connecting to that resolved value
+    (rather than statically checking the file) is also not exposed by
+    skipping it: a genuinely broken chain still fails the deploy loudly and
+    independently at ``compose up`` time — a hard, non-silent gate that
+    exists whether or not this function looked at the chain first. Verified
+    by :func:`test_resolve_effective_dsn_ignores_chain_errors_when_dsn_is_explicit`
+    in ``tests/release_channels/test_channel_isolation_preflight.py``.
+
+    Returns ``None`` when the key is neither set explicitly nor resolvable
+    through the env_file chain (compose would start the service without this
+    binding at all), or when the effective value cannot be verified (an
+    unresolvable interpolation expression, a missing required layer, an
+    unreadable layer, or a winning bare-``KEY`` unset line) — callers needing a
+    fail-closed posture must treat ``None`` as "unknown, do not trust", exactly
+    as :func:`_check_db_dsn` does internally for the omitted-key case (the one
+    case where this function's fail-closed posture does match ``_check_db_dsn``'s).
+
+    Same design constraints as :func:`check_compose_channel_isolation`:
+    read-only, no Docker, no network — this resolves the *declared* binding
+    from YAML plus env_file text, it does not query a running container.
+    Parameters mirror that function's; see its docstring for
+    *base_compose_path* / *environ* / *load_dotenv* semantics.
+    """
+    compose_data = _load_compose(compose_path)
+    services = compose_data.get("services") or {}
+    compose_dir = compose_path.resolve().parent
+
+    lookup = _make_var_lookup(
+        os.environ if environ is None else environ,
+        _load_dotenv(compose_dir) if load_dotenv else {},
+    )
+
+    base_compose = base_compose_path or (compose_dir / BASE_COMPOSE_FILENAME)
+    base_services: dict[str, Any] | None = None
+    if base_compose.is_file():
+        base_services = _load_compose(base_compose).get("services") or {}
+
+    svc = services.get(service) or {}
+    env = _service_env(svc)
+
+    dsn = env.get(key)
+    if dsn is not None:
+        return _interpolate_env_file_path(dsn, lookup)
+
+    # Key omitted from the overlay: resolve through the merged env_file chain
+    # (base layers first, overlay layers appended — later files win), mirroring
+    # check_compose_channel_isolation's own chain construction exactly.
+    overlay_layers = _service_env_file_layers(svc)
+    if base_services is None:
+        chain = [EnvFileLayer(path_expr=str(BASE_ENV_DEFAULTS_REL))]
+    else:
+        chain = _service_env_file_layers(base_services.get(service) or {})
+    chain = chain + overlay_layers
+
+    resolution = _resolve_key_through_chain(key, chain, compose_dir, lookup)
+    if resolution.error is not None:
+        return None
+    return resolution.value
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 

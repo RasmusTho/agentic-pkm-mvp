@@ -540,6 +540,26 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/ops", "tests/scripts", "tests/deploy"),
     ),
     (
+        # First registration of app/release_channels/ (#3903 round 5): the
+        # channel-isolation/fitness/promotion-readiness modules
+        # (channel_isolation_preflight.py, cutover_readiness.py,
+        # fleet_model_fitness.py, prepare_promotion.py, prod_ref_fitness.py,
+        # reversibility.py) have no single test-directory owner. Their own
+        # direct suites live in tests/release_channels/
+        # (test_channel_isolation_preflight.py, test_harness_fidelity.py,
+        # test_migration_reversibility.py, test_prepare_promotion.py), while
+        # tests/deploy/ already owns test_cutover_readiness.py,
+        # test_fleet_model_fitness.py, and the real deploy-entrypoint suites
+        # (test_deploy_channel.py and siblings) that exercise these modules
+        # through scripts/deploy_channel.sh. Run both, or a change here can
+        # leave either half unowned -- ops_deploy's scripts/-rooted prefixes
+        # already reach tests/deploy for the scripts/ callers, but not for
+        # this app/ surface itself.
+        "release_channels",
+        ("app/release_channels/", "tests/release_channels/", "docs/RELEASE_CHANNELS/"),
+        ("tests/release_channels", "tests/deploy"),
+    ),
+    (
         # Skill-contract and cross-subsystem docs-contract surfaces: owned so
         # they resolve via the subsystem loop instead of falling to
         # unowned_paths when mixed with a path that already matches another

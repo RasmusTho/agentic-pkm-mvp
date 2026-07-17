@@ -133,6 +133,91 @@ All values are bounded status strings; no raw state, path, secret, token, or tra
 The `write_guard` field reflects the current cached `HealthContract` state without evaluating the WriteGuard or running the full health contract diagnostics. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
 <!-- SECTION:HEALTH:END -->
 
+## Outbox and dead-letter signals
+
+Cross-reference for every outbox signal that touches dead-lettering: the always-on read/alert
+signal above (`## Dead-letter signal`) plus the PROD deploy-time stop condition below (#3903).
+
+### PROD deploy pending-retry preflight
+
+`scripts/deploy_channel.sh deploy prod <sha>` runs a read-only preflight,
+`scripts/prod_deploy_retry_preflight.py`, before the pin file is written or Compose is touched. It
+inspects pending (`delivered_at is null`) DB outbox rows and blocks the deploy when any row is
+already at a **terminal retry boundary** — a state where the row's very next processing pass
+dead-letters it instead of retrying, with no further code change or failure needed to get there:
+
+- **Worker-level transient retry counter** — the re-emitted event payload's `_worker_retry_count`
+  (stamped by the prior cycle onto the retry row) has already reached
+  `_MAX_TRANSIENT_RETRY_ATTEMPTS` (3, `app/workers/outbox_worker.py`); the next transient failure
+  for that row dead-letters immediately instead of being re-queued (`_queue_transient_retry`).
+- **Dispatch-attempt crash-loop counter** — the outbox row's own `attempts` column has already
+  reached `_MAX_DISPATCH_ATTEMPTS − 1` (4 with the default budget of 5; the budget is overridable
+  via `WORKER_MAX_DISPATCH_ATTEMPTS`, same variable the worker itself reads). The worker bumps
+  `attempts` and then dead-letters+acks in the *same* consume cycle, so a row observed pending
+  between cycles tops out at `max − 1` — and that *is* the terminal state: its next non-transient
+  dispatch failure dead-letters it. (`attempts == max` is only observable in the milliseconds
+  crash window between the bump and the ack.)
+
+The preflight understands both live row shapes: envelope rows written by
+`write_outbox_event` (counter nested at `payload->'payload'->'_worker_retry_count'`) and legacy
+flat rows (counter at the top level) — mirroring the worker's own `_coerce_event_from_db`
+unwrapping.
+
+This is exactly the failure class that let #3124's promotion pass every existing gate (deploy,
+health, exact-SHA, embedding, live smoke) while eight `panel.scan.requested` rows already at
+retry-3 silently dead-lettered the moment the worker restarted — undetected until post-promotion
+verification.
+
+Posture:
+
+- **Read-only.** The preflight never acks, replays, edits, or otherwise mutates an outbox row
+  (KERNEL-12 invariant, same as `dead_letter_stats()`). It only decides whether the deploy may
+  proceed.
+- **Redacted.** The failure output reports aggregate counts only — `terminal_pending_count`, a
+  `by_topic` breakdown keyed on the event-type label, and a `by_classification` breakdown by which
+  counter is exhausted — never payload content, note/source paths, DSNs, or credentials. The DSN
+  itself is resolved by asking `app.release_channels.channel_isolation_preflight` (the one
+  purpose-built resolver for Compose's own precedence rule) what `docker-compose.prod.yml`'s
+  `worker` service actually binds — **not** by reading `./tmp/runtime.env` or any other `env_file`
+  layer directly. Compose's documented rule (`docker-compose.dev.yml`, `docs/RELEASE_CHANNELS/README.md`
+  :: Compose/env binding invariant) is that a service's `environment:` block always wins over its
+  `env_file:` chain for the same key, and the prod overlay sets `DATABASE_URL`/`DB_DSN` directly in
+  `environment:` for every channel-critical service — so in the normal case (no shell override) the
+  effective binding is the overlay's own interpolation default, regardless of what any `env_file`
+  (governed runtime env file included) happens to contain. Nothing is exported to the wider shell,
+  passed to Compose, or printed (the #3875 posture). Two interpolation sources are consulted, in
+  Compose's own precedence order (ambient wins, `--env-file` still contributes when ambient does
+  not set a key): the ambient shell environment, which behaves identically for the preflight and
+  the real `docker compose` invocation since both read it from the same shell; and the channel pin
+  file (`config/deploy/prod.env`), which the real deploy also passes to Compose as `--env-file`
+  (`scripts/lib/deploy_channel_compose.sh`) — committed pin files carry only `APP_IMAGE_*` keys
+  today, so this is normally a no-op, but an operator-added `DATABASE_URL`/`DB_DSN` there (nothing
+  prevents it; `write_pin()` only strips `APP_IMAGE_*` on rewrite) is honored identically by both.
+  In the normal case the resolved
+  value names the Compose-internal `db` service, which the preflight (running on the host, not
+  inside the Compose network) translates to the host-published port — `docker-compose.yaml`'s `db`
+  service publishes container port 5432 on host port 15432 and the prod overlay does not override
+  it; any other resolved host is left untouched.
+- **Never silent.** The deploy log always carries exactly one status line —
+  `prod pending-retry preflight: ok`, `... skipped:<reason>`, or
+  `... blocked terminal_pending_count=<n>` — so a skipped safety gate can never masquerade as a
+  pass.
+- **PROD deploys only.** dev and test channel deploys are unaffected, and `rollback prod` is
+  deliberately not gated: the prior stable ref must always be recoverable
+  (`docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
+- **Ordinary pending work is unaffected.** A row below both thresholds never blocks a deploy, no
+  matter how large the pending queue is.
+- **Fails open on infra unavailability.** No DSN configured, the DB unreachable, or the outbox
+  query itself failing skips the check (visible `skipped:<reason>` line) rather than blocking the
+  deploy — DB/API availability is a distinct, already-gated concern (health/version gates run
+  later in the same script), not this check's job.
+
+Operator action on a block: inspect the reported topic(s) — for example
+`python -m app.cli events-doctor --path "$INDEX_OUTBOX_PATH"`, or the live outbox for the affected
+topic — to find why processing keeps failing, resolve the underlying cause, then redeploy. The
+preflight itself performs no remediation; clearing or replaying the affected rows remains an
+explicit, separate operator/agent action, same as any other dead-letter recovery.
+
 ## False-green register
 
 One authoritative place stating what each always-on health surface's **green** signal

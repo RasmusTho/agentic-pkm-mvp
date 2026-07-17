@@ -41,6 +41,7 @@ import pytest
 
 from app.release_channels.channel_isolation_preflight import (
     check_compose_channel_isolation,
+    resolve_effective_dsn,
 )
 
 
@@ -1216,3 +1217,210 @@ def test_ui_doctor_surfaces_compose_mismatch(tmp_path: Path) -> None:
     # Non-zero exit behavior: result.ok is False, so callers must use non-zero exit.
     # The CLI entry point maps this to exit code 1.
     assert result.ok is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_effective_dsn (#3903 round 6, H2): the effective-value accessor
+# added for the PROD deploy pending-retry preflight had zero direct tests
+# through round 6's review despite the whole preflight hinging on it. These
+# mirror the fixture patterns above (_write_base_defaults / _write_base_compose
+# / _write_compose / _write_env_layer, TEST_DSN / PROD_DSN) rather than
+# reinventing them, and pin its one deliberate divergence from
+# check_compose_channel_isolation/_check_db_dsn (explicit-DSN + broken chain).
+# ---------------------------------------------------------------------------
+
+def test_resolve_effective_dsn_explicit_value(tmp_path: Path) -> None:
+    """The overlay's own environment: value wins, unconditionally."""
+    compose_path = _write_compose(
+        tmp_path,
+        f"""\
+        services:
+          worker:
+            environment:
+              DATABASE_URL: {PROD_DSN}
+        """,
+    )
+
+    value = resolve_effective_dsn(compose_path, "worker", "DATABASE_URL", environ={})
+
+    assert value == PROD_DSN
+
+
+def test_resolve_effective_dsn_falls_back_to_env_file_chain_when_omitted(
+    tmp_path: Path,
+) -> None:
+    """Mirrors test_omitted_dsn_with_correct_channel_later_layer_passes, but
+    asks for the value directly instead of a pass/fail verdict."""
+    _write_base_defaults(tmp_path)
+    _write_base_compose(tmp_path)
+    _write_env_layer(tmp_path, PROD_DSN)
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    value = resolve_effective_dsn(compose_path, "worker", "DATABASE_URL", environ={})
+
+    assert value == PROD_DSN
+
+
+def test_resolve_effective_dsn_later_layer_wins(tmp_path: Path) -> None:
+    """Mirrors test_later_env_file_layer_wins_over_defaults: the defaults file
+    carries a wrong-channel DSN, the later runtime layer corrects it -- the
+    resolved value must be the later layer's, proving later-wins resolution
+    rather than first-match or defaults-only resolution."""
+    _write_base_defaults(tmp_path, f"DATABASE_URL={TEST_DSN}\nDB_DSN={TEST_DSN}\n")
+    _write_base_compose(tmp_path)
+    _write_env_layer(tmp_path, PROD_DSN)
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    value = resolve_effective_dsn(compose_path, "api", "DATABASE_URL", environ={})
+
+    assert value == PROD_DSN
+
+
+def test_resolve_effective_dsn_returns_none_for_missing_required_layer_when_omitted(
+    tmp_path: Path,
+) -> None:
+    """Mirrors test_missing_required_env_file_layer_fails_closed: an omitted
+    key behind an unverifiable chain must resolve to None, the fail-closed
+    signal resolve_effective_dsn's own docstring commits to for this case."""
+    _write_base_defaults(tmp_path)
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./config/runtime.local.env
+        """,
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+        """,
+    )
+
+    value = resolve_effective_dsn(compose_path, "api", "DATABASE_URL", environ={})
+
+    assert value is None
+
+
+def test_resolve_effective_dsn_returns_none_when_key_absent_everywhere(
+    tmp_path: Path,
+) -> None:
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          api: {}
+        """,
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+        """,
+    )
+
+    value = resolve_effective_dsn(compose_path, "api", "DATABASE_URL", environ={})
+
+    assert value is None
+
+
+def test_resolve_effective_dsn_ignores_chain_errors_when_dsn_is_explicit(
+    tmp_path: Path,
+) -> None:
+    """Pins the deliberate divergence from _check_db_dsn documented in
+    resolve_effective_dsn's own docstring: test_required_env_file_chain_error_fails_even_with_explicit_dsns
+    (above) proves check_compose_channel_isolation FAILS this exact shape
+    (explicit DSN, but the service's env_file chain has a missing required
+    layer) as a structural-fitness violation -- Compose still has to load
+    that chain to start the service, regardless of where the DSN came from.
+    resolve_effective_dsn answers a narrower question ("what does this key
+    resolve to"), and an explicit value never depends on the env_file chain,
+    so it must return the explicit value here rather than None -- a real
+    caller like the PROD deploy preflight loses nothing by not chain-checking:
+    a genuinely broken chain still fails the deploy loudly and independently
+    at `compose up` time (scripts/deploy_channel.sh's recreate_channel_services
+    gate), whether or not this function looked at the chain first.
+    """
+    _write_base_defaults(tmp_path)
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          worker:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./config/runtime.local.env
+        """,
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        f"""\
+        services:
+          worker:
+            environment:
+              DATABASE_URL: {PROD_DSN}
+        """,
+    )
+
+    # Sanity: the same shape genuinely fails check_compose_channel_isolation.
+    verdict = check_compose_channel_isolation(compose_path, "prod", environ={})
+    assert not verdict.ok, "fixture no longer reproduces the missing-required-layer shape"
+
+    value = resolve_effective_dsn(compose_path, "worker", "DATABASE_URL", environ={})
+
+    assert value == PROD_DSN
+
+
+def test_resolve_effective_dsn_honors_environ_override_against_real_prod_compose() -> None:
+    """Mirrors test_real_prod_compose_fails_when_invoking_env_carries_test_dsn:
+    an ambient DATABASE_URL in `environ` wins over the real docker-compose.prod.yml's
+    own interpolation default, exactly as Compose's own interpolation would."""
+    ambient = "postgresql+psycopg://app:app@db:5432/app_test"
+
+    value = resolve_effective_dsn(
+        PROD_COMPOSE, "worker", "DATABASE_URL", environ={"DATABASE_URL": ambient}
+    )
+
+    assert value == ambient
+
+
+def test_resolve_effective_dsn_ignores_ambient_runtime_env_file_against_real_prod_compose() -> None:
+    """Mirrors test_real_prod_compose_ignores_runtime_layer_test_dsn_when_overlay_is_explicit:
+    an ambient WATCHER_RUNTIME_ENV_FILE pointing at a wrong-channel layer has
+    no effect, because the real prod overlay declares DATABASE_URL explicitly
+    -- the env_file chain (and thus WATCHER_RUNTIME_ENV_FILE) is never
+    consulted for this key at all."""
+    value = resolve_effective_dsn(
+        PROD_COMPOSE,
+        "worker",
+        "DATABASE_URL",
+        environ={"WATCHER_RUNTIME_ENV_FILE": "/nonexistent/should-not-matter.env"},
+    )
+
+    assert value == PROD_DSN
+
+
+def test_resolve_effective_dsn_against_real_prod_compose() -> None:
+    """Regression guard mirroring test_real_prod_compose_passes_preflight:
+    the committed docker-compose.prod.yml's worker service resolves to the
+    exact literal default for both channel-critical keys. environ={} plus
+    load_dotenv=False keeps this hermetic (see that test's docstring for why
+    a stray runner-local .env/WATCHER_RUNTIME_ENV_FILE must not leak in)."""
+    for key in ("DATABASE_URL", "DB_DSN"):
+        value = resolve_effective_dsn(
+            PROD_COMPOSE, "worker", key, environ={}, load_dotenv=False
+        )
+        assert value == PROD_DSN, (
+            f"docker-compose.prod.yml's worker.{key} no longer resolves to the "
+            f"expected literal default -- update scripts/prod_deploy_retry_preflight.py's "
+            "host-translation assumptions if this default DSN's host:port ever changes"
+        )

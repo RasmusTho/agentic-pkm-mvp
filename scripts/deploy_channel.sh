@@ -297,6 +297,71 @@ capture_watch_gate() {
   return 1
 }
 
+prod_pending_retry_preflight() {
+  # Read-only PROD deploy-only preflight (#3903): detect pending DB-outbox
+  # rows already at a terminal retry boundary -- one more failure and the
+  # worker dead-letters them on its own, no code change involved. Runs before
+  # pin write or Compose mutation so a restart never silently consumes rows
+  # that are already deterministically doomed (the #3124 postmortem: eight
+  # panel.scan.requested rows already at retry-3 dead-lettered the moment
+  # the worker restarted, undetected by every other gate). Never mutates the
+  # outbox; deliberately NOT applied to rollback (the prior stable ref must
+  # always be recoverable -- docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md).
+  # DSN sourcing (#3903 rounds 4 and 6): the effective DATABASE_URL/DB_DSN a
+  # running prod service binds to is resolved ENTIRELY inside
+  # scripts/prod_deploy_retry_preflight.py, by asking
+  # app.release_channels.channel_isolation_preflight (the one purpose-built,
+  # tested Compose environment:-vs-env_file: resolver) what docker-compose.prod.yml
+  # actually binds -- not by this wrapper reading pin/runtime-env files and
+  # guessing precedence by hand (rounds 2 and 3 both tried that and were both
+  # wrong: Compose's own `environment:` block always wins over `env_file:` for
+  # the same key, and the prod overlay sets DATABASE_URL/DB_DSN directly in
+  # `environment:`). This wrapper therefore has no DSN of its own to inject;
+  # the preflight subprocess inherits this shell's environment exactly as the
+  # real `docker compose` invocation below does, AND resolves the same
+  # `--env-file "${pin_file}"` interpolation contribution that invocation
+  # passes to Compose (round 6: an ambient DATABASE_URL/DB_DSN override still
+  # wins over both, matching Compose's real precedence). Nothing is printed
+  # either way (#3875 redaction posture). See
+  # scripts/prod_deploy_retry_preflight.py and
+  # docs/HEALTH.md :: Outbox and dead-letter signals.
+  local receipt_json rc=0
+  receipt_json="$("${PYTHON}" "${ROOT}/scripts/prod_deploy_retry_preflight.py")" || rc=$?
+
+  # Always emit exactly one status line -- ok / skipped:<reason> / blocked --
+  # derived from the receipt's status+reason fields (counts and reason codes
+  # only). A silent skip of a prod safety gate is indistinguishable from a
+  # pass: the false-green pattern this repo has been burned by.
+  printf '%s' "${receipt_json}" | "${PYTHON}" -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    data = {}
+status = data.get("status") or "error"
+if status == "skipped":
+    line = "prod pending-retry preflight: skipped:" + str(data.get("reason") or "unknown")
+elif status == "blocked":
+    line = (
+        "prod pending-retry preflight: blocked terminal_pending_count="
+        + str(data.get("terminal_pending_count"))
+    )
+elif status == "ok":
+    line = "prod pending-retry preflight: ok"
+else:
+    line = "prod pending-retry preflight: " + str(status)
+print(line)
+'
+
+  if [ "${rc}" -ne 0 ]; then
+    echo "prod deploy blocked before pin or Compose mutation: pending outbox work is already at the terminal retry boundary and would dead-letter on worker startup" >&2
+    printf '%s\n' "${receipt_json}" >&2
+    echo "guidance: inspect the reported topic(s) (e.g. python -m app.cli events-doctor --path \"\$INDEX_OUTBOX_PATH\") to find why processing keeps failing, resolve the underlying cause, then redeploy; this preflight is read-only and never mutates the outbox" >&2
+    return 1
+  fi
+  return 0
+}
+
 version_gate() {
   local version_json health_json version_sha health_sha
   version_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/version")"
@@ -374,6 +439,12 @@ fi
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
   exit 86
+fi
+
+# Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
+# the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
+if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
+  prod_pending_retry_preflight || exit 87
 fi
 
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
