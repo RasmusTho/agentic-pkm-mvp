@@ -50,6 +50,7 @@ class SettingsWriteReceipt:
     file: str | None = None
     old_value: Any = None
     new_value: Any = field(default=_NEW_VALUE_UNSET, repr=False)
+    operation_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.new_value is _NEW_VALUE_UNSET:
@@ -77,6 +78,7 @@ def emit_settings_write_receipt(
                 "file": receipt.file,
                 "surface": receipt.surface,
                 "actor": receipt.actor,
+                "operation_id": receipt.operation_id,
                 "timestamp": receipt.timestamp,
                 "is_runtime_gating": receipt.is_runtime_gating,
             },
@@ -138,6 +140,46 @@ def emit_settings_write_receipt(
         write_outbox_event(envelope, idempotency_key=idempotency_key)
     except Exception:
         logger.debug("settings.write.receipt db outbox write skipped/failed", exc_info=True)
+
+
+def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool:
+    """Return whether the exact operation-scoped receipt is in the durable JSONL sink."""
+
+    if not receipt.operation_id:
+        raise ValueError("durable receipt readback requires operation_id")
+
+    from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
+
+    outbox_path = get_index_outbox_path()
+    try:
+        with outbox_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("event") != SETTINGS_WRITE_RECEIPT:
+                    continue
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("operation_id") != receipt.operation_id:
+                    continue
+                return all(
+                    payload.get(key) == expected
+                    for key, expected in {
+                        "key": receipt.key,
+                        "value": receipt.value,
+                        "old_value": receipt.old_value,
+                        "new_value": receipt.new_value,
+                        "file": receipt.file,
+                        "surface": receipt.surface,
+                        "actor": receipt.actor,
+                    }.items()
+                )
+    except FileNotFoundError:
+        return False
+    return False
 
 
 def emit_settings_write_receipts_for_changes(
@@ -205,6 +247,7 @@ def _flatten(values: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
 
 __all__ = [
     "SettingsWriteReceipt",
+    "durable_settings_write_receipt_exists",
     "emit_settings_write_receipt",
     "emit_settings_write_receipts_for_changes",
     "resolve_settings_receipt_old_value",
