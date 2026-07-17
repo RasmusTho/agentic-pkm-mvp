@@ -34,6 +34,11 @@ REPO = "RasmusTho/agentic-pkm-mvp"
 # NormalizedRecord canonicalizes repo evidence via canonical_repository (F12),
 # which lowercases — assertions compare against the canonical form.
 REPO_CANON = "rasmustho/agentic-pkm-mvp"
+# Synthetic host/operator identities for the two-host test universe. Opaque
+# strings only — HostContext.host/user carry no semantic meaning beyond
+# identity/reconciliation grouping, so no fixture needs a real machine name.
+HOST_REMOTE = "server-host"
+OPERATOR = "test-operator"
 
 
 def _iso(dt: datetime) -> str:
@@ -502,7 +507,7 @@ def make_probe(
 def build_full_universe(tmp_path: Path) -> dict:
     """Materialize a two-host universe with real sources.
 
-    MacBook: one primary worktree (env snapshot known-empty). Demerzel: a
+    MacBook: one primary worktree (env snapshot known-empty). Server-host: a
     container mount plus the vault, with NO env snapshot (env=None) — exercising
     the remote-env limitation surfaced in the preflight receipt.
     """
@@ -515,25 +520,25 @@ def build_full_universe(tmp_path: Path) -> dict:
     )
 
     macbook_wt = tmp_path / "macbook" / "worktree-a"
-    demerzel_mount = tmp_path / "demerzel" / "container-mount"
+    demerzel_mount = tmp_path / HOST_REMOTE / "container-mount"
 
     write_state_producers(macbook_wt)
     write_state_producers(demerzel_mount)
 
     # Host-stable vault holding the file-first inquiry store.
-    vault_root = tmp_path / "demerzel" / "vault"
+    vault_root = tmp_path / HOST_REMOTE / "vault"
     write_vault(vault_root)
 
     hosts = (
         HostContext(
             host="macbook",
-            user="rasmus",
+            user=OPERATOR,
             roots=(EnumeratedRoot(RootKind.GIT_WORKTREE, str(macbook_wt), repo_identity=REPO),),
             env={},
         ),
         HostContext(
-            host="demerzel",
-            user="rasmus",
+            host=HOST_REMOTE,
+            user=OPERATOR,
             roots=(
                 EnumeratedRoot(RootKind.CONTAINER_MOUNT, str(demerzel_mount), repo_identity=REPO),
                 EnumeratedRoot(RootKind.VAULT, str(vault_root), repo_identity=REPO),

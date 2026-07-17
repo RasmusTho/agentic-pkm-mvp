@@ -37,15 +37,15 @@ from app.builderops.control_plane.legacy_migration import (
 from tests.builderops.control_plane import _legacy_fixtures as fx
 
 
-def _manifest_and_ack(universe, *, host="demerzel"):
+def _manifest_and_ack(universe, *, host=fx.HOST_REMOTE):
     freshness = fx.iso_now()
     probe = fx.make_probe(freshness_at=freshness)
     manifest = build_coverage_manifest(
-        universe, probe=probe, host=host, user="rasmus", freshness_at=freshness
+        universe, probe=probe, host=host, user=fx.OPERATOR, freshness_at=freshness
     )
     ack = InventoryAcknowledgement(
         host=host,
-        user="rasmus",
+        user=fx.OPERATOR,
         manifest_hash=manifest.manifest_hash,
         acknowledged_at=freshness,
         freshness_horizon_seconds=3600,
@@ -85,7 +85,7 @@ def _expected_root_for(path: Path, *, producer: str, source_class: str, repo=Non
         producer=producer,
         source_class=source_class,
         host="macbook",
-        user="rasmus",
+        user=fx.OPERATOR,
         root_kind=RootKind.GIT_WORKTREE,
         path=str(path),
         authority_bearing=True,

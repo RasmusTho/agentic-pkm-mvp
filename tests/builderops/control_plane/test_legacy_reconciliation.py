@@ -35,10 +35,10 @@ _ACCOUNTED = {
 }
 
 
-def _ack(manifest, host="demerzel"):
+def _ack(manifest, host=fx.HOST_REMOTE):
     return InventoryAcknowledgement(
         host=host,
-        user="rasmus",
+        user=fx.OPERATOR,
         manifest_hash=manifest.manifest_hash,
         acknowledged_at=manifest.freshness_at,
         freshness_horizon_seconds=3600,
@@ -51,8 +51,8 @@ def _reconcilable(expected, *, exclusions=None):
     manifest = build_coverage_manifest(
         expected,
         probe=probe,
-        host="demerzel",
-        user="rasmus",
+        host=fx.HOST_REMOTE,
+        user=fx.OPERATOR,
         freshness_at=freshness,
         exclusions=exclusions,
     )
@@ -101,7 +101,7 @@ def test_reconciliation_blocks_on_missing_root_coverage_gap(tmp_path: Path) -> N
 
     probe = fx.make_probe(freshness_at=freshness)
     manifest = build_coverage_manifest(
-        expected, probe=probe, host="demerzel", user="rasmus", freshness_at=freshness
+        expected, probe=probe, host=fx.HOST_REMOTE, user=fx.OPERATOR, freshness_at=freshness
     )
     # Import only the usable sources; the missing root is a coverage gap.
     records = normalize_sources(manifest)
@@ -199,8 +199,8 @@ def test_reconciliation_accounts_excluded_and_archived_roots(tmp_path: Path) -> 
     manifest = build_coverage_manifest(
         expected,
         probe=probe,
-        host="demerzel",
-        user="rasmus",
+        host=fx.HOST_REMOTE,
+        user=fx.OPERATOR,
         freshness_at=freshness,
         exclusions=exclusions,
     )

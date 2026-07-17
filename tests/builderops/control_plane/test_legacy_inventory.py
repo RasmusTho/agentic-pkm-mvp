@@ -30,7 +30,7 @@ from tests.builderops.control_plane import _legacy_fixtures as fx
 
 
 def _two_host_universe(tmp_path: Path) -> tuple[HostContext, ...]:
-    """MacBook (one clone-set: primary wt-a + linked wt-b) plus Demerzel
+    """MacBook (one clone-set: primary wt-a + linked wt-b) plus a server-host
     (container + automation + vault), with real sources under every enumerated
     root, matching each producer's real resolution semantics: the dispatcher
     writes ONLY at the clone-set primary; builderops/epic-run state is
@@ -38,9 +38,9 @@ def _two_host_universe(tmp_path: Path) -> tuple[HostContext, ...]:
 
     mac_a = tmp_path / "mac/wt-a"
     mac_b = tmp_path / "mac/wt-b"
-    demerzel_container = tmp_path / "demerzel/mount"
-    demerzel_automation = tmp_path / "demerzel/launchd-state"
-    demerzel_vault = tmp_path / "demerzel/vault"
+    demerzel_container = tmp_path / f"{fx.HOST_REMOTE}/mount"
+    demerzel_automation = tmp_path / f"{fx.HOST_REMOTE}/launchd-state"
+    demerzel_vault = tmp_path / f"{fx.HOST_REMOTE}/vault"
 
     fx.write_state_producers(mac_a)  # primary: all producers incl. dispatcher
     fx.write_state_producers(mac_b, dispatcher=False)  # linked: no dispatcher
@@ -51,7 +51,7 @@ def _two_host_universe(tmp_path: Path) -> tuple[HostContext, ...]:
     return (
         HostContext(
             host="macbook",
-            user="rasmus",
+            user=fx.OPERATOR,
             roots=(
                 EnumeratedRoot(RootKind.GIT_WORKTREE, str(mac_a), repo_identity=fx.REPO),
                 EnumeratedRoot(
@@ -64,8 +64,8 @@ def _two_host_universe(tmp_path: Path) -> tuple[HostContext, ...]:
             env={},
         ),
         HostContext(
-            host="demerzel",
-            user="rasmus",
+            host=fx.HOST_REMOTE,
+            user=fx.OPERATOR,
             roots=(
                 EnumeratedRoot(
                     RootKind.CONTAINER_MOUNT, str(demerzel_container), repo_identity=fx.REPO
@@ -105,7 +105,7 @@ def test_producer_derived_inventory_covers_hosts_worktrees_containers_and_automa
         RootKind.AUTOMATION,
         RootKind.VAULT,
     }
-    assert {root.host for root in universe} == {"macbook", "demerzel"}
+    assert {root.host for root in universe} == {"macbook", fx.HOST_REMOTE}
 
     # CWD-resolved producers multiply per worktree (the #3686 fragmentation
     # case): the per-worktree builderops store appears once per worktree.
@@ -156,7 +156,7 @@ def test_producer_derived_inventory_covers_hosts_worktrees_containers_and_automa
         universe,
         probe=fx.make_probe(freshness_at=freshness),
         host="macbook",
-        user="rasmus",
+        user=fx.OPERATOR,
         freshness_at=freshness,
     )
     assert not manifest.is_blocking
@@ -176,7 +176,7 @@ def test_env_overrides_pin_producers_and_record_consulted_keys(tmp_path: Path) -
     hosts = (
         HostContext(
             host="macbook",
-            user="rasmus",
+            user=fx.OPERATOR,
             roots=(EnumeratedRoot(RootKind.GIT_WORKTREE, str(worktree), repo_identity=fx.REPO),),
             env={"DISPATCHER_STATE_DIR": str(state_dir)},
         ),
@@ -204,7 +204,7 @@ def test_env_overrides_pin_producers_and_record_consulted_keys(tmp_path: Path) -
         universe,
         probe=fx.make_probe(freshness_at=freshness),
         host="macbook",
-        user="rasmus",
+        user=fx.OPERATOR,
         freshness_at=freshness,
     )
     assert not manifest.is_blocking
@@ -217,8 +217,8 @@ def test_env_overrides_pin_producers_and_record_consulted_keys(tmp_path: Path) -
     remote_wt = tmp_path / "remote-wt"
     fx.write_state_producers(remote_wt)
     remote = HostContext(
-        host="demerzel",
-        user="rasmus",
+        host=fx.HOST_REMOTE,
+        user=fx.OPERATOR,
         roots=(EnumeratedRoot(RootKind.GIT_WORKTREE, str(remote_wt), repo_identity=fx.REPO),),
         env=None,
     )
@@ -236,7 +236,7 @@ def test_producer_authority_flag_is_load_bearing_for_readers(tmp_path: Path) -> 
         producer="builderops_store",
         source_class="builderops_sqlite",
         host="macbook",
-        user="rasmus",
+        user=fx.OPERATOR,
         root_kind=RootKind.GIT_WORKTREE,
         path=str(db),
         authority_bearing=True,
@@ -262,13 +262,13 @@ def test_caller_roots_can_add_but_cannot_subtract_coverage(tmp_path: Path) -> No
     baseline = derive_expected_universe(hosts)
 
     # An extra caller-supplied host-stable candidate is ADDED.
-    extra_path = str(tmp_path / "demerzel/host-stable/runtime/builderops/builderops.sqlite3")
+    extra_path = str(tmp_path / f"{fx.HOST_REMOTE}/host-stable/runtime/builderops/builderops.sqlite3")
     fx.write_builderops_sqlite(Path(extra_path))
     extra = fx.ExpectedRoot(
         producer="builderops_store",
         source_class="builderops_sqlite",
-        host="demerzel",
-        user="rasmus",
+        host=fx.HOST_REMOTE,
+        user=fx.OPERATOR,
         root_kind=RootKind.HOST_STABLE,
         path=extra_path,
         authority_bearing=True,
@@ -297,13 +297,13 @@ def test_omitted_or_inaccessible_expected_root_blocks_acknowledgement(tmp_path: 
     shutil.rmtree(missing_root.path)
     probe = fx.make_probe(freshness_at=freshness)
     manifest = build_coverage_manifest(
-        universe, probe=probe, host="macbook", user="rasmus", freshness_at=freshness
+        universe, probe=probe, host="macbook", user=fx.OPERATOR, freshness_at=freshness
     )
     assert manifest.is_blocking
     assert missing_root.key in manifest.blocking_roots
     ack = InventoryAcknowledgement(
         host="macbook",
-        user="rasmus",
+        user=fx.OPERATOR,
         manifest_hash=manifest.manifest_hash,
         acknowledged_at=freshness,
         freshness_horizon_seconds=3600,
@@ -317,12 +317,12 @@ def test_omitted_or_inaccessible_expected_root_blocks_acknowledgement(tmp_path: 
     locked = next(r for r in universe2 if r.producer == "dispatcher_store")
     probe2 = fx.make_probe(freshness_at=freshness, inaccessible=frozenset({locked.path}))
     manifest2 = build_coverage_manifest(
-        universe2, probe=probe2, host="macbook", user="rasmus", freshness_at=freshness
+        universe2, probe=probe2, host="macbook", user=fx.OPERATOR, freshness_at=freshness
     )
     assert locked.key in manifest2.blocking_roots
     ack2 = InventoryAcknowledgement(
         host="macbook",
-        user="rasmus",
+        user=fx.OPERATOR,
         manifest_hash=manifest2.manifest_hash,
         acknowledged_at=freshness,
         freshness_horizon_seconds=3600,
@@ -337,13 +337,13 @@ def test_acknowledgement_binds_host_user_freshness_and_manifest_hash(tmp_path: P
     freshness = fx.iso_now()
     probe = fx.make_probe(freshness_at=freshness)
     manifest = build_coverage_manifest(
-        universe, probe=probe, host="demerzel", user="rasmus", freshness_at=freshness
+        universe, probe=probe, host=fx.HOST_REMOTE, user=fx.OPERATOR, freshness_at=freshness
     )
     assert not manifest.is_blocking
 
     good = InventoryAcknowledgement(
-        host="demerzel",
-        user="rasmus",
+        host=fx.HOST_REMOTE,
+        user=fx.OPERATOR,
         manifest_hash=manifest.manifest_hash,
         acknowledged_at=freshness,
         freshness_horizon_seconds=3600,
@@ -355,8 +355,8 @@ def test_acknowledgement_binds_host_user_freshness_and_manifest_hash(tmp_path: P
     refrozen = build_coverage_manifest(
         universe,
         probe=probe,
-        host="demerzel",
-        user="rasmus",
+        host=fx.HOST_REMOTE,
+        user=fx.OPERATOR,
         freshness_at=fx._iso(fx.now().replace(hour=13)),
     )
     assert refrozen.manifest_hash != manifest.manifest_hash
@@ -367,7 +367,7 @@ def test_acknowledgement_binds_host_user_freshness_and_manifest_hash(tmp_path: P
             manifest,
             InventoryAcknowledgement(
                 host="attacker-host",
-                user="rasmus",
+                user=fx.OPERATOR,
                 manifest_hash=manifest.manifest_hash,
                 acknowledged_at=freshness,
                 freshness_horizon_seconds=3600,
@@ -379,8 +379,8 @@ def test_acknowledgement_binds_host_user_freshness_and_manifest_hash(tmp_path: P
         accept_acknowledgement(
             manifest,
             InventoryAcknowledgement(
-                host="demerzel",
-                user="rasmus",
+                host=fx.HOST_REMOTE,
+                user=fx.OPERATOR,
                 manifest_hash="deadbeef",
                 acknowledged_at=freshness,
                 freshness_horizon_seconds=3600,
@@ -393,8 +393,8 @@ def test_acknowledgement_binds_host_user_freshness_and_manifest_hash(tmp_path: P
         accept_acknowledgement(
             manifest,
             InventoryAcknowledgement(
-                host="demerzel",
-                user="rasmus",
+                host=fx.HOST_REMOTE,
+                user=fx.OPERATOR,
                 manifest_hash=manifest.manifest_hash,
                 acknowledged_at=stale,
                 freshness_horizon_seconds=60,

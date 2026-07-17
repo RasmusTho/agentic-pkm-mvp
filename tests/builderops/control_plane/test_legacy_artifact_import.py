@@ -24,11 +24,11 @@ def test_file_first_authority_imports_envelope_and_receipts(tmp_path: Path) -> N
     freshness = fx.iso_now()
     probe = fx.make_probe(freshness_at=freshness)
     manifest = build_coverage_manifest(
-        expected, probe=probe, host="demerzel", user="rasmus", freshness_at=freshness
+        expected, probe=probe, host=fx.HOST_REMOTE, user=fx.OPERATOR, freshness_at=freshness
     )
     ack = InventoryAcknowledgement(
-        host="demerzel",
-        user="rasmus",
+        host=fx.HOST_REMOTE,
+        user=fx.OPERATOR,
         manifest_hash=manifest.manifest_hash,
         acknowledged_at=freshness,
         freshness_horizon_seconds=3600,
@@ -101,4 +101,4 @@ def test_file_first_authority_imports_envelope_and_receipts(tmp_path: Path) -> N
     receipts_json = run.receipts.as_json()
     assert set(receipts_json) == {"preflight", "dry_run", "import_apply", "reconciliation"}
     assert receipts_json["preflight"]["evidence_refs"] == ["issue:3686", "pr:3695"]
-    assert receipts_json["preflight"]["env_unknown_hosts"] == ["demerzel"]
+    assert receipts_json["preflight"]["env_unknown_hosts"] == [fx.HOST_REMOTE]
