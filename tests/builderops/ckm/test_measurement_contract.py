@@ -103,7 +103,7 @@ def test_public_identity_lifecycle_policy(
     assert renamed.identity_key == "seed:measurement"
 
     first_epoch = store.state_identity().epoch
-    store.rebuild()
+    store.rebuild(retained_public_ids=[original.public_id])
     rebuilt = _capability(store, name="Measurement and Access")
 
     assert store.state_identity().epoch != first_epoch
@@ -140,7 +140,7 @@ def test_public_identity_lifecycle_policy(
         asserted_at="2026-07-15T00:00:00Z",
     )
 
-    store.rebuild()
+    store.rebuild(retained_public_ids=store.active_public_ids())
     rebuilt_again = _capability(store, name="Measurement and Access")
     rebuilt_artifact = _artifact(store)
     rebuilt_edge = _edge(store, rebuilt_artifact.id, rebuilt_again.id)
@@ -163,7 +163,6 @@ def test_public_identity_lifecycle_policy(
     assert rebuilt_edge.public_id == edge.public_id
     assert rebuilt_fingerprint == fingerprint
     assert rebuilt_assessment.public_id == assessment.public_id
-
     deleted = store.upsert_capability(
         identity_key="inferred:deleted",
         name="Deleted capability",
@@ -353,11 +352,43 @@ def test_public_identity_lifecycle_policy(
     assert renamed_seed.public_id == seeded.public_id
     assert _revision(store) == before_seed_rename + 1
 
-    store.rebuild()
+    store.rebuild(retained_public_ids=store.active_public_ids())
     seed_capabilities(store, manifest_path=renamed_manifest)
     rebuilt_seed = store.get_capability_by_identity_key("seed:permanent-001")
     assert rebuilt_seed is not None
     assert rebuilt_seed.public_id == seeded.public_id
+
+
+def test_rebuild_tombstones_active_identities_absent_from_declared_keep_set(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+
+    store.rebuild(retained_public_ids=[capability.public_id])
+    rebuilt_capability = _capability(store)
+
+    assert rebuilt_capability.public_id == capability.public_id
+    assert store.identity_lifecycle(capability.public_id)["status"] == "active"
+    artifact_lifecycle = store.identity_lifecycle(artifact.public_id)
+    assert artifact_lifecycle is not None
+    assert artifact_lifecycle["status"] == "tombstone"
+    assert store.list_artifacts() == []
+
+
+@pytest.mark.parametrize("relation", ["split_successor", "merge_successor"])
+def test_tombstone_rejects_self_successor(store: CkmStore, relation: str) -> None:
+    capability = _capability(store)
+
+    with pytest.raises(CkmValidationError, match="cannot be its own successor"):
+        store.tombstone_capability(
+            capability.public_id,
+            successor_public_ids=[capability.public_id],
+            relation=relation,
+        )
+
+    assert store.get_capability(capability.id) is not None
+    assert store.identity_lifecycle(capability.public_id)["status"] == "active"
 
 
 @pytest.mark.parametrize("relation", ["split_successor", "merge_successor"])
@@ -542,12 +573,12 @@ def test_all_mutations_advance_state_revision_atomically(
             [*CKM_DDL_STATEMENTS, "INVALID REBUILD DDL"],
         )
         with pytest.raises(sqlite3.OperationalError):
-            store.rebuild()
+            store.rebuild(retained_public_ids=store.active_public_ids())
     assert store.state_identity() == before_failed_rebuild
     assert store.get_capability(capability.id) is not None
 
     old_epoch = before_failed_rebuild.epoch
-    store.rebuild()
+    store.rebuild(retained_public_ids=[])
     rebuilt_state = store.state_identity()
     assert rebuilt_state.epoch != old_epoch
     assert rebuilt_state.state_revision == 1
@@ -793,7 +824,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert set(legacy.table_names()) == set(CKM_TABLE_NAMES)
 
     migrated_inferred_public_id = migrated_inferred.public_id
-    legacy.rebuild()
+    legacy.rebuild(retained_public_ids=legacy.active_public_ids())
     rebuilt_inferred = legacy.upsert_capability(
         identity_key=migrated_inferred.identity_key,
         name="Legacy inferred capability",
@@ -831,7 +862,7 @@ def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:
             object_classes=[ObjectClassCompleteness("capability", included=1)],
             complete=True,
         ),
-        read_set=[capability.public_id],
+        read_set={"capability": [capability.public_id]},
     )
     resource = ResourceDto(
         public_id=capability.public_id,
@@ -876,6 +907,14 @@ def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:
     assert envelope["snapshot"]["redaction_profile"] == REDACTION_PROFILE
     assert envelope["snapshot"]["completeness"]["complete"] is True
 
+    with pytest.raises(ValueError, match="exactly match the snapshot read set"):
+        ResultEnvelope(
+            resource_type="capability",
+            query_digest=canonical_query_digest({"resource": "capability"}),
+            snapshot=snapshot,
+            resources=[],
+        )
+
     typed_error = CkmContractError(code="unsupported_filter", message="not supported")
     assert ErrorEnvelope(typed_error).to_dict()["error"]["code"] == "unsupported_filter"
 
@@ -893,7 +932,11 @@ def test_snapshot_manifest_accounts_for_complete_scope(store: CkmStore) -> None:
         watermarks={"repo": "commit:abc"},
         provenance=[{"ref_type": "repo", "ref": "fixture@abc"}],
         completeness=incomplete,
-        read_set=[],
+        read_set={
+            "capability": [f"cap-{index}" for index in range(3)],
+            "artifact": [f"artifact-{index}" for index in range(5)],
+            "evidence_edge": [f"edge-{index}" for index in range(7)],
+        },
     )
     assert snapshot.to_dict()["completeness"] == {
         "complete": False,
@@ -917,6 +960,29 @@ def test_snapshot_manifest_accounts_for_complete_scope(store: CkmStore) -> None:
         )
     with pytest.raises(ValueError, match="complete must agree"):
         CompletenessManifest(object_classes=accounting, complete=True)
+
+    complete = CompletenessManifest(
+        object_classes=[ObjectClassCompleteness("capability", included=1)],
+        complete=True,
+    )
+    with pytest.raises(ValueError, match="exactly match the declared read-set scope"):
+        SnapshotManifest.build(
+            state=store.state_identity(),
+            taxonomy_digest="taxonomy-v1",
+            watermarks={"repo": "commit:abc"},
+            provenance=[{"ref_type": "repo", "ref": "fixture@abc"}],
+            completeness=complete,
+            read_set={"capability": ["capability-one"], "artifact": []},
+        )
+    with pytest.raises(ValueError, match="included count must match"):
+        SnapshotManifest.build(
+            state=store.state_identity(),
+            taxonomy_digest="taxonomy-v1",
+            watermarks={"repo": "commit:abc"},
+            provenance=[{"ref_type": "repo", "ref": "fixture@abc"}],
+            completeness=complete,
+            read_set={"capability": []},
+        )
 
 
 def test_unsupported_versions_and_semantics_are_typed() -> None:

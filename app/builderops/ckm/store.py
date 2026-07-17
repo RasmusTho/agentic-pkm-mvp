@@ -138,6 +138,13 @@ class CkmStore:
                     conn.execute(statement)
             self._preflight_schema(conn)
             conn.commit()
+        # Existing human confirmations were signed before public IDs existed.
+        # Authenticate that immutable legacy envelope while its original graph
+        # rows are still present, then emit the public-ID-bound successor receipt
+        # before any later rebuild can discard mutable names or row IDs.
+        from app.builderops.ckm.semantic import migrate_legacy_confirmation_receipts
+
+        migrate_legacy_confirmation_receipts(self)
         prior_receipts = [
             receipt
             for receipt in self._receipt_store.list_records("BuilderOpsReceipt")
@@ -557,8 +564,6 @@ class CkmStore:
             "aggregate_formula_id": row["aggregate_formula_id"],
             "low_confidence": row["low_confidence"],
             "watermark_set": row["watermark_set"],
-            "valid_from": row["valid_from"],
-            "asserted_at": row["asserted_at"],
         }
         return stable_public_id("assessment", canonical_digest(identity))
 
@@ -642,10 +647,20 @@ class CkmStore:
             (zero_shares, legacy_formulas),
         )
 
-    def rebuild(self) -> dict[str, Any]:
-        """Drop and recreate ``ckm_*`` tables only (INV-CKM-4). Emits a receipt."""
+    def rebuild(self, *, retained_public_ids: Sequence[str]) -> dict[str, Any]:
+        """Rebuild CKM state while reconciling public lifecycle truth atomically.
+
+        Callers must declare the active public identities that the governed
+        source will recreate.  Every other previously active identity becomes
+        a content-free tombstone during the rebuild, so a disappeared resource
+        cannot remain falsely active merely because its content row was
+        dropped before source reconciliation ran.
+        """
 
         self._receipt_store.initialize()
+        retained = tuple(retained_public_ids)
+        if len(retained) != len(set(retained)):
+            raise CkmValidationError("retained_public_ids must not contain duplicates")
         with self._connect() as conn:
             conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute("BEGIN IMMEDIATE")
@@ -660,18 +675,41 @@ class CkmStore:
                 preserved_successors = conn.execute(
                     "SELECT * FROM ckm_identity_successor ORDER BY source_public_id, successor_public_id"
                 ).fetchall()
+            active_ids = {
+                str(row["public_id"])
+                for row in preserved_identities
+                if row["status"] == "active"
+            }
+            unknown_retained = set(retained) - active_ids
+            if unknown_retained:
+                raise CkmValidationError(
+                    "retained public identities are not active: "
+                    f"{sorted(unknown_retained)}"
+                )
             for table in reversed(CKM_TABLE_NAMES):
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
             for statement in CKM_DDL_STATEMENTS:
                 conn.execute(statement)
+            tombstoned_at = utc_now()
             for row in preserved_identities:
+                status = str(row["status"])
+                row_tombstoned_at = row["tombstoned_at"]
+                if status == "active" and row["public_id"] not in retained:
+                    status = "tombstone"
+                    row_tombstoned_at = tombstoned_at
                 conn.execute(
                     """
                     INSERT INTO ckm_public_identity
                         (public_id, resource_type, status, created_at, tombstoned_at)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    tuple(row),
+                    (
+                        row["public_id"],
+                        row["resource_type"],
+                        status,
+                        row["created_at"],
+                        row_tombstoned_at,
+                    ),
                 )
             for row in preserved_successors:
                 conn.execute(
@@ -695,6 +733,18 @@ class CkmStore:
             conn.commit()
             conn.execute("PRAGMA foreign_keys = ON")
         return self._emit_schema_receipt(event_type="ckm_schema_rebuilt", action="rebuild")
+
+    def active_public_ids(self) -> tuple[str, ...]:
+        """Return the explicit lifecycle keep-set required by :meth:`rebuild`."""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT public_id FROM ckm_public_identity
+                WHERE status = 'active' ORDER BY public_id
+                """
+            ).fetchall()
+        return tuple(str(row["public_id"]) for row in rows)
 
     def table_names(self) -> list[str]:
         with self._connect() as conn:
@@ -812,6 +862,8 @@ class CkmStore:
 
         if relation not in {"split_successor", "merge_successor"}:
             raise CkmValidationError(f"unsupported successor relation: {relation}")
+        if public_id in successor_public_ids:
+            raise CkmValidationError("a tombstoned identity cannot be its own successor")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             capability = conn.execute(

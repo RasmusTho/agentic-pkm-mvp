@@ -32,7 +32,13 @@ the same transaction retires and tombstones the capability's public edge, assess
 dependents. A snapshot manifest binds epoch/revision, schema versions, taxonomy digest, exact
 watermarks, provenance, `effective_audience=single_operator_local`, the versioned local policy,
 `redaction_profile=none`, and a completeness manifest. V1 defines no cursor contract or multi-user
-security machinery.
+security machinery. Rebuild callers declare the exact active public-ID keep-set before content is
+dropped; identities absent from that set become content-free tombstones atomically. Assessment
+identity binds the measured state and watermark set, not rebuild-time `valid_from`/`asserted_at`
+timestamps. A complete manifest's declared object classes and included counts must exactly match
+the canonical read set, and a result envelope must carry exactly that read set. Schema ensure
+authenticates pre-v5 human-confirmation receipts against their original signed envelope and emits
+one idempotent public-ID-bound successor receipt before rebuild can discard mutable legacy refs.
 
 ## Why This Matters
 

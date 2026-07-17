@@ -195,6 +195,7 @@ class SnapshotManifest:
     access_policy_version: str
     redaction_profile: str
     completeness: CompletenessManifest
+    read_set: Mapping[str, Sequence[str]] = field(repr=False)
     read_set_digest: str
     snapshot_digest: str
 
@@ -207,8 +208,25 @@ class SnapshotManifest:
         watermarks: Mapping[str, str],
         provenance: Sequence[Mapping[str, Any]],
         completeness: CompletenessManifest,
-        read_set: Any,
+        read_set: Mapping[str, Sequence[str]],
     ) -> "SnapshotManifest":
+        declared_scope = {item.object_class for item in completeness.object_classes}
+        if set(read_set) != declared_scope:
+            raise ValueError(
+                "completeness object classes must exactly match the declared read-set scope"
+            )
+        canonical_read_set: dict[str, tuple[str, ...]] = {}
+        for object_class, public_ids in read_set.items():
+            ids = tuple(sorted(public_ids))
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"read set contains duplicate {object_class} public IDs")
+            canonical_read_set[object_class] = ids
+        for accounting in completeness.object_classes:
+            if accounting.included != len(canonical_read_set[accounting.object_class]):
+                raise ValueError(
+                    "completeness included count must match the declared read set for "
+                    f"{accounting.object_class}"
+                )
         unsigned: JsonDict = {
             "epoch": state.epoch,
             "state_revision": state.state_revision,
@@ -222,17 +240,20 @@ class SnapshotManifest:
             "access_policy_version": ACCESS_POLICY_VERSION,
             "redaction_profile": REDACTION_PROFILE,
             "completeness": completeness.to_dict(),
-            "read_set_digest": canonical_digest(read_set),
+            "read_set_digest": canonical_digest(canonical_read_set),
         }
         return cls(
             **{key: value for key, value in unsigned.items() if key != "completeness"},
             completeness=completeness,
+            read_set=canonical_read_set,
             snapshot_digest=canonical_digest(unsigned),
         )
 
     def to_dict(self) -> JsonDict:
+        payload = asdict(self)
+        payload.pop("read_set")
         return {
-            **asdict(self),
+            **payload,
             "watermarks": dict(sorted(self.watermarks.items())),
             "provenance": [dict(item) for item in self.provenance],
             "completeness": self.completeness.to_dict(),
@@ -294,6 +315,10 @@ class ResultEnvelope:
         keys = [resource.total_order_key for resource in self.resources]
         if keys != sorted(keys):
             raise ValueError("resources must use the stable public total order")
+        expected_ids = tuple(self.snapshot.read_set.get(self.resource_type, ()))
+        actual_ids = tuple(resource.public_id for resource in self.resources)
+        if actual_ids != expected_ids:
+            raise ValueError("resources must exactly match the snapshot read set")
 
     def to_dict(self) -> JsonDict:
         return {

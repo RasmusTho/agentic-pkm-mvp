@@ -131,6 +131,29 @@ def test_every_dimension_cites_evidence(store: CkmStore) -> None:
             assert CkmArtifact.from_row(citation["artifact"]).validate().id == citation["artifact_id"]
 
 
+def test_assessment_public_id_survives_real_rebuild_producer(
+    store: CkmStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capability = _capability(store)
+    _fully_evidenced(store, capability.id)
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    store.rebuild(retained_public_ids=store.active_public_ids())
+    store.set_watermark("docs", "docs-one")
+    store.set_watermark("source", "source-one")
+    rebuilt_capability = _capability(store)
+    _fully_evidenced(store, rebuilt_capability.id)
+    monkeypatch.setattr("app.builderops.ckm.store.utc_now", lambda: "2099-01-01T00:00:00Z")
+
+    assert assess_capabilities(store).assessed == 1
+    rebuilt = store.latest_assessment_for_capability(rebuilt_capability.id)
+    assert rebuilt is not None
+    assert rebuilt.asserted_at != first.asserted_at
+    assert rebuilt.public_id == first.public_id
+
+
 def test_aggregate_transparent_and_min_capped(store: CkmStore) -> None:
     capability = _capability(store)
     _fully_evidenced(store, capability.id)

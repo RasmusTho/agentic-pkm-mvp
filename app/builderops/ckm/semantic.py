@@ -462,6 +462,151 @@ def _validated_confirmation_receipt(
     return payload, artifact, capability
 
 
+def _validated_legacy_confirmation_receipt(
+    store: CkmStore, receipt: dict[str, Any]
+) -> tuple[dict[str, Any], CkmArtifact, CkmCapability]:
+    """Authenticate the pre-public-ID receipt format for one-time migration."""
+
+    if receipt.get("object_type") != "BuilderOpsReceipt":
+        raise CkmValidationError("legacy confirmation must be a BuilderOpsReceipt")
+    if receipt.get("event_type") != "ckm_edge_confirmed" or receipt.get("action") != "confirm_edge":
+        raise CkmValidationError("legacy confirmation has an invalid event/action")
+    actor = receipt.get("actor")
+    if (
+        not isinstance(actor, dict)
+        or actor.get("actor_type") != "human"
+        or not isinstance(actor.get("id"), str)
+        or not actor["id"].strip()
+    ):
+        raise CkmValidationError("legacy confirmation requires a named human actor")
+    try:
+        payload = json.loads(receipt["receipt_body"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CkmValidationError("legacy confirmation body must be valid JSON") from exc
+    if not isinstance(payload, dict) or "edge_public_id" in payload:
+        raise CkmValidationError("not a legacy confirmation payload")
+    for field in (
+        "edge_id",
+        "artifact_source_ref",
+        "capability_name",
+        "basis",
+        "provider",
+        "model",
+        "confirmation_key",
+        "binding",
+    ):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise CkmValidationError(f"legacy confirmation requires non-empty {field}")
+    if payload.get("extraction_method") != "inferred" or payload.get("lifecycle") != "confirmed":
+        raise CkmValidationError("legacy confirmation must promote one inferred edge")
+    if payload.get("source_ref") != payload["artifact_source_ref"]:
+        raise CkmValidationError("legacy confirmation artifact binding is inconsistent")
+    if receipt.get("source_refs") != [
+        {"ref_type": "ckm_evidence_edge", "ref": payload["edge_id"]}
+    ]:
+        raise CkmValidationError("legacy confirmation source does not bind its edge")
+    artifact = next(
+        (
+            item
+            for item in store.list_artifacts()
+            if item.source_ref == payload["artifact_source_ref"]
+        ),
+        None,
+    )
+    capability = next(
+        (
+            item
+            for item in store.list_capabilities()
+            if item.name == payload["capability_name"]
+        ),
+        None,
+    )
+    if artifact is None or capability is None:
+        raise CkmValidationError("legacy confirmation target is absent from the current graph")
+    if receipt.get("target_refs") != [
+        {"ref_type": "repo_artifact", "ref": artifact.source_ref},
+        {"ref_type": "ckm_capability", "ref": capability.name},
+    ]:
+        raise CkmValidationError("legacy confirmation targets do not bind its payload")
+    key = store._confirmation_signing_key()
+    if key is None:
+        raise CkmValidationError("legacy confirmation has no trusted signing key")
+    expected_binding = hmac.new(
+        key,
+        _canonical_json(_binding_document(receipt, payload)).encode("utf-8"),
+        sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(payload["binding"], expected_binding):
+        raise CkmValidationError("legacy confirmation trusted binding is invalid")
+    current_payload, _, _, _ = _confirmation_payload(store, payload["edge_id"])
+    for field in (
+        "evidence_kind",
+        "polarity",
+        "maturity_dimension",
+        "confidence",
+        "extraction_method",
+        "lifecycle",
+        "source_ref",
+        "basis",
+        "provider",
+        "model",
+    ):
+        if payload.get(field) != current_payload.get(field):
+            raise CkmValidationError("legacy confirmation does not match its source edge")
+    return payload, artifact, capability
+
+
+def migrate_legacy_confirmation_receipts(store: CkmStore) -> int:
+    """Promote authenticated pre-v5 receipts into the public-ID-bound format."""
+
+    migrated = 0
+    receipts = store.list_builderops_receipts("ckm_edge_confirmed")
+    current_keys: set[str] = set()
+    for receipt in receipts:
+        try:
+            payload, _, _ = _validated_confirmation_receipt(store, receipt)
+        except CkmValidationError:
+            continue
+        current_keys.add(str(payload["confirmation_key"]))
+    for receipt in receipts:
+        try:
+            legacy, artifact, capability = _validated_legacy_confirmation_receipt(store, receipt)
+        except CkmValidationError:
+            continue
+        payload, _, _, capability_name = _confirmation_payload(store, legacy["edge_id"])
+        if payload["confirmation_key"] in current_keys:
+            continue
+        envelope = {
+            "event_type": "ckm_edge_confirmed",
+            "action": "confirm_edge",
+            "actor": receipt["actor"],
+            "source_refs": [
+                {"ref_type": "ckm_evidence_edge", "ref": payload["edge_public_id"]}
+            ],
+            "target_refs": [
+                {"ref_type": "ckm_artifact", "ref": artifact.public_id},
+                {"ref_type": "ckm_capability", "ref": capability.public_id},
+            ],
+        }
+        payload["binding"] = _sign_confirmation(store, envelope, payload)
+        migrated_receipt = store.append_builderops_receipt(
+            source_refs=envelope["source_refs"],
+            summary=f"Migrated legacy CKM confirmation for {capability_name}",
+            event_type=envelope["event_type"],
+            actor=envelope["actor"],
+            occurred_at=str(receipt.get("occurred_at") or utc_now()),
+            target_refs=envelope["target_refs"],
+            action=envelope["action"],
+            receipt_body=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            idempotency_key=f"ckm-confirm:{payload['confirmation_key']}",
+        )
+        _validated_confirmation_receipt(store, migrated_receipt)
+        current_keys.add(str(payload["confirmation_key"]))
+        migrated += 1
+    return migrated
+
+
 def _confirm_edge_from_cli(store: CkmStore, edge_id: str) -> dict[str, Any]:
     """Execute the human-operated CLI confirmation boundary."""
 

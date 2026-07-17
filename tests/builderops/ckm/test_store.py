@@ -82,7 +82,7 @@ def test_upsert_idempotent_and_rebuild(store: CkmStore) -> None:
 
     assert store.table_names() == sorted(CKM_TABLE_NAMES)
 
-    store.rebuild()
+    store.rebuild(retained_public_ids=[])
 
     assert store.table_names() == sorted(CKM_TABLE_NAMES)
     assert store.list_capabilities() == []
@@ -309,7 +309,7 @@ def test_schema_events_emit_receipt(tmp_path: Path) -> None:
     store = CkmStore(db_path)
 
     ensure_response = store.ensure_schema()
-    rebuild_response = store.rebuild()
+    rebuild_response = store.rebuild(retained_public_ids=[])
 
     assert ensure_response["event_type"] == "ckm_schema_ensured"
     assert rebuild_response["event_type"] == "ckm_schema_rebuilt"
