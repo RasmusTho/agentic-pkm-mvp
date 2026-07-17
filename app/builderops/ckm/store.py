@@ -559,6 +559,66 @@ class CkmStore:
 
     @staticmethod
     def _assessment_public_id(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
+        capability_public_id = CkmStore._referenced_public_id(
+            conn, "ckm_capability", str(row["capability_id"])
+        )
+        edge_fingerprint = str(row["edge_fingerprint"])
+        is_engine_fingerprint = len(edge_fingerprint) == 64 and all(
+            character in "0123456789abcdef" for character in edge_fingerprint
+        )
+        if not is_engine_fingerprint and edge_fingerprint.startswith("legacy:"):
+            # Identity-revision fixtures and pre-Q1 rows may carry internal ids
+            # in their old fingerprint.  Normalize those producers through the
+            # active public evidence graph so their migrated identity matches a
+            # real rebuild producer instead of preserving internal-id entropy.
+            from app.builderops.ckm.assess import assessment_fingerprint
+
+            edge_snapshots: dict[str, CkmEvidenceEdge] = {}
+            for dimension in MATURITY_DIMENSIONS:
+                raw_citations = row[f"{dimension}_citations"]
+                citations = (
+                    _loads(raw_citations)
+                    if isinstance(raw_citations, str)
+                    else raw_citations
+                )
+                for citation in citations:
+                    edge_payload = citation.get("edge", citation)
+                    edge = CkmEvidenceEdge.from_row(edge_payload)
+                    edge_snapshots[edge.public_id or edge.basis] = edge
+            edges = list(edge_snapshots.values())
+            artifact_ids = sorted({edge.artifact_id for edge in edges})
+            artifacts = {
+                artifact.id: artifact
+                for artifact_id in artifact_ids
+                if (
+                    artifact_row := conn.execute(
+                        "SELECT * FROM ckm_artifact WHERE id = ?", (artifact_id,)
+                    ).fetchone()
+                )
+                is not None
+                for artifact in (CkmArtifact.from_row(artifact_row),)
+            }
+            if len(artifacts) == len(artifact_ids):
+                edge_fingerprint = assessment_fingerprint(edges, artifacts)
+                is_engine_fingerprint = True
+        if is_engine_fingerprint:
+            # The assessment engine uses this exact rebuild-stable fingerprint
+            # as its append trigger.  Binding the public identity to the same
+            # domain prevents valid but formula-unselected evidence from
+            # triggering an append that collides with the prior assessment.
+            return stable_public_id(
+                "assessment",
+                canonical_digest(
+                    {
+                        "capability": capability_public_id,
+                        "edge_fingerprint": edge_fingerprint,
+                    }
+                ),
+            )
+
+        # Pre-engine callers historically used the sentinel fingerprint.  Keep
+        # their richer value-based identity so multiple legacy bitemporal rows
+        # for one capability remain representable.
         volatile_keys = {
             "id",
             "edge_id",
@@ -589,9 +649,7 @@ class CkmStore:
             citations = _loads(raw) if isinstance(raw, str) else raw
             evidence[dimension] = canonical_digest(stable_evidence(citations))
         identity = {
-            "capability": CkmStore._referenced_public_id(
-                conn, "ckm_capability", str(row["capability_id"])
-            ),
+            "capability": capability_public_id,
             "evidence": evidence,
             "scores": {dimension: row[dimension] for dimension in MATURITY_DIMENSIONS},
             "candidate_shares": row["candidate_shares"],

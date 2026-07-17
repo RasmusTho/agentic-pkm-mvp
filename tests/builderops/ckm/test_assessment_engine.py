@@ -407,6 +407,32 @@ def test_equal_scores_with_changed_artifact_state_append_distinct_assessments(
     assert second.edge_fingerprint != first.edge_fingerprint
 
 
+def test_formula_unselected_evidence_appends_distinct_assessment(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    _edge(
+        store,
+        capability.id,
+        source_ref="docs/DIAGRAM.md",
+        artifact_kind="diagram",
+        evidence_kind="diagram",
+        dimension="test_completeness",
+    )
+
+    assert assess_capabilities(store).assessed == 1
+    second = store.latest_assessment_for_capability(capability.id)
+    assert second is not None
+    assert second.scores == first.scores
+    assert second.citations == first.citations
+    assert second.public_id != first.public_id
+    assert second.edge_fingerprint != first.edge_fingerprint
+
+
 def test_historical_citations_survive_edge_change_and_artifact_cleanup(
     store: CkmStore,
 ) -> None:

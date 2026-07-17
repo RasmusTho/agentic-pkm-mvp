@@ -91,4 +91,4 @@ Watermarks miss link, confirmation, assessment, and finding mutations. Random ro
 
 ## Related GitHub Issues
 
-Implementation issue #3776 under validation parent #3775. The owner decisions are accepted, but the Issue remains blocked until its stale cursor, lifecycle-identity, and access assumptions are reconciled to this contract and strict readiness validation passes. TCD hint: Sol/high or Terra/high; escalate for unresolved migration, transaction, identity, access-policy, or compatibility risk.
+Implementation issue #3776 under validation parent #3775. The owner decisions and contract reconciliation are complete, and the Issue is under current-SHA verification. Q1 acceptance remains blocked on the separately governed Q1b work; this Q1a slice does not claim that successor delivery. TCD hint: Sol/high or Terra/high; escalate for unresolved migration, transaction, identity, access-policy, or compatibility risk.
