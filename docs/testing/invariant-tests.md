@@ -69,6 +69,27 @@ declarative-schema-impossible and therefore live here as the source of truth.
 
 ## Registry
 
+### one_vault_settings_location
+
+- **Purpose:** Every vault-backed settings producer and consumer uses `<vault>/settings/` as the
+  single canonical root; retired locations remain bounded compatibility inputs and can never become
+  a second source of truth.
+- **Protected principle:** SET-2 canonical settings location; canonical settings shadow matching
+  legacy files, values are never merged, and fresh initialization creates no retired settings root.
+- **Affected boundaries:** WSP, HKA vault layout, GOV migration/write safety, Builder System CI.
+- **Required fixture / data:** canonical and legacy settings trees plus the production-path census in
+  `tests/architecture/test_settings_single_location.py`.
+- **Expected failure mode:** a producer creates or a consumer reads a new settings location outside
+  `<vault>/settings/`, or canonical and legacy values are merged into dual truth.
+- **Current enforcement:** `static_test` plus runtime migration/resolution tests — the architecture
+  census blocks new locations, and canonical/compatibility behavior is exercised by the settings
+  canonical-location suite.
+- **Runtime test path:** `tests/architecture/test_settings_single_location.py::test_no_new_settings_paths`;
+  `tests/settings/test_canonical_location.py`.
+- **Related docs / contracts / ADRs:** `docs/SETTINGS.md`;
+  `docs/SETTINGS_SPINE/CANONICALIZE_SETTINGS_LOCATION.md`.
+- **Related issues:** #3156, #3161.
+
 ### inv_ef1_public_private_seam
 
 - **Purpose:** The public repository carries no secret-shaped values, and every retained personal binding has an owned, per-artifact INV-EF1 register row rather than an unreviewed baseline exception.

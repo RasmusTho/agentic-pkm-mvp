@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from app.vault.paths import get_vault_inbox_dir_rel
+from app.vault.manager import VaultManager
 from app.watcher.config import WatcherConfig
-from app.watcher.settings_delta import SettingsSourceDeltaResult
+from app.watcher.settings_delta import (
+    SettingsSourceDeltaResult,
+    is_settings_control_path,
+    is_settings_source_path,
+)
 from app.watcher.state import WatcherState
 import app.watcher.watcher as watcher
 from app.watcher.watcher import run_tick
@@ -73,7 +79,7 @@ def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
 def test_settings_source_uses_configured_vault_and_is_not_emitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Legacy watcher treats @Settings as bound control input, outside note scope."""
+    """Watcher treats the compatibility root as control input, outside note scope."""
     cfg = _config(tmp_path)
     (cfg.vault_path / _inbox_dir(tmp_path)).mkdir(parents=True)
     source = cfg.vault_path / "@Settings" / "global.md"
@@ -81,9 +87,9 @@ def test_settings_source_uses_configured_vault_and_is_not_emitted(
     source.write_text("```yaml settings\nlog_level: DEBUG\n```\n", encoding="utf-8")
     observed: dict[str, Path] = {}
 
-    def reload_source(*, rel_path: Path, vault_settings_dir: Path | None = None):
+    def reload_source(*, rel_path: Path, vault_root: Path | None = None):
         observed["rel_path"] = rel_path
-        observed["vault_settings_dir"] = vault_settings_dir
+        observed["vault_root"] = vault_root
         return SettingsSourceDeltaResult(is_source=True, reloaded=True)
 
     monkeypatch.setattr(watcher, "handle_settings_source_delta", reload_source)
@@ -92,11 +98,127 @@ def test_settings_source_uses_configured_vault_and_is_not_emitted(
 
     assert observed == {
         "rel_path": Path("@Settings/global.md"),
-        "vault_settings_dir": cfg.vault_path / "@Settings",
+        "vault_root": cfg.vault_path,
     }
     assert summary["settings_source_reloads_in_tick"] == 1
     assert summary["emitted_in_tick"] == 0
     assert not cfg.outbox_path.exists()
+
+
+def test_nested_local_markdown_is_a_compiler_source() -> None:
+    assert not is_settings_source_path(Path("settings/local.md"))
+    assert is_settings_source_path(Path("settings/agents/local.md"))
+    assert is_settings_control_path(
+        Path("Meta/Settings/health.md"), configured_system_dir="Meta"
+    )
+    assert is_settings_control_path(
+        Path("Meta/settings/ingest.override.md"), configured_system_dir="Meta"
+    )
+    assert not is_settings_control_path(Path("Projects/Settings/health.md"))
+
+
+def test_configured_legacy_override_is_never_emitted_as_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "Meta")
+    cfg = replace(_config(tmp_path), scope_glob="*.md,**/*.md")
+    system_root = cfg.vault_path / "Meta"
+    system_root.mkdir(parents=True)
+    (system_root / "vault.layout.md").write_text(
+        "---\nsystem_folder: Meta\ninbox_folder: Inbox\ndesk_folder: Desk\n---\n",
+        encoding="utf-8",
+    )
+    override = system_root / "settings" / "ingest.override.md"
+    override.parent.mkdir()
+    override.write_text("---\ninclude_folders: [Notes]\n---\n", encoding="utf-8")
+
+    summary = run_tick(cfg, WatcherState(), now=0.0)
+
+    assert summary["emitted_in_tick"] == 1
+    emitted = cfg.outbox_path.read_text(encoding="utf-8")
+    assert "Meta/vault.layout.md" in emitted
+    assert "ingest.override.md" not in emitted
+
+
+def test_scoped_settings_control_file_is_never_emitted_as_note(tmp_path: Path) -> None:
+    cfg = replace(_config(tmp_path), scope_glob="*.md,**/*.md")
+    (cfg.vault_path / _inbox_dir(tmp_path)).mkdir(parents=True)
+    scoped = cfg.vault_path / "settings" / "vault.md"
+    scoped.parent.mkdir(parents=True)
+    scoped.write_text("---\nvaultId: test\n---\n", encoding="utf-8")
+
+    summary = run_tick(cfg, WatcherState(), now=0.0)
+
+    assert summary["scanned_files"] == 1
+    assert summary["emitted_in_tick"] == 0
+    assert not cfg.outbox_path.exists()
+
+
+def test_layoutless_initialized_vault_ordinary_note_tick_does_not_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_LAYOUT_NOTE_REL", raising=False)
+
+    def fail_layout_provisioning(_vault_root: Path):
+        raise OSError("layout provisioning unavailable")
+
+    monkeypatch.setattr(
+        "app.vault.layout.load_or_create_layout", fail_layout_provisioning
+    )
+    VaultManager().initialize_vault(vault, machine_role="testNode", remember=False)
+    assert (vault / "settings" / "vault.md").exists()
+    assert not list(vault.rglob("vault.layout.md"))
+
+    note = vault / "Notes" / "ordinary.md"
+    note.parent.mkdir()
+    note.write_text("ordinary note", encoding="utf-8")
+    cfg = WatcherConfig(
+        enable=True,
+        vault_path=vault,
+        scope_glob="Notes/**",
+        debounce_ms=0,
+        rate_limit_per_min=30,
+        backoff_seconds=10,
+        state_path=tmp_path / "state.json",
+        stop_file=tmp_path / "WATCHER_STOP",
+        outbox_path=tmp_path / "outbox.jsonl",
+        summary_interval=10,
+        tick_sleep_seconds=0.0,
+        tick_log_path=tmp_path / "tick.jsonl",
+    )
+
+    summary = run_tick(cfg, WatcherState(), now=0.0)
+
+    assert summary["emitted_in_tick"] == 1
+    assert _read_outbox(cfg.outbox_path)[0]["payload"]["relative_path"] == str(
+        Path("Notes/ordinary.md")
+    )
+
+
+def test_deleted_settings_source_reloads_effective_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _config(tmp_path)
+    (cfg.vault_path / _inbox_dir(tmp_path)).mkdir(parents=True)
+    state = WatcherState(
+        files={"settings/global.md": {"mtime": 1.0, "hash": "old"}}
+    )
+    observed: list[Path] = []
+
+    def reload_source(*, rel_path: Path, vault_root: Path | None = None):
+        assert vault_root == cfg.vault_path
+        observed.append(rel_path)
+        return SettingsSourceDeltaResult(is_source=True, reloaded=True)
+
+    monkeypatch.setattr(watcher, "handle_settings_source_delta", reload_source)
+
+    summary = run_tick(cfg, state, now=0.0)
+
+    assert observed == [Path("settings/global.md")]
+    assert summary["settings_source_deletions_in_tick"] == 1
+    assert summary["settings_source_reloads_in_tick"] == 1
 
 
 def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:

@@ -13,12 +13,13 @@ from .rules import compile_rules, score_for
 
 def walk_markdown_files(root: Path, ignore_glob: List[str]) -> List[Path]:
     files = list(iter_vault_markdown_files(root))
-    if not ignore_glob:
-        return files
+    effective_ignores = [*ignore_glob]
+    if "settings/**" not in effective_ignores:
+        effective_ignores.append("settings/**")
     out: List[Path] = []
     for p in files:
         rel = str(p.relative_to(root))
-        if any(fnmatch.fnmatch(rel, pat) for pat in ignore_glob):
+        if any(fnmatch.fnmatch(rel, pat) for pat in effective_ignores):
             continue
         out.append(p)
     return out

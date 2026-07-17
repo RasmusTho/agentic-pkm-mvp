@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-import yaml
 from jsonschema import validate
 
 from app.config.paths import resolve_system_settings_path
+from app.settings.locations import read_settings_mapping
 
 SCHEMA_PATH = Path("schemas/system-settings.schema.json")
 
@@ -23,11 +23,7 @@ def _load_schema() -> dict[str, Any]:
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
-    raw = path.read_text(encoding="utf-8")
-    data = yaml.safe_load(raw) or {}
-    if not isinstance(data, dict):
-        raise ValueError("system settings YAML must decode into a mapping")
-    return data
+    return read_settings_mapping(path)
 
 
 def load_settings(force: bool = False, path: Path | None = None) -> dict[str, Any] | None:

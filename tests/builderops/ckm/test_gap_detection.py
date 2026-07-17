@@ -44,6 +44,7 @@ def _capability(
         ),
     )
     return store.upsert_capability(
+        identity_key=f"fixture:gap:{name}",
         name=name,
         definition=f"Fixture capability {name}.",
         existence_provenance=f"seeded:{source_ref} :: fixture",
@@ -114,7 +115,9 @@ def _assessment(
         citations=citations,
         aggregate=min(scores.values()),
         watermark_set={"fixture": "one"},
-        edge_fingerprint=assessment_fingerprint(edges, artifacts),
+        edge_fingerprint=assessment_fingerprint(
+            edges, artifacts, watermark_set={"fixture": "one"}
+        ),
         asserted_at=asserted_at,
         valid_from=asserted_at,
     )
@@ -536,7 +539,7 @@ def test_open_pr_does_not_satisfy_missing_functional_evidence(store: CkmStore) -
     assert missing_class["observed_edge_count"] == 0
 
 
-def test_watermark_only_lag_is_recoverable_and_explicit(store: CkmStore) -> None:
+def test_watermark_only_lag_appends_fresh_measurements(store: CkmStore) -> None:
     _three_family_fixture(store)
     first = detect_gaps(store)
     store.set_watermark("fixture", "two")
@@ -544,14 +547,15 @@ def test_watermark_only_lag_is_recoverable_and_explicit(store: CkmStore) -> None
     assessment_run = assess_capabilities(store)
     second = detect_gaps(store)
 
-    assert assessment_run.assessed == 0
-    assert assessment_run.skipped == 3
-    assert first.findings == second.findings == 3
-    assert second.stale_assessments == 3
+    assert assessment_run.assessed == 3
+    assert assessment_run.skipped == 0
+    assert first.findings == 3
+    assert second.findings > 0
+    assert second.stale_assessments == 0
     assert all(
         any(
             citation.get("role") == "assessment"
-            and citation.get("stale_relative_to_global_evidence") is True
+            and citation.get("stale_relative_to_global_evidence") is False
             for citation in finding.citations
         )
         for finding in store.list_findings()

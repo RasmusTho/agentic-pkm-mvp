@@ -81,7 +81,22 @@ def configure_json_logging(
         if isinstance(handler, logging.StreamHandler) and isinstance(
             handler.formatter, JsonLogFormatter
         ):
-            handler.setStream(target)
+            current = handler.stream
+            if current is target:
+                return handler
+            if getattr(current, "closed", False):
+                # StreamHandler.setStream() flushes the old stream before it
+                # rebinds. Pytest capture streams can already be closed by the
+                # time another runtime entrypoint configures process logging.
+                # Assign under the handler lock only for that closed-stream
+                # case; live streams keep the normal flush-on-rebind contract.
+                handler.acquire()
+                try:
+                    handler.stream = target
+                finally:
+                    handler.release()
+            else:
+                handler.setStream(target)
             return handler
     handler = logging.StreamHandler(target)
     handler.setFormatter(JsonLogFormatter())

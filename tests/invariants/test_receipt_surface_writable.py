@@ -6,7 +6,7 @@ under it, including directories later `mkdir`'d during the build) owned by
 compose `user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"` (`docker-compose.yaml`,
 populated from `scripts/export_runtime_env.sh`). `/app/runtime` itself never
 ships in the repo — every subdirectory under it is `.gitignore`d
-(`.gitignore` lines 51-57) — so `COPY . .` never bakes the directory at all.
+(`.gitignore` lines 51-59) — so `COPY . .` never bakes the directory at all.
 The **first** receipt/state write from a fresh container
 (`app/activation/ask_synthesis.py::emit_ask_synthesis_receipt` and every
 sibling module listed below) calls

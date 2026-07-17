@@ -41,11 +41,27 @@ ingress transport only; it is never a secret store or raw-audio archive.
 5. **No cloud secret service now.** 1Password Developer/CLI is a future migration option only when
    sharing/rotation across hosts or CI makes it worthwhile. It is not a prerequisite for v1.
 
+### Initial identifier contract
+
+The only initial logical identifier is `heimdal.raw-store-key`. It is declared separately for the
+`dev`, `test`, and `prod` `heimdal-capture-watch` consumers in
+`config/secrets/host_secret_contract.json`; no value or host path is stored in that file. The v1
+Keychain service is pinned to the stable non-secret namespace `yggdrasil.host-secrets`, and its
+account is derived by percent-encoding each `{channel}:{consumer}:{secret}` component before
+colon-joining the declared
+tuple, so distinct tuples cannot collide and each channel resolves a distinct item.
+The v1 loader accepts only those three channels, that consumer, and the named logical identifier;
+any other identifier-bearing string is rejected rather than treated as a potential secret value.
+Contract JSON must use unique object keys; a duplicate declaration fails closed rather than allowing a
+value to be hidden behind a later canonical field.
+HSP-02 is the only future component permitted to resolve that declaration into a process-local
+environment variable.
+
 ## Task order
 
 | Order | Task | ID | Prerequisite | Outcome |
 | --- | --- | --- | --- | --- |
-| 1 | [Define host secret contract](DEFINE_HOST_SECRET_CONTRACT.md) | HSP-01 | — | names, consumer allowlist, Keychain access and redaction contract |
+| 1 | [Define host secret contract](DEFINE_HOST_SECRET_CONTRACT.md) | HSP-01 | — | delivered by [#3845](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3845) / PR #3888: names, consumer allowlist, Keychain access and redaction contract |
 | 2 | [Deliver runtime secret bootstrap](DELIVER_RUNTIME_SECRET_BOOTSTRAP.md) | HSP-02 | HSP-01 | bootstrap, channel integration and fail-closed/redaction tests |
 | Evidence | Delivered [#3830](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3830) | — | completed 2026-07-16 | redacted dev Keychain provisioning and healthy capture-watch receipt; it is not a child or dependency |
 

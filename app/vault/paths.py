@@ -9,13 +9,15 @@ from typing import Any, Dict
 import yaml
 
 from app.config.paths import resolve_optional_vault_root
+from app.settings.locations import (
+    LEGACY_COMPILED_DIR,
+    LEGACY_SYSTEM_SETTINGS,
+    read_settings_mapping,
+    resolve_settings_file,
+)
 from app.vault.layout import load_layout
 from app.vault.manager import VaultContext
 from app.vault.settings_service import SettingsService
-
-
-_SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
-_ALT_SETTINGS_REL_PATH = Path("@Settings") / "system-settings.yaml"
 
 
 @dataclass(frozen=True)
@@ -134,7 +136,7 @@ def _read_system_settings(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        payload = read_settings_mapping(path)
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -157,11 +159,12 @@ def _extract_paths(settings: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _paths_data(vault_root: Path) -> Dict[str, str]:
-    for settings_path in (vault_root / _SETTINGS_REL_PATH, vault_root / _ALT_SETTINGS_REL_PATH):
-        settings = _read_system_settings(settings_path)
-        if settings:
-            return _extract_paths(settings)
-    return {}
+    settings_path = resolve_settings_file(
+        vault_root,
+        "system-settings.md",
+        legacy_paths=(LEGACY_SYSTEM_SETTINGS, LEGACY_COMPILED_DIR / "system-settings.yaml"),
+    )
+    return _extract_paths(_read_system_settings(settings_path))
 
 
 def resolve_vault_inbox_dir_rel(vault_root: Path) -> VaultPathValue:

@@ -18,6 +18,7 @@ def overview_store(tmp_path: Path) -> CkmStore:
     store.ensure_schema()
     store.set_watermark("fixture", "one")
     parent = store.upsert_capability(
+        identity_key="fixture:overview:retrieval",
         name="Retrieval",
         definition="Retrieve grounded context.",
         existence_provenance="seeded:fixture",
@@ -25,6 +26,7 @@ def overview_store(tmp_path: Path) -> CkmStore:
         boundary_ref="RCA",
     )
     store.upsert_capability(
+        identity_key="fixture:overview:context-assembly",
         name="Context Assembly",
         definition="Assemble a bounded context bundle.",
         existence_provenance="seeded:fixture-child",

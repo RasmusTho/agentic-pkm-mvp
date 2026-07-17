@@ -1,3 +1,4 @@
+---
 uuid: D0A054199FC34C6AA510C8689BE1AF89
 title: System Settings (Canonical)
 version: 0.3.0
@@ -60,3 +61,5 @@ observability:
 events:
   catalog_path: vault/_system/events/catalog.yaml
   sla_outbox_to_index_ms: 2000
+---
+# System Settings

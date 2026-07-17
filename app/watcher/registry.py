@@ -30,11 +30,13 @@ from app.services.outbox import (
     write_outbox_event,
 )
 from app.settings.env_defaults import env_str
+from app.settings.locations import LEGACY_COMPILED_DIR
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.vault.manager import VaultManager
 from app.vault.manager import iter_vault_markdown_files
+from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.layout import load_layout
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
@@ -43,6 +45,7 @@ from app.watcher.settings_delta import (
     SETTINGS_SOURCE_DIR_NAME,
     handle_settings_local_delta,
     handle_settings_source_delta,
+    is_settings_control_path,
     is_settings_source_path,
 )
 from app.watcher.state import WatcherState
@@ -121,7 +124,9 @@ def _scan_markdown_many(
 ) -> Iterable[tuple[Path, float, Path]]:
     seen: set[Path] = set()
     for scan_root in scan_roots:
-        for path in iter_vault_markdown_files(vault_root, subtree_root=scan_root):
+        for path in iter_vault_markdown_files(
+            vault_root, subtree_root=scan_root, include_settings=True
+        ):
             try:
                 rel = path.relative_to(vault_root)
             except Exception:
@@ -1002,13 +1007,13 @@ def _collect_changed_entries(
             # content.  Record it as seen for every spec, reload it only once
             # per registry tick, then keep it out of panel/ingest emissions.
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
-            if handled_settings_sources is not None and rel in handled_settings_sources:
+            if handled_settings_sources:
                 continue
             if handled_settings_sources is not None:
                 handled_settings_sources.add(rel)
             source_delta = handle_settings_source_delta(
                 rel_path=rel,
-                vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
+                vault_root=cfg.vault_path,
             )
             if source_delta.reloaded:
                 summary["settings_source_reloads_in_tick"] = (
@@ -1019,6 +1024,21 @@ def _collect_changed_entries(
                 summary["settings_source_errors_in_tick"] = int(
                     summary.get("settings_source_errors_in_tick", 0)
                 ) + len(source_delta.errors)
+            continue
+        if is_settings_control_path(
+            rel,
+            configured_system_dir=resolve_vault_system_dir_rel_or_default(
+                cfg.vault_path
+            ),
+        ):
+            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            if settings_delta.values is not None:
+                _sync_settings_local_state(
+                    states, rel_str=rel_str, values=settings_delta.values
+                )
+            changed_entries.append(
+                ChangedEntry(rel_path=rel, mtime=mtime, digest=digest)
+            )
             continue
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
         if settings_delta.values is not None:
@@ -1078,6 +1098,13 @@ def _emit_changed_entry(
 ) -> str | None:
     last_seen = state.last_seen(str(entry.rel_path))
     state.update_file_state(str(entry.rel_path), mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
+    if is_settings_control_path(
+        entry.rel_path,
+        configured_system_dir=resolve_vault_system_dir_rel_or_default(
+            cfg.vault_path
+        ),
+    ):
+        return None
     should_skip, reason = _should_skip_changed_entry(spec=spec, state=state, last_seen=last_seen, now=now)
     if should_skip:
         if reason == "rate_limit":
@@ -1235,6 +1262,7 @@ def _run_spec_tick(
     handled_settings_sources: set[Path] | None = None,
 ) -> dict[str, object]:
     tick_start = now
+    handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
     state.ticks_run += 1
     errors_before = state.errors
 
@@ -1280,9 +1308,10 @@ def _run_spec_tick(
 
     try:
         scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
-        settings_sources_root = cfg.vault_path / SETTINGS_SOURCE_DIR_NAME
-        if settings_sources_root.exists():
-            scan_roots = [*scan_roots, settings_sources_root]
+        for source_name in (SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name):
+            settings_sources_root = cfg.vault_path / source_name
+            if settings_sources_root.exists():
+                scan_roots = [*scan_roots, settings_sources_root]
     except FileNotFoundError as exc:
         # Static scope-prefix directory does not exist under the bound vault
         # (e.g. an env scope glob naming a folder the vault does not have).
@@ -1310,6 +1339,31 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
     )
+    removed_settings_sources = sorted(
+        Path(path)
+        for path in state.files.keys() - set(scanned_paths)
+        if is_settings_source_path(Path(path))
+    )
+    if removed_settings_sources:
+        summary["settings_source_deletions_in_tick"] = len(
+            removed_settings_sources
+        )
+        if not handled_settings_sources:
+            if handled_settings_sources is not None:
+                handled_settings_sources.add(removed_settings_sources[0])
+            removed_delta = handle_settings_source_delta(
+                rel_path=removed_settings_sources[0],
+                vault_root=cfg.vault_path,
+            )
+            if removed_delta.reloaded:
+                summary["settings_source_reloads_in_tick"] = (
+                    int(summary.get("settings_source_reloads_in_tick", 0)) + 1
+                )
+            if removed_delta.errors:
+                state.errors += len(removed_delta.errors)
+                summary["settings_source_errors_in_tick"] = len(
+                    removed_delta.errors
+                )
 
     if int(summary.get("scanned_files", 0)) == 0:
         # The scope glob's directory exists, but the tick matched zero
@@ -1429,7 +1483,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
 
         ingest_settings(
             reason="registry_watcher_startup",
-            vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
+            vault_root=cfg.vault_path,
         )
     except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
         logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)

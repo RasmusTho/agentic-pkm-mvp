@@ -40,6 +40,7 @@ def store(tmp_path: Path) -> CkmStore:
 
 def _capability(store: CkmStore, name: str = "Retrieval"):
     return store.upsert_capability(
+        identity_key=f"fixture:assessment:{name}",
         name=name,
         definition="Retrieve grounded context.",
         existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",
@@ -128,6 +129,29 @@ def test_every_dimension_cites_evidence(store: CkmStore) -> None:
         for citation in assessment.citations[dimension]:
             assert CkmEvidenceEdge.from_row(citation["edge"]).validate().id == citation["edge_id"]
             assert CkmArtifact.from_row(citation["artifact"]).validate().id == citation["artifact_id"]
+
+
+def test_assessment_public_id_survives_real_rebuild_producer(
+    store: CkmStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capability = _capability(store)
+    _fully_evidenced(store, capability.id)
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    store.rebuild(retained_public_ids=store.active_public_ids())
+    store.set_watermark("docs", "docs-one")
+    store.set_watermark("source", "source-one")
+    rebuilt_capability = _capability(store)
+    _fully_evidenced(store, rebuilt_capability.id)
+    monkeypatch.setattr("app.builderops.ckm.store.utc_now", lambda: "2099-01-01T00:00:00Z")
+
+    assert assess_capabilities(store).assessed == 1
+    rebuilt = store.latest_assessment_for_capability(rebuilt_capability.id)
+    assert rebuilt is not None
+    assert rebuilt.asserted_at != first.asserted_at
+    assert rebuilt.public_id == first.public_id
 
 
 def test_aggregate_transparent_and_min_capped(store: CkmStore) -> None:
@@ -239,9 +263,12 @@ def test_staleness_detectable_from_projection_read_path(store: CkmStore) -> None
     assert stale.assessment.id == first.id
     assert stale.stale_relative_to_evidence is True
     watermark_only_run = assess_capabilities(store)
-    assert watermark_only_run.assessed == 0
-    assert watermark_only_run.skipped == 1
-    assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is True
+    assert watermark_only_run.assessed == 1
+    assert watermark_only_run.skipped == 0
+    watermark_refresh = store.latest_assessment_for_capability(capability.id)
+    assert watermark_refresh is not None
+    assert watermark_refresh.id != first.id
+    assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is False
 
     _edge(
         store,
@@ -254,7 +281,7 @@ def test_staleness_detectable_from_projection_read_path(store: CkmStore) -> None
     second_run = assess_capabilities(store)
     history = store.list_assessments_for_capability(capability.id)
     assert second_run.assessed == 1
-    assert len(history) == 2
+    assert len(history) == 3
     assert history[0].id == first.id
     assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is False
 
@@ -311,6 +338,123 @@ def test_artifact_or_watermark_change_reassesses(store: CkmStore) -> None:
     assert len(history) == 2
     assert history[0].edge_fingerprint != history[1].edge_fingerprint
     assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is False
+
+
+def test_equal_scores_with_replaced_evidence_append_distinct_assessments(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    first_edge = _edge(
+        store,
+        capability.id,
+        source_ref="docs/FIRST.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+    )
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    store.delete_evidence_edge(first_edge.id)
+    _edge(
+        store,
+        capability.id,
+        source_ref="docs/SECOND.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+    )
+    assert assess_capabilities(store).assessed == 1
+    history = store.list_assessments_for_capability(capability.id)
+
+    assert len(history) == 2
+    assert history[0].scores == history[1].scores
+    assert history[0].public_id != history[1].public_id
+    assert history[0].edge_fingerprint != history[1].edge_fingerprint
+
+
+def test_equal_scores_with_changed_artifact_state_append_distinct_assessments(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    edge = _edge(
+        store,
+        capability.id,
+        source_ref="docs/STATE.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+    )
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    artifact = store.upsert_artifact(
+        source_ref="docs/STATE.md",
+        artifact_kind="document",
+        source="fixture",
+        watermark="wm:docs/STATE.md",
+        provenance='{"payload_summary":"State: current v2"}',
+    )
+    assert artifact.public_id == first.citations["documentation_quality"][0]["artifact"][
+        "public_id"
+    ]
+    assert assess_capabilities(store).assessed == 1
+    second = store.latest_assessment_for_capability(capability.id)
+
+    assert second is not None
+    assert edge.public_id == second.citations["documentation_quality"][0]["edge"]["public_id"]
+    assert second.scores == first.scores
+    assert second.public_id != first.public_id
+    assert second.edge_fingerprint != first.edge_fingerprint
+
+
+def test_formula_unselected_evidence_appends_distinct_assessment(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    _edge(
+        store,
+        capability.id,
+        source_ref="docs/DIAGRAM.md",
+        artifact_kind="diagram",
+        evidence_kind="diagram",
+        dimension="test_completeness",
+    )
+
+    assert assess_capabilities(store).assessed == 1
+    second = store.latest_assessment_for_capability(capability.id)
+    assert second is not None
+    assert second.scores == first.scores
+    assert second.citations == first.citations
+    assert second.public_id != first.public_id
+    assert second.edge_fingerprint != first.edge_fingerprint
+
+
+def test_changed_measurement_watermark_appends_distinct_assessment(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    _fully_evidenced(store, capability.id)
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    store.set_watermark("docs", "docs-two")
+    assert assess_capabilities(store).assessed == 1
+    second = store.latest_assessment_for_capability(capability.id)
+
+    assert second is not None
+    assert second.scores == first.scores
+    assert second.citations == first.citations
+    assert second.watermark_set != first.watermark_set
+    assert second.public_id != first.public_id
+    assert second.edge_fingerprint != first.edge_fingerprint
 
 
 def test_historical_citations_survive_edge_change_and_artifact_cleanup(
@@ -547,6 +691,9 @@ def test_schema_v2_assessment_migrates_with_legacy_formula_provenance(tmp_path: 
             f"INSERT INTO ckm_assessment ({','.join(columns)}) VALUES ({','.join('?' for _ in values)})",
             values,
         )
+        conn.execute("DROP TABLE ckm_identity_successor")
+        conn.execute("DROP TABLE ckm_public_identity")
+        conn.execute("DROP TABLE ckm_state")
 
     store.ensure_schema()
     migrated = store.latest_assessment_for_capability(capability.id)
@@ -610,6 +757,7 @@ def test_live_retrieval_outscores_planned_context(tmp_path: Path) -> None:
 def test_assessment_has_no_capability_name_or_lifecycle_prior(store: CkmStore) -> None:
     first = _capability(store, "Retrieval")
     second = store.upsert_capability(
+        identity_key="fixture:assessment:planned-neutral-twin",
         name="Planned neutral twin",
         definition=first.definition,
         existence_provenance="fixture:neutral",

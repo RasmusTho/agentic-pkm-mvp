@@ -64,7 +64,7 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
 
     result = _commit(store, envelope, lease=lease)
     assert result.state == "effect_pending"
-    assert store.readiness() == {"authority_epoch": 1, "schema_version": 1}
+    assert store.readiness() == {"authority_epoch": 1, "schema_version": 2}
     assert store.authority_counts(envelope.repository) == {
         "tasks": 1,
         "attempts": 0,
@@ -74,6 +74,15 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
         "idempotency": before["idempotency"] + 1,
         "outbox": 1,
     }
+
+
+def test_worker_heartbeat_is_database_backed(control_plane_store, envelope) -> None:
+    control_plane_store.write_service_heartbeat(service_name="outbox-worker")
+    heartbeat = control_plane_store.service_heartbeat("outbox-worker")
+    assert heartbeat is not None
+    assert heartbeat["service_name"] == "outbox-worker"
+    assert heartbeat["state"] == "running"
+    assert heartbeat["observed_at"] is not None
 
 
 def test_idempotency_replay_and_conflict(control_plane_store, envelope) -> None:

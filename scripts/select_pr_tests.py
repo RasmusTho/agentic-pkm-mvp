@@ -182,6 +182,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # its CLI regressions live in tests/watcher (same single-file
             # granularity as runtime_health's app/cli/health.py).
             "app/cli/watcher.py",
+            # The scripted vault UAT bootstrap mutates watcher ingest scope
+            # and runs the watcher path; keep its CLI contract in the same
+            # subsystem instead of failing closed as an unowned app module.
+            "app/cli/uat.py",
             "scripts/run_live_watcher.sh",
             "tests/watcher/",
             "tests/sync/",
@@ -189,7 +193,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_watcher_registry_e2e.py",
             "tests/e2e/test_panel_watcher_e2e.py",
         ),
-        ("tests/watcher", "tests/sync", *E2E_TARGETS["watcher_sync"]),
+        (
+            "tests/watcher",
+            "tests/sync",
+            "tests/cli/test_uat_seed_cli.py",
+            *E2E_TARGETS["watcher_sync"],
+        ),
     ),
     (
         "runtime_health",
@@ -205,6 +214,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/health/",
             "tests/invariants/test_health_probe.py",
             "tests/invariants/test_health_heartbeat_visibility.py",
+            # /app/runtime container-writability contract (#3047): no app/
+            # module owns it exclusively (it probes the Dockerfile plus the
+            # ask_synthesis receipt path as one example writer), so its own
+            # suite membership is the only available trigger.
+            "tests/invariants/test_receipt_surface_writable.py",
             "docs/OBSERVABILITY_STABILIZATION/",
         ),
         (
@@ -510,8 +524,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "ops",
+        ("app/ops/", "tests/ops/"),
+        ("tests/ops",),
+    ),
+    (
         "ops_deploy",
-        ("scripts/", "ops/", "config/deploy/", "tests/ops/", "tests/scripts/", "tests/deploy/"),
+        ("scripts/", "ops/", "config/deploy/", "tests/scripts/", "tests/deploy/"),
         ("tests/ops", "tests/scripts", "tests/deploy"),
     ),
     (

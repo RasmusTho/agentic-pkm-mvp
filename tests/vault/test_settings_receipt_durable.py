@@ -16,13 +16,20 @@ This test asserts:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from textwrap import dedent
+
+import pytest
 
 from app.events.types import SETTINGS_WRITE_RECEIPT
 from app.receipts.settings_receipts import (
     SettingsReceiptQuery,
     query_settings_receipts,
+)
+from app.receipts.settings_write import (
+    durable_settings_write_receipt_exists,
+    emit_settings_write_receipt,
 )
 from app.settings import compiler
 from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
@@ -113,6 +120,179 @@ def test_receipt_survives_restart(tmp_path: Path, monkeypatch) -> None:
     assert len(empty.rows) == 0
 
 
+def test_required_receipt_fsyncs_before_return(tmp_path: Path, monkeypatch) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    fsync_calls: list[int] = []
+    monkeypatch.setattr(
+        "app.receipts.settings_write.os.fsync", lambda descriptor: fsync_calls.append(descriptor)
+    )
+
+    emit_settings_write_receipt(
+        SettingsWriteReceipt(
+            key="settings.location",
+            value={"canonical": "settings"},
+            surface="migration",
+            actor="operator",
+        ),
+        require_durable=True,
+    )
+
+    assert fsync_calls
+    assert outbox_path.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_required_receipt_appends_each_record_with_one_os_write(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    real_write = os.write
+    writes: list[bytes] = []
+
+    def _record_write(descriptor: int, payload: bytes) -> int:
+        writes.append(payload)
+        return real_write(descriptor, payload)
+
+    monkeypatch.setattr("app.receipts.settings_write.os.write", _record_write)
+
+    emit_settings_write_receipt(
+        SettingsWriteReceipt(
+            key="settings.location",
+            value={"canonical": "settings"},
+            surface="migration",
+            actor="operator",
+        ),
+        require_durable=True,
+    )
+
+    assert len(writes) == 1
+    assert writes[0].endswith(b"\n")
+
+
+def test_required_receipt_fsyncs_full_fresh_parent_chain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "fresh" / "nested" / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    real_open = os.open
+    opened_directories: list[Path] = []
+
+    def record_open(path, flags, *args):
+        candidate = Path(path)
+        if candidate.is_dir():
+            opened_directories.append(candidate)
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr("app.receipts.settings_write.os.open", record_open)
+
+    emit_settings_write_receipt(
+        SettingsWriteReceipt(
+            key="settings.location",
+            value={"canonical": "settings"},
+            surface="migration",
+            actor="operator",
+        ),
+        require_durable=True,
+    )
+
+    assert outbox_path.parent in opened_directories
+    assert outbox_path.parent.parent in opened_directories
+    assert tmp_path in opened_directories
+
+
+def test_operation_scoped_receipt_has_exact_durable_readback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    receipt = SettingsWriteReceipt(
+        key="ingest.override.include_folders",
+        value=["Test"],
+        old_value=None,
+        new_value=["Test"],
+        file=str(tmp_path / "settings" / "ingest.override.md"),
+        surface="uat-bootstrap",
+        actor="uat-seed",
+        operation_id="uat-operation:0",
+    )
+
+    assert durable_settings_write_receipt_exists(receipt) is False
+    emit_settings_write_receipt(receipt, require_durable=True)
+    assert durable_settings_write_receipt_exists(receipt) is True
+
+    different_payload = SettingsWriteReceipt(
+        key=receipt.key,
+        value=["Other"],
+        old_value=receipt.old_value,
+        new_value=["Other"],
+        file=receipt.file,
+        surface=receipt.surface,
+        actor=receipt.actor,
+        operation_id=receipt.operation_id,
+    )
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(different_payload)
+
+    different_metadata = SettingsWriteReceipt(
+        key=receipt.key,
+        value=receipt.value,
+        old_value=receipt.old_value,
+        new_value=receipt.new_value,
+        file=receipt.file,
+        surface=receipt.surface,
+        actor=receipt.actor,
+        operation_id=receipt.operation_id,
+        timestamp="2099-01-01T00:00:00+00:00",
+        is_runtime_gating=True,
+    )
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(different_metadata)
+
+    emit_settings_write_receipt(different_payload, require_durable=True)
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(receipt)
+
+
+def test_duplicate_exact_operation_receipts_fail_loud(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    receipt = SettingsWriteReceipt(
+        key="ingest.override.include_folders",
+        value=["Test"],
+        surface="uat-bootstrap",
+        actor="uat-seed",
+        operation_id="duplicate-operation:0",
+    )
+
+    emit_settings_write_receipt(receipt, require_durable=True)
+    emit_settings_write_receipt(receipt, require_durable=True)
+
+    with pytest.raises(RuntimeError, match="operation_id collision"):
+        durable_settings_write_receipt_exists(receipt)
+
+
+def test_durable_receipt_readback_requires_operation_identity(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    receipt = SettingsWriteReceipt(
+        key="settings.location",
+        value="settings",
+        surface="migration",
+        actor="operator",
+    )
+
+    try:
+        durable_settings_write_receipt_exists(receipt)
+    except ValueError as exc:
+        assert "operation_id" in str(exc)
+    else:
+        raise AssertionError("readback without an operation identity must fail closed")
+
+
 def test_non_runtime_gating_write_also_durable(tmp_path: Path, monkeypatch) -> None:
     """Durability is unconditional on every governed write, not only runtime-gating keys
     (mirrors the existing in-memory receipt behavior)."""
@@ -138,7 +318,7 @@ def _write_settings_source(path: Path, body: str) -> None:
 
 def test_autoheal_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
     outbox_path = tmp_path / "outbox.jsonl"
-    settings_dir = tmp_path / "vault" / "@Settings"
+    settings_dir = tmp_path / "vault" / "settings"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
@@ -168,7 +348,7 @@ def test_autoheal_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
 
 def test_autoheal_reference_only_writeback_receipted(tmp_path: Path, monkeypatch) -> None:
     outbox_path = tmp_path / "outbox.jsonl"
-    settings_dir = tmp_path / "vault" / "@Settings"
+    settings_dir = tmp_path / "vault" / "settings"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")

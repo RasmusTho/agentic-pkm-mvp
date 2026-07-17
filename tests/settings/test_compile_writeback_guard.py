@@ -17,6 +17,7 @@ from textwrap import dedent
 import pytest
 from click.testing import CliRunner
 
+import app.cli as cli_module
 from app.cli import cli
 from app.settings import compiler
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -72,7 +73,7 @@ def _seed_vault_needing_auto_heal(vault: Path) -> None:
 
 
 def test_blocked_compile_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    vault = tmp_path / "vault" / "@Settings"
+    vault = tmp_path / "vault" / "settings"
     runtime_dir = tmp_path / "runtime" / "settings"
     _seed_vault_needing_auto_heal(vault)
 
@@ -84,6 +85,7 @@ def test_blocked_compile_writes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(compiler, "VAULT", vault)
     monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    monkeypatch.setenv("VAULT_ROOT", str(vault.parent))
     monkeypatch.setattr(
         DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "safe_mode", "reason": "test-blocked"}
     )
@@ -100,3 +102,130 @@ def test_blocked_compile_writes_nothing(tmp_path: Path, monkeypatch: pytest.Monk
     # unchanged from before the blocked compile attempt.
     after = {p: p.read_text(encoding="utf-8") for p in sorted(vault.glob("*.md"))}
     assert after == before
+
+
+def test_legacy_compat_sources_are_read_only_during_auto_heal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    legacy = vault_root / "@Settings"
+    _seed_vault_needing_auto_heal(legacy)
+    before = {
+        path: path.read_bytes() for path in sorted(legacy.glob("*.md"))
+    }
+    monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
+
+    compiler.compile_all(auto_heal=True, vault_root=vault_root)
+
+    assert {path: path.read_bytes() for path in before} == before
+    assert not (vault_root / "settings").exists()
+
+
+def test_settings_watch_compiles_the_watched_settings_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watch_path = tmp_path / "custom-vault" / "settings"
+    watch_path.mkdir(parents=True)
+    legacy_watch_path = watch_path.parent / "@Settings"
+    legacy_watch_path.mkdir()
+    compile_calls: list[dict[str, object]] = []
+    watch_calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "compile_all",
+        lambda **kwargs: compile_calls.append(kwargs),
+    )
+
+    def _watch_once(*args: str, **_kwargs: object):
+        watch_calls.append(args)
+        yield [("modified", str(watch_path / "global.md"))]
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_module, "watch", _watch_once)
+
+    result = CliRunner().invoke(
+        cli,
+        ["settings", "watch", "--path", str(watch_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert compile_calls == [
+        {"auto_heal": False, "vault_root": watch_path.parent.resolve()},
+        {"auto_heal": False, "vault_root": watch_path.parent.resolve()},
+    ]
+    assert watch_calls == [(str(watch_path.resolve()), str(legacy_watch_path))]
+
+
+def test_settings_compile_reads_legacy_only_selected_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "legacy-vault"
+    legacy = vault_root / "@Settings" / "global.md"
+    _write_md(
+        legacy,
+        """
+        ---
+        uuid: legacy-global
+        ---
+        ```yaml settings
+        enable: false
+        log_level: ERROR
+        ```
+        """,
+    )
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
+    captured: list[object] = []
+    real_compile = compiler.compile_all
+
+    def _compile(**kwargs: object):
+        bundle = real_compile(**kwargs)  # type: ignore[arg-type]
+        captured.append(bundle)
+        return bundle
+
+    monkeypatch.setattr(cli_module, "compile_all", _compile)
+
+    result = CliRunner().invoke(
+        cli, ["settings", "compile", "--vault-root", str(vault_root)]
+    )
+
+    assert result.exit_code == 0, result.output
+    bundle = captured[0]
+    assert bundle.global_.enable is False  # type: ignore[union-attr]
+    assert bundle.global_.log_level == "ERROR"  # type: ignore[union-attr]
+
+
+def test_settings_watch_starts_with_legacy_only_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "legacy-vault"
+    canonical = vault_root / "settings"
+    legacy = vault_root / "@Settings"
+    legacy.mkdir(parents=True)
+    (legacy / "global.md").write_text("# legacy\n", encoding="utf-8")
+    compile_calls: list[dict[str, object]] = []
+    watch_calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        cli_module,
+        "compile_all",
+        lambda **kwargs: compile_calls.append(kwargs),
+    )
+
+    def _watch_once(*paths: str, **_kwargs: object):
+        watch_calls.append(paths)
+        raise KeyboardInterrupt
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(cli_module, "watch", _watch_once)
+
+    result = CliRunner().invoke(
+        cli,
+        ["settings", "watch", "--path", str(canonical)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert compile_calls == [{"auto_heal": False, "vault_root": vault_root.resolve()}]
+    assert watch_calls == [(str(legacy),)]

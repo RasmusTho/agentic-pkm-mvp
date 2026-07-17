@@ -859,13 +859,13 @@ def _live_takeover_authority_matches(
     )
 
 
-def _terminal_current_head_replay_matches(
+def _current_head_replay_authority_matches(
     observation: _LiveVerificationObservation | None,
     request: Mapping[str, object],
     candidate_request: Mapping[str, object],
     candidate_supporting: Sequence[int],
 ) -> bool:
-    """Recognize the authenticated current-head identity of a terminal chain."""
+    """Require exact durable and live authority for current-head replay."""
 
     incoming_supporting = request.get("supporting_issues")
     incoming_closing = _request_closing_authority(request)
@@ -1391,7 +1391,15 @@ class VerificationDispatchLedger:
                     existing, existing_request
                 )
                 incoming_closing = _request_closing_authority(request)
-                if set(incoming_closing) != set(stored_closing):
+                stored_supporting = _validated_supporting_authority(
+                    existing, existing_request
+                )
+                incoming_supporting = request.get("supporting_issues")
+                if (
+                    not isinstance(incoming_supporting, list)
+                    or set(incoming_supporting) != set(stored_supporting)
+                    or set(incoming_closing) != set(stored_closing)
+                ):
                     raise ValueError("verification idempotency authority conflict")
                 active_status = existing["status"] in {
                     "queued",
@@ -1403,7 +1411,8 @@ class VerificationDispatchLedger:
                     existing["repository"] != request["repository"]
                     or existing["pr_number"] != request["pr_number"]
                     or existing["stage"] != request["stage"]
-                    or existing["head_sha"] != request["current_head_sha"]
+                    or existing_request["current_head_sha"]
+                    != request["current_head_sha"]
                 ):
                     raise ValueError("verification idempotency authority conflict")
                 if existing_request.get("linked_issue") != request.get("linked_issue"):
@@ -1412,11 +1421,7 @@ class VerificationDispatchLedger:
                             "verification canonical run governing issue mismatch"
                         )
                     raise ValueError("verification idempotency authority conflict")
-                if (
-                    active_status
-                    and existing["current_head_sha"]
-                    != request.get("current_head_sha")
-                ):
+                if existing["current_head_sha"] != request.get("current_head_sha"):
                     raise ValueError(
                         "verification artifact head does not match canonical run"
                     )
@@ -1507,6 +1512,38 @@ class VerificationDispatchLedger:
                     assert reopened is not None
                     conn.commit()
                     return _run(reopened)
+                candidate_supporting = _validated_supporting_authority(
+                    candidate, candidate_request
+                )
+                candidate_closing = _validated_closing_authority(
+                    candidate, candidate_request
+                )
+                incoming_supporting = request.get("supporting_issues")
+                incoming_closing = _request_closing_authority(request)
+                if (
+                    not isinstance(incoming_supporting, list)
+                    or set(incoming_supporting) != set(candidate_supporting)
+                    or set(incoming_closing) != set(candidate_closing)
+                ):
+                    raise ValueError(
+                        "verification active replay authority does not match canonical run"
+                    )
+                if live_observation is not None:
+                    if not _canonical_chain_token_matches(
+                        conn, canonical_chain_token, request
+                    ):
+                        raise ValueError(
+                            "verification canonical authority changed during live observation"
+                        )
+                    if not _current_head_replay_authority_matches(
+                        live_observation,
+                        request,
+                        candidate_request,
+                        candidate_supporting,
+                    ):
+                        raise ValueError(
+                            "verification active replay authority does not match canonical run"
+                        )
                 conn.commit()
                 return _run(candidate)
             terminal_candidates = list(
@@ -1537,7 +1574,7 @@ class VerificationDispatchLedger:
                         raise ValueError(
                             "verification canonical authority changed during live observation"
                         )
-                    if not _terminal_current_head_replay_matches(
+                    if not _current_head_replay_authority_matches(
                         live_observation,
                         request,
                         candidate_request,

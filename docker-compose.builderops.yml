@@ -1,0 +1,171 @@
+name: builderops-control-plane
+
+x-builderops-image: &builderops-image
+  image: ${BUILDEROPS_IMAGE_REPOSITORY:?BuilderOps image repository is required}@${BUILDEROPS_IMAGE_DIGEST:?BuilderOps immutable image digest is required}
+  restart: unless-stopped
+  networks: [builderops-internal]
+  secrets:
+    - builderops_database_url
+
+services:
+  db:
+    # This separately built pin is PostgreSQL 16 plus WAL-G. It is not the
+    # Product pgvector image and must be immutable for the same reason as the
+    # API pin.
+    image: ${BUILDEROPS_POSTGRES_IMAGE_REPOSITORY:?BuilderOps PostgreSQL image repository is required}@${BUILDEROPS_POSTGRES_IMAGE_DIGEST:?BuilderOps PostgreSQL immutable image digest is required}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: builderops
+      POSTGRES_USER: builderops_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/builderops_database_owner_password
+      WALG_S3_PREFIX: ${BUILDEROPS_WALG_S3_PREFIX:?Independent WAL archive target is required}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/builderops_wal_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/builderops_wal_secret_access_key
+      WALG_LIBSODIUM_KEY_FILE: /run/secrets/builderops_wal_encryption_key
+      BUILDEROPS_DATABASE_APP_PASSWORD_FILE: /run/secrets/builderops_database_app_password
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/builderops-postgresql.conf
+    volumes:
+      - builderops-pgdata:/var/lib/postgresql/data
+      - ./config/builderops/postgresql.conf:/etc/postgresql/builderops-postgresql.conf:ro
+      - ./scripts/builderops/wal_archive.sh:/app/scripts/builderops/wal_archive.sh:ro
+      - ./scripts/builderops/init_roles.sh:/docker-entrypoint-initdb.d/10-builderops-roles.sh:ro
+    secrets:
+      - builderops_database_owner_password
+      - builderops_database_app_password
+      - builderops_wal_access_key_id
+      - builderops_wal_secret_access_key
+      - builderops_wal_encryption_key
+    networks: [builderops-internal, builderops-recovery-egress]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U builderops_owner -d builderops"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *builderops-image
+    restart: "no"
+    command: ["python", "-m", "app.builderops.control_plane.migrate"]
+    environment:
+      BUILDEROPS_DATABASE_URL_FILE: /run/secrets/builderops_database_owner_url
+    secrets: !override
+      - builderops_database_owner_url
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *builderops-image
+    command: ["uvicorn", "app.builderops.control_plane.service:production_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      BUILDEROPS_DATABASE_URL_FILE: /run/secrets/builderops_database_url
+      BUILDEROPS_CREDENTIAL_MANIFEST_FILE: /run/secrets/builderops_api_credentials
+      BUILDEROPS_RECOVERY_TARGET_FILE: /run/secrets/builderops_recovery_target
+      BUILDEROPS_PROBE_TOKEN_FILE: /run/secrets/builderops_probe_token
+    secrets: !override
+      - builderops_database_url
+      - builderops_api_credentials
+      - builderops_recovery_target
+      - builderops_probe_token
+    ports:
+      - "127.0.0.1:${BUILDEROPS_API_PORT:-18100}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.builderops.control_plane.health_probe", "liveness"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  worker:
+    <<: *builderops-image
+    command: ["python", "-m", "app.builderops.control_plane.worker"]
+    environment:
+      BUILDEROPS_DATABASE_URL_FILE: /run/secrets/builderops_database_url
+      BUILDEROPS_EXECUTOR_CREDENTIAL_MAP_FILE: /run/secrets/builderops_executor_credentials
+    secrets: !override
+      - builderops_database_url
+      - builderops_executor_credentials
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.builderops.control_plane.health_probe", "worker"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+
+  backup:
+    image: ${BUILDEROPS_POSTGRES_IMAGE_REPOSITORY:?BuilderOps PostgreSQL image repository is required}@${BUILDEROPS_POSTGRES_IMAGE_DIGEST:?BuilderOps PostgreSQL immutable image digest is required}
+    profiles: [ops]
+    entrypoint: ["/bin/bash", "/app/scripts/builderops/backup.sh"]
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      PGHOST: db
+      PGDATABASE: builderops
+      PGUSER: builderops_owner
+      PGPASSWORD_FILE: /run/secrets/builderops_database_owner_password
+      BUILDEROPS_BACKUP_RETAIN_FULL: ${BUILDEROPS_BACKUP_RETAIN_FULL:-14}
+      WALG_S3_PREFIX: ${BUILDEROPS_WALG_S3_PREFIX:?Independent WAL archive target is required}
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/builderops_wal_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/builderops_wal_secret_access_key
+      WALG_LIBSODIUM_KEY_FILE: /run/secrets/builderops_wal_encryption_key
+    volumes:
+      - builderops-pgdata:/var/lib/postgresql/data:ro
+      - ./scripts/builderops/backup.sh:/app/scripts/builderops/backup.sh:ro
+    secrets:
+      - builderops_database_owner_password
+      - builderops_wal_access_key_id
+      - builderops_wal_secret_access_key
+      - builderops_wal_encryption_key
+    networks: [builderops-internal, builderops-recovery-egress]
+    depends_on:
+      db:
+        condition: service_healthy
+
+networks:
+  builderops-internal:
+    name: builderops-control-plane-internal
+    internal: true
+  # Only recovery producers receive outbound connectivity to the independent
+  # object store. API, migration, and worker traffic remains internal-only.
+  builderops-recovery-egress:
+    name: builderops-control-plane-recovery-egress
+
+volumes:
+  builderops-pgdata:
+    external: true
+    name: builderops-control-plane_pgdata
+
+secrets:
+  builderops_database_owner_password:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/database-owner-password
+  builderops_database_owner_url:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/database-owner-url
+  builderops_database_app_password:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/database-app-password
+  builderops_database_url:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/database-app-url
+  builderops_api_credentials:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/api-credentials.json
+  builderops_executor_credentials:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/executor-credentials.json
+  builderops_recovery_target:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/recovery-target.json
+  builderops_probe_token:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/probe-token
+  builderops_wal_access_key_id:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/wal-access-key-id
+  builderops_wal_secret_access_key:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/wal-secret-access-key
+  builderops_wal_encryption_key:
+    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/wal-encryption-key

@@ -12,14 +12,14 @@ source_ref: "vault://settings/Overview.md"
 Detta är en **läsbar** översikt för människor. Den **kanoniska** konfigurationen ligger i:
 
 ```
-vault/_system/settings/system-settings.yaml
+vault/settings/system-settings.md
 ```
 
-Rekommendation: öppna YAML-filen ovan när du faktiskt vill ändra värden. Den här sidan länkar vidare, ger förklaringar och kan visa dashboards (Dataview).
+Rekommendation: öppna Markdown-filen ovan när du faktiskt vill ändra värden. Den här sidan länkar vidare, ger förklaringar och kan visa dashboards (Dataview).
 
 ## Snabbnavigering
 
-- Kanon: [[../_system/settings/system-settings.yaml]]
+- Kanon: [[system-settings.md]]
 - Eventkatalog: [[../_system/events/]]
 - Scheman: [[../_system/schemas/]]
 - Arbetsyta: [[../Workbench/]]
