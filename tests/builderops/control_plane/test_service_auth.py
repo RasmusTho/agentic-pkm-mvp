@@ -509,7 +509,7 @@ def test_normal_client_cannot_use_executor_or_cross_repo_scope(tmp_path: Path) -
         json={
             "envelope": _lease_payload()["envelope"],
             "operation_key": "outbox-3790",
-            "worker_id": "worker:demerzel",
+            "worker_id": "worker:test-executor",
             "claim_ttl_seconds": 300,
         },
     )

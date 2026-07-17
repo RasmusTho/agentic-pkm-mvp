@@ -24,7 +24,7 @@
 #
 # Credentials are host-owned and never inlined here or committed to the repo:
 #   BUILDEROPS_API_URL         — control-plane base URL (required), e.g.
-#                                https://demerzel.<tailnet>.ts.net:18700
+#                                https://<builderops-host>.<tailnet>.ts.net:<port>
 #   BUILDEROPS_API_TOKEN_FILE  — path to a host secret file holding the scoped
 #                                bearer token (preferred), OR
 #   BUILDEROPS_API_TOKEN       — the scoped bearer token in the environment

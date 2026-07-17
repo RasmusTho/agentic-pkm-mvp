@@ -395,7 +395,8 @@ def create_app(
     promotion_write = _credential_dependency(credentials, rate_limiter, "promotions:write")
     receipt_read = _credential_dependency(credentials, rate_limiter, "receipts:read")
     # The outbox/executor scope is the privileged capability a normal MacBook
-    # client credential never holds; only the Demerzel executor is granted it.
+    # client credential never holds; only the host-privileged executor is
+    # granted it.
     outbox_write = _credential_dependency(credentials, rate_limiter, "outbox:write")
 
     async def require_authority_epoch(

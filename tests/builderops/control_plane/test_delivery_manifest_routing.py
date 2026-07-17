@@ -24,7 +24,7 @@ from app.builderops.control_plane.routing import (
 )
 
 REPO_A = "RasmusTho/agentic-pkm-mvp"
-REPO_B = "RasmusTho/bifrost"
+REPO_B = "RasmusTho/example-second-repo"
 
 
 def _doc(repository: str, policy_tag: str) -> dict[str, object]:
