@@ -77,6 +77,16 @@ def test_watcher_cli_entrypoint_is_owned_by_watcher_sync() -> None:
     assert "watcher_sync" in selection.subsystems
     assert "tests/watcher" in selection.targets
 
+
+def test_uat_cli_routes_to_watcher_sync() -> None:
+    selection = select_tests(["app/cli/uat.py"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert "watcher_sync" in selection.subsystems
+    assert "tests/watcher" in selection.targets
+    assert "tests/cli/test_uat_seed_cli.py" in selection.targets
+
 def test_health_contract_module_is_owned_by_runtime_health() -> None:
     selection = select_tests(["app/health_contract.py"])
 

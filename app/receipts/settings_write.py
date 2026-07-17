@@ -30,11 +30,27 @@ class ReceiptDurabilityUncertainError(RuntimeError):
 
 
 def _fsync_parent(path: Path) -> None:
-    parent_descriptor = os.open(path.parent, os.O_RDONLY)
+    """Durably link the file's full parent chain, including fresh nested dirs."""
+
+    parent = path.parent
+    while True:
+        parent_descriptor = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
+        if parent.parent == parent:
+            break
+        parent = parent.parent
+
+
+def _confirm_file_and_parent_durable(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
     try:
-        os.fsync(parent_descriptor)
+        os.fsync(descriptor)
     finally:
-        os.close(parent_descriptor)
+        os.close(descriptor)
+    _fsync_parent(path)
 
 
 @dataclass(frozen=True)
@@ -50,6 +66,7 @@ class SettingsWriteReceipt:
     file: str | None = None
     old_value: Any = None
     new_value: Any = field(default=_NEW_VALUE_UNSET, repr=False)
+    operation_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.new_value is _NEW_VALUE_UNSET:
@@ -77,6 +94,7 @@ def emit_settings_write_receipt(
                 "file": receipt.file,
                 "surface": receipt.surface,
                 "actor": receipt.actor,
+                "operation_id": receipt.operation_id,
                 "timestamp": receipt.timestamp,
                 "is_runtime_gating": receipt.is_runtime_gating,
             },
@@ -138,6 +156,59 @@ def emit_settings_write_receipt(
         write_outbox_event(envelope, idempotency_key=idempotency_key)
     except Exception:
         logger.debug("settings.write.receipt db outbox write skipped/failed", exc_info=True)
+
+
+def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool:
+    """Return whether the exact operation-scoped receipt is in the durable JSONL sink."""
+
+    if not receipt.operation_id:
+        raise ValueError("durable receipt readback requires operation_id")
+
+    from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
+
+    outbox_path = get_index_outbox_path()
+    operation_id_collision = False
+    exact_match_count = 0
+    try:
+        with outbox_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("event") != SETTINGS_WRITE_RECEIPT:
+                    continue
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("operation_id") != receipt.operation_id:
+                    continue
+                exact_match = all(
+                    payload.get(key) == expected
+                    for key, expected in {
+                        "key": receipt.key,
+                        "value": receipt.value,
+                        "old_value": receipt.old_value,
+                        "new_value": receipt.new_value,
+                        "file": receipt.file,
+                        "surface": receipt.surface,
+                        "actor": receipt.actor,
+                        "timestamp": receipt.timestamp,
+                        "is_runtime_gating": receipt.is_runtime_gating,
+                    }.items()
+                )
+                if exact_match:
+                    exact_match_count += 1
+                else:
+                    operation_id_collision = True
+    except FileNotFoundError:
+        return False
+    if operation_id_collision or exact_match_count > 1:
+        raise RuntimeError("settings receipt operation_id collision")
+    if exact_match_count == 1:
+        _confirm_file_and_parent_durable(outbox_path)
+        return True
+    return False
 
 
 def emit_settings_write_receipts_for_changes(
@@ -205,6 +276,7 @@ def _flatten(values: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
 
 __all__ = [
     "SettingsWriteReceipt",
+    "durable_settings_write_receipt_exists",
     "emit_settings_write_receipt",
     "emit_settings_write_receipts_for_changes",
     "resolve_settings_receipt_old_value",

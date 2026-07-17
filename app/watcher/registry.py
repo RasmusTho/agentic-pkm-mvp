@@ -36,7 +36,7 @@ from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.vault.manager import VaultManager
 from app.vault.manager import iter_vault_markdown_files
-from app.vault.paths import get_vault_system_dir_rel
+from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.layout import load_layout
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
@@ -1027,7 +1027,9 @@ def _collect_changed_entries(
             continue
         if is_settings_control_path(
             rel,
-            configured_system_dir=get_vault_system_dir_rel(cfg.vault_path),
+            configured_system_dir=resolve_vault_system_dir_rel_or_default(
+                cfg.vault_path
+            ),
         ):
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             if settings_delta.values is not None:
@@ -1098,7 +1100,9 @@ def _emit_changed_entry(
     state.update_file_state(str(entry.rel_path), mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
     if is_settings_control_path(
         entry.rel_path,
-        configured_system_dir=get_vault_system_dir_rel(cfg.vault_path),
+        configured_system_dir=resolve_vault_system_dir_rel_or_default(
+            cfg.vault_path
+        ),
     ):
         return None
     should_skip, reason = _should_skip_changed_entry(spec=spec, state=state, last_seen=last_seen, now=now)

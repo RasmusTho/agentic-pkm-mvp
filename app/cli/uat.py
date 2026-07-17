@@ -1,18 +1,26 @@
 from __future__ import annotations
+import ctypes
+import fcntl
+import json
+import logging
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Tuple
+from uuid import uuid4
 
 import yaml
 
 from app.promotion.consumer import consume_promotion_intents
 from app.receipts.settings_write import (
+    ReceiptDurabilityUncertainError,
     SettingsWriteReceipt,
+    durable_settings_write_receipt_exists,
     emit_settings_write_receipt,
-    emit_settings_write_receipts_for_changes,
 )
 from app.settings.locations import canonical_settings_root, resolve_settings_file
 from app.testing.runtime_contract import failing_check_names, write_contract_report
@@ -24,6 +32,8 @@ SEED_SOURCE = Path(__file__).resolve().parents[2] / "docs" / "examples" / "vault
 DEFAULT_TARGET_SUBDIR = "Test"
 DEFAULT_FOLDER_NAME = "AgenticPKM-UAT"
 DEFAULT_MAX_NOTES = 50
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -142,6 +152,286 @@ def _normalize_unique_folders(values: list[object]) -> list[str]:
     return folders
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _ensure_durable_directory(path: Path, *, mode: int = 0o755) -> None:
+    """Create a directory chain and durably link every newly created entry."""
+
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    if not cursor.is_dir():
+        raise NotADirectoryError(cursor)
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=mode)
+        except FileExistsError:
+            if not directory.is_dir():
+                raise
+        _fsync_directory(directory)
+        _fsync_directory(directory.parent)
+
+
+@contextmanager
+def _settings_directory_lock(path: Path) -> Iterator[None]:
+    """Serialize repo-supported UAT settings writers without a lock artifact."""
+
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _atomic_rename_noreplace(source: Path, target: Path) -> None:
+    """Rename a same-filesystem file only when the target is still absent."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    target_bytes = os.fsencode(target)
+    if hasattr(libc, "renameatx_np"):
+        rename = libc.renameatx_np
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(-2, source_bytes, -2, target_bytes, 0x00000004)
+    elif hasattr(libc, "renameat2"):
+        rename = libc.renameat2
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(-100, source_bytes, -100, target_bytes, 0x00000001)
+    else:
+        raise RuntimeError("atomic no-replace publication requires renameatx_np or renameat2")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), str(source), str(target))
+
+
+def _transaction_paths(path: Path) -> tuple[Path, Path]:
+    transaction_dir = path.parent.parent / ".agentic-pkm" / "uat-settings-transactions"
+    return transaction_dir, transaction_dir / "ingest-override.json"
+
+
+def _write_transaction_marker(marker: Path, payload: dict[str, Any]) -> None:
+    _ensure_durable_directory(marker.parent, mode=0o700)
+    os.chmod(marker.parent, 0o700)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=marker.parent, prefix=f".{marker.name}.", suffix=".tmp"
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, marker)
+        _fsync_directory(marker.parent)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _receipt_payload(receipt: SettingsWriteReceipt) -> dict[str, Any]:
+    return {
+        "key": receipt.key,
+        "value": receipt.value,
+        "surface": receipt.surface,
+        "actor": receipt.actor,
+        "operation_id": receipt.operation_id,
+        "timestamp": receipt.timestamp,
+        "is_runtime_gating": receipt.is_runtime_gating,
+        "file": receipt.file,
+        "old_value": receipt.old_value,
+        "new_value": receipt.new_value,
+    }
+
+
+def _receipt_from_payload(payload: object) -> SettingsWriteReceipt:
+    if not isinstance(payload, dict):
+        raise RuntimeError("UAT settings transaction has invalid receipt payload")
+    required_strings = ("key", "surface", "actor", "operation_id", "timestamp")
+    if any(not isinstance(payload.get(key), str) for key in required_strings):
+        raise RuntimeError("UAT settings transaction has invalid receipt identity")
+    file_value = payload.get("file")
+    if file_value is not None and not isinstance(file_value, str):
+        raise RuntimeError("UAT settings transaction has invalid receipt file")
+    return SettingsWriteReceipt(
+        key=payload["key"],
+        value=payload.get("value"),
+        surface=payload["surface"],
+        actor=payload["actor"],
+        operation_id=payload["operation_id"],
+        timestamp=payload["timestamp"],
+        is_runtime_gating=bool(payload.get("is_runtime_gating", False)),
+        file=file_value,
+        old_value=payload.get("old_value"),
+        new_value=payload.get("new_value"),
+    )
+
+
+def _build_uat_receipts(
+    *,
+    transaction_id: str,
+    path: Path,
+    previous: dict[str, Any],
+    payload: dict[str, Any],
+    source_path: Path,
+) -> tuple[SettingsWriteReceipt, ...]:
+    old_value = previous.get("include_folders")
+    new_value = payload.get("include_folders")
+    if old_value != new_value:
+        return (
+            SettingsWriteReceipt(
+                key="ingest.override.include_folders",
+                value=new_value,
+                old_value=old_value,
+                new_value=new_value,
+                file=str(path),
+                surface="uat-bootstrap",
+                actor="uat-seed",
+                operation_id=f"{transaction_id}:0",
+            ),
+        )
+    return (
+        SettingsWriteReceipt(
+            key="ingest.override.__materialization__",
+            value=str(path),
+            old_value=str(source_path),
+            new_value=str(path),
+            file=str(path),
+            surface="uat-bootstrap",
+            actor="uat-seed",
+            operation_id=f"{transaction_id}:0",
+        ),
+    )
+
+
+def _owned_transaction_file(transaction_dir: Path, name: object) -> Path:
+    if not isinstance(name, str) or Path(name).name != name:
+        raise RuntimeError("UAT settings transaction has unsafe file name")
+    return transaction_dir / name
+
+
+def _same_inode(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samestat(left.stat(), right.stat())
+    except FileNotFoundError:
+        return False
+
+
+def _cleanup_transaction(
+    marker: Path, *, stage: Path | None = None, witness: Path | None = None
+) -> None:
+    for candidate in (stage, witness, marker):
+        if candidate is not None:
+            candidate.unlink(missing_ok=True)
+    _fsync_directory(marker.parent)
+
+
+def _reconcile_receipts(
+    marker: Path,
+    transaction: dict[str, Any],
+    receipts: tuple[SettingsWriteReceipt, ...],
+) -> None:
+    for receipt in receipts:
+        if durable_settings_write_receipt_exists(receipt):
+            continue
+        try:
+            emit_settings_write_receipt(receipt, require_durable=True)
+        except ReceiptDurabilityUncertainError:
+            if durable_settings_write_receipt_exists(receipt):
+                continue
+            raise
+        if not durable_settings_write_receipt_exists(receipt):
+            raise RuntimeError("durable UAT settings receipt failed readback")
+    transaction["state"] = "committed"
+    _write_transaction_marker(marker, transaction)
+
+
+def _reconcile_pending_transaction(path: Path) -> bool:
+    transaction_dir, marker = _transaction_paths(path)
+    if not marker.exists():
+        return False
+    try:
+        transaction = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("UAT settings transaction journal is corrupt") from exc
+    if not isinstance(transaction, dict) or transaction.get("version") != 1:
+        raise RuntimeError("UAT settings transaction journal has unsupported shape")
+    if transaction.get("target") != str(path):
+        raise RuntimeError("UAT settings transaction target mismatch")
+
+    stage = _owned_transaction_file(transaction_dir, transaction.get("stage"))
+    witness = _owned_transaction_file(transaction_dir, transaction.get("witness"))
+    raw_receipts = transaction.get("receipts")
+    if not isinstance(raw_receipts, list) or not raw_receipts:
+        raise RuntimeError("UAT settings transaction lacks receipt evidence")
+    receipts = tuple(_receipt_from_payload(item) for item in raw_receipts)
+    state = transaction.get("state")
+    if state == "prepared" and stage.exists():
+        if not witness.is_file():
+            raise RuntimeError("UAT settings prepared state lacks inode witness")
+        if _same_inode(path, witness):
+            raise RuntimeError("UAT settings prepared state is ambiguous")
+        if any(durable_settings_write_receipt_exists(item) for item in receipts):
+            raise RuntimeError("unpublished UAT settings transaction has a receipt")
+        transaction["state"] = "aborted"
+        _write_transaction_marker(marker, transaction)
+        _cleanup_transaction(marker, stage=stage, witness=witness)
+        return False
+    if state == "prepared":
+        raise RuntimeError("UAT settings prepared state is ambiguous")
+    if state == "publishing":
+        if not witness.is_file():
+            raise RuntimeError("UAT settings publication lacks inode witness")
+        if not _same_inode(path, witness):
+            raise RuntimeError("UAT settings publication state is ambiguous")
+        _fsync_directory(path.parent)
+        _fsync_directory(transaction_dir)
+        transaction["state"] = "published_receipt_pending"
+        _write_transaction_marker(marker, transaction)
+        state = "published_receipt_pending"
+    if state == "published_receipt_pending":
+        try:
+            _reconcile_receipts(marker, transaction, receipts)
+        except Exception as exc:
+            raise RuntimeError("UAT settings publication is receipt_pending") from exc
+    elif state == "committed":
+        if not all(durable_settings_write_receipt_exists(item) for item in receipts):
+            raise RuntimeError("committed UAT settings transaction lacks durable receipt")
+    elif state == "aborted":
+        if witness.is_file() and _same_inode(path, witness):
+            raise RuntimeError("aborted UAT settings transaction owns canonical inode")
+        if any(durable_settings_write_receipt_exists(item) for item in receipts):
+            raise RuntimeError("aborted UAT settings transaction has a receipt")
+        _cleanup_transaction(marker, stage=stage, witness=witness)
+        return False
+    else:
+        raise RuntimeError("UAT settings transaction has invalid state")
+    _cleanup_transaction(marker, stage=stage, witness=witness)
+    return True
+
+
 def _write_ingest_override(
     path: Path,
     payload: dict[str, Any],
@@ -158,65 +448,91 @@ def _write_ingest_override(
     if path.exists() and path.read_text(encoding="utf-8") == serialized:
         return
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_durable_directory(path.parent)
+    transaction_dir, marker = _transaction_paths(path)
+    _ensure_durable_directory(transaction_dir, mode=0o700)
+    os.chmod(transaction_dir, 0o700)
+    if marker.exists():
+        raise RuntimeError("pending UAT settings transaction must be reconciled first")
     descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+        dir=transaction_dir, prefix="stage-", suffix=".tmp"
     )
-    temporary_path = Path(temporary_name)
+    stage = Path(temporary_name)
+    witness = stage.with_name(f"{stage.name}.witness")
+    transaction_id = uuid4().hex
+    receipts = _build_uat_receipts(
+        transaction_id=transaction_id,
+        path=path,
+        previous=previous,
+        payload=payload,
+        source_path=source_path,
+    )
+    transaction = {
+        "version": 1,
+        "state": "prepared",
+        "transaction_id": transaction_id,
+        "target": str(path),
+        "stage": stage.name,
+        "witness": witness.name,
+        "receipts": [_receipt_payload(receipt) for receipt in receipts],
+    }
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(serialized)
             handle.flush()
             os.fsync(handle.fileno())
-        receipts = emit_settings_write_receipts_for_changes(
-            old_values=previous,
-            new_values=payload,
-            surface="uat-bootstrap",
-            actor="uat-seed",
-            file=path,
-            key_prefix="ingest.override",
-            flatten_nested=True,
-            require_durable=True,
-        )
-        if not receipts:
-            emit_settings_write_receipt(
-                SettingsWriteReceipt(
-                    key="ingest.override.__materialization__",
-                    value=str(path),
-                    old_value=str(source_path),
-                    new_value=str(path),
-                    file=str(path),
-                    surface="uat-bootstrap",
-                    actor="uat-seed",
-                ),
-                require_durable=True,
-            )
-        os.replace(temporary_path, path)
-        parent_descriptor = os.open(path.parent, os.O_RDONLY)
+        os.link(stage, witness)
+        _fsync_directory(transaction_dir)
+        _write_transaction_marker(marker, transaction)
+        had_canonical = path.exists()
+        transaction["state"] = "publishing"
+        _write_transaction_marker(marker, transaction)
         try:
-            os.fsync(parent_descriptor)
-        finally:
-            os.close(parent_descriptor)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+            if had_canonical:
+                os.replace(stage, path)
+            else:
+                _atomic_rename_noreplace(stage, path)
+        except Exception:
+            if stage.exists():
+                transaction["state"] = "aborted"
+                _write_transaction_marker(marker, transaction)
+                _cleanup_transaction(marker, stage=stage, witness=witness)
+            raise
+        _fsync_directory(path.parent)
+        _fsync_directory(transaction_dir)
+        transaction["state"] = "published_receipt_pending"
+        _write_transaction_marker(marker, transaction)
+        try:
+            _reconcile_receipts(marker, transaction, receipts)
+        except Exception as exc:
+            raise RuntimeError("UAT settings publication is receipt_pending") from exc
+        _cleanup_transaction(marker, witness=witness)
+    except Exception:
+        if not marker.exists():
+            _cleanup_transaction(marker, stage=stage, witness=witness)
+        raise
 
 
 def _ensure_uat_ingest_scope(vault_root: Path, *, target_subdir: str) -> None:
     read_path, canonical_path = _ingest_override_paths(vault_root)
-    existing = _read_existing_override(read_path)
-    include_folders = existing.get("include_folders")
-    if isinstance(include_folders, list):
-        merged = _normalize_unique_folders([*include_folders, target_subdir])
-    elif include_folders is None:
-        merged = [target_subdir]
-    else:
-        merged = _normalize_unique_folders([include_folders, target_subdir])
+    _ensure_durable_directory(canonical_path.parent)
+    with _settings_directory_lock(canonical_path.parent):
+        if _reconcile_pending_transaction(canonical_path):
+            return
+        existing = _read_existing_override(read_path)
+        include_folders = existing.get("include_folders")
+        if isinstance(include_folders, list):
+            merged = _normalize_unique_folders([*include_folders, target_subdir])
+        elif include_folders is None:
+            merged = [target_subdir]
+        else:
+            merged = _normalize_unique_folders([include_folders, target_subdir])
 
-    payload = dict(existing)
-    payload["include_folders"] = merged
-    _write_ingest_override(
-        canonical_path, payload, previous=existing, source_path=read_path
-    )
+        payload = dict(existing)
+        payload["include_folders"] = merged
+        _write_ingest_override(
+            canonical_path, payload, previous=existing, source_path=read_path
+        )
 
 
 def _default_snapshot_path(scope: Path) -> Path:
