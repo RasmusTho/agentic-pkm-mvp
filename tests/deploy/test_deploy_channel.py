@@ -188,6 +188,13 @@ class _FakeConnection:
 def connect(dsn, **kwargs):
     if os.environ.get("FAKE_OUTBOX_DB_UNREACHABLE") == "1":
         raise OperationalError("fake: db unreachable")
+    # Regression guard for the ambient-env-contamination bug (#3903 round 3):
+    # a DSN this test marks "poison" must never actually be connected to. If
+    # the preflight ever resolves an ambient/foreign runtime env file again,
+    # this makes that mistake fail loud (skipped:db_unreachable) instead of
+    # silently succeeding against the wrong database.
+    if dsn == os.environ.get("FAKE_OUTBOX_POISON_DSN"):
+        raise OperationalError("fake: connected to a DSN this test forbids")
     raw = os.environ.get("FAKE_OUTBOX_ROWS_JSON", "[]")
     rows = [tuple(row) for row in json.loads(raw)]
     return _FakeConnection(rows)
@@ -198,6 +205,10 @@ def connect(dsn, **kwargs):
 # identity fragments ever reach deploy output, and every other prod test rides
 # the same DSN so any new leak path shows up loudly.
 _FAKE_PROD_DSN = "postgresql://produser:sup3rsecret@prod-db.internal:5432/pkm_prod"
+
+# A second, distinct DSN standing in for a stale/foreign ambient
+# WATCHER_RUNTIME_ENV_FILE export -- never the one the real deploy targets.
+_AMBIENT_CONTAMINATION_DSN = "postgresql://wrong-host-should-never-be-used/contaminated"
 
 
 def _configure_prod_retry_preflight(
@@ -596,3 +607,50 @@ def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
     assert result.returncode == 0, result.stdout + result.stderr
     assert "prod pending-retry preflight: skipped:no_dsn" in result.stdout
     assert (tmp_path / "docker-called").exists()
+
+
+def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
+    tmp_path: Path,
+) -> None:
+    """Regression test for #3903 round 3: an earlier revision fell back to an
+    exported shell WATCHER_RUNTIME_ENV_FILE when the pin file lacked the key.
+    The real deploy path never does this -- scripts/lib's compose helper
+    resolves that variable ONLY from the pin file and explicitly `unset`s it
+    before invoking Compose whenever the pin file lacks the key, precisely so
+    a stale parent shell cannot redirect Compose to a different runtime env.
+    A preflight that honors the ambient value instead would silently connect
+    to a different database than the one the real deploy targets -- worse
+    than a visible skip, because it looks like a normal pass/block.
+
+    Setup: pin file omits the key (the committed-pin-file shape), the correct
+    DSN sits at the compose-default location (./tmp/runtime.env), and an
+    ambient WATCHER_RUNTIME_ENV_FILE points at a DIFFERENT file carrying a
+    DIFFERENT ("poison") DSN that the fake DB layer refuses to connect to.
+    If ambient were still honored, the connect would fail and the deploy
+    would show skipped:db_unreachable. It must not: the deploy must reach
+    and classify the compose-default file's rows instead.
+    """
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[("panel.scan.requested", {}, 4)],
+        runtime_env_via="compose_default",
+    )
+
+    # A foreign runtime env file, reachable only if the ambient export were
+    # (wrongly) honored -- distinct path, distinct ("poison") DSN.
+    ambient_env_file = tmp_path / "ambient-foreign-runtime.env"
+    ambient_env_file.write_text(
+        f"DATABASE_URL={_AMBIENT_CONTAMINATION_DSN}\n", encoding="utf-8"
+    )
+    env["WATCHER_RUNTIME_ENV_FILE"] = str(ambient_env_file)
+    env["FAKE_OUTBOX_POISON_DSN"] = _AMBIENT_CONTAMINATION_DSN
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode != 0
+    assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
+    assert "skipped:db_unreachable" not in result.stdout
+    assert "skipped:no_dsn" not in result.stdout

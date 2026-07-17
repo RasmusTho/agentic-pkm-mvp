@@ -63,11 +63,14 @@ Usage: ``python scripts/prod_deploy_retry_preflight.py`` (no arguments).
 Reads ``DATABASE_URL`` or ``DB_DSN`` from the process environment, same
 precedence as ``app/services/outbox.py::_open_conn``; the production caller
 (``scripts/deploy_channel.sh::prod_pending_retry_preflight``) locates the
-channel's runtime env file the way the running stack does (pin-file
-``WATCHER_RUNTIME_ENV_FILE`` reference, exported shell override, or the
-docker-compose.yaml default ``./tmp/runtime.env``), extracts the DSN from
-it, and injects it into THIS subprocess only. Prints one JSON receipt
-object to stdout.
+channel's runtime env file with the SAME two steps the shared compose lib
+uses for the same lookup -- the pin-file ``WATCHER_RUNTIME_ENV_FILE``
+reference, or the docker-compose.yaml default ``./tmp/runtime.env`` when
+that key is absent (the committed-pin-file case) -- deliberately with no
+ambient-shell fallback, since the compose lib itself unsets that variable
+before invoking Compose whenever the pin file lacks the key. It then
+extracts the DSN from the resolved file and injects it into THIS
+subprocess only. Prints one JSON receipt object to stdout.
 """
 
 from __future__ import annotations

@@ -311,28 +311,26 @@ prod_pending_retry_preflight() {
   # docs/HEALTH.md :: Outbox and dead-letter signals.
   local receipt_json rc=0 dsn_from_file="" runtime_env_ref="" runtime_env_file=""
 
-  # Resolve the channel's governed runtime env file the way the running stack
-  # actually resolves it, in the same precedence order Compose interpolation
-  # sees: (1) the WATCHER_RUNTIME_ENV_FILE ref in the channel pin file (read
-  # via _deploy_channel_env_value, like the shared compose lib); (2) an
-  # exported shell WATCHER_RUNTIME_ENV_FILE; (3) the docker-compose.yaml
-  # service env_file default `./tmp/runtime.env`. Committed pin files carry
-  # only APP_IMAGE_* keys, so on a real host the default in step (3) IS the
-  # live configuration -- stopping at step (1) would make this gate skip on
-  # every real prod deploy (the round-2 D1 gap). The extracted DSN is
-  # injected ONLY into the single preflight subprocess env below -- never
-  # exported into this shell, never passed to Compose, never printed (#3875
-  # redaction posture). Ambient shell DATABASE_URL/DB_DSN remains the
-  # fallback when the resolved file provides none.
+  # Resolve the channel's governed runtime env file with EXACTLY the two
+  # steps the shared compose lib (scripts/lib/) itself uses for the same
+  # lookup: (1) the WATCHER_RUNTIME_ENV_FILE ref in the channel pin file,
+  # read via _deploy_channel_env_value; (2) the docker-compose.yaml service
+  # env_file default `./tmp/runtime.env`. Committed pin files carry only
+  # APP_IMAGE_* keys, so on a real host the default in step (2) IS the live
+  # configuration -- stopping at step (1) would make this gate skip on every
+  # real prod deploy (the round-2 D1 gap). Deliberately NO ambient-shell
+  # fallback: the compose lib explicitly `unset WATCHER_RUNTIME_ENV_FILE`
+  # right before invoking `docker compose` whenever the pin file lacks the
+  # key ("so a stale parent shell cannot swap the selected runtime env") --
+  # an earlier revision of this preflight honored an ambient export here,
+  # which reintroduced precisely the contamination that unset exists to
+  # prevent (silently checking a different DSN than the one the real deploy
+  # will target). Do not reintroduce it. The extracted DSN is injected ONLY
+  # into the single preflight subprocess env below -- never exported into
+  # this shell, never passed to Compose, never printed (#3875 redaction
+  # posture). Ambient shell DATABASE_URL/DB_DSN remains the fallback when
+  # the resolved file provides none.
   runtime_env_ref="$(_deploy_channel_env_value "${pin_file}" WATCHER_RUNTIME_ENV_FILE)"
-  if [ -z "${runtime_env_ref}" ]; then
-    # Outside the pinning wrapper, Compose interpolation reads the exported
-    # shell value; honor it between the governed pin value and the default.
-    # (The wrapper itself pins/unsets this var for the actual service
-    # selection -- this fallback only widens the DSN lookup, governed value
-    # first.)
-    runtime_env_ref="${WATCHER_RUNTIME_ENV_FILE:-}"
-  fi
   if [ -z "${runtime_env_ref}" ]; then
     # docker-compose.yaml: `${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}`,
     # resolved against the compose project directory = ${ROOT} (directory of
