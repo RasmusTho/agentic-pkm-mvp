@@ -150,6 +150,7 @@ def test_yss01_migration_bootstrap_parity_and_legacy_repair(
             "acquisition_source_registry_priority_chk",
             "acquisition_source_registry_poll_interval_chk",
             "acquisition_source_registry_account_binding_chk",
+            "acquisition_source_registry_account_binding_uuid_chk",
         ):
             conn.execute(f"ALTER TABLE {TABLE} DROP CONSTRAINT {constraint}")
         conn.execute("DROP INDEX acquisition_source_registry_account_idx")

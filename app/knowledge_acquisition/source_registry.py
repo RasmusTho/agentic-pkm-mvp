@@ -30,7 +30,9 @@ memory backend must never be a lesser contract than Postgres):
   structurally unreachable rather than merely checked.
 - authenticated ``inbox_playlist``, ``owned_playlist``, and
   ``liked_videos`` bindings require ``account_binding_id``; only public
-  playlists and RSS subscription feeds may be account-less.
+  playlists and RSS subscription feeds may be account-less. Every present
+  account binding is validated and normalized to its canonical UUID text
+  before either backend sees it.
 - ``poll_interval_seconds`` validated to ``[60, 604800]`` (contract-wide
   bound; the finer per-kind bounds on the *settings* defaults --
   ``youtubeSync.inboxPollSeconds`` etc. -- are a separate, narrower
@@ -119,6 +121,7 @@ _ALLOWED_MEDIA_KEYS: frozenset[str] = frozenset(
 )
 
 _TABLE = "acquisition_source_registry"
+_NULL_ACCOUNT_SENTINEL = "__none__"
 _MIGRATION_HINT = (
     "acquisition_source_registry schema is migration-owned: run 'alembic upgrade head' "
     "against this database. See "
@@ -159,6 +162,25 @@ class SourceUnsupportedError(ValueError):
             "scraping or any other unofficial fallback to read it."
         )
         super().__init__(message)
+
+
+def _normalize_account_binding_id(account_binding_id: str | None) -> str | None:
+    """Validate and canonicalize the contract UUID before backend selection."""
+    if account_binding_id is None:
+        return None
+    if not isinstance(account_binding_id, str):
+        raise SourceRegistryValidationError("account_binding_id must be a UUID string or None")
+    raw = account_binding_id.strip()
+    if raw == _NULL_ACCOUNT_SENTINEL:
+        raise SourceRegistryValidationError(
+            f"account_binding_id value {_NULL_ACCOUNT_SENTINEL!r} is reserved for SQL NULL indexing"
+        )
+    try:
+        return str(uuid.UUID(raw))
+    except (ValueError, AttributeError) as exc:
+        raise SourceRegistryValidationError(
+            f"account_binding_id must be a valid UUID, got {account_binding_id!r}"
+        ) from exc
 
 
 # --- Row type ------------------------------------------------------------------
@@ -555,17 +577,22 @@ def _bootstrap_pg(conn: Any) -> None:
             CONSTRAINT acquisition_source_registry_account_binding_chk CHECK (
                 collection_kind IN ('public_playlist', 'subscription_feed')
                 OR account_binding_id IS NOT NULL
+            ),
+            CONSTRAINT acquisition_source_registry_account_binding_uuid_chk CHECK (
+                account_binding_id IS NULL OR account_binding_id ~
+                '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$'
             )
         )
         """
     )
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_binding_triple_uq "
-        f"ON {_TABLE} (collection_kind, collection_ref, COALESCE(account_binding_id, '__none__'))"
+        f"ON {_TABLE} (collection_kind, collection_ref, "
+        f"COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}'))"
     )
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_single_inbox_uq "
-        f"ON {_TABLE} (COALESCE(account_binding_id, '__none__')) "
+        f"ON {_TABLE} (COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}')) "
         "WHERE collection_kind = 'inbox_playlist' AND enabled = true"
     )
     cur.execute(
@@ -839,7 +866,8 @@ class SourceRegistry:
             raise SourceRegistryValidationError(
                 f"collection_kind must be one of {sorted(VALID_COLLECTION_KINDS)}, got {collection_kind!r}"
             )
-        if collection_kind in _ACCOUNT_BOUND_COLLECTION_KINDS and account_binding_id is None:
+        resolved_account_binding_id = _normalize_account_binding_id(account_binding_id)
+        if collection_kind in _ACCOUNT_BOUND_COLLECTION_KINDS and resolved_account_binding_id is None:
             raise SourceRegistryValidationError(
                 f"account_binding_id is required for authenticated collection_kind {collection_kind!r}"
             )
@@ -875,7 +903,7 @@ class SourceRegistry:
 
         binding = SourceBinding(
             binding_id=str(uuid.uuid4()),
-            account_binding_id=account_binding_id,
+            account_binding_id=resolved_account_binding_id,
             collection_kind=collection_kind,
             collection_ref=collection_ref,
             title=title,
@@ -901,7 +929,7 @@ class SourceRegistry:
         this account (if any) and enables the target, as a single atomic
         operation -- a second enabled inbox is structurally impossible.
         """
-        return self._backend.set_inbox(account_binding_id, binding_id)
+        return self._backend.set_inbox(_normalize_account_binding_id(account_binding_id), binding_id)
 
     def rename(self, binding_id: str, title: str) -> SourceBinding:
         """Change only ``title``; identity, cursor, and policy are untouched."""
@@ -916,7 +944,7 @@ class SourceRegistry:
         return self._backend.list_all()
 
     def list_for_account(self, account_binding_id: str | None) -> tuple[SourceBinding, ...]:
-        return self._backend.list_for_account(account_binding_id)
+        return self._backend.list_for_account(_normalize_account_binding_id(account_binding_id))
 
 
 __all__ = [

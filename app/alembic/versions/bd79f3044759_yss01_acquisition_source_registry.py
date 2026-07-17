@@ -28,7 +28,8 @@ module docstring in `source_registry.py`):
   transiently violated mid-swap.
 - authenticated `inbox_playlist`, `owned_playlist`, and `liked_videos` rows
   require `account_binding_id`; only public playlists and RSS subscription
-  feeds may be account-less.
+  feeds may be account-less. Present account bindings are canonical UUID text;
+  the reserved NULL-index sentinel can never be stored as a real account id.
 
 Forward-only, following the KERNEL-04/KERNEL-05/HEIM/ERE-02/ERE-04/ERE-05
 precedent: schema-owning migrations in this repo have no downgrade path for
@@ -100,6 +101,10 @@ def upgrade() -> None:
             CONSTRAINT acquisition_source_registry_account_binding_chk CHECK (
                 collection_kind IN ('public_playlist', 'subscription_feed')
                 OR account_binding_id IS NOT NULL
+            ),
+            CONSTRAINT acquisition_source_registry_account_binding_uuid_chk CHECK (
+                account_binding_id IS NULL OR account_binding_id ~
+                '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
             )
         )
         """
@@ -129,6 +134,11 @@ def upgrade() -> None:
             "acquisition_source_registry_account_binding_chk",
             "collection_kind IN ('public_playlist', 'subscription_feed') "
             "OR account_binding_id IS NOT NULL",
+        ),
+        (
+            "acquisition_source_registry_account_binding_uuid_chk",
+            "account_binding_id IS NULL OR account_binding_id ~ "
+            "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
         ),
     ):
         op.execute(

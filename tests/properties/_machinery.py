@@ -477,11 +477,12 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "own directly-related-repair convention when YSS-01 (#3916) added the "
         "youtubeSync.* SettingDefinitions earlier in the file."
     ),
-    ("app/vault/settings_service.py", 561): (
+    ("app/vault/settings_service.py", 558): (
         "guarded: _scaffold_missing_settings_file asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
-        "before writing a missing settings/youtube.md for every youtubeSync.* "
-        "key, including otherwise non-gating keys (YSS-01 #3916 review repair)."
+        "before writing every missing static vault-shared settings seed, including "
+        "legacy non-gating paths.md and settings/youtube.md. Line drifted 561 -> 558 "
+        "while broadening the YSS-01 #3916 review repair to every static seed."
     ),
     ("app/instance/vault_registry.py", 1088): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "

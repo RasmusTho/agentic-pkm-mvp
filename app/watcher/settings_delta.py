@@ -10,12 +10,23 @@ from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 from app.vault.settings_service import (
     RUNTIME_GATING_SETTINGS,
+    SETTING_DEFINITIONS,
     SettingsService,
     SettingsWriteError,
     SettingsWriteReceipt,
 )
 
 SETTINGS_LOCAL_REL = Path("settings/local.md")
+SETTINGS_YOUTUBE_REL = Path("settings/youtube.md")
+
+_RUNTIME_GATING_KEYS_BY_FILE: dict[Path, frozenset[str]] = {
+    rel_path: frozenset(
+        definition.key
+        for definition in SETTING_DEFINITIONS
+        if definition.key in RUNTIME_GATING_SETTINGS and definition.file == rel_path.name
+    )
+    for rel_path in (SETTINGS_LOCAL_REL, SETTINGS_YOUTUBE_REL)
+}
 
 # Settings source files compile into the effective bundle. A change to one must
 # re-ingest so the running services honor
@@ -34,6 +45,7 @@ SCOPED_SETTINGS_FILENAMES = frozenset(
         "design-handoff.md",
         "companion-ui.md",
         "local.md",
+        "youtube.md",
     }
 )
 
@@ -130,9 +142,16 @@ def handle_settings_local_delta(
     settings_service: SettingsService | None = None,
     markdown_store: MarkdownSettingsStore | None = None,
 ) -> SettingsDeltaResult:
-    """Route watcher-detected runtime-gating settings deltas through the governed seam."""
+    """Route watcher-detected runtime-gating file deltas through the governed seam.
 
-    if rel_path != SETTINGS_LOCAL_REL:
+    The historical function name is retained for callers, but the seam covers
+    both the vault-local runtime controls and the vault-shared YouTube master
+    switch. A blocked edit remains on disk as human-authored input while the
+    returned accepted runtime values stay at the last guarded state.
+    """
+
+    gating_keys = _RUNTIME_GATING_KEYS_BY_FILE.get(rel_path)
+    if gating_keys is None:
         return SettingsDeltaResult(values=None)
 
     store = markdown_store or MarkdownSettingsStore()
@@ -144,7 +163,7 @@ def handle_settings_local_delta(
 
     current_values = {
         key: document.frontmatter[key]
-        for key in sorted(RUNTIME_GATING_SETTINGS)
+        for key in sorted(gating_keys)
         if key in document.frontmatter
     }
     if previous_values is None:
@@ -157,7 +176,8 @@ def handle_settings_local_delta(
         return SettingsDeltaResult(
             values=current_values,
             errors=(
-                f"settings/local.md delta requires selected vault; status={context.status}{detail}",
+                f"{rel_path.as_posix()} delta requires selected vault; "
+                f"status={context.status}{detail}",
             ),
         )
 
@@ -179,6 +199,7 @@ def handle_settings_local_delta(
 
     receipts: list[SettingsWriteReceipt] = []
     errors: list[str] = []
+    accepted_values = dict(current_values)
     for key in changed_keys:
         try:
             persist = key in current_keys
@@ -194,11 +215,15 @@ def handle_settings_local_delta(
                 )
         except SettingsWriteError as exc:
             errors.append(str(exc))
+            if key in previous_values:
+                accepted_values[key] = previous_values[key]
+            else:
+                accepted_values.pop(key, None)
             continue
         receipts.append(receipt)
 
     return SettingsDeltaResult(
-        values=current_values,
+        values=accepted_values,
         receipts=tuple(receipts),
         errors=tuple(errors),
     )
@@ -206,6 +231,7 @@ def handle_settings_local_delta(
 
 __all__ = [
     "SETTINGS_LOCAL_REL",
+    "SETTINGS_YOUTUBE_REL",
     "SETTINGS_SOURCE_DIR_NAME",
     "SettingsDeltaResult",
     "SettingsSourceDeltaResult",

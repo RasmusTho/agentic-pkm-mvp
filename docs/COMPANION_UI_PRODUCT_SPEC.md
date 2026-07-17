@@ -257,10 +257,11 @@ The canonical two-tier classification:
    second pair gates the YouTube Source Sync capability/runner. Writes route
    through the single server-side governed seam: WriteGuard health-gate + actor-tagged
    `SettingsWriteReceipt` (who / surface / when). No human/agent approval loop — a human may
-   already flip these via a direct hand-edit of the owning settings file (the file-originated door).
-   The receipt is wired for the **API door only** (caller: `app/api/routes/companion.py:826`); the CLI (`app.cli vault`, init/preflight only) is NOT yet wired.
-   The file-originated door (watcher-detected delta → `surface='file'`) is NOT yet wired; tracked
-   by #2512. The full register (setting key / effect / authority class / seam) lives in
+   already flip these via a direct hand-edit of the owning settings file (the file-originated door),
+   and the watcher routes that delta through the same gate before runtime acceptance. Receipts are
+   wired for the API door and watcher file-originated door (`surface='file'`); the CLI (`app.cli
+   vault`, init/preflight only) is NOT yet wired. The full register (setting key / effect /
+   authority class / seam) lives in
    `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Control-action register`.
 
 3. **External-boundary enable** — TTS provider enable. EBF applies; not re-decided here

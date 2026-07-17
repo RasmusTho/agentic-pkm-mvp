@@ -78,8 +78,8 @@ No write guard applies to the binding itself.
 These writes reconfigure whether the watcher/indexing runtime runs. They are **authority-bearing**
 in the proportional sense (#1881 tiers): reversible, local, no external boundary — so **no
 approval loop** (consistent with a human being able to flip the same flag via a direct
-`settings/local.md` hand-edit with no gate). The governed seam applies the WriteGuard
-health-gate and emits an actor-tagged receipt.
+settings-file hand-edit; the watcher routes the delta through the same gate before runtime
+acceptance). The governed seam applies the WriteGuard health-gate and emits an actor-tagged receipt.
 
 | Setting key | Effect | Authority class | Governed seam |
 |-------------|--------|-----------------|---------------|
@@ -92,7 +92,8 @@ health-gate and emits an actor-tagged receipt.
 1. `RUNTIME_GATING_SETTINGS` classifies the key as authority-bearing.
 2. `DEFAULT_WRITE_GUARD.assert_writes_allowed()` is called; raises `SettingsWriteError` if
    `state in WRITE_BLOCKED_STATES` (i.e. `safe_mode` or `unhealthy`).
-3. The markdown write is applied to `settings/local.md`.
+3. The markdown write is applied to the setting's owning file (`settings/local.md` or
+   `settings/youtube.md`).
 4. A `SettingsWriteReceipt(key, value, surface, actor, timestamp, is_runtime_gating=True)` is
    emitted and logged at INFO level.
 
@@ -101,12 +102,13 @@ health-gate and emits an actor-tagged receipt.
   (sole production caller: `app/api/routes/companion.py:826`).
 - **CLI origin** (`surface='cli'`): NOT yet wired. The `app.cli vault` group exposes `init`/`preflight`
   only; no command toggles runtime-gating settings through the seam. Addable when a consumer exists.
-- **File-originated origin** (`surface='file'`): NOT yet wired. The watcher does NOT call the
-  governed seam on a `settings/local.md` delta, so a human hand-editing that file produces no
-  receipt. Closing this door is tracked by #2512.
+- **File-originated origin** (`surface='file'`): wired for the runtime-gating keys owned by
+  `settings/local.md` and `settings/youtube.md`. The watcher calls the same governed seam; a
+  blocked delta is not accepted as runtime state and an allowed delta emits the durable receipt.
 
-**Valid origins of the same seam:** UI (via `POST /api/companion/vault/settings`, wired), CLI (existing
-`app.cli vault` commands — NOT yet wired, see above), and future MCP/API surfaces. No new surfaces are added here.
+**Valid origins of the same seam:** UI (via `POST /api/companion/vault/settings`, wired), watcher
+file deltas (`surface='file'`, wired), CLI (existing `app.cli vault` commands — NOT yet wired, see
+above), and future MCP/API surfaces.
 
 ### Tier 3 — External-boundary enable
 

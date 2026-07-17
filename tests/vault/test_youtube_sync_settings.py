@@ -274,3 +274,52 @@ def test_update_setting_scaffolds_missing_youtube_settings_file(tmp_path: Path) 
     ):
         service.update_setting(context, "youtubeSync.runnerEnabled", True, surface="cli", actor="human")
     assert not local_md.exists()
+
+
+def test_static_shared_settings_scaffold_is_guarded_for_legacy_paths_file(tmp_path: Path) -> None:
+    """Every static shared seed is guarded before a legacy-vault file is created."""
+    import app.write_guard as _wg_module
+
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(
+        status="selected",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+    )
+    service = SettingsService()
+    paths_md = settings_dir / "paths.md"
+
+    with (
+        patch.object(
+            _wg_module.DEFAULT_WRITE_GUARD,
+            "snapshot_fn",
+            return_value={"state": "safe_mode", "reason": "maintenance window"},
+        ),
+        pytest.raises(SettingsWriteError, match="settings scaffold blocked"),
+    ):
+        service.update_setting(
+            context,
+            "handoffFolder",
+            "Changed Handoff",
+            surface="cli",
+            actor="human",
+        )
+    assert not paths_md.exists()
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        effective, receipt = service.update_setting(
+            context,
+            "handoffFolder",
+            "Changed Handoff",
+            surface="cli",
+            actor="human",
+        )
+
+    assert paths_md.exists()
+    assert effective.value == "Changed Handoff"
+    assert receipt.is_runtime_gating is False

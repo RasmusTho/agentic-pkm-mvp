@@ -30,7 +30,7 @@ RegistryFactory = Callable[[], SourceRegistry]
 
 
 def _acct() -> str:
-    return f"acct-{uuid.uuid4()}"
+    return str(uuid.uuid4())
 
 
 def assert_round_trip_and_contract_fields(make_registry: RegistryFactory) -> None:
@@ -207,6 +207,33 @@ def assert_account_binding_nullability_by_kind(make_registry: RegistryFactory) -
             title="Unauthenticated collection",
         )
         assert binding.account_binding_id is None
+
+
+def assert_account_binding_uuid_contract(make_registry: RegistryFactory) -> None:
+    """Present account bindings are canonical UUIDs; SQL's NULL sentinel is reserved."""
+    reg = make_registry()
+    before_ids = {binding.binding_id for binding in reg.list_all()}
+
+    for index, invalid in enumerate(("", "not-a-uuid", "__none__")):
+        with pytest.raises(SourceRegistryValidationError, match="account_binding_id"):
+            reg.register(
+                collection_kind="owned_playlist",
+                collection_ref=f"PLfixtureINVALIDACCOUNT{index}",
+                account_binding_id=invalid,
+                title="Invalid account binding",
+            )
+    assert {binding.binding_id for binding in reg.list_all()} == before_ids
+
+    canonical = str(uuid.uuid4())
+    noncanonical = canonical.upper()
+    binding = reg.register(
+        collection_kind="owned_playlist",
+        collection_ref="PLfixtureNORMALIZEDACCOUNT",
+        account_binding_id=noncanonical,
+        title="Normalized account binding",
+    )
+    assert binding.account_binding_id == canonical
+    assert reg.list_for_account(noncanonical) == (binding,)
 
 
 def assert_watch_later_and_history_refused(make_registry: RegistryFactory) -> None:
@@ -424,6 +451,7 @@ ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_single_enabled_inbox_and_swap,
     assert_duplicate_binding_refused,
     assert_account_binding_nullability_by_kind,
+    assert_account_binding_uuid_contract,
     assert_watch_later_and_history_refused,
     assert_title_rename_preserves_binding,
     assert_invalid_interval_and_policy_fail_loud,

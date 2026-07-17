@@ -106,6 +106,7 @@ def test_settings_source_uses_configured_vault_and_is_not_emitted(
 
 def test_nested_local_markdown_is_a_compiler_source() -> None:
     assert not is_settings_source_path(Path("settings/local.md"))
+    assert not is_settings_source_path(Path("settings/youtube.md"))
     assert is_settings_source_path(Path("settings/agents/local.md"))
     assert is_settings_control_path(
         Path("Meta/Settings/health.md"), configured_system_dir="Meta"
