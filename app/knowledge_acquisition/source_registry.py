@@ -28,6 +28,9 @@ memory backend must never be a lesser contract than Postgres):
   disables whichever inbox was previously enabled (if any) and enables the
   target in one atomic operation. This makes "more than one enabled inbox"
   structurally unreachable rather than merely checked.
+- authenticated ``inbox_playlist``, ``owned_playlist``, and
+  ``liked_videos`` bindings require ``account_binding_id``; only public
+  playlists and RSS subscription feeds may be account-less.
 - ``poll_interval_seconds`` validated to ``[60, 604800]`` (contract-wide
   bound; the finer per-kind bounds on the *settings* defaults --
   ``youtubeSync.inboxPollSeconds`` etc. -- are a separate, narrower
@@ -82,6 +85,9 @@ VALID_PROVENANCE_ORIGINS: frozenset[str] = frozenset({"user_pick", "takeout_impo
 
 _PLAYLIST_SHAPED_KINDS: frozenset[str] = frozenset(
     {"inbox_playlist", "owned_playlist", "liked_videos", "public_playlist"}
+)
+_ACCOUNT_BOUND_COLLECTION_KINDS: frozenset[str] = frozenset(
+    {"inbox_playlist", "owned_playlist", "liked_videos"}
 )
 
 # Watch Later / Watch History: unsupported by the official Data API. Checked
@@ -545,6 +551,10 @@ def _bootstrap_pg(conn: Any) -> None:
             ),
             CONSTRAINT acquisition_source_registry_poll_interval_chk CHECK (
                 poll_interval_seconds >= 60 AND poll_interval_seconds <= 604800
+            ),
+            CONSTRAINT acquisition_source_registry_account_binding_chk CHECK (
+                collection_kind IN ('public_playlist', 'subscription_feed')
+                OR account_binding_id IS NOT NULL
             )
         )
         """
@@ -828,6 +838,10 @@ class SourceRegistry:
         if collection_kind not in VALID_COLLECTION_KINDS:
             raise SourceRegistryValidationError(
                 f"collection_kind must be one of {sorted(VALID_COLLECTION_KINDS)}, got {collection_kind!r}"
+            )
+        if collection_kind in _ACCOUNT_BOUND_COLLECTION_KINDS and account_binding_id is None:
+            raise SourceRegistryValidationError(
+                f"account_binding_id is required for authenticated collection_kind {collection_kind!r}"
             )
         if not isinstance(title, str) or not title.strip():
             raise SourceRegistryValidationError("title must be a non-empty string")

@@ -179,6 +179,36 @@ def assert_duplicate_binding_refused(make_registry: RegistryFactory) -> None:
     assert different_kind.collection_kind == "public_playlist"
 
 
+def assert_account_binding_nullability_by_kind(make_registry: RegistryFactory) -> None:
+    """Authenticated collections require an account; RSS/public collections do not."""
+    reg = make_registry()
+    before_ids = {binding.binding_id for binding in reg.list_all()}
+
+    for kind, collection_ref in (
+        ("inbox_playlist", "PLfixtureNOACCOUNTINBOX"),
+        ("owned_playlist", "PLfixtureNOACCOUNTOWNED"),
+        ("liked_videos", "LLfixtureNOACCOUNTLIKED"),
+    ):
+        with pytest.raises(SourceRegistryValidationError, match="account_binding_id is required"):
+            reg.register(
+                collection_kind=kind,
+                collection_ref=collection_ref,
+                title="Authenticated collection without account",
+            )
+    assert {binding.binding_id for binding in reg.list_all()} == before_ids
+
+    for kind, collection_ref in (
+        ("public_playlist", "PLfixturePUBLICNOACCOUNT"),
+        ("subscription_feed", "UCfixtureRSSNOACCOUNT"),
+    ):
+        binding = reg.register(
+            collection_kind=kind,
+            collection_ref=collection_ref,
+            title="Unauthenticated collection",
+        )
+        assert binding.account_binding_id is None
+
+
 def assert_watch_later_and_history_refused(make_registry: RegistryFactory) -> None:
     """AC4: Watch Later / Watch History refused as source_unsupported with legible copy."""
     reg = make_registry()
@@ -393,6 +423,7 @@ ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
     assert_duplicate_binding_refused,
+    assert_account_binding_nullability_by_kind,
     assert_watch_later_and_history_refused,
     assert_title_rename_preserves_binding,
     assert_invalid_interval_and_policy_fail_loud,

@@ -9,7 +9,7 @@ registry`). Every later slice in this capability (YSS-02..11) reads or writes
 through this table -- it is the one durable substrate for "which collections
 does this account follow, with what policy, cursor, and state."
 
-Two service-layer integrity rules are additionally backed by DB constraints
+Three service-layer integrity rules are additionally backed by DB constraints
 as defense-in-depth (the service layer, covering both the Postgres and
 in-process memory backend identically, remains authoritative -- see the
 module docstring in `source_registry.py`):
@@ -26,6 +26,9 @@ module docstring in `source_registry.py`):
   swap (`SourceRegistry.set_inbox`) performs the disable-then-enable update
   as two statements in one transaction so the partial index is never
   transiently violated mid-swap.
+- authenticated `inbox_playlist`, `owned_playlist`, and `liked_videos` rows
+  require `account_binding_id`; only public playlists and RSS subscription
+  feeds may be account-less.
 
 Forward-only, following the KERNEL-04/KERNEL-05/HEIM/ERE-02/ERE-04/ERE-05
 precedent: schema-owning migrations in this repo have no downgrade path for
@@ -93,6 +96,10 @@ def upgrade() -> None:
             ),
             CONSTRAINT acquisition_source_registry_poll_interval_chk CHECK (
                 poll_interval_seconds >= 60 AND poll_interval_seconds <= 604800
+            ),
+            CONSTRAINT acquisition_source_registry_account_binding_chk CHECK (
+                collection_kind IN ('public_playlist', 'subscription_feed')
+                OR account_binding_id IS NOT NULL
             )
         )
         """
@@ -117,6 +124,11 @@ def upgrade() -> None:
         (
             "acquisition_source_registry_poll_interval_chk",
             "poll_interval_seconds >= 60 AND poll_interval_seconds <= 604800",
+        ),
+        (
+            "acquisition_source_registry_account_binding_chk",
+            "collection_kind IN ('public_playlist', 'subscription_feed') "
+            "OR account_binding_id IS NOT NULL",
         ),
     ):
         op.execute(

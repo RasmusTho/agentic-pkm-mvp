@@ -19,6 +19,7 @@ import pytest
 
 from app.knowledge_acquisition.source_registry import SourceRegistry, reset_memory_source_registry
 from tests.knowledge_acquisition._source_registry_contract import (
+    assert_account_binding_nullability_by_kind,
     assert_duplicate_binding_refused,
     assert_invalid_interval_and_policy_fail_loud,
     assert_memory_json_isolation,
@@ -56,6 +57,10 @@ def test_single_enabled_inbox_enforced_and_swap_atomic() -> None:
 
 def test_duplicate_binding_refused() -> None:
     assert_duplicate_binding_refused(_make_registry)
+
+
+def test_account_binding_nullability_matches_collection_kind() -> None:
+    assert_account_binding_nullability_by_kind(_make_registry)
 
 
 def test_watch_later_and_history_refused_unsupported() -> None:
