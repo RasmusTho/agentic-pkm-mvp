@@ -75,10 +75,10 @@ reshape a Product SBS subsystem.
 
 | Task | GitHub work item | Initial state |
 |---|---|---|
-| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | released first (PR #3691 merged 2026-07-15); in progress |
-| BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | `agent:blocked` on BCP-01 |
-| BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | `agent:blocked` on BCP-01 |
-| BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | `agent:blocked` on BCP-02 |
+| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | merged via PR #3852 |
+| BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | repo/deployment contract implemented; live activation remains gated |
+| BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | dependency-unblocked after BCP-01 |
+| BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | dependency-unblocked after BCP-02 |
 | BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline; API/PostgreSQL migration blocked on BCP-02/04; host auth green and #3812/PR #3813 closed/merged; installed-main pilot receipt pending |
 | BCP-06 | [#3793](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3793) | `agent:blocked` on BCP-03/04/05 |
 | BCP-07 | Existing #3690 | `agent:blocked` on BCP-06 |

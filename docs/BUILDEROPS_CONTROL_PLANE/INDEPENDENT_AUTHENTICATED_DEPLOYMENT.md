@@ -11,6 +11,24 @@ can_parallelize_with: [BCP-03]
 
 # Independent Authenticated Deployment
 
+## Implementation Status
+
+Implemented by #3790 at the repo/deployment-contract level: the independent FastAPI factory,
+scoped/revocable credential verifier, durable-payload secret guard, PostgreSQL migration gate,
+API/worker/DB Compose project, separate Docker-engine preflight, immutable image pins,
+authenticated probes, Tailscale Serve TLS termination, secret-safe live status/metrics,
+failure-safe deploy/rollback receipts, a dedicated PostgreSQL 16 + WAL-G image, WAL-G backup/WAL
+archive wrappers, structural recovery-target validation, and an image-level encrypted restore
+gate are present. The gate performs a real full backup, archived-WAL recovery into a disposable
+PostgreSQL instance, restored-data/integrity checks, and negative credential scans without using
+Demerzel host secrets. Restore activation increments the database-owned authority epoch, invalidates
+leases, marks claimed effects unknown, and keeps the executor fenced until reconciliation.
+
+No production authority or client cutover is claimed here. The committed zero digests are deliberate
+non-runnable placeholders; an operator-provided release pin, second Demerzel engine, off-host target,
+independent recovery custody, successful live restore receipt, and BCP-03/04/05/06 gates are still
+required before activation.
+
 ## Purpose
 
 BuilderOps currently rides inside Product FastAPI/startup and has no service-specific authentication,
@@ -23,11 +41,17 @@ Product ownership.
 - create a separate BuilderOps FastAPI/service entrypoint over the BCP-01 store port;
 - require encrypted tailnet transport and revocable, scoped client credentials; distinguish normal,
   privileged executor, and operator scopes;
+- terminate tailnet-only HTTPS with Tailscale Serve and verify that Funnel/public exposure is not
+  enabled before a deployment is accepted;
 - keep raw client/database/GitHub/model credentials in host secret stores only; persist only secret
-  references, non-secret fingerprints, scopes, and rotation generations;
+  references, non-secret fingerprints, bounded token lengths, scopes, and rotation generations;
 - create a BuilderOps-only Compose project with its own API, outbox worker, migration gate,
   PostgreSQL service/database/role/volume/secrets, and immutable release pin;
-- provide independent deploy/rollback receipts and a host probe;
+- keep API, migration, and worker services on an internal-only network while granting outbound
+  recovery-target access only to the PostgreSQL WAL archiver and scheduled backup service;
+- provide independent deploy/rollback receipts that bind both the control-plane and
+  PostgreSQL/WAL-G image digests, plus a host probe with separate least-privilege readiness and
+  status credentials;
 - implement `/healthz`, `/readyz`, and secret-safe status/metrics for database/schema, outbox age and
   dead letters, lease conflicts, auth failures, rate limits/credential state, and executor heartbeat;
 - provide scheduled encrypted full backups plus WAL archiving on an operator-chosen cadence to an
@@ -36,9 +60,12 @@ Product ownership.
   retention, documented point-in-time restore, and an automated restore-from-backup drill with
   Demerzel's host secret store unavailable (ADR-0062 A1: recovery durability is asynchronous and
   never gates acknowledgement);
-- run the BuilderOps-only Compose project and database on a separate VM/container engine on
-  Demerzel, outside the `pkm-*` container-VM failure domain, so Product deploys, restarts, resource
-  pressure, and container-VM lifecycle events cannot stop the builder plane (ADR-0062 A2);
+- build the control-plane and PostgreSQL/WAL-G images in CI and run the encrypted full-backup plus
+  archived-WAL restore gate against those exact candidate images before publication, with no
+  post-gate rebuild;
+- deliver the fail-closed separate-engine preflight and deployment tooling for the BuilderOps-only
+  project on Demerzel, outside the `pkm-*` container-VM failure domain; live host activation and
+  Product-load/BuilderOps-readiness proof remain an operator-gated successor (ADR-0062 A2);
 - wire BuilderOps `/healthz` into the operator alerting path so control-plane outages are observed
   rather than discovered (ADR-0062 A2); and
 - prove Product Compose and Product credentials/config are not dependencies.
@@ -46,12 +73,12 @@ Product ownership.
 ## Concretely
 
 The slice adds a BuilderOps-only Compose invocation and service entrypoint such that an operator can
-deploy a pinned image, wait for migrations, call authenticated `/healthz` and `/readyz`, inspect
-secret-safe status, take a full backup, independently recover its decryption capability, restore it
-plus archived WAL to the latest archived point in an isolated project while Demerzel's host secret
-store is unavailable, and change to a compatible BuilderOps image without rewinding authoritative
-data or running a `pkm-*` Compose command — while the `pkm-*` stacks stay stopped, restarted, or
-under load without affecting any of it.
+deploy a pinned pair of restore-proved images, wait for migrations, call authenticated `/healthz`
+and `/readyz`, inspect secret-safe status, take a full backup, independently recover its decryption
+capability, restore it plus archived WAL to the latest archived point in an isolated project while
+Demerzel's host secret store is unavailable, and change to compatible BuilderOps images without
+rewinding authoritative data or running a `pkm-*` Compose command. This repository slice proves the
+deployment and failure-domain contracts; it does not claim the later live two-engine/load receipt.
 
 ## Why This Matters
 
@@ -73,6 +100,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 
 - BuilderOps Compose project/database/volume/role/secrets/pin/migrations remain distinct from
   `pkm-dev`, `pkm-test`, and `pkm-prod`.
+- Only recovery producers (PostgreSQL WAL archiving and the backup job) receive recovery-target
+  egress; API, migration, and worker services remain internal-only.
 - Tailnet membership alone is not authentication; no anonymous mutation or Product API key reuse.
 - Raw client, database, GitHub, merge, model/session, and recovery-decryption credentials are never
   returned to clients or persisted in repo config, PostgreSQL, outbox payloads, receipts, artifacts,
@@ -89,6 +118,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - A persistent volume or snapshot alone is not accepted as recoverability. Full backup + archived
   WAL must restore to the latest archived point; backup/restore negative scans must also prove the
   credential exclusion boundary.
+- A candidate image is not publishable unless the image-level restore gate proves the real WAL-G,
+  PostgreSQL, migration, recovery-fence, and credential-exclusion paths together.
 - The BuilderOps-only Compose project and database run on a separate VM/container engine from the
   `pkm-*` stacks; no Product lifecycle event can stop, restart, or resource-starve the builder plane
   (ADR-0062 A2). A native host service is outside this task's selected deployment contract.
@@ -102,20 +133,23 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - [ ] BuilderOps Compose uses a distinct project, PostgreSQL service/database/role/volume/secrets,
   migrations, API/worker, and release pin without importing Product Compose lifecycle.
   Verify: `tests/ops/test_builderops_compose_contract.py::test_builderops_compose_is_lifecycle_isolated`.
-- [ ] Product services can remain stopped while BuilderOps reaches ready, and BuilderOps can remain
-  stopped while Product reaches its own readiness without attempting to start it.
+- [ ] Repository lifecycle commands keep Product and BuilderOps projects independent: neither
+  start/stop path imports or attempts to start the other. Live two-engine lifecycle/load proof on
+  Demerzel remains an operator-gated successor receipt.
   Verify: `tests/ops/test_builderops_lifecycle_isolation.py::test_product_and_builderops_start_stop_independently`.
 - [ ] Readiness/status reports database/schema/authority epoch, outbox/dead-letter, lease, auth,
   rate-limit, and executor-heartbeat state without exposing secrets.
   Verify: `tests/builderops/control_plane/test_service_health.py::test_readiness_and_status_cover_required_dependencies_without_secrets`.
-- [ ] Deploy and rollback use a BuilderOps-specific immutable pin and emit receipts that identify
-  image SHA, schema version, and authority epoch without restoring an older authoritative snapshot.
+- [ ] Deploy accepts only a GitHub-attested main-workflow receipt binding one source SHA to both the
+  restore-proved `linux/amd64` control-plane and PostgreSQL/WAL-G digests. Rollback uses the prior
+  trusted dual pin; deployment receipts identify both digests, schema version, and authority epoch
+  without restoring an older authoritative snapshot.
   Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
-- [ ] The BuilderOps-only Compose project and database run on a separate VM/container engine from
-  the `pkm-*` stacks, and
-  stopping, restarting, or load-cycling the Product stacks leaves BuilderOps ready and mutating
-  normally; a co-resident recovery target fails `/readyz`, while a stalled backup/WAL-archiving
-  pipeline raises a loud alert/status condition without blocking acknowledgement.
+- [ ] Repository preflight and Compose contracts require a BuilderOps-only project, database, and
+  separate container-engine identity from the `pkm-*` stacks. A co-resident recovery target fails
+  `/readyz`, while a stalled backup/WAL-archiving pipeline raises a loud alert/status condition
+  without blocking acknowledgement. Live Product load-cycle survival is deferred to the same
+  operator-gated two-engine receipt.
   Verify: `tests/ops/test_builderops_failure_domain.py::test_builder_plane_survives_product_stack_lifecycle_and_alerts_on_stalled_archiving`.
 - [ ] With Demerzel's host secret store unavailable, independently recoverable key/KMS custody can
   decrypt an encrypted full backup plus archived WAL and restore a disposable database to the latest
@@ -123,8 +157,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   Verify: `tests/ops/test_builderops_backup_restore.py::test_restore_from_backup_without_demerzel_secret_store`.
 - [ ] Negative scans of PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, WAL,
   encrypted backup bytes, and a restored database find no raw client/database/GitHub/model/
-  recovery-decryption credential; only non-secret reference/fingerprint/scope/rotation metadata is
-  durable.
+  recovery-decryption credential; only non-secret reference/fingerprint/token-length/scope/rotation
+  metadata is durable.
   Verify: `tests/security/test_builderops_secret_persistence.py::test_raw_credentials_never_enter_durable_state_or_restored_backup`.
 
 ## Out of Scope
@@ -138,9 +172,10 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 
 - render/validate Compose config under the dedicated project name;
 - run auth-negative, credential-redaction, durable-state, WAL, and restored-backup secret scans;
-- stop/restart the Product stacks and stall WAL archiving to prove builder-plane independence and
-  loud alerting, then execute full backup + archived-WAL restore to the latest archived point in an
-  isolated test project with Demerzel's host secret store unavailable; and
+- validate the repository lifecycle/failure-domain contracts and stall WAL archiving to prove loud
+  alerting; the later operator-gated host receipt owns Product load-cycle survival. Execute full
+  backup + archived-WAL restore to the latest archived point in an isolated test project with
+  Demerzel's host secret store unavailable; and
 - run `ruff check app tests` plus focused ops tests.
 
 ## Related Docs
