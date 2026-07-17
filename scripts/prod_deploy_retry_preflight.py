@@ -168,14 +168,90 @@ def _repo_root() -> Path:
     return root
 
 
+def _parse_simple_env_file(path: Path) -> dict[str, str]:
+    """Minimal ``KEY=VALUE`` parser for the channel pin file.
+
+    Mirrors the pin file's own writer (``write_pin()`` in
+    ``scripts/deploy_channel.sh``, which only ever emits a leading comment
+    plus ``KEY=VALUE`` lines) and is a close enough model of Compose's
+    ``--env-file`` interpolation-source format for this narrow, read-only
+    need: comments (``#``) and blank lines are skipped, and a bare ``KEY``
+    line (no ``=``) is skipped rather than treated as an empty-string
+    contribution. This is deliberately not the full ``env_file:`` CHAIN
+    semantics ``channel_isolation_preflight.py`` implements (bare-key-as-
+    winning-unset, required-layer fail-closed, multi-layer precedence) --
+    ``--env-file`` is a flat interpolation source, not a layered container
+    env injection, and the pin file is a single file, not a chain.
+    """
+    result: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return result
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, sep, value = stripped.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if key:
+            result[key] = value.strip()
+    return result
+
+
+def _interpolation_environ(repo_root: Path) -> dict[str, str] | None:
+    """The real interpolation-source layering for the prod channel's Compose
+    invocation, for ``resolve_effective_dsn``'s ``environ=`` parameter.
+
+    ``scripts/lib/deploy_channel_compose.sh`` invokes
+    ``docker compose --env-file "${channel_env_file}" ...`` -- the channel
+    pin file (``config/deploy/prod.env``) is a genuine Compose interpolation
+    source for ``docker-compose.prod.yml``'s ``${DATABASE_URL:-default}``
+    expression, not just the ambient shell environment. Compose's own
+    precedence is: shell environment wins over ``--env-file``, but
+    ``--env-file`` still contributes when the shell does not set a key -- so
+    the pin file's values are layered UNDER ``os.environ`` here, matching
+    that order exactly (``os.environ`` applied last, on top).
+
+    Committed pin files carry only ``APP_IMAGE_*`` keys today, so this is
+    currently a no-op overlay of ``os.environ`` in practice. But nothing
+    prevents an operator adding ``DATABASE_URL``/``DB_DSN`` to the pin file
+    directly: ``write_pin()`` only strips ``APP_IMAGE_*`` keys on rewrite,
+    preserving every other key untouched -- the exact mechanism
+    ``WATCHER_RUNTIME_ENV_FILE``/``VAULT_HOST_ROOT`` already use to persist
+    there. If that ever happens, the real ``docker compose`` invocation
+    honors it; this preflight must resolve identically, or it silently
+    inspects a different database than the one the real deploy targets --
+    the same failure class rounds 1-4 fixed, one layer deeper (#3903 round 6).
+
+    Returns ``None`` (matching ``resolve_effective_dsn``'s own ``os.environ``
+    default) when the pin file cannot be read or is empty, so a missing pin
+    file never narrows the interpolation source available to a normal run.
+    """
+    pin_path = repo_root / "config" / "deploy" / "prod.env"
+    if not pin_path.is_file():
+        return None
+    pin_values = _parse_simple_env_file(pin_path)
+    if not pin_values:
+        return None
+    merged = dict(pin_values)
+    merged.update(os.environ)
+    return merged
+
+
 def _resolve_prod_dsn() -> str | None:
     """The effective DATABASE_URL/DB_DSN the real prod worker service binds to.
 
     Delegates entirely to
     ``app.release_channels.channel_isolation_preflight.resolve_effective_dsn``
     against the committed ``docker-compose.prod.yml`` (+ base
-    ``docker-compose.yaml``) -- see the module docstring for why this must not
-    be re-derived by hand. Tries ``DATABASE_URL`` then ``DB_DSN``, matching
+    ``docker-compose.yaml``), with the ``environ=`` override from
+    :func:`_interpolation_environ` so the pin file's own ``--env-file``
+    contribution is consulted exactly like the real deploy consults it -- see
+    the module docstring for why this must not be re-derived by hand. Tries
+    ``DATABASE_URL`` then ``DB_DSN``, matching
     ``app/services/outbox.py::_open_conn``'s own key precedence; both are
     bound to the identical expression in docker-compose.prod.yml, so this only
     matters if a future overlay edit ever splits them. Returns ``None`` when
@@ -192,8 +268,9 @@ def _resolve_prod_dsn() -> str | None:
         compose_path = repo_root / "docker-compose.prod.yml"
         if not compose_path.is_file():
             return None
+        environ = _interpolation_environ(repo_root)
         for key in ("DATABASE_URL", "DB_DSN"):
-            value = resolve_effective_dsn(compose_path, PROD_DSN_SERVICE, key)
+            value = resolve_effective_dsn(compose_path, PROD_DSN_SERVICE, key, environ=environ)
             if value:
                 return value
         return None

@@ -723,13 +723,33 @@ def resolve_effective_dsn(
     docstring; that reinvention is exactly what broke round 2/3 of #3903's
     review).
 
+    **Deliberate divergence from** :func:`_check_db_dsn`: when *key* is set
+    explicitly in ``environment:``, this function returns that value
+    immediately and never calls :func:`_env_file_chain_error` — unlike
+    ``_check_db_dsn``, which flags a violation for a structurally broken
+    env_file chain (missing required layer, unreadable layer, unresolvable
+    path expression) even when the DSN itself is explicit, because Compose
+    still has to load that chain to start the service at all. That check is
+    a static-analysis FITNESS concern (would this compose file let the
+    service start), not a value-resolution one: once a key is explicit, its
+    *value* does not depend on the env_file chain in any way, so an
+    accessor whose only job is "what does this key resolve to" gains
+    nothing by inspecting it. A caller connecting to that resolved value
+    (rather than statically checking the file) is also not exposed by
+    skipping it: a genuinely broken chain still fails the deploy loudly and
+    independently at ``compose up`` time — a hard, non-silent gate that
+    exists whether or not this function looked at the chain first. Verified
+    by :func:`test_resolve_effective_dsn_ignores_chain_errors_when_dsn_is_explicit`
+    in ``tests/release_channels/test_channel_isolation_preflight.py``.
+
     Returns ``None`` when the key is neither set explicitly nor resolvable
     through the env_file chain (compose would start the service without this
     binding at all), or when the effective value cannot be verified (an
     unresolvable interpolation expression, a missing required layer, an
     unreadable layer, or a winning bare-``KEY`` unset line) — callers needing a
     fail-closed posture must treat ``None`` as "unknown, do not trust", exactly
-    as :func:`_check_db_dsn` does internally.
+    as :func:`_check_db_dsn` does internally for the omitted-key case (the one
+    case where this function's fail-closed posture does match ``_check_db_dsn``'s).
 
     Same design constraints as :func:`check_compose_channel_isolation`:
     read-only, no Docker, no network — this resolves the *declared* binding

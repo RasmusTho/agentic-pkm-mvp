@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from scripts.prod_deploy_retry_preflight import _PROD_DB_HOST_PUBLISHED_PORT
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -186,6 +188,15 @@ class _FakeConnection:
 
 
 def connect(dsn, **kwargs):
+    # H3 (#3903 round 6): record the exact DSN every call actually received,
+    # so a test can assert the real host:port rather than only "not the one
+    # poison string" -- a hardcoded host-translation constant drifting from
+    # docker-compose.yaml's real port mapping would otherwise still pass
+    # every existing assertion here (any non-poison DSN accepted).
+    log_path = os.environ.get("FAKE_OUTBOX_CONNECT_LOG")
+    if log_path:
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(dsn + "\\n")
     if os.environ.get("FAKE_OUTBOX_DB_UNREACHABLE") == "1":
         raise OperationalError("fake: db unreachable")
     # Regression guard for the ambient-env-contamination bug (#3903 round 3):
@@ -228,6 +239,7 @@ def _configure_prod_retry_preflight(
     unreachable: bool = False,
     dsn_override: str | None = None,
     compose_files_present: bool = True,
+    pin_file_dsn_override: str | None = None,
 ) -> None:
     """Copy the real preflight script + real compose files into the fixture
     repo, and fake the DB connection layer.
@@ -238,8 +250,8 @@ def _configure_prod_retry_preflight(
     through the fake psycopg module below -- only the DB connection is faked;
     the classification logic under test is real.
 
-    DSN resolution (#3903 round 4): the preflight no longer reads any pin or
-    runtime-env file directly -- it asks the REAL, unmodified
+    DSN resolution (#3903 rounds 4 and 6): the preflight no longer reads any
+    pin or runtime-env file BY HAND -- it asks the REAL, unmodified
     app.release_channels.channel_isolation_preflight module (imported via
     PYTHONPATH, not copied) what the REAL committed docker-compose.prod.yml's
     worker service actually binds, exactly as the production code path does.
@@ -248,12 +260,17 @@ def _configure_prod_retry_preflight(
     resolution succeeds against the genuine, current compose definitions --
     resolving to the real literal default
     (``postgresql+psycopg://app:app@db:5432/app``, host-translated to
-    ``127.0.0.1:15432`` by the preflight) unless ``dsn_override`` is set.
-    ``dsn_override`` sets an ambient DATABASE_URL, matching the one
-    legitimate way Compose interpolation itself allows overriding the
-    resolved value. ``compose_files_present=False`` omits the compose files
-    entirely, exercising the visible skipped:no_dsn path for "resolution is
-    impossible at all", not "a file was empty".
+    ``127.0.0.1:15432`` by the preflight) unless ``dsn_override`` or
+    ``pin_file_dsn_override`` is set. ``dsn_override`` sets an ambient
+    DATABASE_URL, matching the one Compose interpolation itself allows
+    overriding the resolved value with; ``pin_file_dsn_override`` instead
+    writes a real ``DATABASE_URL=`` line into ``config/deploy/prod.env`` (the
+    channel pin file), matching the OTHER genuine interpolation source the
+    real deploy passes to Compose as ``--env-file`` -- Compose's own
+    precedence has the ambient shell win over ``--env-file``, so setting both
+    together exercises that ordering. ``compose_files_present=False`` omits
+    the compose files entirely, exercising the visible skipped:no_dsn path
+    for "resolution is impossible at all", not "a file was empty".
     """
     shutil.copy2(
         REPO_ROOT / "scripts/prod_deploy_retry_preflight.py",
@@ -263,6 +280,14 @@ def _configure_prod_retry_preflight(
         shutil.copy2(REPO_ROOT / "docker-compose.yaml", root / "docker-compose.yaml")
         shutil.copy2(
             REPO_ROOT / "docker-compose.prod.yml", root / "docker-compose.prod.yml"
+        )
+    if pin_file_dsn_override is not None:
+        pin_dir = root / "config" / "deploy"
+        pin_dir.mkdir(parents=True, exist_ok=True)
+        (pin_dir / "prod.env").write_text(
+            "# deploy pin (H1 regression fixture: operator-added DSN key)\n"
+            f"DATABASE_URL={pin_file_dsn_override}\n",
+            encoding="utf-8",
         )
 
     pylib_dir = tmp_path / "pylib"
@@ -280,6 +305,10 @@ def _configure_prod_retry_preflight(
     if not (pylib_dir / "app").exists():
         (pylib_dir / "app").symlink_to(REPO_ROOT / "app")
     env["PYTHONPATH"] = str(pylib_dir)
+
+    # H3 (#3903 round 6): always-on connect-attempt log so a test can assert
+    # the EXACT host:port a connect() call received, not just "not poison".
+    env["FAKE_OUTBOX_CONNECT_LOG"] = str(tmp_path / "outbox-connect.log")
 
     env.pop("DATABASE_URL", None)
     env.pop("DB_DSN", None)
@@ -500,6 +529,12 @@ def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutat
     assert not (root / "config/deploy/prod.env").exists()
     assert not (root / "config/deploy/prod.previous.env").exists()
     assert not (tmp_path / "docker-called").exists()
+    # H3 (#3903 round 6): assert the EXACT host:port the fake DB layer
+    # received, not just "not the poison string" -- the real-compose-path
+    # resolution must actually translate to the pinned host-published port.
+    connect_log = (tmp_path / "outbox-connect.log").read_text(encoding="utf-8")
+    assert f"127.0.0.1:{_PROD_DB_HOST_PUBLISHED_PORT}" in connect_log
+    assert "@db:5432" not in connect_log
 
 
 def test_prod_deploy_pending_retry_preflight_uses_compose_environment_not_env_file(
@@ -588,6 +623,80 @@ def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
     assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
     assert "skipped:db_unreachable" not in result.stdout
     assert "skipped:no_dsn" not in result.stdout
+
+
+def test_prod_deploy_pending_retry_preflight_honors_pin_file_dsn_override(
+    tmp_path: Path,
+) -> None:
+    """H1 (#3903 round 6): the real prod deploy passes config/deploy/prod.env
+    to Compose as --env-file (scripts/lib/deploy_channel_compose.sh:76) -- a
+    genuine interpolation source for docker-compose.prod.yml's own
+    ${DATABASE_URL:-default} expression, separate from (and layered under)
+    the ambient shell environment. Committed pin files carry only
+    APP_IMAGE_* keys today, but nothing prevents an operator adding
+    DATABASE_URL/DB_DSN there directly (write_pin() only strips APP_IMAGE_*
+    keys on rewrite, preserving every other key -- the same mechanism
+    WATCHER_RUNTIME_ENV_FILE/VAULT_HOST_ROOT already use to persist there).
+    If that ever happens, the real deploy honors it (--env-file wins over
+    the compose file's own literal default); this preflight must resolve
+    identically, or it would silently keep checking the compose file's own
+    default DSN instead -- the same wrong-database bug class rounds 1-4
+    fixed, reopened one layer deeper.
+    """
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_dsn = "postgresql+psycopg://app:app@pin-file-designated-host:5432/app"
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[("panel.scan.requested", {}, 4)],
+        pin_file_dsn_override=pin_dsn,
+    )
+    # Poison the compose file's OWN literal default, host-translated: if the
+    # preflight ever regresses to ignoring the pin file's --env-file
+    # contribution, it resolves and connects to THIS instead, and the fake
+    # DB layer refuses it -- rc 0 / skipped:db_unreachable, not blocked.
+    env["FAKE_OUTBOX_POISON_DSN"] = (
+        f"postgresql+psycopg://app:app@127.0.0.1:{_PROD_DB_HOST_PUBLISHED_PORT}/app"
+    )
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode != 0
+    assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
+    assert "skipped:db_unreachable" not in result.stdout
+    assert "skipped:no_dsn" not in result.stdout
+    connect_log = (tmp_path / "outbox-connect.log").read_text(encoding="utf-8")
+    assert "pin-file-designated-host" in connect_log
+
+
+def test_prod_deploy_pending_retry_preflight_ambient_env_wins_over_pin_file(
+    tmp_path: Path,
+) -> None:
+    """Companion to the pin-file-override test above: Compose's own
+    precedence is ambient shell wins over --env-file. An operator-added pin
+    file DSN and an ambient shell DSN present together must resolve to the
+    ambient value, exactly as the real `docker compose` invocation would."""
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_dsn = "postgresql+psycopg://app:app@pin-file-should-lose:5432/app"
+    _configure_prod_retry_preflight(
+        root,
+        env,
+        tmp_path,
+        rows=[("panel.scan.requested", {}, 4)],
+        pin_file_dsn_override=pin_dsn,
+        dsn_override="postgresql+psycopg://app:app@ambient-should-win:5432/app",
+    )
+    env["FAKE_OUTBOX_POISON_DSN"] = pin_dsn
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode != 0
+    assert "prod pending-retry preflight: blocked terminal_pending_count=1" in result.stdout
+    assert "skipped:db_unreachable" not in result.stdout
+    connect_log = (tmp_path / "outbox-connect.log").read_text(encoding="utf-8")
+    assert "ambient-should-win" in connect_log
+    assert "pin-file-should-lose" not in connect_log
 
 
 def test_prod_deploy_pending_retry_preflight_is_redacted(tmp_path: Path) -> None:

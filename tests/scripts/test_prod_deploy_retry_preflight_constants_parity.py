@@ -14,11 +14,16 @@ semantics fails here until the preflight copy is updated.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+import yaml
 
 from app.workers import outbox_worker
 from scripts import prod_deploy_retry_preflight as preflight
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_retry_budget_constants_match_worker() -> None:
@@ -158,3 +163,67 @@ def test_classification_boundary_tracks_live_worker_constants() -> None:
     sql, params = conn.cursor_obj.executed[0]
     assert "delivered_at is null" in sql
     assert params == {"attempts_threshold": max_attempts - 1}
+
+
+def test_host_translation_constants_match_docker_compose_yaml_port_mapping() -> None:
+    """H3 (#3903 round 6): pin _COMPOSE_INTERNAL_DB_HOST/_PROD_DB_HOST_PUBLISHED_PORT
+    against the REAL docker-compose.yaml db service port mapping -- a
+    source-of-truth pin, not a hand-duplicated constant. Without this, if the
+    compose file's port mapping ever changed, the preflight would silently
+    resolve a wrong host:port, hit a connection error, and fall into the SAME
+    exit-0 skipped:db_unreachable path as an ordinary transient DB outage --
+    nothing would distinguish "the gate is broken" from "the DB had a blip."
+
+    docker-compose.yaml carries no !override/!reset tags (confirmed: those
+    only appear in channel overlays), so a bare yaml.safe_load is faithful
+    here without needing channel_isolation_preflight's tolerant loader.
+    """
+    compose_path = REPO_ROOT / "docker-compose.yaml"
+    data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    services = data.get("services") or {}
+
+    db_service = services.get(preflight._COMPOSE_INTERNAL_DB_HOST)
+    assert db_service is not None, (
+        f"docker-compose.yaml has no service named "
+        f"{preflight._COMPOSE_INTERNAL_DB_HOST!r} -- update "
+        "_COMPOSE_INTERNAL_DB_HOST in scripts/prod_deploy_retry_preflight.py"
+    )
+
+    host_ports_for_5432: list[str] = []
+    for entry in db_service.get("ports") or []:
+        if isinstance(entry, str):
+            # "HOST:CONTAINER" short syntax -- the only form this file uses today.
+            host_part, sep, container_part = entry.rpartition(":")
+            if sep and container_part.split("/")[0] == "5432" and host_part:
+                host_ports_for_5432.append(host_part)
+        elif isinstance(entry, dict) and str(entry.get("target")) == "5432":
+            # Long mapping form, tolerated even though unused today.
+            published = entry.get("published")
+            if published is not None:
+                host_ports_for_5432.append(str(published))
+
+    assert host_ports_for_5432, (
+        "docker-compose.yaml's db service no longer publishes container port "
+        "5432 -- update _PROD_DB_HOST_PUBLISHED_PORT (or the whole host-"
+        "translation approach) in scripts/prod_deploy_retry_preflight.py"
+    )
+    assert preflight._PROD_DB_HOST_PUBLISHED_PORT in host_ports_for_5432, (
+        f"scripts/prod_deploy_retry_preflight.py's _PROD_DB_HOST_PUBLISHED_PORT "
+        f"({preflight._PROD_DB_HOST_PUBLISHED_PORT!r}) no longer matches "
+        f"docker-compose.yaml's actual db port mapping {host_ports_for_5432!r} "
+        "-- update the constant to match."
+    )
+
+
+def test_host_reachable_dsn_uses_the_pinned_published_port() -> None:
+    """_host_reachable_dsn's output must actually USE the pinned constants
+    (not just have them defined) -- proves the translation function and the
+    source-of-truth-pinned constant above stay wired together."""
+    internal_dsn = (
+        f"postgresql+psycopg://app:app@{preflight._COMPOSE_INTERNAL_DB_HOST}:5432/app"
+    )
+
+    translated = preflight._host_reachable_dsn(internal_dsn)
+
+    assert f"127.0.0.1:{preflight._PROD_DB_HOST_PUBLISHED_PORT}" in translated
+    assert preflight._COMPOSE_INTERNAL_DB_HOST + ":5432" not in translated

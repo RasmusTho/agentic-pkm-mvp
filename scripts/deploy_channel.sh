@@ -307,8 +307,8 @@ prod_pending_retry_preflight() {
   # the worker restarted, undetected by every other gate). Never mutates the
   # outbox; deliberately NOT applied to rollback (the prior stable ref must
   # always be recoverable -- docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md).
-  # DSN sourcing (#3903 round 4): the effective DATABASE_URL/DB_DSN a running
-  # prod service binds to is resolved ENTIRELY inside
+  # DSN sourcing (#3903 rounds 4 and 6): the effective DATABASE_URL/DB_DSN a
+  # running prod service binds to is resolved ENTIRELY inside
   # scripts/prod_deploy_retry_preflight.py, by asking
   # app.release_channels.channel_isolation_preflight (the one purpose-built,
   # tested Compose environment:-vs-env_file: resolver) what docker-compose.prod.yml
@@ -318,9 +318,11 @@ prod_pending_retry_preflight() {
   # the same key, and the prod overlay sets DATABASE_URL/DB_DSN directly in
   # `environment:`). This wrapper therefore has no DSN of its own to inject;
   # the preflight subprocess inherits this shell's environment exactly as the
-  # real `docker compose` invocation below does, so an ambient DATABASE_URL/
-  # DB_DSN override behaves identically for both (Compose interpolation
-  # semantics), with nothing printed either way (#3875 redaction posture). See
+  # real `docker compose` invocation below does, AND resolves the same
+  # `--env-file "${pin_file}"` interpolation contribution that invocation
+  # passes to Compose (round 6: an ambient DATABASE_URL/DB_DSN override still
+  # wins over both, matching Compose's real precedence). Nothing is printed
+  # either way (#3875 redaction posture). See
   # scripts/prod_deploy_retry_preflight.py and
   # docs/HEALTH.md :: Outbox and dead-letter signals.
   local receipt_json rc=0

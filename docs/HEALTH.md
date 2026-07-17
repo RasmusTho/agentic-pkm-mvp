@@ -185,9 +185,15 @@ Posture:
   `environment:` for every channel-critical service — so in the normal case (no shell override) the
   effective binding is the overlay's own interpolation default, regardless of what any `env_file`
   (governed runtime env file included) happens to contain. Nothing is exported to the wider shell,
-  passed to Compose, or printed (the #3875 posture); an ambient `DATABASE_URL`/`DB_DSN` override
-  behaves identically for the preflight and the real `docker compose` invocation, since both read it
-  via the same Compose interpolation semantics from the same shell. In the normal case the resolved
+  passed to Compose, or printed (the #3875 posture). Two interpolation sources are consulted, in
+  Compose's own precedence order (ambient wins, `--env-file` still contributes when ambient does
+  not set a key): the ambient shell environment, which behaves identically for the preflight and
+  the real `docker compose` invocation since both read it from the same shell; and the channel pin
+  file (`config/deploy/prod.env`), which the real deploy also passes to Compose as `--env-file`
+  (`scripts/lib/deploy_channel_compose.sh`) — committed pin files carry only `APP_IMAGE_*` keys
+  today, so this is normally a no-op, but an operator-added `DATABASE_URL`/`DB_DSN` there (nothing
+  prevents it; `write_pin()` only strips `APP_IMAGE_*` on rewrite) is honored identically by both.
+  In the normal case the resolved
   value names the Compose-internal `db` service, which the preflight (running on the host, not
   inside the Compose network) translates to the host-published port — `docker-compose.yaml`'s `db`
   service publishes container port 5432 on host port 15432 and the prod overlay does not override
