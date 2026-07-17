@@ -23,7 +23,7 @@ from app.watcher.settings_delta import (
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 from app.watcher.state import WatcherState
 from app.vault.manager import iter_vault_markdown_files
-from app.vault.paths import get_vault_system_dir_rel
+from app.vault.paths import resolve_vault_system_dir_rel_or_default
 
 _WATCHER_LOG = logging.getLogger(__name__)
 
@@ -393,7 +393,9 @@ def run_tick(
             continue
         if is_settings_control_path(
             rel,
-            configured_system_dir=get_vault_system_dir_rel(cfg.vault_path),
+            configured_system_dir=resolve_vault_system_dir_rel_or_default(
+                cfg.vault_path
+            ),
         ):
             state.update_file_state(
                 rel_str,

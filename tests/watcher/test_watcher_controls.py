@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.vault.paths import get_vault_inbox_dir_rel
+from app.vault.manager import VaultManager
 from app.watcher.config import WatcherConfig
 from app.watcher.settings_delta import (
     SettingsSourceDeltaResult,
@@ -151,6 +152,49 @@ def test_scoped_settings_control_file_is_never_emitted_as_note(tmp_path: Path) -
     assert summary["scanned_files"] == 1
     assert summary["emitted_in_tick"] == 0
     assert not cfg.outbox_path.exists()
+
+
+def test_layoutless_initialized_vault_ordinary_note_tick_does_not_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_LAYOUT_NOTE_REL", raising=False)
+
+    def fail_layout_provisioning(_vault_root: Path):
+        raise OSError("layout provisioning unavailable")
+
+    monkeypatch.setattr(
+        "app.vault.layout.load_or_create_layout", fail_layout_provisioning
+    )
+    VaultManager().initialize_vault(vault, machine_role="testNode", remember=False)
+    assert (vault / "settings" / "vault.md").exists()
+    assert not list(vault.rglob("vault.layout.md"))
+
+    note = vault / "Notes" / "ordinary.md"
+    note.parent.mkdir()
+    note.write_text("ordinary note", encoding="utf-8")
+    cfg = WatcherConfig(
+        enable=True,
+        vault_path=vault,
+        scope_glob="Notes/**",
+        debounce_ms=0,
+        rate_limit_per_min=30,
+        backoff_seconds=10,
+        state_path=tmp_path / "state.json",
+        stop_file=tmp_path / "WATCHER_STOP",
+        outbox_path=tmp_path / "outbox.jsonl",
+        summary_interval=10,
+        tick_sleep_seconds=0.0,
+        tick_log_path=tmp_path / "tick.jsonl",
+    )
+
+    summary = run_tick(cfg, WatcherState(), now=0.0)
+
+    assert summary["emitted_in_tick"] == 1
+    assert _read_outbox(cfg.outbox_path)[0]["payload"]["relative_path"] == str(
+        Path("Notes/ordinary.md")
+    )
 
 
 def test_deleted_settings_source_reloads_effective_bundle(

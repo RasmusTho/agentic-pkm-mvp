@@ -8,6 +8,7 @@ import yaml
 from app.cli import cli
 from app.cli.uat import DEFAULT_FOLDER_NAME, DEFAULT_TARGET_SUBDIR
 from app import objects as object_store_module
+from app.receipts.settings_write import ReceiptDurabilityUncertainError
 
 
 def test_uat_seed_cli_copies_notes(tmp_path: Path) -> None:
@@ -204,9 +205,17 @@ def test_uat_seed_receipt_failure_leaves_canonical_settings_unchanged(
     tmp_path: Path,
 ) -> None:
     canonical = tmp_path / "settings" / "ingest.override.md"
+    publication_observed = False
+
+    def fail_after_publication(**_kwargs):
+        nonlocal publication_observed
+        publication_observed = canonical.exists()
+        assert canonical.exists()
+        raise RuntimeError("receipt unavailable")
+
     with patch(
         "app.cli.uat.emit_settings_write_receipts_for_changes",
-        side_effect=RuntimeError("receipt unavailable"),
+        side_effect=fail_after_publication,
     ):
         result = CliRunner().invoke(
             cli,
@@ -215,4 +224,87 @@ def test_uat_seed_receipt_failure_leaves_canonical_settings_unchanged(
         )
 
     assert result.exit_code != 0
+    assert publication_observed
     assert not canonical.exists()
+
+
+def test_uat_seed_replace_failure_emits_no_receipt_and_preserves_canonical(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "settings" / "ingest.override.md"
+    canonical.parent.mkdir(parents=True)
+    original = b"---\ninclude_folders: [Existing]\n---\n\noriginal bytes\n"
+    canonical.write_bytes(original)
+
+    with (
+        patch("app.cli.uat.os.replace", side_effect=OSError("replace failed")),
+        patch("app.cli.uat.emit_settings_write_receipts_for_changes") as emit_receipts,
+        patch("app.cli.uat.emit_settings_write_receipt") as emit_receipt,
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+            env={"STORE_BACKEND": "memory"},
+        )
+
+    assert result.exit_code != 0
+    assert canonical.read_bytes() == original
+    emit_receipts.assert_not_called()
+    emit_receipt.assert_not_called()
+    assert not list(canonical.parent.glob(f".{canonical.name}.*.tmp"))
+
+
+def test_uat_seed_receipt_failure_restores_exact_previous_canonical_bytes(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "settings" / "ingest.override.md"
+    canonical.parent.mkdir(parents=True)
+    original = b"---\r\ninclude_folders: [Existing]\r\n---\r\n\r\nexact old bytes\r\n"
+    canonical.write_bytes(original)
+    publication_observed = False
+
+    def fail_after_publication(**_kwargs):
+        nonlocal publication_observed
+        publication_observed = canonical.read_bytes() != original
+        assert canonical.read_bytes() != original
+        raise RuntimeError("receipt unavailable")
+
+    with patch(
+        "app.cli.uat.emit_settings_write_receipts_for_changes",
+        side_effect=fail_after_publication,
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+            env={"STORE_BACKEND": "memory"},
+        )
+
+    assert result.exit_code != 0
+    assert publication_observed
+    assert canonical.read_bytes() == original
+    assert not list(canonical.parent.glob(f".{canonical.name}.*.tmp"))
+
+
+def test_uat_seed_receipt_durability_uncertainty_keeps_published_canonical(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "settings" / "ingest.override.md"
+    canonical.parent.mkdir(parents=True)
+    original = b"---\ninclude_folders: [Existing]\n---\n\noriginal bytes\n"
+    canonical.write_bytes(original)
+
+    with patch(
+        "app.cli.uat.emit_settings_write_receipts_for_changes",
+        side_effect=ReceiptDurabilityUncertainError("parent fsync failed"),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+            env={"STORE_BACKEND": "memory"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert canonical.read_bytes() != original
+    payload = yaml.safe_load(canonical.read_text(encoding="utf-8").split("---", 2)[1])
+    assert payload["include_folders"] == ["Existing", DEFAULT_TARGET_SUBDIR]
+    assert not list(canonical.parent.glob(f".{canonical.name}.*.tmp"))

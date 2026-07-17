@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import os
 import shutil
 import tempfile
@@ -10,6 +11,7 @@ import yaml
 
 from app.promotion.consumer import consume_promotion_intents
 from app.receipts.settings_write import (
+    ReceiptDurabilityUncertainError,
     SettingsWriteReceipt,
     emit_settings_write_receipt,
     emit_settings_write_receipts_for_changes,
@@ -24,6 +26,8 @@ SEED_SOURCE = Path(__file__).resolve().parents[2] / "docs" / "examples" / "vault
 DEFAULT_TARGET_SUBDIR = "Test"
 DEFAULT_FOLDER_NAME = "AgenticPKM-UAT"
 DEFAULT_MAX_NOTES = 50
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -142,6 +146,35 @@ def _normalize_unique_folders(values: list[object]) -> list[str]:
     return folders
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _restore_canonical_bytes(path: Path, previous_bytes: bytes | None) -> None:
+    if previous_bytes is None:
+        path.unlink(missing_ok=True)
+        _fsync_directory(path.parent)
+        return
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".rollback.tmp"
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(previous_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def _write_ingest_override(
     path: Path,
     payload: dict[str, Any],
@@ -158,16 +191,21 @@ def _write_ingest_override(
     if path.exists() and path.read_text(encoding="utf-8") == serialized:
         return
 
+    previous_bytes = path.read_bytes() if path.exists() else None
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
     )
     temporary_path = Path(temporary_name)
+    published = False
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(serialized)
             handle.flush()
             os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        published = True
+        _fsync_directory(path.parent)
         receipts = emit_settings_write_receipts_for_changes(
             old_values=previous,
             new_values=payload,
@@ -191,12 +229,15 @@ def _write_ingest_override(
                 ),
                 require_durable=True,
             )
-        os.replace(temporary_path, path)
-        parent_descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(parent_descriptor)
-        finally:
-            os.close(parent_descriptor)
+    except ReceiptDurabilityUncertainError as exc:
+        logger.warning(
+            "UAT ingest override published with receipt durability uncertain: %s",
+            exc,
+        )
+    except Exception:
+        if published:
+            _restore_canonical_bytes(path, previous_bytes)
+        raise
     finally:
         temporary_path.unlink(missing_ok=True)
 
