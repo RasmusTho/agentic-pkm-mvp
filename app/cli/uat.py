@@ -1,8 +1,11 @@
 from __future__ import annotations
+import fcntl
 import logging
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Tuple
@@ -154,11 +157,40 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _restore_canonical_bytes(path: Path, previous_bytes: bytes | None) -> None:
+@contextmanager
+def _settings_directory_lock(path: Path) -> Iterator[None]:
+    """Serialize repo-supported UAT settings writers without a lock artifact."""
+
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _restore_canonical_bytes(
+    path: Path,
+    previous_bytes: bytes | None,
+    *,
+    published_bytes: bytes,
+) -> bool:
+    try:
+        current_bytes = path.read_bytes()
+    except FileNotFoundError:
+        return False
+    if current_bytes != published_bytes:
+        logger.warning(
+            "UAT ingest override rollback skipped because canonical changed concurrently: %s",
+            path,
+        )
+        return False
+
     if previous_bytes is None:
         path.unlink(missing_ok=True)
         _fsync_directory(path.parent)
-        return
+        return True
 
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent, prefix=f".{path.name}.", suffix=".rollback.tmp"
@@ -173,6 +205,7 @@ def _restore_canonical_bytes(path: Path, previous_bytes: bytes | None) -> None:
         _fsync_directory(path.parent)
     finally:
         temporary_path.unlink(missing_ok=True)
+    return True
 
 
 def _write_ingest_override(
@@ -188,6 +221,7 @@ def _write_ingest_override(
         "This file extends the ingest scope used by the repo-supported local test bootstrap.\n"
     )
     serialized = f"---\n{frontmatter}\n---\n\n{body}"
+    published_bytes = serialized.encode("utf-8")
     if path.exists() and path.read_text(encoding="utf-8") == serialized:
         return
 
@@ -236,7 +270,11 @@ def _write_ingest_override(
         )
     except Exception:
         if published:
-            _restore_canonical_bytes(path, previous_bytes)
+            _restore_canonical_bytes(
+                path,
+                previous_bytes,
+                published_bytes=published_bytes,
+            )
         raise
     finally:
         temporary_path.unlink(missing_ok=True)
@@ -244,20 +282,22 @@ def _write_ingest_override(
 
 def _ensure_uat_ingest_scope(vault_root: Path, *, target_subdir: str) -> None:
     read_path, canonical_path = _ingest_override_paths(vault_root)
-    existing = _read_existing_override(read_path)
-    include_folders = existing.get("include_folders")
-    if isinstance(include_folders, list):
-        merged = _normalize_unique_folders([*include_folders, target_subdir])
-    elif include_folders is None:
-        merged = [target_subdir]
-    else:
-        merged = _normalize_unique_folders([include_folders, target_subdir])
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    with _settings_directory_lock(canonical_path.parent):
+        existing = _read_existing_override(read_path)
+        include_folders = existing.get("include_folders")
+        if isinstance(include_folders, list):
+            merged = _normalize_unique_folders([*include_folders, target_subdir])
+        elif include_folders is None:
+            merged = [target_subdir]
+        else:
+            merged = _normalize_unique_folders([include_folders, target_subdir])
 
-    payload = dict(existing)
-    payload["include_folders"] = merged
-    _write_ingest_override(
-        canonical_path, payload, previous=existing, source_path=read_path
-    )
+        payload = dict(existing)
+        payload["include_folders"] = merged
+        _write_ingest_override(
+            canonical_path, payload, previous=existing, source_path=read_path
+        )
 
 
 def _default_snapshot_path(scope: Path) -> Path:

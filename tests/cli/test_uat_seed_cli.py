@@ -308,3 +308,56 @@ def test_uat_seed_receipt_durability_uncertainty_keeps_published_canonical(
     payload = yaml.safe_load(canonical.read_text(encoding="utf-8").split("---", 2)[1])
     assert payload["include_folders"] == ["Existing", DEFAULT_TARGET_SUBDIR]
     assert not list(canonical.parent.glob(f".{canonical.name}.*.tmp"))
+
+
+def test_uat_seed_receipt_failure_preserves_concurrent_existing_canonical_write(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "settings" / "ingest.override.md"
+    canonical.parent.mkdir(parents=True)
+    original = b"---\ninclude_folders: [Existing]\n---\n\noriginal bytes\n"
+    concurrent = b"---\ninclude_folders: [Concurrent]\n---\n\nconcurrent bytes\n"
+    canonical.write_bytes(original)
+
+    def replace_then_fail(**_kwargs):
+        canonical.write_bytes(concurrent)
+        raise RuntimeError("receipt unavailable")
+
+    with patch(
+        "app.cli.uat.emit_settings_write_receipts_for_changes",
+        side_effect=replace_then_fail,
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+            env={"STORE_BACKEND": "memory"},
+        )
+
+    assert result.exit_code != 0
+    assert canonical.read_bytes() == concurrent
+    assert not list(canonical.parent.glob(f".{canonical.name}.*.tmp"))
+
+
+def test_uat_seed_receipt_failure_preserves_concurrent_new_canonical_write(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "settings" / "ingest.override.md"
+    concurrent = b"---\ninclude_folders: [Concurrent]\n---\n\nconcurrent bytes\n"
+
+    def replace_then_fail(**_kwargs):
+        canonical.write_bytes(concurrent)
+        raise RuntimeError("receipt unavailable")
+
+    with patch(
+        "app.cli.uat.emit_settings_write_receipts_for_changes",
+        side_effect=replace_then_fail,
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["uat-seed-vault-test", "--vault-root", str(tmp_path)],
+            env={"STORE_BACKEND": "memory"},
+        )
+
+    assert result.exit_code != 0
+    assert canonical.read_bytes() == concurrent
+    assert not list(canonical.parent.glob(f".{canonical.name}.*.tmp"))
