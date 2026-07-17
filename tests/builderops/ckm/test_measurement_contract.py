@@ -993,10 +993,20 @@ def test_snapshot_manifest_accounts_for_complete_scope(store: CkmStore) -> None:
         read_set={"capability": ["capability-one"]},
     )
     original_digest = immutable.read_set_digest
+    original_snapshot = immutable.to_dict()
     with pytest.raises(TypeError):
         immutable.read_set["capability"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        immutable.watermarks["repo"] = "commit:mutated"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        immutable.provenance[0]["ref"] = "fixture@mutated"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        immutable.completeness.object_classes[0] = ObjectClassCompleteness(  # type: ignore[index]
+            "artifact", included=0
+        )
     assert immutable.read_set == {"capability": ("capability-one",)}
     assert immutable.read_set_digest == original_digest
+    assert immutable.to_dict() == original_snapshot
 
     artifact_only = SnapshotManifest.build(
         state=store.state_identity(),

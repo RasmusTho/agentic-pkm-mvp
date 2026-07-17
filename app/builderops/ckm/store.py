@@ -22,7 +22,12 @@ from uuid import uuid4
 from app.builderops.config import BuilderOpsPaths, load_paths, validate_db_path_outside_vault
 from app.builderops.store import SqliteBuilderOpsStore
 
-from app.builderops.ckm.contracts import CkmStateIdentity, canonical_digest, stable_public_id
+from app.builderops.ckm.contracts import (
+    CkmStateIdentity,
+    canonical_digest,
+    canonical_json,
+    stable_public_id,
+)
 from app.builderops.ckm.models import (
     MATURITY_DIMENSIONS,
     CkmArtifact,
@@ -554,21 +559,35 @@ class CkmStore:
 
     @staticmethod
     def _assessment_public_id(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
-        def public_ids(value: Any) -> set[str]:
-            if isinstance(value, list):
-                return set().union(*(public_ids(item) for item in value)) if value else set()
-            if not isinstance(value, dict):
-                return set()
-            found = {str(value["public_id"])} if value.get("public_id") else set()
-            for item in value.values():
-                found.update(public_ids(item))
-            return found
+        volatile_keys = {
+            "id",
+            "edge_id",
+            "artifact_id",
+            "capability_id",
+            "created_at",
+            "updated_at",
+            "retired_at",
+            "valid_from",
+            "asserted_at",
+        }
 
-        evidence: dict[str, tuple[str, ...]] = {}
+        def stable_evidence(value: Any) -> Any:
+            if isinstance(value, list):
+                frozen = [stable_evidence(item) for item in value]
+                return sorted(frozen, key=lambda item: canonical_json(item))
+            if not isinstance(value, dict):
+                return value
+            return {
+                key: stable_evidence(item)
+                for key, item in sorted(value.items())
+                if key not in volatile_keys
+            }
+
+        evidence: dict[str, str] = {}
         for dimension in MATURITY_DIMENSIONS:
             raw = row[f"{dimension}_citations"]
             citations = _loads(raw) if isinstance(raw, str) else raw
-            evidence[dimension] = tuple(sorted(public_ids(citations)))
+            evidence[dimension] = canonical_digest(stable_evidence(citations))
         identity = {
             "capability": CkmStore._referenced_public_id(
                 conn, "ckm_capability", str(row["capability_id"])

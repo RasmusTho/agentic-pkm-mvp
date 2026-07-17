@@ -371,6 +371,42 @@ def test_equal_scores_with_replaced_evidence_append_distinct_assessments(
     assert history[0].edge_fingerprint != history[1].edge_fingerprint
 
 
+def test_equal_scores_with_changed_artifact_state_append_distinct_assessments(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    edge = _edge(
+        store,
+        capability.id,
+        source_ref="docs/STATE.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+    )
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+
+    artifact = store.upsert_artifact(
+        source_ref="docs/STATE.md",
+        artifact_kind="document",
+        source="fixture",
+        watermark="wm:docs/STATE.md",
+        provenance='{"payload_summary":"State: current v2"}',
+    )
+    assert artifact.public_id == first.citations["documentation_quality"][0]["artifact"][
+        "public_id"
+    ]
+    assert assess_capabilities(store).assessed == 1
+    second = store.latest_assessment_for_capability(capability.id)
+
+    assert second is not None
+    assert edge.public_id == second.citations["documentation_quality"][0]["edge"]["public_id"]
+    assert second.scores == first.scores
+    assert second.public_id != first.public_id
+    assert second.edge_fingerprint != first.edge_fingerprint
+
+
 def test_historical_citations_survive_edge_change_and_artifact_cleanup(
     store: CkmStore,
 ) -> None:

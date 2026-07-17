@@ -32,6 +32,22 @@ SUPPORTED_VALUE_STATES = frozenset(
 SUPPORTED_HISTORY_MODES = frozenset({"current"})
 
 
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _deep_thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_thaw(item) for item in value]
+    return value
+
+
 def canonical_json(value: Any) -> str:
     """Return the single canonical JSON representation used by public digests."""
 
@@ -166,6 +182,7 @@ class CompletenessManifest:
     complete: bool
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "object_classes", tuple(self.object_classes))
         names = [item.object_class for item in self.object_classes]
         if not names or len(names) != len(set(names)):
             raise ValueError("completeness manifest needs distinct object classes")
@@ -244,7 +261,13 @@ class SnapshotManifest:
             "read_set_digest": canonical_digest(canonical_read_set),
         }
         return cls(
-            **{key: value for key, value in unsigned.items() if key != "completeness"},
+            **{
+                key: value
+                for key, value in unsigned.items()
+                if key not in {"completeness", "watermarks", "provenance"}
+            },
+            watermarks=_deep_freeze(dict(sorted(watermarks.items()))),
+            provenance=tuple(_deep_freeze(dict(item)) for item in provenance),
             completeness=completeness,
             read_set=MappingProxyType(canonical_read_set),
             snapshot_digest=canonical_digest(unsigned),
@@ -263,8 +286,8 @@ class SnapshotManifest:
             "redaction_profile": self.redaction_profile,
             "read_set_digest": self.read_set_digest,
             "snapshot_digest": self.snapshot_digest,
-            "watermarks": dict(sorted(self.watermarks.items())),
-            "provenance": [dict(item) for item in self.provenance],
+            "watermarks": _deep_thaw(self.watermarks),
+            "provenance": _deep_thaw(self.provenance),
             "completeness": self.completeness.to_dict(),
         }
 
