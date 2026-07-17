@@ -11,7 +11,11 @@ from uuid import UUID
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
-from app.index.artifact_metadata import build_indexed_unit_payload, compute_payload_content_hash, extract_indexable_text
+from app.index.artifact_metadata import (
+    build_indexed_unit_payload,
+    canonicalize_indexable_text,
+    compute_payload_content_hash,
+)
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app import objects as domain_objects
 from app.stores import get_vector_index, resolve_store_backend
@@ -38,7 +42,7 @@ _RETRYABLE_NAMES = {"SerializationFailure", "DeadlockDetected", "TooManyRequests
 
 
 def _extract_text(payload: dict | None) -> str:
-    return extract_indexable_text(payload)
+    return canonicalize_indexable_text(payload)
 
 
 def _load_objects(limit: int | None) -> Tuple[List[domain_objects.DomainObject], str]:
@@ -267,6 +271,10 @@ def rebuild(
             summary["skipped"] = int(summary["skipped"]) + 1
             continue
 
+        indexed_payload = dict(domain_obj.payload or {})
+        indexed_payload["content"] = text
+        indexed_payload["text"] = text
+
         embedding: list | None = None
         try:
             embedding = embed_with_retry(
@@ -315,7 +323,7 @@ def rebuild(
                     object_id=UUID(str(domain_obj.uuid)),
                     kind=str(domain_obj.kind or "note"),
                     source_ref=str(domain_obj.source_ref or ""),
-                    payload=dict(domain_obj.payload or {}),
+                    payload=indexed_payload,
                     text=text,
                     embedding_identity=identity,
                 ),
@@ -432,12 +440,12 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
     return stale
 
 
-def _reconcile_object_text(object_id, vector_payload: dict | None) -> str:
-    """Resolve the source text to re-embed for a row.
+def _reconcile_object_payload(object_id, vector_payload: dict | None) -> dict:
+    """Resolve the authoritative payload to re-embed for a row.
 
     Prefer the authoritative ``store_objects`` payload (the durable object of
-    record); fall back to the text carried in the vector-index row payload when the
-    object row is absent, so an orphaned index row can still be reconciled.
+    record); fall back to the vector-index row payload when the object row is
+    absent, so an orphaned index row can still be reconciled.
     """
     from app.stores.pg import _connect  # local import: pg backend is optional
 
@@ -449,10 +457,10 @@ def _reconcile_object_text(object_id, vector_payload: dict | None) -> str:
             )
             row = cur.fetchone()
     if row and row.get("payload"):
-        text = _extract_text(dict(row["payload"]))
-        if text:
-            return text
-    return _extract_text(vector_payload or {})
+        payload = dict(row["payload"])
+        if _extract_text(payload):
+            return payload
+    return dict(vector_payload or {})
 
 
 @index.command("reconcile", help="Re-embed non-primary-identity vectors under the primary identity (converge a mixed index).")
@@ -555,18 +563,27 @@ def reconcile(
         kind = str(row.get("kind") or "note")
         source_ref = str(row.get("source_ref") or "")
         vector_payload = dict(row.get("payload") or {})
+        source_payload = _reconcile_object_payload(object_id, vector_payload)
         domain_obj = domain_objects.DomainObject(
             uuid=str(object_id),
             kind=kind,
             source_ref=source_ref,
-            payload=vector_payload,
+            payload=source_payload,
             created_at=datetime.now(timezone.utc),
         )
 
-        text = _reconcile_object_text(object_id, vector_payload)
+        text = _extract_text(source_payload)
         if not text:
             summary["skipped"] = int(summary["skipped"]) + 1
             continue
+
+        # ``store_vector_index`` is a derived retrieval projection.  Keep both
+        # compatibility aliases bound to the exact producer-selected source
+        # text so a successful reconcile cannot leave retrieval serving a
+        # stale legacy ``text`` value while provenance already reports clean.
+        indexed_payload = dict(source_payload)
+        indexed_payload["content"] = text
+        indexed_payload["text"] = text
 
         embedding: list | None = None
         try:
@@ -588,7 +605,7 @@ def reconcile(
             _oid=object_id,
             _kind=kind,
             _source_ref=source_ref,
-            _payload=vector_payload,
+            _payload=indexed_payload,
             _text=text,
             _embedding=embedding,
         ) -> None:

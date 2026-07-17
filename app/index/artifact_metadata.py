@@ -65,6 +65,11 @@ def extract_indexable_text(payload: dict | None) -> str:
     return ""
 
 
+def canonicalize_indexable_text(payload: dict | None) -> str:
+    """Return the exact producer text used for embedding and provenance."""
+    return strip_ai_panels(extract_indexable_text(payload))
+
+
 def compute_indexed_content_hash(text: str) -> str:
     """Hash text with the producer's AI-panel canonicalization."""
     return compute_content_hash(strip_ai_panels(text or ""))
@@ -72,7 +77,7 @@ def compute_indexed_content_hash(text: str) -> str:
 
 def compute_payload_content_hash(payload: dict | None) -> str:
     """Hash the producer-selected text from a durable object payload."""
-    return compute_indexed_content_hash(extract_indexable_text(payload))
+    return compute_content_hash(canonicalize_indexable_text(payload))
 
 
 def build_indexed_unit_payload(
@@ -138,6 +143,7 @@ def build_indexed_unit_payload(
 
 __all__ = [
     "build_indexed_unit_payload",
+    "canonicalize_indexable_text",
     "compute_content_hash",
     "compute_indexed_content_hash",
     "compute_payload_content_hash",

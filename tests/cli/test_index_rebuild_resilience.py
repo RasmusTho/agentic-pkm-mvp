@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from click.testing import CliRunner
 
+from app.agents.panel.filters import strip_ai_panels
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.objects import DomainObject, ObjectStore
 from app import objects as legacy_store
@@ -175,4 +176,36 @@ def test_rebuild_max_retries_wires_embed_attempt_budget(monkeypatch):
     assert result.exit_code == 0, f"CLI exited non-zero: {result.output}\n{result.exception}"
     assert seen == [1], f"--max-retries 0 should pass max_attempts=1 to embed_with_retry, got {seen}"
 
+    legacy_store._MEMORY_STORE.clear()
+
+
+def test_rebuild_embeds_the_same_ai_panel_stripped_text_it_hashes(monkeypatch):
+    """Rebuild provenance must hash the exact bytes sent to the embedder."""
+    reset_store_backends()
+    legacy_store._MEMORY_STORE.clear()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "8")
+
+    source_text = """Canonical note body.
+
+%% AI:Start %%
+## AI-instruktion
+Transient panel text.
+%% AI:End %%
+"""
+    _seed_object(source_text, source_ref="vault/panel.md")
+    embedded_texts: list[str] = []
+
+    def capture_embed(text, **_kwargs):
+        embedded_texts.append(text)
+        return [0.1] * 8
+
+    from app.cli import cli
+
+    with patch("app.cli.index_rebuild.embed_with_retry", side_effect=capture_embed):
+        result = CliRunner().invoke(cli, ["index", "rebuild", "--backend", "memory", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert embedded_texts == [strip_ai_panels(source_text)]
     legacy_store._MEMORY_STORE.clear()

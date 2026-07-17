@@ -281,6 +281,25 @@ Transient panel text.
                     (changed_content, "legacy shadow text", stale_oid),
                 )
 
+        import importlib
+
+        rebuild_module = importlib.import_module("app.cli.index_rebuild")
+        resolved_client = rebuild_module.get_embedding_client(profile="default")
+        embedded_texts: list[str] = []
+
+        class CapturingClient:
+            identity = resolved_client.identity
+
+            def embed_text(self, text: str) -> list[float]:
+                embedded_texts.append(text)
+                return resolved_client.embed_text(text)
+
+        monkeypatch.setattr(
+            rebuild_module,
+            "get_embedding_client",
+            lambda *, profile="default": CapturingClient(),
+        )
+
         runner = CliRunner()
         env = dict(os.environ)
         result = runner.invoke(cli, ["index", "reconcile", "--backend", "pg", "--json"], env=env)
@@ -289,19 +308,29 @@ Transient panel text.
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT object_id, payload->'provenance'->>'content_hash' AS content_hash "
+                    "SELECT object_id, payload, "
+                    "payload->'provenance'->>'content_hash' AS content_hash "
                     "FROM store_vector_index WHERE object_id IN (%s, %s)",
                     (stale_oid, fresh_oid),
                 )
-                rows_after = {row["object_id"]: row["content_hash"] for row in cur.fetchall()}
+                rows_after = {row["object_id"]: row for row in cur.fetchall()}
 
         # Stale row is re-embedded: its hash matches the producer's canonical
         # panel-free form of the selected content field.
-        assert rows_after[stale_oid] == compute_content_hash(strip_ai_panels(changed_content))
+        assert rows_after[stale_oid]["content_hash"] == compute_content_hash(
+            strip_ai_panels(changed_content)
+        )
+        # The derived retrieval payload must also carry the authoritative
+        # source text.  Otherwise doctor can report convergence while hybrid
+        # retrieval still serves the legacy ``text`` alias.
+        canonical_changed_content = strip_ai_panels(changed_content)
+        assert embedded_texts == [canonical_changed_content]
+        assert rows_after[stale_oid]["payload"]["content"] == canonical_changed_content
+        assert rows_after[stale_oid]["payload"]["text"] == canonical_changed_content
 
         # Fresh (unchanged) row is untouched: same content_hash as before —
         # incremental repair, not a blanket re-embed of the whole index.
-        assert rows_after[fresh_oid] == compute_content_hash("fresh unchanged")
+        assert rows_after[fresh_oid]["content_hash"] == compute_content_hash("fresh unchanged")
 
         from app.index.doctor import diagnose_index, reset_diagnose_cache
 

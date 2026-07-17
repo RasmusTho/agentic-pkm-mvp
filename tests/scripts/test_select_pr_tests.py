@@ -303,7 +303,10 @@ def test_index_rebuild_cli_change_selects_memory_retrieval_coverage() -> None:
     assert selection.subsystems == ("memory_retrieval",)
     assert selection.unowned_paths == ()
     assert "tests/indexer" in selection.targets
+    assert "tests/index" in selection.targets
     assert "tests/search" in selection.targets
+    assert "tests/cli/test_index_rebuild_resilience.py" in selection.targets
+    assert "tests/cli/test_index_doctor_mixed_identity.py" in selection.targets
 
 
 def test_reasoning_expansion_paths_select_owned_cognition_coverage() -> None:

@@ -335,7 +335,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_promotion_intent_to_index.py",
             "tests/e2e/test_reality_mvp_pipeline.py",
         ),
-        ("tests/agent_memory", "tests/retrieval", "tests/indexer", "tests/search", *E2E_TARGETS["memory_retrieval"]),
+        (
+            "tests/agent_memory",
+            "tests/retrieval",
+            "tests/index",
+            "tests/indexer",
+            "tests/search",
+            "tests/cli/test_index_rebuild_resilience.py",
+            "tests/cli/test_index_doctor_mixed_identity.py",
+            *E2E_TARGETS["memory_retrieval"],
+        ),
     ),
     (
         "episodes",
