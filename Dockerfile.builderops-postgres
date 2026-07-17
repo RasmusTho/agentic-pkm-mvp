@@ -1,0 +1,25 @@
+FROM postgres:16-bookworm
+
+ARG TARGETARCH
+ARG WAL_G_VERSION=v3.0.8
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    case "${TARGETARCH}" in \
+      amd64) wal_g_arch=amd64; wal_g_sha=9a09c2b1afad6a4e7d87444b34726dd098b60ec816032af921d2f887e6e285c5 ;; \
+      arm64) wal_g_arch=aarch64; wal_g_sha=c3dc13b90fce8fe498742143f9ae07db19a603f7f26de00f161419e163e6175f ;; \
+      *) echo "unsupported WAL-G architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL \
+      "https://github.com/wal-g/wal-g/releases/download/${WAL_G_VERSION}/wal-g-pg-20.04-${wal_g_arch}" \
+      -o /usr/local/bin/wal-g; \
+    echo "${wal_g_sha}  /usr/local/bin/wal-g" | sha256sum -c -; \
+    chmod 0755 /usr/local/bin/wal-g; \
+    wal-g --version; \
+    apt-get purge -y --auto-remove curl; \
+    rm -rf /var/lib/apt/lists/*
+
+LABEL org.opencontainers.image.title="BuilderOps PostgreSQL + WAL-G" \
+      org.opencontainers.image.source="https://github.com/RasmusTho/agentic-pkm-mvp" \
+      org.opencontainers.image.wal-g.version="v3.0.8"

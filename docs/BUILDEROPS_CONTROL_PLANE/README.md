@@ -1,4 +1,4 @@
-State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 is implemented in the development baseline by #3792/PR #3852; BCP-02 and BCP-03 are dependency-unblocked next candidates, while BCP-04 through BCP-07 remain dependency-blocked. Existing issues #3603 and #3690 are reconciled into the sequence.
+State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 and the repo/deployment contract for BCP-02 are implemented by #3792 and #3790; live authority activation remains forbidden until BCP-03 through BCP-06 complete. BCP-03 and BCP-04 are now dependency-unblocked, BCP-05 still waits for BCP-04, and BCP-06/07 remain dependency-blocked. Existing issues #3603 and #3690 are reconciled into the sequence.
 Doc role: Specification directory
 Authority: Owns the bounded task decomposition and cross-task invariants after merge. ADR-0062 owns the architectural decision; ADR-0010 owns the repo/BuilderOps authority seam; shipped owner docs win for current behavior.
 Owner: BuilderOps governance / Architecture spine
@@ -20,9 +20,13 @@ required CI, review gates, repository protection, and GitHub merge results remai
 BCP-01 is implemented in the development baseline by #3792/PR #3852 with the independent
 PostgreSQL migration lineage, domain-neutral store port, atomic local task/transition/receipt/
 idempotency/outbox transaction, fenced leases, crash-safe reconciliation, and explicit SQLite
-migration/test adapter. This is not a production cutover: deployment, asynchronous off-host
-recovery durability, client migration, legacy import, and Product Runtime route removal remain
-owned by BCP-02 through BCP-06.
+migration/test adapter. BCP-02 (#3790) adds the independent scoped-auth service, migration-gated
+BuilderOps Compose project, separate-engine preflight, immutable pins, authenticated probes,
+secret-safe status/metrics, deploy/rollback receipts, asynchronous WAL-G backup/archive contract,
+and independently credentialed restore drill with a new recovery epoch and executor fence. This is
+still not a production cutover: the checked-in zero pins are non-runnable placeholders, no live
+Demerzel authority was activated, and client migration, legacy import, privileged execution, final
+restore rehearsal, and Product Runtime route removal remain owned by BCP-03 through BCP-06.
 
 ## Target boundary
 
@@ -53,9 +57,10 @@ Execution order:
 `BCP-01 -> BCP-02`; `BCP-03` may start after BCP-01 and run beside BCP-02. Then
 `BCP-02 -> BCP-04 -> BCP-05`; `BCP-03 + BCP-04 + BCP-05 -> BCP-06 -> BCP-07`.
 
-Parent validation hub: #3788. BCP-01 is implemented in the development baseline by #3792/PR #3852.
-BCP-02 (#3790) and BCP-03 (#3789) are the next dependency-unblocked candidates; later children
-remain blocked on the dependency chain above.
+Parent validation hub: #3788. BCP-01 is implemented in the development baseline by #3792/PR #3852,
+and BCP-02's repo/deployment contract is implemented by #3790 without live authority activation.
+BCP-03 (#3789) and BCP-04 (#3791) are the next executable work; the BCP-05 migration (#3603)
+follows BCP-04, and BCP-06/07 remain blocked.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
 not by rewriting that merge.

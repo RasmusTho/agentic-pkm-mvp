@@ -224,8 +224,6 @@ class PostgresBuilderOpsStore:
                     raise RuntimeError("BuilderOps authority metadata row is missing")
                 if int(metadata["schema_version"]) > SCHEMA_VERSION:
                     raise RuntimeError("BuilderOps database schema is newer than this release")
-                if int(metadata["authority_epoch"]) > AUTHORITY_EPOCH:
-                    raise RuntimeError("BuilderOps authority epoch is newer than this release")
                 if int(metadata["schema_version"]) != max(migration_rows):
                     raise RuntimeError(
                         "BuilderOps schema metadata does not match the migration ledger"
@@ -247,11 +245,11 @@ class PostgresBuilderOpsStore:
                 "INSERT INTO builderops_authority_metadata("
                 "singleton, authority_epoch, schema_version, schema_fingerprint) "
                 "VALUES (true, %s, %s, %s) ON CONFLICT (singleton) DO UPDATE SET "
-                "authority_epoch = EXCLUDED.authority_epoch, schema_version = EXCLUDED.schema_version, "
+                "authority_epoch = GREATEST(builderops_authority_metadata.authority_epoch, "
+                "EXCLUDED.authority_epoch), schema_version = EXCLUDED.schema_version, "
                 "schema_fingerprint = EXCLUDED.schema_fingerprint, "
                 "updated_at = clock_timestamp() "
-                "WHERE builderops_authority_metadata.authority_epoch <= EXCLUDED.authority_epoch "
-                "AND builderops_authority_metadata.schema_version <= EXCLUDED.schema_version "
+                "WHERE builderops_authority_metadata.schema_version <= EXCLUDED.schema_version "
                 "RETURNING authority_epoch, schema_version",
                 (AUTHORITY_EPOCH, SCHEMA_VERSION, schema_fingerprint),
             ).fetchone()
@@ -271,6 +269,125 @@ class PostgresBuilderOpsStore:
                 "authority_epoch": int(row["authority_epoch"]),
                 "schema_version": int(row["schema_version"]),
             }
+
+    def recovery_state(self) -> dict[str, Any]:
+        """Return the bounded recovery fence, never backup credentials or target URLs."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT activated_authority_epoch, recovery_id, restored_lsn::text AS restored_lsn, "
+                "reconciliation_required, executor_enabled, activated_at, reconciled_at "
+                "FROM builderops_recovery_state WHERE singleton"
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("BuilderOps recovery state is not initialized")
+        return dict(row)
+
+    def write_service_heartbeat(self, *, service_name: str, state: str = "running") -> None:
+        if not service_name.strip() or not state.strip():
+            raise ValueError("service_name and state are mandatory")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO builderops_service_heartbeats(service_name, state, observed_at) "
+                "VALUES (%s, %s, clock_timestamp()) ON CONFLICT (service_name) DO UPDATE SET "
+                "state = EXCLUDED.state, observed_at = EXCLUDED.observed_at",
+                (service_name, state),
+            )
+
+    def service_heartbeat(self, service_name: str) -> dict[str, Any] | None:
+        if not service_name.strip():
+            raise ValueError("service_name is mandatory")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT service_name, state, observed_at FROM builderops_service_heartbeats "
+                "WHERE service_name = %s",
+                (service_name,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def activate_recovered_epoch(self, *, recovery_id: str, restored_lsn: str) -> int:
+        """Fence pre-restore actors and require external-effect reconciliation.
+
+        This transition is deliberately independent of backup lag. It runs only
+        after a database has been restored and promoted, and it never rewinds an
+        epoch chosen by the database itself.
+        """
+        if not recovery_id.strip() or not restored_lsn.strip():
+            raise ValueError("recovery_id and restored_lsn are mandatory")
+        with self._connect() as conn:
+            recovery = conn.execute(
+                "SELECT recovery_id, activated_authority_epoch, restored_lsn::text AS restored_lsn "
+                "FROM builderops_recovery_state WHERE singleton FOR UPDATE"
+            ).fetchone()
+            if recovery is None:
+                raise RuntimeError("BuilderOps recovery state is not initialized")
+            if recovery["recovery_id"] == recovery_id:
+                if recovery["restored_lsn"] != restored_lsn:
+                    raise RuntimeError("recovery identity was reused for another restored LSN")
+                return int(recovery["activated_authority_epoch"])
+            metadata = conn.execute(
+                "SELECT authority_epoch FROM builderops_authority_metadata "
+                "WHERE singleton FOR UPDATE"
+            ).fetchone()
+            if metadata is None:
+                raise RuntimeError("BuilderOps authority metadata is missing")
+            next_epoch = int(metadata["authority_epoch"]) + 1
+            conn.execute(
+                "UPDATE builderops_authority_metadata SET authority_epoch = %s, "
+                "updated_at = clock_timestamp() WHERE singleton",
+                (next_epoch,),
+            )
+            conn.execute(
+                "UPDATE builderops_leases SET holder = 'recovery-fence', "
+                "fencing_token = fencing_token + 1, expires_at = clock_timestamp(), "
+                "updated_at = clock_timestamp()"
+            )
+            conn.execute(
+                "UPDATE builderops_outbox SET status = 'unknown', "
+                "unknown_detail = 'recovered claim requires external readback', "
+                "claim_expires_at = NULL, updated_at = clock_timestamp() "
+                "WHERE status = 'claimed'"
+            )
+            activated = conn.execute(
+                "UPDATE builderops_recovery_state SET activated_authority_epoch = %s, "
+                "recovery_id = %s, restored_lsn = %s::pg_lsn, "
+                "reconciliation_required = true, executor_enabled = false, "
+                "activated_at = clock_timestamp(), reconciled_at = NULL WHERE singleton "
+                "RETURNING activated_authority_epoch",
+                (next_epoch, recovery_id, restored_lsn),
+            ).fetchone()
+            if activated is None:
+                raise RuntimeError("BuilderOps recovery fence activation failed")
+        return next_epoch
+
+    def complete_recovery_reconciliation(
+        self, *, recovery_id: str, authority_epoch: int
+    ) -> None:
+        """Re-enable executor claims after the separate GitHub readback gate."""
+        if not recovery_id.strip() or authority_epoch <= 0:
+            raise ValueError("recovery_id and positive authority_epoch are mandatory")
+        with self._connect() as conn:
+            updated = conn.execute(
+                "UPDATE builderops_recovery_state SET reconciliation_required = false, "
+                "executor_enabled = true, reconciled_at = clock_timestamp() "
+                "WHERE singleton AND recovery_id = %s "
+                "AND activated_authority_epoch = %s AND reconciliation_required "
+                "AND NOT EXISTS (SELECT 1 FROM builderops_outbox WHERE status = 'unknown') "
+                "RETURNING singleton",
+                (recovery_id, authority_epoch),
+            ).fetchone()
+            if updated is None:
+                raise RuntimeError(
+                    "recovery reconciliation gate still has an identity, epoch, "
+                    "or unknown-effect mismatch"
+                )
+
+    @staticmethod
+    def _assert_executor_enabled(conn: psycopg.Connection[dict[str, Any]]) -> None:
+        row = conn.execute(
+            "SELECT executor_enabled FROM builderops_recovery_state WHERE singleton"
+        ).fetchone()
+        if row is None or not bool(row["executor_enabled"]):
+            raise DurabilityPending("executor is fenced pending post-restore reconciliation")
 
     def commit_transition(
         self,
@@ -1653,6 +1770,7 @@ class PostgresBuilderOpsStore:
         expired_attempt = False
         with self._connect() as conn:
             conn.execute("SET LOCAL synchronous_commit = on")
+            self._assert_executor_enabled(conn)
             row = conn.execute(
                 "SELECT task_id, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
                 "claim_fencing_token, claim_expires_at, reconciliation_receipt_sequence, "

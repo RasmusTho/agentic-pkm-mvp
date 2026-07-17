@@ -1,0 +1,30 @@
+FROM python:3.12-slim
+
+ARG VCS_REF=unknown
+ARG BUILT_AT=unknown
+
+LABEL org.opencontainers.image.title="BuilderOps control plane" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.created="$BUILT_AT"
+
+ENV VCS_REF=$VCS_REF \
+    BUILT_AT=$BUILT_AT \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY pyproject.toml ./
+COPY app ./app
+RUN pip install --no-cache-dir --no-deps . \
+    && addgroup --system builderops \
+    && adduser --system --ingroup builderops --home /nonexistent builderops
+
+USER builderops
+EXPOSE 8000
+
+CMD ["uvicorn", "app.builderops.control_plane.service:production_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

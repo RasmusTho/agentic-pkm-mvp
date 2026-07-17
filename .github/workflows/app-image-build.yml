@@ -10,6 +10,10 @@ on:
       - 'app/**'
       - 'scripts/start_api.sh'
       - 'Dockerfile'
+      - 'Dockerfile.builderops'
+      - 'Dockerfile.builderops-postgres'
+      - 'docker-compose.builderops.yml'
+      - 'scripts/builderops/**'
       - 'requirements.txt'
       - 'requirements-tts.txt'
       - '.github/workflows/app-image-build.yml'
@@ -117,3 +121,133 @@ jobs:
             --entrypoint python \
             "${image}" \
             -c 'from app.version import get_runtime_version; import os; version = get_runtime_version(); assert version["git_sha"] == os.environ["VCS_REF"], version; assert version["built_at"] == os.environ["BUILT_AT"], version'
+
+  build-builderops-images:
+    name: Build independent BuilderOps images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute immutable BuilderOps image identities
+        id: images
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "control_plane=ghcr.io/${owner}/builderops-control-plane:${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "postgres=ghcr.io/${owner}/builderops-postgres:${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build BuilderOps control-plane candidate image
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.builderops
+          load: true
+          push: false
+          platforms: linux/amd64
+          tags: ${{ steps.images.outputs.control_plane }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILT_AT=${{ env.BUILT_AT }}
+
+      - name: Build BuilderOps PostgreSQL plus WAL-G candidate image
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.builderops-postgres
+          load: true
+          push: false
+          platforms: linux/amd64
+          tags: ${{ steps.images.outputs.postgres }}
+
+      - name: Verify BuilderOps image runtimes
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python \
+            "${{ steps.images.outputs.control_plane }}" \
+            -c 'from app.builderops.control_plane.service import production_app; assert callable(production_app)'
+          docker run --rm --entrypoint wal-g \
+            "${{ steps.images.outputs.postgres }}" --version
+
+      - name: Prove encrypted full-backup plus archived-WAL restore
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/builderops/real_restore_selftest.sh \
+            "${{ steps.images.outputs.control_plane }}" \
+            "${{ steps.images.outputs.postgres }}"
+
+      - name: Publish the exact restore-proved BuilderOps images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "${{ steps.images.outputs.control_plane }}"
+          docker push "${{ steps.images.outputs.postgres }}"
+
+      - name: Write the restore-proved candidate pair receipt
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          control_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "${{ steps.images.outputs.control_plane }}")"
+          postgres_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "${{ steps.images.outputs.postgres }}")"
+          python3 scripts/builderops/write_candidate_pair_receipt.py \
+            --output builderops-candidate-pair.json \
+            --source-sha "${GITHUB_SHA}" \
+            --control-plane-digest "${control_digest#*@}" \
+            --postgres-walg-digest "${postgres_digest#*@}"
+
+      - name: Upload the restore-proved candidate pair receipt
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: builderops-candidate-pair-${{ github.sha }}
+          path: builderops-candidate-pair.json
+          if-no-files-found: error
+
+  attest-builderops-candidate-pair:
+    name: Attest trusted BuilderOps candidate pair
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-builderops-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the restore-proved candidate pair receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: builderops-candidate-pair-${{ github.sha }}
+
+      - name: Attest the restore-proved candidate pair receipt
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: builderops-candidate-pair.json
