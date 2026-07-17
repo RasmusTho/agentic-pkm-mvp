@@ -8,7 +8,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed)
+State: Implemented. Delivered by PR #3888 (issue #3845, 2026-07-17).
 
 # Define Host Secret Contract
 
@@ -37,13 +37,13 @@ records require an existing key; rotation is a separate migration, never a boots
 
 ## Acceptance criteria
 
-- [ ] The contract lists every initial logical secret, consumer, and permitted channel without a
+- [x] The contract lists every initial logical secret, consumer, and permitted channel without a
       secret value or copied environment-file content.
       Verify: doc writeback at `docs/LOCAL_SECRET_PROVISIONING/README.md :: Fixed constraints`
-- [ ] The contract names a deterministic Keychain lookup rule and rejects an undeclared
+- [x] The contract names a deterministic Keychain lookup rule and rejects an undeclared
       consumer/secret pair.
       Verify: `tests/ops/test_host_secret_contract.py::test_contract_rejects_undeclared_consumer_secret_pair`
-- [ ] The runbook describes generated-key creation and redacted failure evidence without printing a
+- [x] The runbook describes generated-key creation and redacted failure evidence without printing a
       key.
       Verify: doc writeback at `docs/LOCAL_SECRET_PROVISIONING/DEFINE_HOST_SECRET_CONTRACT.md :: What this task does`
 

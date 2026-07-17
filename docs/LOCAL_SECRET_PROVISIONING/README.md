@@ -61,7 +61,7 @@ environment variable.
 
 | Order | Task | ID | Prerequisite | Outcome |
 | --- | --- | --- | --- | --- |
-| 1 | [Define host secret contract](DEFINE_HOST_SECRET_CONTRACT.md) | HSP-01 | — | names, consumer allowlist, Keychain access and redaction contract |
+| 1 | [Define host secret contract](DEFINE_HOST_SECRET_CONTRACT.md) | HSP-01 | — | delivered by [#3845](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3845) / PR #3888: names, consumer allowlist, Keychain access and redaction contract |
 | 2 | [Deliver runtime secret bootstrap](DELIVER_RUNTIME_SECRET_BOOTSTRAP.md) | HSP-02 | HSP-01 | bootstrap, channel integration and fail-closed/redaction tests |
 | Evidence | Delivered [#3830](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3830) | — | completed 2026-07-16 | redacted dev Keychain provisioning and healthy capture-watch receipt; it is not a child or dependency |
 
