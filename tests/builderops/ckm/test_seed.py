@@ -26,6 +26,7 @@ def _manifest(tmp_path: Path, text: str) -> Path:
 
 def test_manifest_covers_sbs_and_sources_resolve() -> None:
     entries = load_manifest()
+    assert len({entry.stable_key for entry in entries}) == len(entries)
     roots = [entry for entry in entries if entry.parent is None]
     boundaries = [entry for entry in entries if entry.boundary_ref is not None and len(entry.slug) == 3]
     assert len(roots) == 8
@@ -38,8 +39,8 @@ def test_loader_rejects_duplicates_and_cycles(tmp_path: Path) -> None:
     duplicate = _manifest(
         tmp_path,
         "capabilities:\n"
-        "  - {id: one, name: One, definition: First, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
-        "  - {id: one, name: Two, definition: Second, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
+        "  - {id: one, stable_key: stable-one, name: One, definition: First, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
+        "  - {id: one, stable_key: stable-two, name: Two, definition: Second, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
     )
     with pytest.raises(SeedManifestError, match="duplicate capability slug"):
         load_manifest(duplicate)
@@ -47,22 +48,21 @@ def test_loader_rejects_duplicates_and_cycles(tmp_path: Path) -> None:
     cycle = _manifest(
         tmp_path,
         "capabilities:\n"
-        "  - {id: one, name: One, definition: First, parent: two, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
-        "  - {id: two, name: Two, definition: Second, parent: one, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
+        "  - {id: one, stable_key: stable-one, name: One, definition: First, parent: two, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
+        "  - {id: two, stable_key: stable-two, name: Two, definition: Second, parent: one, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
     )
     with pytest.raises(SeedManifestError, match="parent cycle"):
         load_manifest(cycle)
 
 
 def test_loader_rejects_duplicate_names_across_distinct_slugs(tmp_path: Path) -> None:
-    # CkmStore.upsert_capability dedups on `name` (ON CONFLICT(name)), not on
-    # this manifest's `id`. Two entries with different slugs but the same
-    # `name` would otherwise silently collapse into a single row on seed.
+    # Public identity no longer depends on name, but the display-name uniqueness
+    # contract still rejects two distinct stable capabilities with one name.
     duplicate_name = _manifest(
         tmp_path,
         "capabilities:\n"
-        "  - {id: one, name: Same Name, definition: First, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
-        "  - {id: two, name: Same Name, definition: Second, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
+        "  - {id: one, stable_key: stable-one, name: Same Name, definition: First, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
+        "  - {id: two, stable_key: stable-two, name: Same Name, definition: Second, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
     )
     with pytest.raises(SeedManifestError, match="duplicate capability name"):
         load_manifest(duplicate_name)
@@ -79,8 +79,8 @@ def test_seed_idempotent_and_incremental(store: CkmStore, tmp_path: Path) -> Non
     manifest = _manifest(
         tmp_path,
         "capabilities:\n"
-        "  - {id: root, name: Root, definition: Root definition, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
-        "  - {id: child, name: Child, definition: Child definition, parent: root, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
+        "  - {id: root, stable_key: stable-root, name: Root, definition: Root definition, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
+        "  - {id: child, stable_key: stable-child, name: Child, definition: Child definition, parent: root, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
     )
     small_store = CkmStore(tmp_path / "small.sqlite3")
     small_store.ensure_schema()
@@ -88,8 +88,8 @@ def test_seed_idempotent_and_incremental(store: CkmStore, tmp_path: Path) -> Non
     changed_manifest = _manifest(
         tmp_path,
         "capabilities:\n"
-        "  - {id: root, name: Root, definition: Root definition changed, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
-        "  - {id: child, name: Child, definition: Child definition, parent: root, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
+        "  - {id: root, stable_key: stable-root, name: Root, definition: Root definition changed, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
+        "  - {id: child, stable_key: stable-child, name: Child, definition: Child definition, parent: root, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
     )
     result = seed_capabilities(small_store, manifest_path=changed_manifest)
     assert result["changed"] == 1

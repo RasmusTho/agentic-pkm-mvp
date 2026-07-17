@@ -159,7 +159,9 @@ def _validate_assessment_snapshot(
         if dict(assessment.watermark_set) != current_watermarks:
             stale_assessments.add(capability.id)
         current_fingerprint = assessment_fingerprint(
-            edges_by_capability.get(capability.id, []), artifacts
+            edges_by_capability.get(capability.id, []),
+            artifacts,
+            watermark_set=current_watermarks,
         )
         if assessment.edge_fingerprint != current_fingerprint:
             raise CkmValidationError(

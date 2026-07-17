@@ -206,6 +206,7 @@ def test_matrix_test_imports_do_not_manufacture_unrelated_source_edges(
     store = CkmStore(tmp_path / "builderops.sqlite3")
     store.ensure_schema()
     retrieval = store.upsert_capability(
+        identity_key="fixture:linkers:retrieval",
         name="Retrieval",
         definition="Fixture",
         existence_provenance="seeded:docs/retrieval.md :: retrieval",
@@ -213,6 +214,7 @@ def test_matrix_test_imports_do_not_manufacture_unrelated_source_edges(
         boundary_ref="RCA",
     )
     store.upsert_capability(
+        identity_key="fixture:linkers:context-building",
         name="Context building",
         definition="Fixture",
         existence_provenance="seeded:docs/context.md :: context",
@@ -270,6 +272,7 @@ def test_stale_source_and_dependent_test_edges_converge_in_one_run(
     store = CkmStore(tmp_path / "builderops.sqlite3")
     store.ensure_schema()
     capability = store.upsert_capability(
+        identity_key="fixture:linkers:retrieval-coverage",
         name="Retrieval",
         definition="Fixture",
         existence_provenance="seeded:docs/retrieval.md :: retrieval",
@@ -346,6 +349,7 @@ def test_adr_shared_seed_path_requires_capability_specific_selector(tmp_path: Pa
     store.ensure_schema()
     capabilities = {
         name: store.upsert_capability(
+            identity_key=f"fixture:linkers:shared:{name}",
             name=name,
             definition="Fixture capability",
             existence_provenance="seeded:docs/shared-owner.md :: Shared taxonomy",
@@ -501,6 +505,7 @@ def test_spec_test_code_and_github_linker_families(tmp_path: Path) -> None:
     store = CkmStore(tmp_path / "builderops.sqlite3")
     store.ensure_schema()
     store.upsert_capability(
+        identity_key="fixture:linkers:example-capability",
         name="Example Capability",
         definition="Fixture capability",
         existence_provenance="seeded:docs/owner.md :: example",
@@ -608,6 +613,7 @@ def test_candidate_inference_never_promotes_to_confirmed_test_edge(tmp_path: Pat
     store = CkmStore(tmp_path / "builderops.sqlite3")
     store.ensure_schema()
     capability = store.upsert_capability(
+        identity_key="fixture:linkers:inferred-capability",
         name="Inferred Capability",
         definition="Fixture",
         existence_provenance="seeded:docs/owner.md :: inferred",

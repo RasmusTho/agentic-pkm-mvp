@@ -342,7 +342,55 @@ def compute_aggregate(scores: Mapping[str, float]) -> float:
 def assessment_fingerprint(
     edges: Sequence[CkmEvidenceEdge],
     artifacts: Mapping[str, CkmArtifact],
+    *,
+    watermark_set: Mapping[str, str],
 ) -> str:
+    edge_payload = [
+        {
+            "public_id": edge.public_id,
+            "artifact_public_id": artifacts[edge.artifact_id].public_id,
+            "basis": edge.basis,
+            "kind": edge.evidence_kind,
+            "polarity": edge.polarity,
+            "dimension": edge.maturity_dimension,
+            "confidence": edge.confidence,
+            "method": edge.extraction_method,
+            "lifecycle": edge.lifecycle,
+            "model": edge.model,
+            "provider": edge.provider,
+            "artifact": {
+                "kind": artifacts[edge.artifact_id].artifact_kind,
+                "source_ref": artifacts[edge.artifact_id].source_ref,
+                "watermark": artifacts[edge.artifact_id].watermark,
+                "provenance": artifacts[edge.artifact_id].provenance,
+            },
+        }
+        for edge in sorted(edges, key=lambda item: item.public_id)
+    ]
+    formula_payload = {
+        formula_id: {
+            "dimension": FORMULAS[formula_id].dimension,
+            "description": FORMULAS[formula_id].description,
+            "weight": FORMULAS[formula_id].weight,
+        }
+        for formula_id in (*_DIMENSION_FORMULA_IDS.values(), AGGREGATE_FORMULA_ID)
+    }
+    payload = {
+        "edges": edge_payload,
+        "formulae": formula_payload,
+        "watermark_set": dict(sorted(watermark_set.items())),
+    }
+    return "v2:" + hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def legacy_assessment_fingerprint(
+    edges: Sequence[CkmEvidenceEdge],
+    artifacts: Mapping[str, CkmArtifact],
+) -> str:
+    """Reproduce the exact pre-v5 append trigger for migration authentication."""
+
     edge_payload = [
         {
             "id": edge.id,
@@ -363,7 +411,9 @@ def assessment_fingerprint(
                 "provenance": artifacts[edge.artifact_id].provenance,
             },
         }
-        for edge in sorted(edges, key=lambda item: (item.artifact_id, item.basis, item.id))
+        for edge in sorted(
+            edges, key=lambda item: (item.artifact_id, item.basis, item.id)
+        )
     ]
     formula_payload = {
         formula_id: {
@@ -373,12 +423,12 @@ def assessment_fingerprint(
         }
         for formula_id in (*_DIMENSION_FORMULA_IDS.values(), AGGREGATE_FORMULA_ID)
     }
-    payload = {
-        "edges": edge_payload,
-        "formulae": formula_payload,
-    }
     return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            {"edges": edge_payload, "formulae": formula_payload},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
 
 
@@ -409,7 +459,9 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
     skipped = 0
     for capability in store.list_capabilities():
         edges = store.list_evidence_edges_for_capability(capability.id)
-        fingerprint = assessment_fingerprint(edges, artifacts)
+        fingerprint = assessment_fingerprint(
+            edges, artifacts, watermark_set=watermarks
+        )
         latest = store.latest_assessment_for_capability(capability.id)
         if latest is not None and latest.edge_fingerprint == fingerprint:
             skipped += 1
