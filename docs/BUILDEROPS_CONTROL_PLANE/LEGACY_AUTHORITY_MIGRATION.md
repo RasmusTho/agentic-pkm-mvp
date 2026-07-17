@@ -11,6 +11,12 @@ can_parallelize_with: [BCP-02]
 
 # Legacy Authority Migration
 
+Delivery status: implemented in the development baseline by #3789/PR #3929
+(`app/builderops/control_plane/legacy_migration.py`; mechanism only). Not deployed
+or authoritative until the BCP-06 cutover; remote-host environment snapshots are a
+recorded limitation (env-less hosts derive default paths only and are listed in
+the preflight receipt).
+
 ## Purpose
 
 Authority-bearing state currently exists in CWD/worktree-local BuilderOps SQLite (including the
@@ -88,34 +94,34 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 
 ## Acceptance Criteria
 
-- [ ] Static producer/default-path inventory plus MacBook/Demerzel Git-worktree, Docker-volume/mount,
+- [x] Static producer/default-path inventory plus MacBook/Demerzel Git-worktree, Docker-volume/mount,
   automation, and host-path enumeration proves the expected source/root universe; omitted or
   inaccessible expected coverage blocks and acknowledgement binds host/user/freshness/manifest hash.
   Verify: `tests/builderops/control_plane/test_legacy_inventory.py::test_producer_derived_inventory_covers_hosts_worktrees_containers_and_automations`.
-- [ ] Re-running an unchanged import is idempotent, while a source changed after freeze fails hash
+- [x] Re-running an unchanged import is idempotent, while a source changed after freeze fails hash
   verification and imports nothing further.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_import_is_restart_safe_and_rejects_changed_source`.
-- [ ] Equal authority-bearing identities with divergent content block cutover rather than using
+- [x] Equal authority-bearing identities with divergent content block cutover rather than using
   last-write-wins or plain quarantine; activation becomes eligible only after evidence resolution or
   a non-authoritative tombstone reserves all legacy identity/idempotency/operation keys and makes
   replay fail closed.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_conflicting_identity_requires_resolution_or_duplicate_preventing_tombstone`.
-- [ ] Legacy live leases import only as expired/tombstone evidence and cannot authorize mutation in
+- [x] Legacy live leases import only as expired/tombstone evidence and cannot authorize mutation in
   the new epoch.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_live_legacy_leases_do_not_cross_authority_epoch`.
-- [ ] Inquiry/epic-run identities, transitions, promotions, and receipts are represented in
+- [x] Inquiry/epic-run identities, transitions, promotions, and receipts are represented in
   PostgreSQL with content-hash references to immutable artifacts and no file-only terminal state.
   Verify: `tests/builderops/control_plane/test_legacy_artifact_import.py::test_file_first_authority_imports_envelope_and_receipts`.
-- [ ] CKM/Capability Evidence Graph tables (ADR-0057 substrate, ADR-0062 A3) are inventoried and
+- [x] CKM/Capability Evidence Graph tables (ADR-0057 substrate, ADR-0062 A3) are inventoried and
   imported with the same identity/provenance discipline, covering any schema additions made between
   spec acceptance and freeze.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_ckm_ceg_tables_are_inventoried_and_imported`.
-- [ ] Legacy `RepoRef`/scope/stack is backfilled only from evidence-bound mappings. Evidence-only
+- [x] Legacy `RepoRef`/scope/stack is backfilled only from evidence-bound mappings. Evidence-only
   ambiguity may remain plain non-authoritative quarantine; authority-bearing ambiguity must be
   evidence-resolved or duplicate-preventing tombstoned and cannot authorize a lease, effect,
   promotion, or merge.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_authority_ambiguity_requires_resolution_or_duplicate_preventing_tombstone`.
-- [ ] A reconciliation receipt accounts for every expected producer/root and every source item as
+- [x] A reconciliation receipt accounts for every expected producer/root and every source item as
   imported, deduplicated, evidence-quarantined, duplicate-preventing tombstoned, explicitly missing/
   inaccessible, intentionally excluded, or archived, and cutover rejects any unresolved coverage or
   authority-replay gap.
