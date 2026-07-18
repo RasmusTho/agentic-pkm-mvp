@@ -59,3 +59,4 @@
 - [ADR-0060: Capture posture flips to B-full (always-on) with voice identification — staged activation behind explicit gates (Accepted)](./ADR-0060-capture-posture-b-full-voice-identity.md)
 - [ADR-0061: Admit MCP as an additional Mimer client adapter — topology, wire transport, and auth posture (proposed)](./ADR-0061-mimer-mcp-client-adapter.md)
 - [ADR-0062: BuilderOps as an ecosystem-wide API-first enabling system (Accepted; amended 2026-07-16, A1-A3)](./ADR-0062-builderops-ecosystem-wide-enabling-system.md)
+- [ADR-0063: Share a neutral LLM contract kernel; keep Product and Builder execution fabrics separate (Accepted 2026-07-17)](./ADR-0063-shared-llm-contract-kernel.md)

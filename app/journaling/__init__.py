@@ -1,1 +1,1 @@
-"""Read-only assembly helpers for Conversational Journaling."""
+"""Conversational Journaling context assembly and governed proposal staging."""

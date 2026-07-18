@@ -15,6 +15,7 @@ import pytest
 import app.knowledge_compilation.proposal_builders as proposal_builders
 from app.knowledge_compilation.proposal_builders import (
     ProposalContext,
+    build_cited_unreviewed_compilation_draft,
     build_compilation_draft,
     build_curation_candidate,
 )
@@ -94,7 +95,6 @@ def test_builders_reject_hidden_authority_context() -> None:
             ),
             title="t",
         )
-
     # Unreviewed memory laundering.
     with pytest.raises(ValueError, match="unreviewed"):
         build_compilation_draft(
@@ -131,6 +131,63 @@ def test_builders_reject_hidden_authority_context() -> None:
         build_curation_candidate(
             ProposalContext(source_refs=(SourceRef(artifact_id="s", derived_by="generated_summary"),)),
             title="t",
+        )
+
+
+def test_cited_unreviewed_builder_preserves_raw_posture_without_authority() -> None:
+    raw = SourceRef(artifact_id="capture:draft", review_state="unreviewed")
+    draft = build_cited_unreviewed_compilation_draft(
+        ProposalContext(
+            source_refs=(raw,),
+            authority_limits=ContextAuthorityLimits(
+                may_inform=True, may_propose=True
+            ),
+            content="citation-grounded proposal",
+        ),
+        title="Raw-source proposal",
+    )
+
+    assert draft.source_refs == (raw,)
+    assert draft.canonical is False
+    assert draft.trust_verb is TrustVerb.SUGGEST
+    with pytest.raises(ValueError, match="write-authorizing"):
+        build_cited_unreviewed_compilation_draft(
+            ProposalContext(
+                source_refs=(raw,),
+                authority_limits=ContextAuthorityLimits(may_write=True),
+            ),
+            title="forbidden",
+        )
+    with pytest.raises(ValueError, match="machine-derived"):
+        build_cited_unreviewed_compilation_draft(
+            ProposalContext(
+                source_refs=(
+                    SourceRef(
+                        artifact_id="summary",
+                        review_state="unreviewed",
+                        derived_by="generated_summary",
+                    ),
+                )
+            ),
+            title="forbidden",
+        )
+
+
+@pytest.mark.parametrize("review_state", ("rejected", "revised", "unknown"))
+def test_cited_unreviewed_builder_rejects_non_proposal_posture(
+    review_state: str,
+) -> None:
+    with pytest.raises(ValueError, match="non-approved review_state"):
+        build_cited_unreviewed_compilation_draft(
+            ProposalContext(
+                source_refs=(
+                    SourceRef(artifact_id="inadmissible", review_state=review_state),
+                ),
+                authority_limits=ContextAuthorityLimits(
+                    may_inform=True, may_propose=True
+                ),
+            ),
+            title="forbidden",
         )
 
 
