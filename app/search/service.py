@@ -4,8 +4,8 @@ from typing import Any, Iterable
 import logging
 
 from app.components.retrieval import embed_query
-from app.agents.panel.filters import strip_ai_panels
-from app.index.artifact_metadata import build_indexed_unit_payload
+from app.index.artifact_metadata import build_indexed_unit_payload, canonicalize_indexed_text
+from app.outbox.events import DEFAULT_EMBEDDING_VIEW
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +261,13 @@ def search(query_text: str, k: int = 5, *_a, **_k) -> list:
 
 def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
     oid = object_id or uuid4()
-    safe_text = strip_ai_panels(text)
+    safe_text = canonicalize_indexed_text(text)
+    idx = get_vector_index()
+    if not safe_text:
+        purge = getattr(idx, "purge_vectors", None)
+        if purge is not None:
+            purge(oid, view=DEFAULT_EMBEDDING_VIEW)
+        return (oid, 0)
 
     embedding, identity = embed_query(safe_text)
     payload_out = build_indexed_unit_payload(
@@ -272,7 +278,6 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
         text=safe_text,
         embedding_identity=identity,
     )
-    idx = get_vector_index()
     try:
         idx.upsert(
             object_id=oid,
@@ -292,16 +297,16 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
             item = st[oid]
             if isinstance(item, dict):
                 item.setdefault("payload", {})
-                item["payload"].setdefault("text", safe_text)
-                item["payload"].setdefault("content", safe_text)
+                item["payload"]["text"] = safe_text
+                item["payload"]["content"] = safe_text
                 item["payload"].setdefault("object_type", kind)
                 item["payload"].setdefault("system_intent", "learn")
                 item["payload"].setdefault("emergent_tags", [])
             else:
                 pl = getattr(item, "payload", None)
                 if isinstance(pl, dict):
-                    pl.setdefault("text", safe_text)
-                    pl.setdefault("content", safe_text)
+                    pl["text"] = safe_text
+                    pl["content"] = safe_text
                     pl.setdefault("object_type", kind)
                     pl.setdefault("system_intent", "learn")
                     pl.setdefault("emergent_tags", [])

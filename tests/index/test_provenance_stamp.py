@@ -25,7 +25,7 @@ import pytest
 
 from app.agents.panel.filters import strip_ai_panels
 from app.components.embeddings import EmbeddingIdentity
-from app.index.artifact_metadata import compute_content_hash
+from app.index.artifact_metadata import canonicalize_indexable_text, compute_content_hash
 from app.ingest.chunk_policy import CHUNK_POLICY_VERSION
 from app.settings.models import SettingsBundle
 
@@ -54,9 +54,55 @@ def _isolate_llm_routing_settings(monkeypatch) -> None:
 class CapturingVectorIndex:
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.purge_calls: list[tuple[object, str]] = []
 
     def upsert(self, **kwargs) -> None:
         self.calls.append(kwargs)
+
+    def purge_vectors(self, object_id, *, view: str) -> int:
+        self.purge_calls.append((object_id, view))
+        return 0
+
+
+def _seed_legacy_panel_vector(*, source_ref: str) -> tuple[object, str]:
+    """Construct the pre-fix panel-only vector state without a live producer."""
+    from app.search import service as search_service
+    from app.stores import get_object_store
+    from app.stores.pg import _connect
+
+    placeholder = "legacy placeholder used only to create a vector row"
+    panel_only = "%% AI:Start %%\nLegacy indexed panel bytes.\n%% AI:End %%"
+    oid, _ = search_service.ingest_object(
+        kind="note",
+        source_ref=source_ref,
+        payload={"content": placeholder, "text": placeholder},
+        text=placeholder,
+    )
+    get_object_store().put(
+        oid,
+        kind="note",
+        source_ref=source_ref,
+        payload={"content": panel_only, "text": panel_only},
+    )
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT payload FROM store_vector_index WHERE object_id = %s",
+                (oid,),
+            )
+            vector_payload = dict(cur.fetchone()["payload"])
+            vector_payload["content"] = panel_only
+            vector_payload["text"] = panel_only
+            provenance = dict(vector_payload.get("provenance") or {})
+            provenance["content_hash"] = compute_content_hash("")
+            vector_payload["provenance"] = provenance
+            cur.execute(
+                "UPDATE store_vector_index SET payload = %s::jsonb WHERE object_id = %s",
+                (json.dumps(vector_payload), oid),
+            )
+
+    return oid, panel_only
 
 
 def test_upsert_writes_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,6 +136,70 @@ def test_upsert_writes_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
         "dim": identity.dim,
         "normalize": identity.normalize,
     }
+
+
+def test_ingest_object_embeds_hashes_and_projects_exact_canonical_bytes(monkeypatch) -> None:
+    from app.search import service as search_service
+
+    identity = EmbeddingIdentity(provider="mock", model="mock-embedding", dim=3, normalize=True)
+    index = CapturingVectorIndex()
+    embedded_texts: list[str] = []
+
+    def fake_embed(text: str):
+        embedded_texts.append(text)
+        return [0.1, 0.2, 0.3], identity
+
+    monkeypatch.setattr(search_service, "embed_query", fake_embed)
+    monkeypatch.setattr(search_service, "get_vector_index", lambda: index)
+
+    raw = "\n".join(
+        (
+            "retained before",
+            "%% AI:Start %%",
+            "fenced panel",
+            "%% AI:End %%",
+            "## AI-instruktion",
+            "legacy panel",
+            "## Retained section",
+            "retained after",
+        )
+    )
+    canonical = canonicalize_indexable_text({"content": raw})
+
+    search_service.ingest_object(
+        kind="note",
+        source_ref="unit-test://producer-exact-bytes",
+        payload={"content": raw, "text": "stale alias"},
+        text=raw,
+    )
+
+    assert embedded_texts == [canonical]
+    payload = index.calls[-1]["payload"]
+    assert payload["content"] == canonical
+    assert payload["text"] == canonical
+    assert payload["provenance"]["content_hash"] == compute_content_hash(canonical)
+
+
+def test_ingest_object_does_not_recreate_panel_only_vector(monkeypatch) -> None:
+    from app.search import service as search_service
+
+    index = CapturingVectorIndex()
+    monkeypatch.setattr(search_service, "get_vector_index", lambda: index)
+
+    def unexpected_embed(_text: str):
+        raise AssertionError("panel-only source must not reach the embedder")
+
+    monkeypatch.setattr(search_service, "embed_query", unexpected_embed)
+    oid, dim = search_service.ingest_object(
+        kind="note",
+        source_ref="unit-test://producer-panel-only",
+        payload={"content": "\n%% AI:Start %%\ntransient\n%% AI:End %%\n\n"},
+        text="\n%% AI:Start %%\ntransient\n%% AI:End %%\n\n",
+    )
+
+    assert dim == 0
+    assert index.calls == []
+    assert index.purge_calls == [(oid, "markdown.semantic")]
 
 
 def test_content_hash_is_stable_for_same_text() -> None:
@@ -465,7 +575,6 @@ def test_reconcile_purges_equal_empty_hash_panel_only_vector(tmp_path, monkeypat
 
     from app.cli import cli
     from app.index.doctor import inspect_unembedded_pg_objects, reset_diagnose_cache
-    from app.stores import get_object_store
     from app.stores.pg import _connect, inspect_pg_content_hash_staleness
     from tests.indexer.test_outbox_roundtrip_pg import (
         _configure_isolated_pg_test,
@@ -475,20 +584,8 @@ def test_reconcile_purges_equal_empty_hash_panel_only_vector(tmp_path, monkeypat
 
     base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
     try:
-        from app.search import service as search_service
-
-        panel_only = "%% AI:Start %%\nLegacy indexed panel bytes.\n%% AI:End %%"
-        oid, _ = search_service.ingest_object(
-            kind="note",
-            source_ref="unit-test://reconcile-equal-empty-panel",
-            payload={"content": panel_only, "text": panel_only},
-            text=panel_only,
-        )
-        get_object_store().put(
-            oid,
-            kind="note",
-            source_ref="unit-test://reconcile-equal-empty-panel",
-            payload={"content": panel_only, "text": panel_only},
+        oid, panel_only = _seed_legacy_panel_vector(
+            source_ref="unit-test://reconcile-equal-empty-panel"
         )
 
         with _connect() as conn:
@@ -537,6 +634,176 @@ def test_reconcile_purges_equal_empty_hash_panel_only_vector(tmp_path, monkeypat
         assert inspect_pg_content_hash_staleness()["stale_count"] == 0
     finally:
         reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_reconcile_reclassifies_source_update_before_conditional_purge(
+    tmp_path, monkeypatch
+) -> None:
+    """A concurrent source repair is embedded rather than purged from a stale read."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from click.testing import CliRunner
+
+    from app.cli import cli
+    from app.stores.pg import _connect
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    try:
+        oid, _panel_only = _seed_legacy_panel_vector(
+            source_ref="unit-test://reconcile-source-update-race"
+        )
+        repaired_raw = "retained before\n%% AI:Start %%\ntransient\n%% AI:End %%\nretained after"
+        repaired_canonical = canonicalize_indexable_text({"content": repaired_raw})
+
+        import importlib
+
+        rebuild_module = importlib.import_module("app.cli.index_rebuild")
+        original_resolve = rebuild_module._reconcile_object_payload
+        resolved_client = rebuild_module.get_embedding_client(profile="default")
+        embedded_texts: list[str] = []
+        raced = False
+
+        class CapturingClient:
+            identity = resolved_client.identity
+
+            def embed_text(self, text: str) -> list[float]:
+                embedded_texts.append(text)
+                return resolved_client.embed_text(text)
+
+        def update_after_stale_read(object_id, vector_payload):
+            nonlocal raced
+            result = original_resolve(object_id, vector_payload)
+            if not raced:
+                with _connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE store_objects SET payload = %s::jsonb WHERE object_id = %s",
+                            (json.dumps({"content": repaired_raw, "text": "stale alias"}), oid),
+                        )
+                raced = True
+            return result
+
+        monkeypatch.setattr(rebuild_module, "_reconcile_object_payload", update_after_stale_read)
+        monkeypatch.setattr(
+            rebuild_module,
+            "get_embedding_client",
+            lambda *, profile="default": CapturingClient(),
+        )
+
+        result = CliRunner().invoke(
+            cli,
+            ["index", "reconcile", "--backend", "pg", "--json", "--strict"],
+            env=dict(os.environ),
+        )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)
+        assert summary["purged_non_indexable"] == 0
+        assert summary["reconciled"] == 1
+        assert embedded_texts == [repaired_canonical]
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload FROM store_objects WHERE object_id = %s",
+                    (oid,),
+                )
+                source_payload = cur.fetchone()["payload"]
+                cur.execute(
+                    "SELECT payload FROM store_vector_index WHERE object_id = %s",
+                    (oid,),
+                )
+                vector_payload = cur.fetchone()["payload"]
+
+        assert source_payload == {"content": repaired_raw, "text": "stale alias"}
+        assert vector_payload["content"] == repaired_canonical
+        assert vector_payload["text"] == repaired_canonical
+        assert vector_payload["provenance"]["content_hash"] == compute_content_hash(
+            repaired_canonical
+        )
+    finally:
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_reconcile_reclassifies_source_delete_before_conditional_purge(
+    tmp_path, monkeypatch
+) -> None:
+    """A concurrently deleted source retains the existing vector fallback."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from click.testing import CliRunner
+
+    from app.cli import cli
+    from app.stores.pg import _connect
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    try:
+        oid, panel_only = _seed_legacy_panel_vector(
+            source_ref="unit-test://reconcile-source-delete-race"
+        )
+
+        import importlib
+
+        rebuild_module = importlib.import_module("app.cli.index_rebuild")
+        original_resolve = rebuild_module._reconcile_object_payload
+        raced = False
+
+        def delete_after_stale_read(object_id, vector_payload):
+            nonlocal raced
+            result = original_resolve(object_id, vector_payload)
+            if not raced:
+                with _connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM store_objects WHERE object_id = %s", (oid,))
+                raced = True
+            return result
+
+        monkeypatch.setattr(rebuild_module, "_reconcile_object_payload", delete_after_stale_read)
+
+        result = CliRunner().invoke(
+            cli,
+            ["index", "reconcile", "--backend", "pg", "--json", "--strict"],
+            env=dict(os.environ),
+        )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)
+        assert summary["purged_non_indexable"] == 0
+        assert summary["reconciled"] == 0
+        assert summary["skipped"] == 1
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) AS total FROM store_objects WHERE object_id = %s",
+                    (oid,),
+                )
+                assert cur.fetchone()["total"] == 0
+                cur.execute(
+                    "SELECT payload FROM store_vector_index WHERE object_id = %s",
+                    (oid,),
+                )
+                vector_row = cur.fetchone()
+
+        assert vector_row is not None
+        assert vector_row["payload"]["content"] == panel_only
+        assert vector_row["payload"]["provenance"]["content_hash"] == compute_content_hash("")
+    finally:
         _reset_store_backend_cache_only()
         _drop_schema(base_dsn, schema)
 

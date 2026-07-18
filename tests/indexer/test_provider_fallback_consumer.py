@@ -7,6 +7,7 @@ import app.objects as legacy_object_store
 import pytest
 
 from app.components.embeddings import EmbeddingIdentity
+from app.index.artifact_metadata import canonicalize_indexable_text, compute_content_hash
 from app.llm import fallback_orchestrator
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.objects import DomainObject, ObjectStore
@@ -17,9 +18,11 @@ from app.stores import reset_store_backends
 class _SpyVectorIndex:
     def __init__(self) -> None:
         self.upsert_calls: list[dict[str, object]] = []
+        self.purge_calls: list[UUID] = []
 
     def purge_vectors(self, object_id: UUID, *, view: str) -> int:
-        del object_id, view
+        del view
+        self.purge_calls.append(object_id)
         return 0
 
     def upsert(self, object_id: UUID, **kwargs) -> None:
@@ -110,3 +113,111 @@ def test_fallback_invoked_from_process_event(monkeypatch: pytest.MonkeyPatch) ->
     assert len(created_events) == 1
     assert created_events[0]["provider"] == "gemini"
     assert created_events[0]["meta"]["fallback_used"] is True
+
+
+def test_process_event_embeds_and_projects_exact_canonical_bytes(monkeypatch) -> None:
+    from app.indexer.consumer import process_event
+
+    identity = EmbeddingIdentity(provider="mock", model="mock-embedding", dim=3)
+    embedder = _FakeEmbeddingClient(identity, [0.1, 0.2, 0.3])
+    spy_index = _SpyVectorIndex()
+    monkeypatch.setattr("app.indexer.consumer.get_embeddings_client", lambda intent: embedder)
+    monkeypatch.setattr("app.indexer.consumer.get_vector_index", lambda: spy_index)
+    monkeypatch.setattr(
+        "app.indexer.consumer.outbox_events.emit_index_embedding_created", lambda **kwargs: None
+    )
+
+    raw = "\n".join(
+        (
+            "retained before",
+            "%% AI:Start %%",
+            "fenced panel",
+            "%% AI:End %%",
+            "## AI-instruktion",
+            "legacy panel",
+            "## Retained section",
+            "retained after",
+        )
+    )
+    canonical = canonicalize_indexable_text({"content": raw})
+    object_id = "44444444-4444-4444-4444-444444444444"
+    ObjectStore().save_object(
+        DomainObject(
+            uuid=object_id,
+            kind="note",
+            payload={"content": raw, "text": "stale alias"},
+            source_ref="vault/canonical-consumer.md",
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+    )
+
+    process_event(
+        {
+            "event": outbox_events.INDEX_EMBEDDING_REQUESTED,
+            "payload": {"object_id": object_id},
+        }
+    )
+
+    assert embedder.calls == [canonical]
+    payload = spy_index.upsert_calls[-1]["payload"]
+    assert payload["content"] == canonical
+    assert payload["text"] == canonical
+    assert payload["provenance"]["content_hash"] == compute_content_hash(canonical)
+
+
+def test_process_event_does_not_recreate_panel_only_vector(monkeypatch) -> None:
+    from app.indexer.consumer import process_event
+
+    identity = EmbeddingIdentity(provider="mock", model="mock-embedding", dim=3)
+    embedder = _FakeEmbeddingClient(identity, [0.1, 0.2, 0.3])
+    spy_index = _SpyVectorIndex()
+    monkeypatch.setattr("app.indexer.consumer.get_embeddings_client", lambda intent: embedder)
+    monkeypatch.setattr("app.indexer.consumer.get_vector_index", lambda: spy_index)
+
+    object_id = "55555555-5555-5555-5555-555555555555"
+    ObjectStore().save_object(
+        DomainObject(
+            uuid=object_id,
+            kind="note",
+            payload={"content": "\n%% AI:Start %%\ntransient\n%% AI:End %%\n\n"},
+            source_ref="vault/panel-only-consumer.md",
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+    )
+
+    process_event(
+        {
+            "event": outbox_events.INDEX_EMBEDDING_REQUESTED,
+            "payload": {"object_id": object_id},
+        }
+    )
+
+    assert embedder.calls == []
+    assert spy_index.upsert_calls == []
+    assert spy_index.purge_calls == [UUID(object_id)]
+
+
+def test_legacy_precomputed_event_rejects_noncanonical_source_bytes(monkeypatch) -> None:
+    from app.indexer.consumer import process_event
+
+    spy_index = _SpyVectorIndex()
+    monkeypatch.setattr("app.indexer.consumer.get_vector_index", lambda: spy_index)
+
+    object_id = "88888888-8888-8888-8888-888888888888"
+    process_event(
+        {
+            "object_id": object_id,
+            "kind": "note",
+            "source_ref": "vault/legacy-precomputed-panel.md",
+            "payload": {
+                "content": "retained\n%% AI:Start %%\ntransient\n%% AI:End %%"
+            },
+            "embedding": [0.1, 0.2, 0.3],
+            "model": "legacy-model",
+        }
+    )
+
+    assert spy_index.upsert_calls == []
+    assert spy_index.purge_calls == [UUID(object_id)]

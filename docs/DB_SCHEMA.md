@@ -155,14 +155,18 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
     content_hash, chunk_policy_version, pipeline_version, embedding_identity}`, written in the same
     upsert statement as the vector (never a separate write). `content_hash` is a `sha256` of the
     exact embedded text. Canonical source selection is `content` → `text` → `raw_text`; AI panels
-    are stripped to a fixed point before embedding, hashing, and projection into the derived row's `content`/`text`
-    retrieval aliases; a post-panel remainder containing only whitespace is non-indexable. The index
-    doctor's read-only missing-vector and staleness checks use that
+    are stripped to a fixed point once per producer before the provider call, and that exact result
+    is used for embedding, hashing, and assignment (not `setdefault`) into the derived row's
+    `content`/`text` retrieval aliases. A post-panel remainder containing only whitespace is
+    non-indexable: producers do not embed or upsert it and remove any prior derived vector instead.
+    A legacy precomputed vector is accepted only when its selected payload text is already canonical
+    byte-for-byte. The index doctor's read-only missing-vector and staleness checks use that
     same canonical predicate. `index reconcile` re-embeds only rows that drifted; when a present
     authoritative `store_objects` row has become canonically non-indexable, explicit reconcile
-    selects it for purge independently of stored hash or embedding identity, then purges only its
-    derived vector row so retrieval cannot serve obsolete bytes. It never mutates
-    the source row, and a genuinely absent source row retains the existing vector-payload fallback.
+    selects it for purge independently of stored hash or embedding identity, then re-reads and locks
+    the source row and conditionally purges only its derived vector in that same transaction. A source
+    that became indexable is reclassified and embedded; one that disappeared retains the existing
+    vector-payload fallback. Reconcile never mutates the source row.
     A B-tree expression index on `payload->>'content_hash'` (migration `699c97b7c007`) backs the
     staleness scan.
 

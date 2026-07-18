@@ -5,6 +5,7 @@ import pytest
 from app.components.embeddings import EmbeddingIdentity
 from app.index.artifact_metadata import (
     _embedding_identity_dict,
+    build_indexed_unit_payload,
     canonicalize_indexable_text,
     compute_content_hash,
     compute_indexed_content_hash,
@@ -59,3 +60,21 @@ def test_panel_only_canonicalization_collapses_whitespace_only_remainder() -> No
 
     meaningful_whitespace = "\n  Retained text.  \n"
     assert canonicalize_indexable_text({"content": meaningful_whitespace}) == meaningful_whitespace
+
+
+def test_indexed_unit_payload_binds_aliases_and_hash_to_exact_text() -> None:
+    identity = EmbeddingIdentity(provider="mock", model="mock-embedding", dim=3, normalize=True)
+    canonical = "retained canonical bytes"
+
+    payload = build_indexed_unit_payload(
+        object_id="11111111-1111-1111-1111-111111111111",
+        kind="note",
+        source_ref="unit-test://exact-aliases",
+        payload={"content": "stale raw content", "text": "stale raw text"},
+        text=canonical,
+        embedding_identity=identity,
+    )
+
+    assert payload["content"] == canonical
+    assert payload["text"] == canonical
+    assert payload["provenance"]["content_hash"] == compute_content_hash(canonical)

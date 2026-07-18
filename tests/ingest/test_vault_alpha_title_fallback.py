@@ -73,4 +73,7 @@ def test_vault_alpha_title_fallbacks_and_search_titles(tmp_path: Path, monkeypat
     assert all(title for title in index_titles)
     assert "Heading Title" in index_titles
     assert "First line title" in index_titles
-    assert "NoHeading" in index_titles
+    # The source object still receives its filename-derived title, but an
+    # otherwise empty note is canonically non-indexable and must not create a
+    # vector row merely to project that metadata.
+    assert "NoHeading" not in index_titles

@@ -379,12 +379,15 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 - `checks.embedding_index` reports `rebuild_required=true|false` and the active/stored embedding identity relationship.
 - `make verify-runtime` prints both the task-route summary and the embedding-index rebuild state from inside the containerized stack.
 - Index operations share the canonical text contract in `docs/DB_SCHEMA.md :: store_vector_index`.
-  AI-panel removal reaches a fixed point, and a remainder containing only whitespace is treated as
-  non-indexable rather than embedded as an empty vector payload.
+  Every producer removes AI panels to a fixed point once, then uses those exact bytes for the
+  provider call, content hash, and derived `content`/`text` aliases. A remainder containing only
+  whitespace is treated as non-indexable rather than embedded or upserted as an empty vector payload;
+  any prior derived vector is removed.
   `index doctor` remains read-only. During explicit `index reconcile`, a present authoritative
   source that has become canonically non-indexable is selected regardless of its stored hash or
-  identity and causes only its rebuildable vector row to be purged; the source row is never mutated,
-  and an absent source retains the vector-payload fallback.
+  identity. Before deletion, reconcile locks and reclassifies that source in the same transaction as
+  the conditional vector purge: a newly indexable source is embedded instead, while a source that
+  disappeared retains the vector-payload fallback. The source row is never mutated.
 
 ## Startup telemetry (startup_status.json)
 - Location: `tmp/startup_status.json` (workspace root on the host).

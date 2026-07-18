@@ -625,8 +625,10 @@ def reconcile(
         if not text:
             if authoritative_source_present:
                 try:
-                    purged = index_store.purge_vectors(
-                        UUID(str(object_id)), view=DEFAULT_EMBEDDING_VIEW
+                    classification = (
+                        index_store.purge_vector_if_present_source_non_indexable(
+                            UUID(str(object_id)), view=DEFAULT_EMBEDDING_VIEW
+                        )
                     )
                 except Exception as purge_exc:
                     _record_failure(
@@ -640,12 +642,35 @@ def reconcile(
                         False,
                     )
                     continue
-                summary["purged_non_indexable"] = int(
-                    summary["purged_non_indexable"]
-                ) + int(purged)
-            else:
+
+                if classification.source_present and not classification.source_indexable:
+                    summary["purged_non_indexable"] = int(
+                        summary["purged_non_indexable"]
+                    ) + int(classification.purged)
+                    continue
+
+                if classification.source_present:
+                    # The source became indexable after the candidate read.
+                    # Reclassify and embed the locked-read payload instead of
+                    # deleting its derived row from stale evidence.
+                    source_payload = dict(classification.source_payload or {})
+                else:
+                    # The source disappeared after the candidate read.  The
+                    # present-source purge contract no longer applies; retain
+                    # and, where possible, reconcile from vector fallback.
+                    source_payload = vector_payload
+                domain_obj = domain_objects.DomainObject(
+                    uuid=str(object_id),
+                    kind=kind,
+                    source_ref=source_ref,
+                    payload=source_payload,
+                    created_at=datetime.now(timezone.utc),
+                )
+                text = _extract_text(source_payload)
+
+            if not text:
                 summary["skipped"] = int(summary["skipped"]) + 1
-            continue
+                continue
 
         # ``store_vector_index`` is a derived retrieval projection.  Keep both
         # compatibility aliases bound to the exact producer-selected source

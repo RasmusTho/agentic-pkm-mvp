@@ -67,10 +67,10 @@ def extract_indexable_text(payload: dict | None) -> str:
 
 def canonicalize_indexable_text(payload: dict | None) -> str:
     """Return the exact producer text used for embedding and provenance."""
-    return _canonicalize_indexed_text(extract_indexable_text(payload))
+    return canonicalize_indexed_text(extract_indexable_text(payload))
 
 
-def _canonicalize_indexed_text(text: str) -> str:
+def canonicalize_indexed_text(text: str) -> str:
     """Strip panels while preserving meaningful source whitespace.
 
     Panel removal can leave only separator newlines around an otherwise
@@ -84,7 +84,7 @@ def _canonicalize_indexed_text(text: str) -> str:
 
 def compute_indexed_content_hash(text: str) -> str:
     """Hash text with the producer's AI-panel canonicalization."""
-    return compute_content_hash(_canonicalize_indexed_text(text))
+    return compute_content_hash(canonicalize_indexed_text(text))
 
 
 def compute_payload_content_hash(payload: dict | None) -> str:
@@ -100,15 +100,22 @@ def build_indexed_unit_payload(
     payload: dict | None,
     text: str | None = None,
     embedding_identity: Any = None,
+    bind_text_aliases: bool = True,
 ) -> dict:
     payload_out = dict(payload or {})
     safe_object_id = str(object_id)
     safe_source_ref = str(source_ref)
     safe_kind = str(kind or "note")
 
-    if text is not None:
-        payload_out.setdefault("text", text)
-        payload_out.setdefault("content", text)
+    canonical_text = canonicalize_indexed_text(
+        text if text is not None else extract_indexable_text(payload_out)
+    )
+    if text is not None and bind_text_aliases:
+        # A derived vector payload must expose exactly the bytes that produced
+        # both its embedding and provenance hash.  Assignment is intentional:
+        # compatibility aliases copied from a source row may be stale/raw.
+        payload_out["text"] = canonical_text
+        payload_out["content"] = canonical_text
     payload_out.setdefault("object_type", safe_kind)
     payload_out.setdefault("system_intent", "learn")
     payload_out.setdefault("emergent_tags", [])
@@ -142,10 +149,9 @@ def build_indexed_unit_payload(
     # note (idempotent no-op on panel-free text). Hashing the enriched body
     # instead makes content_hash non-deterministic and breaks reingest
     # idempotence + cold-rebuild (registry_chain).
-    embedded_text = text if text is not None else extract_indexable_text(payload_out)
     payload_out["provenance"] = {
         "source_ref": safe_source_ref,
-        "content_hash": compute_indexed_content_hash(embedded_text),
+        "content_hash": compute_content_hash(canonical_text),
         "chunk_policy_version": CHUNK_POLICY_VERSION,
         "pipeline_version": EMBED_PIPELINE_VERSION,
         "embedding_identity": _embedding_identity_dict(embedding_identity) if embedding_identity is not None else None,
@@ -156,6 +162,7 @@ def build_indexed_unit_payload(
 __all__ = [
     "build_indexed_unit_payload",
     "canonicalize_indexable_text",
+    "canonicalize_indexed_text",
     "compute_content_hash",
     "compute_indexed_content_hash",
     "compute_payload_content_hash",

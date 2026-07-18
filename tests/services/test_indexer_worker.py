@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.services.indexer import handle_ingest_object_created
 from app import objects as object_store_module
+from app.index.artifact_metadata import canonicalize_indexable_text, compute_content_hash
 from app.objects import ObjectStore
 
 
@@ -160,3 +161,127 @@ def test_handle_ingest_object_created_replaces_vectors_on_update(monkeypatch):
     assert purge_calls[1][2] == 1
     store = get_vector_index()
     assert len(store._entries) == 1
+
+
+def test_handle_ingest_object_created_preserves_source_and_indexes_canonical_bytes(monkeypatch):
+    object_store_module._MEMORY_STORE.clear()
+    calls: list[dict] = []
+    embedded_texts: list[str] = []
+
+    class DummyIndex:
+        def purge_vectors(self, object_id, *, view):
+            return 0
+
+        def upsert(self, object_id, **kwargs):
+            calls.append({"object_id": object_id, **kwargs})
+
+    identity = SimpleNamespace(provider="mock", model="mock-embedding", dim=3, normalize=True)
+    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
+    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: None)
+    monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: None)
+
+    def fake_embed(**kwargs):
+        embedded_texts.append(kwargs["text"])
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("app.services.indexer.llm_embed_text", fake_embed)
+
+    raw = "\n".join(
+        (
+            "retained before",
+            "%% AI:Start %%",
+            "fenced panel",
+            "%% AI:End %%",
+            "## AI-instruktion",
+            "legacy panel",
+            "## Retained section",
+            "retained after",
+        )
+    )
+    canonical = canonicalize_indexable_text({"content": raw})
+    event = _make_event(source_ref="vault/canonical-indexer.md")
+    event["uuid"] = "66666666-6666-6666-6666-666666666666"
+    event["content"] = raw
+
+    handle_ingest_object_created(event)
+
+    source = ObjectStore().get_object(event["uuid"])
+    assert source is not None
+    assert source.payload["content"] == raw
+    assert embedded_texts == [canonical]
+    vector_payload = calls[-1]["payload"]
+    assert vector_payload["content"] == canonical
+    assert vector_payload["text"] == canonical
+    assert vector_payload["provenance"]["content_hash"] == compute_content_hash(canonical)
+
+
+def test_handle_ingest_object_created_does_not_recreate_panel_only_vector(monkeypatch):
+    object_store_module._MEMORY_STORE.clear()
+    purge_calls: list[tuple[UUID, str]] = []
+
+    class DummyIndex:
+        def purge_vectors(self, object_id, *, view):
+            purge_calls.append((object_id, view))
+            return 1
+
+        def upsert(self, object_id, **kwargs):
+            raise AssertionError("panel-only source must not be upserted")
+
+    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
+    monkeypatch.setattr(
+        "app.services.indexer.get_embedding_identity",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("panel-only source must not resolve an embedding identity")
+        ),
+    )
+
+    panel_only = "\n%% AI:Start %%\ntransient\n%% AI:End %%\n\n"
+    event = _make_event(source_ref="vault/panel-only-indexer.md")
+    event["uuid"] = "77777777-7777-7777-7777-777777777777"
+    event["content"] = panel_only
+
+    handle_ingest_object_created(event)
+
+    source = ObjectStore().get_object(event["uuid"])
+    assert source is not None
+    assert source.payload["content"] == panel_only
+    assert purge_calls == [(UUID(event["uuid"]), "markdown.semantic")]
+
+
+def test_handle_ingest_object_created_uses_raw_text_fallback_bytes(monkeypatch):
+    object_store_module._MEMORY_STORE.clear()
+    embedded_texts: list[str] = []
+    vector_payloads: list[dict] = []
+
+    class DummyIndex:
+        def purge_vectors(self, object_id, *, view):
+            return 0
+
+        def upsert(self, object_id, **kwargs):
+            vector_payloads.append(kwargs["payload"])
+
+    identity = SimpleNamespace(provider="mock", model="mock-embedding", dim=3, normalize=True)
+    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
+    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: None)
+
+    def fake_embed(**kwargs):
+        embedded_texts.append(kwargs["text"])
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("app.services.indexer.llm_embed_text", fake_embed)
+
+    event = _make_event(source_ref="vault/raw-text-fallback.md")
+    event["uuid"] = "99999999-9999-9999-9999-999999999999"
+    event["content"] = ""
+    event["payload"] = {"raw_text": "raw fallback bytes"}
+
+    handle_ingest_object_created(event)
+
+    assert embedded_texts == ["raw fallback bytes"]
+    assert vector_payloads[-1]["content"] == "raw fallback bytes"
+    assert vector_payloads[-1]["text"] == "raw fallback bytes"
+    assert vector_payloads[-1]["provenance"]["content_hash"] == compute_content_hash(
+        "raw fallback bytes"
+    )
