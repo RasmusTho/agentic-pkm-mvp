@@ -348,6 +348,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/index",
             "tests/indexer",
             "tests/search",
+            "tests/services/test_indexer_worker.py",
             "tests/cli/test_index_rebuild_resilience.py",
             "tests/cli/test_index_doctor_mixed_identity.py",
             *E2E_TARGETS["memory_retrieval"],

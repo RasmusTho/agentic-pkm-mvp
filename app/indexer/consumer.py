@@ -38,13 +38,17 @@ def _extract_text(obj_payload: Dict[str, Any]) -> str:
     return canonicalize_indexable_text(obj_payload)
 
 
-def _purge_vectors(idx: object, object_id: UUID) -> int:
+def _purge_vectors(idx: object, object_id: UUID, *, required: bool = False) -> int:
     purge = getattr(idx, "purge_vectors", None)
     if purge is None:
+        if required:
+            raise RuntimeError("vector index does not support required purge_vectors")
         return 0
     try:
         return purge(object_id, view=outbox_events.DEFAULT_EMBEDDING_VIEW)
     except Exception:
+        if required:
+            raise
         return 0
 
 
@@ -70,7 +74,7 @@ def process_event(evt: Dict[str, Any]) -> None:
         # payload text is already canonical byte-for-byte; otherwise fail
         # closed instead of stamping a canonical hash onto a raw-panel vector.
         if not text or text != raw_text:
-            _purge_vectors(idx, object_id)
+            _purge_vectors(idx, object_id, required=True)
             return
         _purge_vectors(idx, object_id)
         payload = build_indexed_unit_payload(
@@ -127,7 +131,7 @@ def process_event(evt: Dict[str, Any]) -> None:
     text = _extract_text(obj_payload)
     idx = get_vector_index()
     if not text:
-        _purge_vectors(idx, obj_uuid)
+        _purge_vectors(idx, obj_uuid, required=True)
         return
 
     embedder = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))

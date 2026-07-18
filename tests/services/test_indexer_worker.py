@@ -249,6 +249,43 @@ def test_handle_ingest_object_created_does_not_recreate_panel_only_vector(monkey
     assert purge_calls == [(UUID(event["uuid"]), "markdown.semantic")]
 
 
+def test_vault_event_preserves_explicitly_empty_canonical_body(monkeypatch):
+    object_store_module._MEMORY_STORE.clear()
+    purge_calls: list[tuple[UUID, str]] = []
+
+    class DummyIndex:
+        def purge_vectors(self, object_id, *, view):
+            purge_calls.append((object_id, view))
+            return 1
+
+        def upsert(self, object_id, **kwargs):
+            raise AssertionError("empty canonical vault body must not be upserted")
+
+    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
+    monkeypatch.setattr(
+        "app.services.indexer.get_embedding_identity",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("empty canonical vault body must not be embedded")
+        ),
+    )
+
+    event = _make_event(source_ref="vault/panel-only-with-frontmatter.md")
+    event["uuid"] = "78787878-7878-7878-7878-787878787878"
+    event["content"] = ""
+    event["payload"] = {
+        "frontmatter": {"title": "Panel only"},
+        "raw_text": "---\ntitle: Panel only\n---\n%% AI:Start %%\ntransient\n%% AI:End %%\n",
+    }
+
+    handle_ingest_object_created(event)
+
+    source = ObjectStore().get_object(event["uuid"])
+    assert source is not None
+    assert source.payload["content"] == ""
+    assert source.payload["raw_text"].startswith("---\n")
+    assert purge_calls == [(UUID(event["uuid"]), "markdown.semantic")]
+
+
 def test_handle_ingest_object_created_uses_raw_text_fallback_bytes(monkeypatch):
     object_store_module._MEMORY_STORE.clear()
     embedded_texts: list[str] = []

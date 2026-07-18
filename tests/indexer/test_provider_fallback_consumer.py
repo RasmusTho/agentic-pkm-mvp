@@ -199,6 +199,37 @@ def test_process_event_does_not_recreate_panel_only_vector(monkeypatch) -> None:
     assert spy_index.purge_calls == [UUID(object_id)]
 
 
+def test_process_event_retries_when_panel_only_purge_fails(monkeypatch) -> None:
+    from app.indexer.consumer import process_event
+
+    class FailingPurgeIndex(_SpyVectorIndex):
+        def purge_vectors(self, object_id: UUID, *, view: str) -> int:
+            raise ConnectionError("postgres unavailable")
+
+    monkeypatch.setattr(
+        "app.indexer.consumer.get_vector_index", lambda: FailingPurgeIndex()
+    )
+    object_id = "56565656-5656-5656-5656-565656565656"
+    ObjectStore().save_object(
+        DomainObject(
+            uuid=object_id,
+            kind="note",
+            payload={"content": "%% AI:Start %%\ntransient\n%% AI:End %%"},
+            source_ref="vault/panel-only-retry.md",
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+    )
+
+    with pytest.raises(ConnectionError, match="postgres unavailable"):
+        process_event(
+            {
+                "event": outbox_events.INDEX_EMBEDDING_REQUESTED,
+                "payload": {"object_id": object_id},
+            }
+        )
+
+
 def test_legacy_precomputed_event_rejects_noncanonical_source_bytes(monkeypatch) -> None:
     from app.indexer.consumer import process_event
 
@@ -221,3 +252,29 @@ def test_legacy_precomputed_event_rejects_noncanonical_source_bytes(monkeypatch)
 
     assert spy_index.upsert_calls == []
     assert spy_index.purge_calls == [UUID(object_id)]
+
+
+def test_legacy_precomputed_rejection_retries_when_purge_fails(monkeypatch) -> None:
+    from app.indexer.consumer import process_event
+
+    class FailingPurgeIndex(_SpyVectorIndex):
+        def purge_vectors(self, object_id: UUID, *, view: str) -> int:
+            raise ConnectionError("postgres unavailable")
+
+    monkeypatch.setattr(
+        "app.indexer.consumer.get_vector_index", lambda: FailingPurgeIndex()
+    )
+
+    with pytest.raises(ConnectionError, match="postgres unavailable"):
+        process_event(
+            {
+                "object_id": "89898989-8989-8989-8989-898989898989",
+                "kind": "note",
+                "source_ref": "vault/legacy-precomputed-panel-retry.md",
+                "payload": {
+                    "content": "retained\n%% AI:Start %%\ntransient\n%% AI:End %%"
+                },
+                "embedding": [0.1, 0.2, 0.3],
+                "model": "legacy-model",
+            }
+        )
