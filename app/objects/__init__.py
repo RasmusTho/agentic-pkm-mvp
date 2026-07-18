@@ -189,6 +189,10 @@ def save_object_in_transaction(conn: Any, obj: DomainObject) -> None:
         source_ref=obj.source_ref,
         payload=dict(obj.payload or {}),
     )
+    # Evict instead of refreshing before commit: if a later statement rolls
+    # the surrounding transaction back, the next read safely reloads the old
+    # durable row instead of exposing uncommitted state from this process.
+    _MEMORY_STORE.pop(str(obj.uuid), None)
 
 
 def resolve_canonical_object_id_in_transaction(conn: Any, vault_uuid: str) -> str:
@@ -196,17 +200,25 @@ def resolve_canonical_object_id_in_transaction(conn: Any, vault_uuid: str) -> st
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id::text
+            SELECT id::text, count(*) OVER () AS match_count
             FROM objects
             WHERE uuid = %s
+            ORDER BY id
             LIMIT 1
             """,
             (vault_uuid,),
         )
         row = cur.fetchone()
-    if isinstance(row, dict):
-        return str(row.get("id") or vault_uuid)
-    return str(row[0]) if row and row[0] is not None else str(vault_uuid)
+    if not row:
+        return str(vault_uuid)
+    object_id = row.get("id") if isinstance(row, dict) else row[0]
+    match_count = row.get("match_count") if isinstance(row, dict) else row[1]
+    if int(match_count or 0) > 1:
+        raise RuntimeError(
+            "ambiguous retained vault UUID mapping; reconcile duplicate objects.uuid rows "
+            "before retrying"
+        )
+    return str(object_id or vault_uuid)
 
 
 def resolve_canonical_object_id(vault_uuid: str) -> str:
@@ -242,6 +254,7 @@ def update_object_source_ref_in_transaction(
         object_id=UUID(str(object_id)),
         source_ref=source_ref,
     )
+    _MEMORY_STORE.pop(str(object_id), None)
 
 
 __all__ = [

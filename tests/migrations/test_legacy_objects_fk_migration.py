@@ -573,3 +573,20 @@ def test_runtime_identity_resolver_preserves_distinct_legacy_id(
     from app.objects import resolve_canonical_object_id
 
     assert resolve_canonical_object_id(str(vault_uuid)) == str(canonical_id)
+
+
+def test_migration_rejects_ambiguous_retained_uuid_mapping(scratch_dsn: str) -> None:
+    _upgrade(PRE_CUTOVER_REVISION)
+    duplicate_uuid = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (uuid.uuid4(), duplicate_uuid),
+        )
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (uuid.uuid4(), duplicate_uuid),
+        )
+
+    with pytest.raises(Exception, match="duplicate non-null objects.uuid"):
+        _upgrade("head")

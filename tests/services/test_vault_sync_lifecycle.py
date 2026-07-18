@@ -41,9 +41,9 @@ class _FakeCursor:
                 self.conn.objects_path[uuid_value] = new_path
                 self.rowcount = 1
             return
-        if normalized.startswith("select id::text from objects where uuid = %s"):
+        if normalized.startswith("select id::text, count(*) over ()"):
             (uuid_value,) = params
-            self._fetchone = (uuid_value,) if uuid_value in self.conn.objects_path else None
+            self._fetchone = (uuid_value, 1) if uuid_value in self.conn.objects_path else None
             return
         if normalized.startswith("select exists(select 1 from store_objects"):
             canonical_id, _id_value, uuid_value, expected_source, _canonical_again = params

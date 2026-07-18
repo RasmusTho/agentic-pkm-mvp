@@ -62,6 +62,18 @@ def upgrade() -> None:
 
             IF EXISTS (
                 SELECT 1
+                FROM public.objects
+                WHERE uuid IS NOT NULL
+                GROUP BY uuid
+                HAVING count(*) > 1
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = '#3510 unsupported data: duplicate non-null objects.uuid values',
+                    HINT = 'Reconcile each retained vault UUID to exactly one objects.id, then rerun alembic upgrade head.';
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
                 FROM pg_constraint c
                 WHERE c.contype = 'f'
                   AND c.confrelid = 'public.objects'::regclass
