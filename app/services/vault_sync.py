@@ -163,7 +163,12 @@ def _object_materialization_state(
 
 
 def _update_materialized_source_ref(
-    conn: psycopg.Connection, *, canonical_object_id: str, uuid_value: str, source_ref: str | None
+    conn: psycopg.Connection,
+    *,
+    canonical_object_id: str,
+    uuid_value: str,
+    source_ref: str | None,
+    allow_missing_parent: bool = False,
 ) -> None:
     """Update a fully materialized parent; tolerate only deferred no-parent state."""
     canonical_exists, mirror_exists, _ = _object_materialization_state(
@@ -172,8 +177,10 @@ def _update_materialized_source_ref(
         canonical_object_id=canonical_object_id,
         expected_source_ref=source_ref or "",
     )
-    if not canonical_exists and not mirror_exists:
+    if not canonical_exists and not mirror_exists and allow_missing_parent:
         return  # active-edit baseline: file_state exists but no producer has materialized yet
+    if not canonical_exists and not mirror_exists:
+        raise RuntimeError("missing vault object materialization; reconcile before retrying")
     if not canonical_exists or not mirror_exists:
         raise RuntimeError("inconsistent vault object materialization; reconcile before retrying")
     update_object_source_ref_in_transaction(
@@ -336,6 +343,7 @@ def update_path(uuid_value: str, new_path: str) -> None:
                 canonical_object_id=canonical_object_id,
                 uuid_value=uuid_value,
                 source_ref=resolved_path,
+                allow_missing_parent=state is not None,
             )
             cur.execute(
                 """
@@ -402,6 +410,7 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                         canonical_object_id=canonical_object_id,
                         uuid_value=effective_uuid,
                         source_ref=None,
+                        allow_missing_parent=deleted and state is not None,
                     )
             if deleted and effective_uuid and remaining_for_uuid == 0:
                 delete_payload = {

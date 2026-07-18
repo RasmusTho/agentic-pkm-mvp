@@ -294,6 +294,16 @@ def test_one_sided_materialization_remains_fail_loud(canonical, mirror) -> None:
         )
 
 
+def test_unknown_no_parent_state_remains_fail_loud() -> None:
+    with pytest.raises(RuntimeError, match="missing vault object materialization"):
+        vault_sync._update_materialized_source_ref(
+            _FakeConn(),
+            canonical_object_id=UUID1,
+            uuid_value=UUID1,
+            source_ref=None,
+        )
+
+
 def test_delete_note_does_not_emit_deleted_event_when_uuid_still_has_other_paths(
     monkeypatch,
 ) -> None:

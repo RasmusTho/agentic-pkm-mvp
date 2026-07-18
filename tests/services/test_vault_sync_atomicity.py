@@ -19,6 +19,7 @@ The not-pg tests below are the real old-vs-new discriminators without a database
 committed *before* the enqueue runs — so a fault leaves a committed object with
 the event lost.
 """
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -71,6 +72,15 @@ class _RecCursor:
         if norm.startswith("delete from file_state where path"):
             self.conn.log.append("file_state_delete")
             self.rowcount = 1 if self.conn.has_file_state else 0
+            return
+        if norm.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path"
+        ):
+            self._fetch = (
+                {"path": params[0], "uuid": "00000000-0000-0000-0000-000000000002", "mtime": "test"}
+                if self.conn.has_file_state
+                else None
+            )
             return
         if norm.startswith("select count(*) from file_state where uuid"):
             # Zero remaining paths for the uuid → delete_note emits the event.
@@ -126,7 +136,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, conn: _RecConn, enqueue) -> dict:
 
 
 def _tail_after(log: list[str], marker: str) -> list[str]:
-    return log[log.index(marker):]
+    return log[log.index(marker) :]
 
 
 # --- upsert_object_from_note --------------------------------------------------
