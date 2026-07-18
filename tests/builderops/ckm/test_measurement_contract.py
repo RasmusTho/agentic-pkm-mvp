@@ -97,6 +97,54 @@ def _assert_one_mutation(store: CkmStore, action) -> object:
     return result
 
 
+def _downgrade_identity_schema_to_v4(db_path: Path) -> None:
+    """Strip the schema-v5 identity/state additions from a populated fixture."""
+
+    with sqlite3.connect(db_path) as conn:
+        for index_name in (
+            "idx_ckm_capability_public_id",
+            "idx_ckm_capability_identity_key",
+            "idx_ckm_artifact_public_id",
+            "idx_ckm_evidence_edge_public_id",
+            "idx_ckm_assessment_public_id",
+            "idx_ckm_finding_public_id",
+        ):
+            conn.execute(f"DROP INDEX {index_name}")
+        conn.execute("DROP TABLE ckm_identity_successor")
+        conn.execute("DROP TABLE ckm_public_identity")
+        conn.execute("DROP TABLE ckm_state")
+        conn.execute("ALTER TABLE ckm_capability DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_capability DROP COLUMN identity_key")
+        conn.execute("ALTER TABLE ckm_artifact DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_evidence_edge DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_evidence_edge_history DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_assessment DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_finding DROP COLUMN public_id")
+        conn.commit()
+
+
+def _ckm_storage_snapshot(path: Path) -> tuple[object, ...]:
+    with sqlite3.connect(path) as conn:
+        schema = tuple(
+            conn.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE name LIKE 'ckm_%' ORDER BY type, name"
+            ).fetchall()
+        )
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name LIKE 'ckm_%' ORDER BY name"
+            ).fetchall()
+        ]
+        rows = tuple(
+            (table, tuple(conn.execute(f'SELECT * FROM "{table}" ORDER BY rowid')))
+            for table in tables
+        )
+        return schema, rows
+
+
 def test_public_identity_lifecycle_policy(
     store: CkmStore, tmp_path: Path
 ) -> None:
@@ -597,6 +645,99 @@ def test_all_mutations_advance_state_revision_atomically(
     assert rebuilt_state.state_revision == 1
 
 
+def test_history_only_evidence_edges_receive_public_identity_or_tombstone(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "history-only-v4.sqlite3"
+    legacy = CkmStore(db_path)
+    legacy.ensure_schema()
+    capability = _capability(legacy)
+    artifact = _artifact(legacy)
+    edge = _edge(legacy, artifact.id, capability.id)
+    legacy.delete_evidence_edge(edge.id)
+    _downgrade_identity_schema_to_v4(db_path)
+
+    migrated = CkmStore(db_path)
+    migrated.ensure_schema()
+
+    with sqlite3.connect(db_path) as conn:
+        history = conn.execute(
+            """
+            SELECT h.public_id, a.public_id, c.public_id, h.basis
+            FROM ckm_evidence_edge_history AS h
+            JOIN ckm_artifact AS a ON a.id = h.artifact_id
+            JOIN ckm_capability AS c ON c.id = h.capability_id
+            WHERE h.edge_id = ?
+            """,
+            (edge.id,),
+        ).fetchone()
+    assert history is not None
+    expected_public_id = stable_public_id(
+        "evidence_edge",
+        canonical_digest(
+            {
+                "artifact": history[1],
+                "capability": history[2],
+                "basis": history[3],
+            }
+        ),
+    )
+    assert history[0] == expected_public_id
+    assert migrated.identity_lifecycle(expected_public_id) == {
+        "public_id": expected_public_id,
+        "resource_type": "evidence_edge",
+        "status": "tombstone",
+        "successors": [],
+    }
+    assert expected_public_id not in migrated.active_public_ids()
+
+
+def test_ambiguous_history_only_edge_state_rolls_back_without_half_init(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "ambiguous-history-only-v4.sqlite3"
+    legacy = CkmStore(db_path)
+    legacy.ensure_schema()
+    capability = _capability(legacy)
+    artifact = _artifact(legacy)
+    edge = _edge(legacy, artifact.id, capability.id)
+    legacy.delete_evidence_edge(edge.id)
+    _downgrade_identity_schema_to_v4(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(ckm_evidence_edge_history)")
+        ]
+        original = conn.execute(
+            "SELECT * FROM ckm_evidence_edge_history WHERE edge_id = ?",
+            (edge.id,),
+        ).fetchone()
+        assert original is not None
+        ambiguous = dict(zip(columns, original, strict=True))
+        ambiguous.update(
+            {
+                "history_id": "edge_history_ambiguous_identity",
+                "basis": "doc:ambiguous-identity",
+                "retired_at": "2026-07-14T00:00:00Z",
+            }
+        )
+        conn.execute(
+            f"INSERT INTO ckm_evidence_edge_history ({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})",
+            [ambiguous[column] for column in columns],
+        )
+        conn.commit()
+
+    before_migration = _ckm_storage_snapshot(db_path)
+    with pytest.raises(
+        CkmValidationError,
+        match="history-only evidence edge.*multiple public identities",
+    ):
+        CkmStore(db_path).ensure_schema()
+    assert _ckm_storage_snapshot(db_path) == before_migration
+
+
 def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.sqlite3"
     legacy = CkmStore(db_path)
@@ -800,26 +941,8 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
                 "UPDATE ckm_finding SET citations = ? WHERE id = ?",
                 (json.dumps(stripped), row["id"]),
             )
-        for index_name in (
-            "idx_ckm_capability_public_id",
-            "idx_ckm_capability_identity_key",
-            "idx_ckm_artifact_public_id",
-            "idx_ckm_evidence_edge_public_id",
-            "idx_ckm_assessment_public_id",
-            "idx_ckm_finding_public_id",
-        ):
-            conn.execute(f"DROP INDEX {index_name}")
-        conn.execute("DROP TABLE ckm_identity_successor")
-        conn.execute("DROP TABLE ckm_public_identity")
-        conn.execute("DROP TABLE ckm_state")
-        conn.execute("ALTER TABLE ckm_capability DROP COLUMN public_id")
-        conn.execute("ALTER TABLE ckm_capability DROP COLUMN identity_key")
-        conn.execute("ALTER TABLE ckm_artifact DROP COLUMN public_id")
-        conn.execute("ALTER TABLE ckm_evidence_edge DROP COLUMN public_id")
-        conn.execute("ALTER TABLE ckm_evidence_edge_history DROP COLUMN public_id")
-        conn.execute("ALTER TABLE ckm_assessment DROP COLUMN public_id")
-        conn.execute("ALTER TABLE ckm_finding DROP COLUMN public_id")
         conn.commit()
+    _downgrade_identity_schema_to_v4(db_path)
 
     ambiguous_path = tmp_path / "ambiguous-legacy.sqlite3"
     with sqlite3.connect(db_path) as source, sqlite3.connect(ambiguous_path) as target:
@@ -850,34 +973,13 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         )
         conn.commit()
 
-    def ckm_storage_snapshot(path: Path) -> tuple[object, ...]:
-        with sqlite3.connect(path) as conn:
-            schema = tuple(
-                conn.execute(
-                    "SELECT type, name, sql FROM sqlite_master "
-                    "WHERE name LIKE 'ckm_%' ORDER BY type, name"
-                ).fetchall()
-            )
-            tables = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master "
-                    "WHERE type = 'table' AND name LIKE 'ckm_%' ORDER BY name"
-                ).fetchall()
-            ]
-            rows = tuple(
-                (table, tuple(conn.execute(f'SELECT * FROM "{table}" ORDER BY rowid')))
-                for table in tables
-            )
-            return schema, rows
-
-    before_unsupported_migration = ckm_storage_snapshot(ambiguous_path)
+    before_unsupported_migration = _ckm_storage_snapshot(ambiguous_path)
     with pytest.raises(
         CkmValidationError,
         match="unsupported legacy assessment history.*rebuild-stable",
     ):
         CkmStore(ambiguous_path).ensure_schema()
-    assert ckm_storage_snapshot(ambiguous_path) == before_unsupported_migration
+    assert _ckm_storage_snapshot(ambiguous_path) == before_unsupported_migration
 
     legacy.ensure_schema()
     migrated_state = legacy.state_identity()
@@ -943,6 +1045,8 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         ),
     )
     assert migrated_history_public_id == expected_history_public_id
+    assert legacy.identity_lifecycle(expected_history_public_id)["status"] == "tombstone"
+    assert expected_history_public_id not in legacy.active_public_ids()
 
     legacy.ensure_schema()
     assert legacy.state_identity() == post_immediate_state
