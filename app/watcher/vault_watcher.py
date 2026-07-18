@@ -638,6 +638,14 @@ def run_watcher_tick(
                 summary["errors"] += 1
                 continue
 
+            # Filesystem/companion identity remains the retained vault UUID,
+            # but every ObjectStore-facing panel operation must use the
+            # canonical objects.id.  Historical rows may deliberately have
+            # objects.uuid != objects.id after the #3510 cutover; using the
+            # frontmatter UUID here would let panel writeback create a second
+            # store_objects parent and split executed-action history.
+            canonical_object_id = resolve_canonical_object_id(note_uuid)
+
             content_hash = _content_hash(current_markdown)
             dedup_key = _build_dedup_key(_PANEL_POLICY_ID, rel_path, content_hash)
             if not _DEDUP_QUEUE.try_acquire(dedup_key):
@@ -653,16 +661,16 @@ def run_watcher_tick(
                     messages.append(f"Watcher auto-exec blocked for {rel_path}: {exc}")
                     continue
 
-                _hydrate_store_with_markdown(note_uuid, note_path)
+                _hydrate_store_with_markdown(canonical_object_id, note_path)
                 expected_version = _WRITE_GUARD.compute_version(current_markdown.encode("utf-8"))
 
-                stored = store.get_object(note_uuid)
+                stored = store.get_object(canonical_object_id)
                 old_markdown = ""
                 if stored:
                     old_markdown = str((stored.payload or {}).get("raw_text") or "")
 
                 panel_result = handle_note_update(
-                    note_uuid,
+                    canonical_object_id,
                     old_markdown,
                     current_markdown,
                     action_mappings=action_mappings,
@@ -716,7 +724,7 @@ def run_watcher_tick(
                             expected_version,
                             panel_result.updated_markdown,
                         )
-                        _hydrate_store_with_markdown(note_uuid, note_path)
+                        _hydrate_store_with_markdown(canonical_object_id, note_path)
                     except VersionMismatch:
                         messages.append(f"Warning: stale write prevented for {note_path}")
                         summary["errors"] += 1
