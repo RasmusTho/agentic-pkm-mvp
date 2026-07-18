@@ -319,6 +319,13 @@ def test_postdeploy_smoke_failure_rolls_back_previous_pin_and_services(
             "capture-watch gate: container unhealthy",
             2,
         ),
+        (
+            "FAKE_DOCKER_FAIL_MATCH",
+            " ps -q ",
+            24,
+            "capture-watch gate: service lookup failed",
+            2,
+        ),
     ],
 )
 def test_every_postmutation_gate_has_fail_closed_terminal_handling(

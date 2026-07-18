@@ -245,6 +245,7 @@ health_gate() {
 }
 
 recreate_channel_services() {
+  local rc=0
   if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then
     # During an acknowledged embedding-dimension cutover, /readyz must stay red
     # until the governed full rebuild completes. Start the runtime first, prove
@@ -252,9 +253,12 @@ recreate_channel_services() {
     # dependency. The later live smoke still admits only the sole exact
     # embedding_index=rebuild_required transition; the API container healthcheck
     # remains strict on /readyz throughout.
-    compose up -d --force-recreate api worker watcher heimdal-capture-watch || return 1
+    compose up -d --force-recreate api worker watcher heimdal-capture-watch || rc=$?
+    [ "${rc}" -eq 0 ] || return "${rc}"
     wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
-    compose up -d --force-recreate --no-deps companion-ui || return 1
+    rc=0
+    compose up -d --force-recreate --no-deps companion-ui || rc=$?
+    [ "${rc}" -eq 0 ] || return "${rc}"
     return 0
   fi
 
@@ -305,8 +309,13 @@ capture_watch_gate() {
   # its own healthcheck fails loud on) at deploy time instead of letting it sit unhealthy and
   # silent. This is a required post-mutation gate: a failure routes through the shared rollback
   # path before a successful deploy receipt is recorded.
-  local cid deadline status
-  cid="$(compose ps -q heimdal-capture-watch 2>/dev/null | head -1)"
+  local cid deadline status ps_output rc=0
+  ps_output="$(compose ps -q heimdal-capture-watch)" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "capture-watch gate: service lookup failed (status ${rc})" >&2
+    return "${rc}"
+  fi
+  cid="$(head -1 <<<"${ps_output}")"
   if [ -z "${cid}" ]; then
     echo "capture-watch gate: heimdal-capture-watch container not found after deploy" >&2
     return 1

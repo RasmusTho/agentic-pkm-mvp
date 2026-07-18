@@ -484,7 +484,7 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert "service recreate/liveness gate failed" in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     events = _deploy_events(env)
@@ -519,7 +519,7 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
-    assert result.returncode != 0
+    assert result.returncode == 24
     assert "service recreate/liveness gate failed" in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     events = _deploy_events(env)
