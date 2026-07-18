@@ -575,6 +575,34 @@ def test_runtime_identity_resolver_preserves_distinct_legacy_id(
     assert resolve_canonical_object_id(str(vault_uuid)) == str(canonical_id)
 
 
+def test_runtime_identity_resolver_rejects_post_cutover_cross_key_collision(
+    scratch_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later canonical write must not turn a retained UUID into a silent alias."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    canonical_id = uuid.uuid4()
+    vault_uuid = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (canonical_id, vault_uuid),
+        )
+    _upgrade("head")
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
+            (vault_uuid,),
+        )
+
+    monkeypatch.setenv("DATABASE_URL", scratch_dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    from app.objects import resolve_canonical_object_id
+
+    with pytest.raises(RuntimeError, match="cross-key identity collision"):
+        resolve_canonical_object_id(str(vault_uuid))
+
+
 def test_migration_rejects_ambiguous_retained_uuid_mapping(scratch_dsn: str) -> None:
     _upgrade(PRE_CUTOVER_REVISION)
     duplicate_uuid = uuid.uuid4()

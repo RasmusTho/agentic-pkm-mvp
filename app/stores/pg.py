@@ -384,23 +384,37 @@ def resolve_vault_uuid_with_connection(conn, vault_uuid: str) -> str:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id::text, count(*) OVER () AS match_count
+            SELECT id::text,
+                   count(*) OVER () AS match_count,
+                   EXISTS (
+                       SELECT 1
+                       FROM store_objects
+                       WHERE object_id = %s
+                   ) AS canonical_alias_exists
             FROM objects
             WHERE uuid = %s
             ORDER BY id
             LIMIT 1
             """,
-            (vault_uuid,),
+            (vault_uuid, vault_uuid),
         )
         row = cur.fetchone()
     if not row:
         return str(vault_uuid)
     object_id = row.get("id") if isinstance(row, dict) else row[0]
     match_count = row.get("match_count") if isinstance(row, dict) else row[1]
+    canonical_alias_exists = (
+        row.get("canonical_alias_exists") if isinstance(row, dict) else row[2]
+    )
     if int(match_count or 0) > 1:
         raise RuntimeError(
             "ambiguous retained vault UUID mapping; reconcile duplicate objects.uuid rows "
             "before retrying"
+        )
+    if canonical_alias_exists and str(object_id) != str(vault_uuid):
+        raise RuntimeError(
+            "retained vault UUID already names a different canonical object; reconcile the "
+            "cross-key identity collision before retrying"
         )
     return str(object_id or vault_uuid)
 
