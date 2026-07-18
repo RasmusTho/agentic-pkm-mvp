@@ -313,6 +313,14 @@ def test_handle_ingest_object_created_uses_raw_text_fallback_bytes(monkeypatch):
 
     event = _make_event(source_ref="vault/raw-text-fallback.md")
     event["uuid"] = "99999999-9999-9999-9999-999999999999"
+    explicit_empty = dict(event)
+    explicit_empty["content"] = ""
+    explicit_empty["payload"] = {
+        "frontmatter": {"title": "Panel only"},
+        "raw_text": "---\ntitle: Panel only\n---\n",
+    }
+    handle_ingest_object_created(explicit_empty)
+
     event["content"] = ""
     event["payload"] = {"raw_text": "raw fallback bytes"}
 
@@ -324,3 +332,7 @@ def test_handle_ingest_object_created_uses_raw_text_fallback_bytes(monkeypatch):
     assert vector_payloads[-1]["provenance"]["content_hash"] == compute_content_hash(
         "raw fallback bytes"
     )
+    source = ObjectStore().get_object(event["uuid"])
+    assert source is not None
+    assert source.payload["indexable_text_source"] == "raw_text"
+    assert canonicalize_indexable_text(source.payload) == "raw fallback bytes"

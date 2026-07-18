@@ -108,6 +108,14 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         payload["indexable_text_source"] = "content"
     else:
         canonical_content = canonicalize_indexable_text(payload)
+        payload["indexable_text_source"] = next(
+            (
+                key
+                for key in ("content", "text", "raw_text")
+                if payload.get(key)
+            ),
+            "content",
+        )
     # Carry the note's vault-canonical episode_ref (ERE-03/ERE-05, invariant->producers): the
     # POST /ingest → outbox → this-handler path builds a FRESH store_objects/store_vector_index
     # payload. When the event carries frontmatter (the ingest.vault.changed path), that frontmatter
