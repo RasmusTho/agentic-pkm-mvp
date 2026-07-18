@@ -1,6 +1,8 @@
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from scripts import git_hygiene
 
 
@@ -778,7 +780,7 @@ def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch
     assert commands.index(
         ["ls-remote", "--exit-code", "origin", rescue_refspec.split(":", 1)[0]]
     ) < commands.index(
-        ["push", "--no-verify", "origin", "--delete", "closed-unmerged"]
+        ["push", "--no-verify", "origin", ":refs/heads/closed-unmerged"]
     )
 
 
@@ -918,7 +920,7 @@ def test_janitor_apply_does_not_delete_remote_when_rescue_push_fails(
     report = git_hygiene.janitor_apply(tmp_path, pr_states={"closed-unmerged": {"state": "CLOSED"}})
 
     assert report["ok"] is False
-    assert ["push", "--no-verify", "origin", "--delete", "closed-unmerged"] not in commands
+    assert ["push", "--no-verify", "origin", ":refs/heads/closed-unmerged"] not in commands
 
 
 def test_janitor_apply_does_not_delete_remote_when_rescue_verification_fails(
@@ -962,7 +964,95 @@ def test_janitor_apply_does_not_delete_remote_when_rescue_verification_fails(
     )
 
     assert report["ok"] is False
-    assert ["push", "--no-verify", "origin", "--delete", "closed-unmerged"] not in commands
+    assert ["push", "--no-verify", "origin", ":refs/heads/closed-unmerged"] not in commands
+
+
+def test_janitor_rescue_delete_uses_exact_full_ref_for_ref_like_branch(
+    tmp_path, monkeypatch
+) -> None:
+    commands: list[list[str]] = []
+    branch = "refs/heads/main"
+    rescue_ref = f"refs/archive/git-hygiene/20260607T000000Z/{branch}"
+
+    def fake_run_git_result(args: list[str], _cwd: Path) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", fake_run_git_result)
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *args, **kwargs: {
+            "mode": "report",
+            "remote_policy": "merged-and-closed-with-rescue",
+            "destructive_actions": [],
+            "candidates": {
+                "local_branches": [],
+                "worktrees": [],
+                "orphaned_worktrees": [],
+                "remote_branches": [],
+                "remote_branches_requiring_rescue": [
+                    {"branch": branch, "rescue_ref": rescue_ref}
+                ],
+                "old_stashes": [],
+            },
+            "skipped": [],
+            "prune_candidates": {"worktree": [], "remote": []},
+            "active_leases_respected": [],
+        },
+    )
+
+    report = git_hygiene.janitor_apply(
+        tmp_path, pr_states={branch: {"state": "CLOSED"}}
+    )
+
+    assert report["ok"] is True
+    assert ["push", "--no-verify", "origin", ":refs/heads/refs/heads/main"] in commands
+    assert ["push", "--no-verify", "origin", ":refs/heads/main"] not in commands
+    assert ["push", "--no-verify", "origin", "--delete", branch] not in commands
+
+
+@pytest.mark.parametrize("branch", ["--force", "main"])
+def test_janitor_rescue_transport_rejects_unsafe_branch(
+    tmp_path, monkeypatch, branch: str
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run_git_result(args: list[str], _cwd: Path) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", fake_run_git_result)
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *args, **kwargs: {
+            "mode": "report",
+            "remote_policy": "merged-and-closed-with-rescue",
+            "destructive_actions": [],
+            "candidates": {
+                "local_branches": [],
+                "worktrees": [],
+                "orphaned_worktrees": [],
+                "remote_branches": [],
+                "remote_branches_requiring_rescue": [
+                    {
+                        "branch": branch,
+                        "rescue_ref": f"refs/archive/git-hygiene/20260607T000000Z/{branch}",
+                    }
+                ],
+                "old_stashes": [],
+            },
+            "skipped": [],
+            "prune_candidates": {"worktree": [], "remote": []},
+            "active_leases_respected": [],
+        },
+    )
+
+    report = git_hygiene.janitor_apply(tmp_path, pr_states={branch: {"state": "CLOSED"}})
+
+    assert report["ok"] is False
+    assert not any(command[0] == "push" for command in commands)
 
 
 def test_janitor_dry_run_integration_with_temp_repo(tmp_path) -> None:

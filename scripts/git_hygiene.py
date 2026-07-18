@@ -815,8 +815,15 @@ def janitor_apply(
     for remote in plan["candidates"]["remote_branches_requiring_rescue"]:
         branch = remote["branch"]
         rescue_ref = remote["rescue_ref"]
-        if branch in DEFAULT_PROTECTED_BRANCHES or not rescue_ref.startswith(
-            "refs/archive/git-hygiene/"
+        source_ref = f"refs/heads/{branch}"
+        protected_source_refs = {
+            f"refs/heads/{protected}" for protected in DEFAULT_PROTECTED_BRANCHES
+        }
+        if (
+            not branch
+            or branch.startswith("-")
+            or source_ref in protected_source_refs
+            or not rescue_ref.startswith("refs/archive/git-hygiene/")
         ):
             errors.append(
                 {
@@ -832,6 +839,12 @@ def janitor_apply(
         apply_git(
             ["check-ref-format", rescue_ref],
             {"artifact": "remote_branch", "action": "validate_rescue_ref", **remote},
+        )
+        if len(errors) != errors_before_validation:
+            continue
+        apply_git(
+            ["check-ref-format", source_ref],
+            {"artifact": "remote_branch", "action": "validate_source_ref", **remote},
         )
         if len(errors) != errors_before_validation:
             continue
@@ -862,10 +875,11 @@ def janitor_apply(
             # The repository's direct-main pre-push guard is branch-based and
             # rejects every push made while main is checked out. This transport
             # bypass is deliberately confined to a validated archive ref and a
-            # non-protected source-branch delete; refs/heads/main is never an
-            # admissible target here.
+            # fully qualified non-protected source-branch deletion. Prefixing
+            # the plan's short branch name with refs/heads/ prevents ref-like
+            # names from being reinterpreted as refs/heads/main.
             apply_git(
-                ["push", "--no-verify", "origin", "--delete", branch],
+                ["push", "--no-verify", "origin", f":{source_ref}"],
                 {
                     "artifact": "remote_branch",
                     "action": "delete_after_rescue",
