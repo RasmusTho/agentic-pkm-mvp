@@ -66,14 +66,22 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
 )
 # Structural authority fields whose names collide with the credential-key
 # heuristic (``fencing_token`` ends in ``_token``) but which are never secrets.
-# The exemption is scoped to BOTH the exact field path (the immediate parent
-# key) AND a strict int value type — never the bare key name anywhere in the
-# tree. A free-form ``payload``/``request`` field named ``fencing_token`` is
-# NOT exempt: it is not a direct child of a ``lease`` object, and even if an
-# attacker nests a fake ``lease`` key inside free-form content, the value-type
-# gate still rejects a string (a raw secret can never be a Python int).
+# The exemption is scoped to BOTH the FULL ancestor path from the request
+# root (not merely the immediate parent key — a "lease" object nested at any
+# depth inside free-form payload/request content must not qualify) AND a
+# strict int value type — never the bare key name anywhere in the tree. Every
+# request model that carries a real lease puts it at the top level
+# (``TaskHeartbeatRequest.lease``, ``TaskCompleteRequest.lease``,
+# ``AttemptCommitRequest.lease``, ``PromotionCommitRequest.lease``), so the
+# only legitimate path is exactly ``("lease", "fencing_token")``. As a second,
+# independent layer, the value-type gate rejects a string even if some future
+# path were added here by mistake: no BuilderOps credential/secret in this
+# system is ever numeric (they are opaque strings from secret files), so a
+# raw credential can never satisfy the int check regardless of path.
 _STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
-_STRUCTURAL_SAFE_KEY_PARENTS: dict[str, frozenset[str]] = {"fencing_token": frozenset({"lease"})}
+_STRUCTURAL_SAFE_FIELD_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
+    "fencing_token": frozenset({("lease", "fencing_token")})
+}
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
     {
         "authorization",
@@ -197,7 +205,7 @@ def _assert_durable_payload_safe(
     registry: CredentialRegistry,
     *,
     key: str = "",
-    _parent_key: str = "",
+    _path: tuple[str, ...] = (),
     _remaining_chars: list[int] | None = None,
     _remaining_nodes: list[int] | None = None,
 ) -> None:
@@ -216,19 +224,23 @@ def _assert_durable_payload_safe(
     if remaining_nodes[0] < 0:
         raise ValueError("durable BuilderOps request exceeds the value node limit")
     normalized_key = _canonical_durable_key(key)
-    normalized_parent_key = _canonical_durable_key(_parent_key)
+    # The full ancestor chain from the request root down to and including
+    # this node's own key — not just the immediate parent. ``_path`` is the
+    # chain ABOVE this node, threaded in from the caller.
+    current_path = (*_path, normalized_key) if normalized_key else _path
     if normalized_key in _ALLOWED_SECRET_METADATA_KEYS:
         _assert_secret_metadata_shape(normalized_key, value)
-    # The structural exemption requires the EXACT field path (the immediate
-    # parent key) plus a strict int value type, not just a matching key name
-    # anywhere in the tree. A free-form payload/request field named
-    # "fencing_token" — even one nested under an attacker-supplied "lease" key
-    # — is only exempt if its value is literally an int; a raw secret string
-    # can never satisfy that, so it always falls through to the forbidden-key
-    # check below.
+    # The structural exemption requires the EXACT full path from the request
+    # root (not just an immediate parent name — a "lease" object nested at
+    # ANY depth inside free-form payload/request content must not qualify)
+    # plus a strict int value type. A free-form payload/request field named
+    # "fencing_token" is only exempt if BOTH its full path matches the one
+    # genuine top-level lease field AND its value is literally an int; a raw
+    # secret string can never satisfy the type gate, so it always falls
+    # through to the forbidden-key check below regardless of path.
     is_exempt_structural_field = (
         normalized_key in _STRUCTURAL_SAFE_KEYS
-        and normalized_parent_key in _STRUCTURAL_SAFE_KEY_PARENTS.get(normalized_key, frozenset())
+        and current_path in _STRUCTURAL_SAFE_FIELD_PATHS.get(normalized_key, frozenset())
         and isinstance(value, int)
         and not isinstance(value, bool)
     )
@@ -257,7 +269,7 @@ def _assert_durable_payload_safe(
                 child,
                 registry,
                 key=durable_key,
-                _parent_key=normalized_key,
+                _path=current_path,
                 _remaining_chars=remaining_chars,
                 _remaining_nodes=remaining_nodes,
             )
@@ -266,13 +278,18 @@ def _assert_durable_payload_safe(
         for child in value:
             # The collection shape above owns metadata validation. Children
             # still receive the value scan without being mistaken for a whole
-            # `scopes` collection.
+            # `scopes` collection. A list does not introduce its own path
+            # segment: its items reuse this node's key (as `child_key` does
+            # below) and inherit the SAME ancestor path this node received
+            # (not `current_path`, which already includes this node's own
+            # key) so the item's own path computation adds exactly one
+            # segment, matching the non-list case instead of duplicating it.
             child_key = "" if normalized_key in _ALLOWED_SECRET_METADATA_KEYS else key
             _assert_durable_payload_safe(
                 child,
                 registry,
                 key=child_key,
-                _parent_key=normalized_parent_key,
+                _path=_path,
                 _remaining_chars=remaining_chars,
                 _remaining_nodes=remaining_nodes,
             )

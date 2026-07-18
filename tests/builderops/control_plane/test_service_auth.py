@@ -691,6 +691,71 @@ def test_fencing_token_key_in_free_form_payload_is_not_exempt(tmp_path: Path) ->
     assert store.last_actor is None
 
 
+def test_fencing_token_nested_at_any_depth_with_int_value_is_still_rejected(
+    tmp_path: Path,
+) -> None:
+    """Round-2 review finding: the structural exemption's path check must
+    inspect the FULL ancestor chain from the request root, not just the
+    immediate parent key. A "lease" object nested at arbitrary depth inside
+    free-form payload/request content must not qualify for the exemption even
+    when its fencing_token value IS a genuine int — proving the path check
+    itself is load-bearing, independent of the value-type gate (which would
+    otherwise be the only thing stopping a hypothetical future numeric
+    secret from smuggling through this route)."""
+    registry = _registry(tmp_path)
+
+    # Empirically reproduces the reviewer's exact bypass: a "lease" key
+    # nested four levels deep inside a free-form payload field, carrying an
+    # int fencing_token. Only the full-path check (not an immediate-parent
+    # check) can reject this, since the immediate parent IS literally "lease".
+    deeply_nested_int = {
+        "envelope": {
+            "repository": "RasmusTho/agentic-pkm-mvp",
+            "scope": "issue:3790",
+            "stack": "builderops-control-plane",
+            "source_refs": ["github:issue:3790"],
+        },
+        "record_id": "learning-3790",
+        "record_type": "LearningSignal",
+        "state": "active",
+        "payload": {"foo": {"bar": {"lease": {"fencing_token": 123}}}},
+        "idempotency_key": "record-deeply-nested-lease",
+    }
+    with pytest.raises(ValueError):
+        _assert_durable_payload_safe(deeply_nested_int, registry)
+
+    # A single hop of nesting (the original, narrower gap this exemption once
+    # had) must also be rejected: the full path is
+    # ("payload", "lease", "fencing_token"), not ("lease", "fencing_token").
+    one_hop_nested_int = {
+        **deeply_nested_int,
+        "payload": {"lease": {"fencing_token": 999}},
+        "idempotency_key": "record-one-hop-nested-lease",
+    }
+    with pytest.raises(ValueError):
+        _assert_durable_payload_safe(one_hop_nested_int, registry)
+
+    # Same check through the real HTTP route, confirming the API never
+    # persists it either.
+    store = _Store()
+    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer client-token"}
+    response = client.post(
+        "/v1/records",
+        headers=headers,
+        json={
+            "envelope": deeply_nested_int["envelope"],
+            "record_id": "learning-3790",
+            "record_type": "LearningSignal",
+            "state": "active",
+            "payload": {"foo": {"bar": {"lease": {"fencing_token": 123}}}},
+            "idempotency_key": "record-deeply-nested-lease-http",
+        },
+    )
+    assert response.status_code == 400
+    assert store.last_actor is None
+
+
 def test_fencing_token_exemption_still_allows_the_legitimate_lease_field(
     tmp_path: Path,
 ) -> None:
