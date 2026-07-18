@@ -2,12 +2,15 @@
 #   app/reasoning/multi.py:run_multi_note_reasoning(...)
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.reasoning.multi import run_multi_note_reasoning
 from app.reasoning.schema import Claim, Evidence, Inference, ReasoningOutput
 from app.reasoning.store import reset_reasoning_store
 from app.stores import get_object_store
+from tests.helpers.providers import mock_reasoning_env as mock_reasoning_env
 from tests.helpers.pkm_alpha_helper import load_pkm_alpha_subset_for_reasoning, reset_memory_stores
 
 pytestmark = [pytest.mark.not_pg, pytest.mark.alpha_llm]
@@ -33,7 +36,9 @@ def _reasoning_item_mentions_both_sources(item, ids: set[str]) -> bool:
     return all(str(source_id) in combined for source_id in ids)
 
 
+@pytest.mark.usefixtures("mock_reasoning_env")
 def test_reasoning_multi_note_synthesizes_across_pkm_alpha(memory_object_store) -> None:
+    assert os.environ["REASONING_PROVIDER"] == "mock"
     ids = load_pkm_alpha_subset_for_reasoning(memory_object_store)
     concept_id = ids["concept"]
     project_id = ids["project"]
