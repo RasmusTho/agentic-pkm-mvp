@@ -3,13 +3,20 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_COMPOSE = REPO_ROOT / "docker-compose.yaml"
 DEV_COMPOSE = REPO_ROOT / "docker-compose.dev.yml"
 DEV_ENV = REPO_ROOT / "config/deploy/dev.env"
+pytestmark = pytest.mark.skipif(
+    shutil.which("docker") is None,
+    reason="docker executable not found on PATH",
+)
 
 
 def _merged_dev_compose() -> dict[str, object]:
