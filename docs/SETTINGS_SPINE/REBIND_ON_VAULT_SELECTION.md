@@ -28,16 +28,19 @@ validation hub. It must not be claimed as one implementation issue.
 
 ## Authority boundary and prerequisites
 
-SETTINGS-05 does **not** create, migrate, back up, export, or activate `/app/instance-state` and
-does not establish a deployment or rollback floor. Those responsibilities are owned by MVR-01:
+SETTINGS-05 does **not** create, migrate, back up, export, or activate `/app/instance-state`.
+Those substrate and registry responsibilities are owned by MVR-01:
 
 - MVR-01B / #3854 owns the protected external volume, final legacy-writer fence, final export/import,
   cross-process path identity, backup/restore, and the dormant protected registry substrate.
-- MVR-01C / #3855 owns guarded authority cutover, supported scalar rollback isolation, the applicable
-  minimum-runtime floor, and roll-forward lineage.
+- MVR-01C / #3855 owns guarded registry authority cutover, supported scalar rollback isolation, the
+  registry minimum-runtime floor, and roll-forward lineage.
 - SETTINGS-05 begins only after both are merged and reconciled on `origin/main`. It stores its
   compatibility rebind record in the already-authoritative protected store and may not reopen MVR's
   volume, migration, writer-fence, export, backup, or rollback decisions.
+- SETTINGS-05A owns the schema-specific `minimum_settings_rebind_runtime=1` floor. It records that
+  floor before the first `settings_rebind.v1` record becomes authoritative, migrates every producer,
+  and adds host/process preflight so an older writer cannot read or rewrite the new record.
 
 ## What This Task Does
 
@@ -84,7 +87,8 @@ Each extracted issue copies the shared Context, Source Anchors, SBS Impact, Cons
 Scope, and only its mapped acceptance criteria and validation commands.
 
 1. **SETTINGS-05A — durable rebind record and recovery (dormant).** Add the versioned record,
-   protected-store transaction, checksum/revision validation, producer fixtures, and restart recovery.
+   protected-store transaction, checksum/revision validation, schema-specific runtime floor,
+   all-producer migration/preflight, producer fixtures, and restart recovery.
    Every production initiation point remains capability-sealed and the watcher behavior is unchanged.
    Depends on MVR-01B #3854 and MVR-01C #3855.
 2. **SETTINGS-05B — watcher reconciler and quiescence (dormant from picker).** Add the production
@@ -113,6 +117,14 @@ deliveries precisely because production initiation stays fail-closed until C.
       same current schema, while production picker/API and direct initiation calls remain sealed and
       cannot change selection or watcher behavior before SETTINGS-05C.
   - Verify: `tests/architecture/test_settings_rebind_producers.py::test_all_producers_match_production_rebind_schema_and_activation_seal`
+- [ ] **SETTINGS-05A:** The rollout records `minimum_settings_rebind_runtime=1` before the first
+      authoritative v1 record; host-side and process startup guards reject incompatible API/watcher
+      capability before protected-state access or root resolution.
+  - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
+- [ ] **SETTINGS-05A:** Every CLI, bootstrap/reconciliation, compiler/delta, fixture, and direct
+      store/manager producer is migrated in the same slice and fails before protected-state mutation
+      when it cannot preserve the v1 floor and revision.
+  - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_every_legacy_writer_after_cutover`
 
 - [ ] **SETTINGS-05B:** The separately deployed production watcher loop consumes a prepared dormant
       revision, finishes the captured A tick, retains durable A event observation through commit,
@@ -165,7 +177,7 @@ deliveries precisely because production initiation stays fail-closed until C.
 
 ### SETTINGS-05A validation
 
-- `pytest -q tests/integration/test_settings_rebind_record.py tests/architecture/test_settings_rebind_producers.py`
+- `pytest -q tests/integration/test_settings_rebind_record.py tests/architecture/test_settings_rebind_producers.py tests/ops/test_settings_rebind_runtime_floor.py`
 - Verify the diff contains no activation of picker/API rebind initiation.
 
 ### SETTINGS-05B validation
@@ -187,7 +199,8 @@ the exact production-call-site selectors above.
 
 - Creating, migrating, exporting, backing up, restoring, or activating the protected
   `/app/instance-state` store; MVR-01B/01C own that authority.
-- Establishing or changing MVR deployment, rollback, or minimum-runtime floors.
+- Establishing or changing MVR deployment, rollback, or registry minimum-runtime floors. SETTINGS-05A
+  still owns its own `minimum_settings_rebind_runtime` floor and all-producer compatibility gate.
 - Running more than one watcher or concurrently serving more than one active vault.
 - Generic MVR request/session selection; only the legacy compatibility picker binding is changed.
 - Removing `WATCHER_VAULT_PATH`; it remains a bootstrap adapter.
