@@ -1,11 +1,11 @@
 ---
 name: Rebind On Vault Selection
-description: Selecting or switching a vault durably advances a shared revision that rebinds every vault-scoped settings consumer, including the separately deployed watcher
+description: Selecting or switching a vault durably rebinds the compatibility watcher after protected instance-state authority exists
 task_id: SETTINGS-05
 source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F4
 parent_capability: Settings Spine
-prerequisites: [SETTINGS-01, SETTINGS-03, SETTINGS-04]
-depends_on: [WIRE_SETTINGS_INGESTION.md, CANONICALIZE_SETTINGS_LOCATION.md, RECEIPT_EVERY_SETTINGS_WRITE.md]
+prerequisites: [SETTINGS-01, SETTINGS-03, SETTINGS-04, MVR-01B, MVR-01C]
+depends_on: [WIRE_SETTINGS_INGESTION.md, CANONICALIZE_SETTINGS_LOCATION.md, RECEIPT_EVERY_SETTINGS_WRITE.md, ../MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md]
 can_parallelize_with: []
 ---
 
@@ -15,215 +15,202 @@ can_parallelize_with: []
 
 Close audit finding F4 (SET-7): `WATCHER_VAULT_PATH` is read once at watcher boot and never
 rebinds when a vault is selected through the Companion UI, so a capture can succeed while
-remaining invisible to ingest (`docs/ENVIRONMENTS.md:94-108`). More generally, vault-scoped
-settings consumers must follow the selection, not a frozen env snapshot.
+remaining invisible to ingest (`docs/ENVIRONMENTS.md:94-108`). Vault-scoped settings consumers
+must follow the committed compatibility selection, not a frozen environment snapshot.
 
 **Owner ruling (2026-07-07) supersedes prior posture.** Issue #2476 ("document the split, do not
-converge") and #3119's closing fix (PR #3126, visible-warning-only, not self-healing) both
-deliberately chose *not* to make the watcher follow live selection, treating watcher/API
-convergence as an architectural line not to cross. The owner has now explicitly ruled the
-opposite: the watcher must be flexible about what it watches — there is no value in a watcher
-pointed at the wrong vault — and the mechanism should support redirecting a running watcher, not
-just detecting divergence. This task implements that ruling and supersedes #2476's verdict; update
-the module docstring in `app/watcher/config.py` (the "document the split, do not converge"
-rationale) to record the supersession rather than leaving it as if still current.
+converge") and #3119's closing fix (PR #3126, visible-warning-only, not self-healing) deliberately
+chose not to make the watcher follow live selection. SETTINGS-05 implements the opposite ruling:
+the compatibility watcher follows the one committed compatibility binding.
+
+This is future-state specification, not shipped truth. GitHub issue #3163 is the blocked SETTINGS-05
+validation hub. It must not be claimed as one implementation issue.
+
+## Authority boundary and prerequisites
+
+SETTINGS-05 does **not** create, migrate, back up, export, or activate `/app/instance-state` and
+does not establish a deployment or rollback floor. Those responsibilities are owned by MVR-01:
+
+- MVR-01B / #3854 owns the protected external volume, final legacy-writer fence, final export/import,
+  cross-process path identity, backup/restore, and the dormant protected registry substrate.
+- MVR-01C / #3855 owns guarded authority cutover, supported scalar rollback isolation, the applicable
+  minimum-runtime floor, and roll-forward lineage.
+- SETTINGS-05 begins only after both are merged and reconciled on `origin/main`. It stores its
+  compatibility rebind record in the already-authoritative protected store and may not reopen MVR's
+  volume, migration, writer-fence, export, backup, or rollback decisions.
 
 ## What This Task Does
 
-- Runs selection/switch plus rebind as a recoverable prepare → commit → resume transaction in the
-  shared app-local selection state before returning success. When the watcher lifecycle is enabled,
-  the picker first closes and drains a durable compatibility-mutation ingress gate. The separately
-  deployed watcher drains its captured old tick, enters durable handoff observation for A, runs a
-  reconciliation scan after that mutation drain, and acknowledges the prepare revision while normal
-  old-binding effects are quiescent. It keeps the A filesystem subscription and durable event buffer
-  live through selection commit. After observing the committed revision it performs a bracketing
-  A reconciliation scan, drains/receipts the buffer, and only then may consume resume, re-resolve the
-  root → reload vault-scoped
-  settings via the SETTINGS-01 path (one loader, not a second one — see capability Cross-Task
-  Invariants) → resume ingest against the new root. Pre-commit failure cancels while the new root has
-  no watcher effects, resumes A, then reopens A mutation ingress; post-commit recovery rolls forward
-  and keeps ingress blocked until the A scan/buffer drain and resume. A direct-filesystem write after
-  the pre-commit scan but before commit is therefore receipted under A even if its event hint is lost.
-  An intentionally disabled or omitted watcher is represented durably as `no_lifecycle`, so picker
-  commit succeeds without waiting for a nonexistent acknowledgement. `VaultChangedEvent` (emitted by
-  `VaultManager._emit_changed`) remains
-  an optional same-process wake-up hint; it is not delivery between the API and watcher containers,
-  and restart/event loss converges from the durable revision.
-- Version that shared record as `settings_rebind.v1` with schema revision, monotonic desired/applied
-  revisions, phase, prior/candidate binding identity, lifecycle posture, and recovery checksum. The
-  SETTINGS-05 rollout first creates the protected channel/instance-scoped `instance-state` store that
-  MVR-01 later reuses: an external, non-project Compose volume mounted at `/app/instance-state` for
-  containers and owner-only native app data outside temp/runtime directories. Under the host rollout
-  fence it inventories, blocks, and drains every legacy app-local writer—not only API/watcher, but
-  picker initialize/open, CLI, bootstrap/reconciliation, settings compiler/delta, fixtures, and direct
-  `VaultManager`/store callers—then prevents their process or entrypoint from restarting through the
-  final snapshot/import. When no MVR-01 registry authority exists, it atomically copies and validates
-  that final legacy payload from `runtime-tmp`. In registry-first order it instead reads the
-  authoritative protected registry/last-active registration and existing protected handoff state;
-  stale or absent `runtime-tmp` is archived only as non-authoritative migration evidence and never
-  selects a binding or blocks a healthy registry-backed upgrade. It writes the floor and v1 record to protected storage and retains a permission-checked backup/restore copy;
-  only then may the disposable source be retired. Missing, disposable, unrestorable, or divergent
-  protected state blocks API/watcher start even when `runtime-tmp` has been deleted. Before
-  the first v1 prepare, a channel/native rollout fence closes selection ingress, drains and stops
-  every old API and watcher producer, and migrates only one provable stable binding: last-active and
-  watcher-env aliases must canonicalize to the same root, or one side must be truthfully absent/idle;
-  a disagreement fails loud without choosing. If an authoritative MVR-01 registry already exists,
-  the migration must resolve the canonical root to exactly one live registration and reuse that
-  `vault_binding_id`. Only when no registry authority exists may it mint one provisional stable
-  `vault_binding_id` for each provable canonical binding and record its canonical legacy reference;
-  a later MVR-01 migration must adopt that exact ID rather than derive a new identity from a path.
-  Registry-first ambiguity or a conflicting registration fails without writing rebind state.
-  Init/bootstrap scripts, existing-state migration, production fixtures, API/watcher startup, and
-  no-lifecycle producers all write/read the same schema.
-  The migration atomically records `minimum_settings_rebind_runtime=1` before v1 state can become
-  authoritative. A host-side channel pre-start guard plus every API, watcher, CLI, bootstrap,
-  reconciliation, compiler/delta, fixture, and direct store/manager entrypoint read that durable floor
-  and the candidate runtime capability manifest before state access or mutation, so an incompatible
-  pre-#3163 writer cannot ignore, recreate, or truncate a prepared/committed handoff. Rollback is
-  therefore to a compatible build or roll-forward; a missing manifest, partial migration, unprovable
-  binding, or mixed writer capability blocks all affected channel entrypoints before state access.
-- Upgrades the advisory `ingest_binding` status (`bound`/`diverged`/`unbound`/`unknown`) so
-  `diverged` becomes a transient state that self-heals on rebind, and a rebind failure is loud.
-- Retires the second, unsynchronized "current vault" notion in
-  `runtime/settings/instance.yaml` (`vault.name`/`vault.purpose` display metadata): display
-  derives from the live selection, or the field is explicitly marked display-only and excluded
-  from any binding decision.
+- Adds a versioned `settings_rebind.v1` compatibility record to the protected instance-state store.
+  It carries schema revision, monotonic desired/applied revisions, phase, prior/candidate stable
+  binding IDs, lifecycle posture, and recovery checksum. The record is initially dormant: it can be
+  read, written, and recovered, but cannot change picker, watcher, or settings behavior.
+- Adds a separately deployed watcher reconciler for the dormant record. It drains its captured old
+  tick, enters durable handoff observation for A, scans before acknowledging prepare, and retains the
+  A subscription plus durable event buffer through commit. After commit it performs the bracketing A
+  scan, drains and receipts the buffer, then may apply B. The production picker/API remains sealed
+  from initiating this path until the activation slice.
+- Activates the production compatibility picker transaction only after the durable record and watcher
+  reconciler are proven. The picker closes and drains compatibility-mutation ingress, prepares the
+  revision, waits for watcher quiescence (or durable `no_lifecycle`), commits selection and binding,
+  then resumes the watcher and invokes the SETTINGS-01 reload path exactly once. `VaultChangedEvent`
+  remains an optional same-process wake-up hint, never cross-process delivery authority.
+- Recovers pre-commit failure by cancelling and resuming A before ingress reopens. Post-commit recovery
+  rolls forward while ingress remains blocked until the old-root scan/buffer drain and resume finish.
+  No candidate-root effect occurs before commit; no accepted or direct-filesystem A write in the
+  handoff window is stranded.
+- Makes `ingest_binding` report binding, schema, phase, desired/applied revision, and failure posture
+  truthfully. Display-only fields in `runtime/settings/instance.yaml` never decide a binding.
 
 ## Concretely
 
-```
-# watcher running, no vault selected → idle (unchanged)
-$ curl -s localhost:8000/api/companion/vault/select -d '{"ref":"path:/vaults/Niflheim"}'
-$ curl -s localhost:8000/api/health | jq .watcher.ingest_binding   # "bound", path = Niflheim
-# capture a note → it reaches ingest without any container restart
+```text
+# after SETTINGS-05C activation; watcher running, no vault selected -> idle
+POST /api/companion/vault/select {"ref":"<registered-binding>"}
+GET  /api/health -> watcher.ingest_binding.status == "bound"
+# a new file under the committed binding is ingested without a container restart
 ```
 
 ## Why This Matters
 
-Selection being the source of truth (Option 2, #2325) is only true if consumers follow it. Today
-the UI says one vault and ingest watches another — captures silently vanish from retrieval.
+Selection can be the compatibility source of truth only when the independently deployed watcher
+follows it without losing old-root work or observing the candidate root prematurely.
+
+## Bounded implementation issue decomposition
+
+This specification maps to three serial, independently mergeable GitHub child issues under blocked
+validation hub #3163. It must never be filed or claimed as one monolithic implementation issue.
+Each extracted issue copies the shared Context, Source Anchors, SBS Impact, Constraints, Out of
+Scope, and only its mapped acceptance criteria and validation commands.
+
+1. **SETTINGS-05A — durable rebind record and recovery (dormant).** Add the versioned record,
+   protected-store transaction, checksum/revision validation, producer fixtures, and restart recovery.
+   Every production initiation point remains capability-sealed and the watcher behavior is unchanged.
+   Depends on MVR-01B #3854 and MVR-01C #3855.
+2. **SETTINGS-05B — watcher reconciler and quiescence (dormant from picker).** Add the production
+   watcher loop's prepare acknowledgement, old-root observation, bracketing scans, buffer drain,
+   failure recovery, and `no_lifecycle` reconciliation. The picker/API still cannot prepare or commit
+   a rebind. Depends on SETTINGS-05A.
+3. **SETTINGS-05C — picker/API activation and aggregate acceptance.** Atomically enable the production
+   choose/open path, compatibility ingress gate, commit/resume, SETTINGS-01 reload, truthful health,
+   integrated cross-process UAT, invariant registration, and owner-doc writeback. Depends on
+   SETTINGS-05B and carries the #3163 validation/closure handoff.
+
+No child may borrow a later activation criterion to bypass its dependency. A and B are safe partial
+deliveries precisely because production initiation stays fail-closed until C.
 
 ## Acceptance Criteria
 
-- [ ] Selecting a vault via the production selection path rebinds the watcher ingest root in the
-      separately deployed watcher process; a file created in the newly selected vault is picked up
-      only after prepare/quiesce, selection commit, and resume.
+- [ ] **SETTINGS-05A:** API and watcher startup use the production protected-store resolver to read
+      the same complete `settings_rebind.v1` revision; atomic write/restart preserves stable binding
+      IDs, monotonic desired/applied revisions, phase, lifecycle posture, and checksum.
+  - Verify: `tests/integration/test_settings_rebind_record.py::test_api_and_watcher_startup_share_one_dormant_rebind_revision`
+- [ ] **SETTINGS-05A:** Interrupted record writes and every persisted phase recover through the
+      production store/startup path to the last complete revision, never a guessed binding or partial
+      record; invalid checksum/revision fails before watcher root resolution.
+  - Verify: `tests/integration/test_settings_rebind_record.py::test_production_startup_recovers_every_dormant_record_phase_fail_closed`
+- [ ] **SETTINGS-05A:** Init/bootstrap, migration, no-lifecycle setup, and runtime fixtures produce the
+      same current schema, while production picker/API and direct initiation calls remain sealed and
+      cannot change selection or watcher behavior before SETTINGS-05C.
+  - Verify: `tests/architecture/test_settings_rebind_producers.py::test_all_producers_match_production_rebind_schema_and_activation_seal`
+
+- [ ] **SETTINGS-05B:** The separately deployed production watcher loop consumes a prepared dormant
+      revision, finishes the captured A tick, retains durable A event observation through commit,
+      acknowledges only after its pre-commit scan, and applies no candidate-root effect.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_production_watcher_reconciler_quiesces_old_binding_without_picker_activation`
+- [ ] **SETTINGS-05B:** The production watcher reconciler brackets commit with old-root scans, drains
+      and receipts the A buffer before B, and fault injection at acknowledge/commit/drain/resume
+      converges after restart without stranded A work or premature B work.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_dormant_reconciler_failure_matrix_preserves_old_root_observation`
+- [ ] **SETTINGS-05B:** An intentionally absent/disabled production watcher records and reconciles
+      durable `no_lifecycle`; missing, invalid, and failed lifecycle states remain loud, while the
+      production picker initiation path is still capability-sealed.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_dormant_no_lifecycle_reconciles_without_unsealing_picker`
+
+- [ ] **SETTINGS-05C:** Production choose/open closes and drains compatibility-mutation ingress,
+      prepares the shared revision, waits for production watcher quiescence or `no_lifecycle`, commits
+      selection plus binding atomically, then resumes; the API returns success only after commit.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_selection_rebinds_ingest`
-    (enforcement AC — drives the production API process and a separate watcher process/container,
-    asserts commit-before-success plus revision reconciliation, and never calls the rebind helper)
-- [ ] Switching vaults mid-run rebinds cleanly: in-flight tick completes against the old root, next
-      tick runs against the new root, `ingest_binding` reflects each state truthfully.
+- [ ] **SETTINGS-05C:** Mid-run switch admits no candidate-root effect before commit and no B effect
+      before the bracketing A scan/buffer drain; in-flight A work completes and health reports the
+      exact phase and desired/applied revisions.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_switch_is_clean_and_truthful`
-- [ ] A fault at every prepare/acknowledge/selection-commit/old-root-drain/resume boundary produces no effect in the
-      candidate vault before selection commit and recovers forward after commit. The prepare gate
-      blocks/drains old-binding mutations; the watcher scans before acknowledgement, durably observes
-      A through commit, and scans/drains again after commit before B, so no accepted or direct-
-      filesystem A write in the handoff window is stranded. A configured
-      `no_lifecycle` watcher posture completes the foreground selection without a process ack.
-  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic`
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes`
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
-  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
-- [ ] Rebind triggers the SETTINGS-01 settings reload for the new vault (vault-scoped settings
-      follow the vault; one bundle swap).
+- [ ] **SETTINGS-05C:** Faults at prepare, acknowledgement, selection commit, old-root drain, and
+      resume recover to A before commit or roll forward to B after commit, using the production API
+      and separate production watcher process rather than a direct helper call.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic`
+- [ ] **SETTINGS-05C:** Each committed revision invokes the production SETTINGS-01 reload call site
+      exactly once and atomically swaps the vault-scoped settings bundle.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_rebind_reloads_settings`
-- [ ] No-vault → selected transition and selected → no-vault (vault removed) both land in truthful
-      idle/bound states, never a crash or a stale binding reported healthy.
+- [ ] **SETTINGS-05C:** No-vault, selected, removed, failed, and `no_lifecycle` transitions remain
+      truthful through the production picker and health endpoints; lost wake-up events and independent
+      API/watcher restarts converge from protected phase/revision truth.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_novault_transitions_truthful`
-- [ ] Lost wake-up events and independent API/watcher restarts converge from durable phase/revision
-      truth without stale-old or premature-candidate effects.
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart`
-- [ ] Existing single-watcher state migrates to `settings_rebind.v1` only when last-active and
-      watcher-env truth identify one canonical binding (or one is truthfully absent); disagreement or
-      partial persistence fails before selection/watcher effects and leaves the old state intact.
-  - Verify: `tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud`
-- [ ] The rollout writes `minimum_settings_rebind_runtime=1` before the first authoritative v1 record,
-      updates every init/migration/fixture producer, and every write-capable process or direct
-      entrypoint rejects a capability manifest that cannot interpret that floor before state access,
-      root resolution, or mutation.
-  - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
-- [ ] After cutover, incompatible headless CLI, bootstrap/reconciliation, compiler/delta, fixture, and
-      direct store/manager callers all fail before protected-state read/write and cannot recreate a
-      legacy payload; compatible callers preserve the same floor and revision.
-  - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_every_legacy_writer_after_cutover`
-- [ ] Before the floor or first v1 record becomes authoritative, SETTINGS-05 migrates the final
-      fenced legacy payload into protected non-project `instance-state`, records a restorable backup,
-      and proves that deletion of disposable `runtime-tmp` cannot remove or bypass either the floor or
-      handoff truth. The one provable legacy binding reuses an existing authoritative registry ID or,
-      when no registry exists, receives a provisional stable ID for later MVR-01 adoption; ambiguous
-      legacy aliases fail without minting an ID.
-  - Verify: `tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
-- [ ] The protected-state cutover inventories, blocks, drains, and restart-fences every legacy
-      app-local writer through final snapshot/import; an injected CLI/bootstrap/direct-store write
-      cannot be acknowledged after the snapshot or lost when authority moves.
-  - Verify: `tests/migrations/test_settings_rebind_state.py::test_protected_cutover_fences_every_legacy_app_local_writer`
-- [ ] Registry-first rollout reuses the one authoritative registration's exact binding ID; settings-
-      first rollout mints a provisional ID for later atomic adoption. Either order converges to one
-      identity, while conflicting or ambiguous registry truth fails without a second ID.
-  - Verify: `tests/migrations/test_settings_rebind_state.py::test_registry_first_and_settings_first_orders_converge_to_one_binding_id`
-- [ ] In registry-first order the protected registry and its last-active/binding state are the only
-      migration authority; stale, conflicting, or missing disposable `runtime-tmp` content is archived
-      as evidence but cannot select an obsolete binding or block the valid protected-state upgrade.
-  - Verify: `tests/migrations/test_settings_rebind_state.py::test_registry_first_ignores_stale_disposable_app_local_payload`
-- [ ] Deployment and release owner contracts describe the protected external instance-state mount,
-      final-writer fence, backup/restore posture, runtime floor, and compatible rollback requirement in
-      the same #3163 PR.
-  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
-    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
-- [ ] SET-7 registered in the invariant registry with enforcement `runtime_test`; `app/watcher/config.py`'s
-      "document the split, do not converge" docstring is updated to record that #2476's verdict is
-      superseded by this task (owner ruling 2026-07-07), not silently left to read as current.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
+- [ ] **SETTINGS-05C:** SET-7 and owner docs describe the activated compatibility transaction and
+      its MVR-06B handoff without claiming multi-active lifecycle support.
   - Verify: doc writeback at `docs/testing/invariant-tests.md :: vault_selection_rebinds_consumers`
+    + doc writeback at `docs/ENVIRONMENTS.md :: Companion UI vault selection vs. watcher/worker ingest binding (#3119)`
     + doc writeback at `app/watcher/config.py` module docstring
+- [ ] **SETTINGS-05C:** Aggregate integrated UAT proves a production API selection rebinds the separate
+      watcher, ingests a post-commit file, reloads settings once, and leaves a durable revision/receipt;
+      #3163 records child receipts and the closure verdict.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_settings05_parent_acceptance`
+    + runtime receipt on GitHub issue `#3163`
 
 ## How to Verify (Pre-Merge)
 
+### SETTINGS-05A validation
+
+- `pytest -q tests/integration/test_settings_rebind_record.py tests/architecture/test_settings_rebind_producers.py`
+- Verify the diff contains no activation of picker/API rebind initiation.
+
+### SETTINGS-05B validation
+
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py -k "dormant or reconciler"`
+- Verify the production picker/API remains capability-sealed.
+
+### SETTINGS-05C validation
+
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
-- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/migrations/test_settings_rebind_state.py::test_protected_cutover_fences_every_legacy_app_local_writer tests/migrations/test_settings_rebind_state.py::test_registry_first_and_settings_first_orders_converge_to_one_binding_id tests/migrations/test_settings_rebind_state.py::test_registry_first_ignores_stale_disposable_app_local_payload tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_every_legacy_writer_after_cutover tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
-- `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
-  (vault/watcher hot path)
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py`
+- Verify the mapped owner-doc and invariant-registry writebacks.
+
+Every child also runs its mapped no-vault regression selectors. The final activation child runs
+`pytest -q -m "not pg"` and the integrated watcher/settings UAT; shared gates never substitute for
+the exact production-call-site selectors above.
 
 ## Out of Scope
 
-- Running more than one watcher at a time, or spinning up temporary/time-limited watchers on
-  demand — the owner has flagged this as a wanted future capability (see the Settings Spine
-  README follow-up note), but it is a distinct, larger capability (multi-watcher lifecycle
-  management) than "the one watcher follows the one active selection." This task's rebind
-  mechanism (prepare shared revision, quiesce, commit, reconcile, resume) is the building block a future
-  multi-watcher task would reuse per-instance, but instantiating multiple watchers is not this
-  task's scope. The single-watcher transaction is prepare/pre-scan+buffer/quiesce → picker commit →
-  post-scan+buffer drain → resume, not an
-  acknowledgement after the watcher has already performed effects in the candidate vault.
-- Multi-active-vault epic #2143 in the sense of concurrently serving more than one selected vault
-  to the API/retrieval layer — still exactly one active vault at a time, as today. (This task is
-  about the watcher *following* that one selection, not about serving several at once.)
+- Creating, migrating, exporting, backing up, restoring, or activating the protected
+  `/app/instance-state` store; MVR-01B/01C own that authority.
+- Establishing or changing MVR deployment, rollback, or minimum-runtime floors.
+- Running more than one watcher or concurrently serving more than one active vault.
+- Generic MVR request/session selection; only the legacy compatibility picker binding is changed.
+- Removing `WATCHER_VAULT_PATH`; it remains a bootstrap adapter.
 - Location migration (SETTINGS-03).
-- `WATCHER_VAULT_PATH` env removal — it remains the deploy bootstrap for headless channels; this
-  task makes live selection override it, with the override visible in `ingest_binding`.
 
 ## Restart / Durability Posture
 
-The applied binding is in-memory, but the versioned `settings_rebind.v1` prepare/commit/resume phase,
-monotonic desired/applied revisions, binding identities, lifecycle posture, and runtime floor are
-durable in the shared app-local selection seam. On restart the watcher reconciles that record rather
-than relying on an event or process-local manager state: an uncommitted prepare cancels without new-
-root effects, while a committed selection recovers forward to resume. If no durable selection exists,
-env bootstrap applies and the binding status says so; if the lifecycle is intentionally disabled,
-the durable posture is `no_lifecycle` rather than a missing acknowledgement. Candidate API/watcher
-images must advertise floor compatibility before process start; older images cannot silently project
-or discard the record.
+The applied watcher binding is in memory, while `settings_rebind.v1` is mechanical durable state in
+MVR's protected instance-state store. SETTINGS-05A proves record recovery while dormant;
+SETTINGS-05B proves watcher recovery without picker activation; SETTINGS-05C is the only slice that
+allows production initiation. An uncommitted prepare returns to A, a committed revision rolls
+forward to B, and `no_lifecycle` is explicit rather than inferred from a missing acknowledgement.
 
 ## Related Docs
 
 - `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F4`
-- `docs/ENVIRONMENTS.md :: ingest binding` · Issue #2476 (superseded by this task's owner ruling)
-  · Issue #3119 (closed; this task supersedes its visible-warning-only resolution with a real
-  rebind)
+- `docs/MULTI_VAULT_RUNTIME/README.md :: Persistence and package placement`
+- `docs/MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md :: Bounded implementation issue decomposition`
+- `docs/ENVIRONMENTS.md :: Companion UI vault selection vs. watcher/worker ingest binding (#3119)`
 
 ## Related GitHub Issues
 
-One implementation issue. Does not close #3119 (already closed) or #2476 (already closed); the PR
-should link both and state explicitly that this supersedes their prior "do not converge" posture.
-TCD hint: opus / high — concurrency-sensitive rebind on the ingest hot path; reverses a prior
-architectural decision, so the PR needs explicit owner-visible framing, not just code review.
+Issue #3163 is the blocked validation hub. Extract three serial child issues from the stable
+`Bounded implementation issue decomposition` anchor after this specification repair merges. Keep
+05A blocked on #3854/#3855; keep 05B blocked on 05A and 05C blocked on 05B. Use Sol/xhigh for
+architecture/concurrency review; downstream `issue-to-code` re-derives live capability per TCD.

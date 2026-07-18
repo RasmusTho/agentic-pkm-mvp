@@ -27,16 +27,10 @@ This slice promotes the existing seed without changing content-vault authority.
   `vault_binding_id` separately from path and device provenance.
 - Migrate the existing Markdown payload in place, preserving the installed-instance
   `appInstallId`, every registration, `last_active_vault_ref`, timestamps, and unknown
-  forward-compatible fields. If SETTINGS-05 already created `settings_rebind.v1`, the fenced MVR-01
-  migration canonicalizes each recorded legacy reference with the same resolver used by the ownership
-  ledger and atomically adopts its provisional `vault_binding_id` into the matching registration,
-  rewriting prior/candidate/applied references to registry identity in the same commit. A matching
-  existing registration keeps its ID only when it is the provisional ID; aliases coalesce only when
-  they prove the same physical root. Missing, conflicting, relocated-without-lineage, or multiply
-  matching references block registry activation with the original rebind record intact—migration
-  never derives a replacement ID from the current path or attaches lifecycle state by guesswork.
-- For container deployments, adopt the protected SETTINGS-05 `instance-state` volume when it exists,
-  otherwise create the same channel/instance-scoped external volume, mounted at
+  forward-compatible fields. MVR-01 is the sole authority for stable registry binding identity;
+  SETTINGS-05 starts only after MVR-01B/01C and consumes those IDs. No pre-MVR rebind record or path
+  may mint, replace, or override a registry binding identity.
+- For container deployments, create the protected channel/instance-scoped external volume, mounted at
   `/app/instance-state` in every registry consumer and resolve the production store to
   `/app/instance-state/agentic-pkm/vault-registry.md`. Migrate once from the legacy resolved
   app-local path by atomic validated copy with provenance; never treat the image layer, `$HOME`,
@@ -103,7 +97,8 @@ This slice promotes the existing seed without changing content-vault authority.
   for source-reference repair and source-bound work drain, but does not invent or implement schemas
   owned by later slices. MVR-02 installs the default repair hook, MVR-04 installs the dimension repair
   hook, MVR-05A installs the outbox/queue drain hook, and MVR-05B installs the protected
-  `settings_rebind.v1` compatibility-binding repair hook. MVR-05C is the first slice allowed to require
+  `settings_rebind.v1` compatibility-binding repair hook after SETTINGS-05 has installed that record
+  in the MVR-owned protected store. MVR-05C is the first slice allowed to require
   and invoke all four production implementations: before source retirement, the same transaction
   then clears or explicitly replaces the source default, removes the binding from every source
   dimension with its revision/audit receipt, and drains every pending source-bound row to a terminal
@@ -273,11 +268,15 @@ then carries only its mapped acceptance criteria and validation commands:
    source/destination lineage, latest-revision legacy export/transformer for scalar-representable
    state, protected prod-volume backup/restore, guarded previous-image startup, and cutover owner-doc
    writebacks. It depends on 01A. Its prepared registry state remains non-authoritative and every
-   new-schema mutation stays dormant until 01C performs the guarded authority cutover.
+   new-schema mutation stays dormant until 01C performs the guarded authority cutover. This slice,
+   not SETTINGS-05, owns creation of the protected store, final legacy-writer fence, final export,
+   and backup/restore posture.
 3. **MVR-01C — multi-registration rollback lineage:** explicit scalar target, authenticated
    mutation-filtering gateway/mount restriction, minimum-runtime floor, roll-forward merge, and
    atomic unsealing of second-registration producers only after those rollback mechanisms pass
-   preflight. It depends on 01B and closes the aggregate parent-registry acceptance target.
+   preflight. It depends on 01B, owns guarded authority cutover and the applicable rollback/runtime
+   floor, and closes the aggregate parent-registry acceptance target. SETTINGS-05 may start only
+   after this cutover is delivered.
 
 No issue may borrow an acceptance criterion from a later group merely to bypass its dependency.
 The post-spec issue extraction records three distinct child receipts on #2143.
@@ -332,11 +331,6 @@ new-schema state before fork/merge protection exists.
 - [ ] **MVR-01A:** A legacy app-local payload migrates in place without changing `appInstallId` or losing
   registrations, `last_active_vault_ref`, timestamps, or unknown fields.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly`
-- [ ] **MVR-01A:** A pre-existing `settings_rebind.v1` record is atomically translated from its
-  canonical legacy references into registrations that adopt the exact provisional binding IDs;
-  aliases of one physical root coalesce, while missing, conflicting, or ambiguous references leave
-  both registry and rebind state uncommitted and unchanged.
-  - Verify: `tests/instance/test_vault_registry_migration.py::test_settings_rebind_provisional_ids_are_adopted_atomically`
 - [ ] **MVR-01A:** Explicit production picker select/initialize over parse-corrupt registry state backs up the
   original and preserves #2185 legacy/empty recovery without a 500.
   - Verify: `tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup`
@@ -511,7 +505,7 @@ family-wide command that requires a later sealed slice.
 
 ### MVR-01A validation
 
-- `pytest -q tests/instance/test_vault_registry.py::test_registry_round_trip_preserves_multiple_vaults tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly tests/instance/test_vault_registry_migration.py::test_settings_rebind_provisional_ids_are_adopted_atomically tests/instance/test_vault_registry_migration.py::test_ambiguous_registry_migration_fails_without_destructive_reset tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup tests/api/test_vault_registry_recovery.py::test_populated_registry_corruption_never_reseeds_empty tests/architecture/test_instance_vault_registry_boundary.py::test_production_registry_imports_use_instance_package tests/architecture/test_instance_vault_registry_boundary.py::test_registry_schema_producers_match_runtime_precondition tests/ops/test_instance_state_volume_contract.py::test_mvr01a_schema_activation_requires_rollback_capability`
+- `pytest -q tests/instance/test_vault_registry.py::test_registry_round_trip_preserves_multiple_vaults tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly tests/instance/test_vault_registry_migration.py::test_ambiguous_registry_migration_fails_without_destructive_reset tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup tests/api/test_vault_registry_recovery.py::test_populated_registry_corruption_never_reseeds_empty tests/architecture/test_instance_vault_registry_boundary.py::test_production_registry_imports_use_instance_package tests/architecture/test_instance_vault_registry_boundary.py::test_registry_schema_producers_match_runtime_precondition tests/ops/test_instance_state_volume_contract.py::test_mvr01a_schema_activation_requires_rollback_capability`
 
 ### MVR-01B validation
 
