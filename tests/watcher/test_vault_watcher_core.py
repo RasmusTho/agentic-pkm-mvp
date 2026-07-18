@@ -1,4 +1,5 @@
 import json
+import importlib
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,8 +184,10 @@ def test_watcher_panel_writeback_uses_canonical_identity_for_retained_uuid(
         lambda value: canonical_id if value == vault_uuid else value,
     )
     monkeypatch.setattr("app.watcher.vault_watcher.ObjectStore", FakeObjectStore)
-    monkeypatch.setattr("app.agents.panel.agent.ObjectStore", FakeObjectStore)
-    monkeypatch.setattr("app.agents.panel.writeback.ObjectStore", FakeObjectStore)
+    panel_agent_module = importlib.import_module("app.agents.panel.agent")
+    panel_writeback_module = importlib.import_module("app.agents.panel.writeback")
+    monkeypatch.setattr(panel_agent_module, "ObjectStore", FakeObjectStore)
+    monkeypatch.setattr(panel_writeback_module, "ObjectStore", FakeObjectStore)
 
     summary, _ = run_watcher_tick(
         vault_root=vault,

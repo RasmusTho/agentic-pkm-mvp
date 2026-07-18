@@ -78,17 +78,18 @@ def _is_valid_uuid(value: str | None) -> bool:
 def resolve_event_object_id(obj: Dict[str, object]) -> object:
     """Return canonical identity for current and queued pre-cutover events.
 
-    Current producers carry ``object_id`` explicitly. Older vault-sync rows
-    carry only the retained frontmatter UUID, which must cross the retained
-    ``objects.uuid -> objects.id`` mapping before replay after #3510.
+    Current producers carry ``object_id`` explicitly, but the raw ``POST
+    /ingest`` producer sets it from the caller-supplied UUID and may therefore
+    still carry a retained frontmatter identity. Every valid candidate crosses
+    the retained ``objects.uuid -> objects.id`` mapping; already-canonical IDs
+    resolve to themselves. Older vault-sync rows carry only ``uuid`` and use
+    the same path during replay after #3510.
     """
     object_id = obj.get("object_id")
-    if object_id:
-        return object_id
-    vault_uuid = obj.get("uuid")
-    if _is_valid_uuid(vault_uuid):
-        return resolve_canonical_object_id(str(vault_uuid))
-    return vault_uuid
+    candidate = object_id or obj.get("uuid")
+    if _is_valid_uuid(candidate):
+        return resolve_canonical_object_id(str(candidate))
+    return candidate
 
 
 def _infer_dim_from_error(exc: Exception) -> int | None:

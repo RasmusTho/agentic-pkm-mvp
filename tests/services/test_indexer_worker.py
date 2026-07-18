@@ -34,14 +34,25 @@ def test_uuid_only_legacy_event_resolves_retained_canonical_id(monkeypatch):
     assert resolve_event_object_id({"uuid": vault_uuid}) == canonical_id
 
 
-def test_explicit_event_object_id_never_reinterprets_canonical_identity(monkeypatch):
+def test_explicit_canonical_event_object_id_resolves_to_itself(monkeypatch):
     canonical_id = str(UUID(int=3))
     monkeypatch.setattr(
         "app.services.indexer.resolve_canonical_object_id",
-        lambda _value: (_ for _ in ()).throw(AssertionError("must not resolve explicit object_id")),
+        lambda value: value,
     )
 
     assert resolve_event_object_id({"object_id": canonical_id, "uuid": str(UUID(int=4))}) == canonical_id
+
+
+def test_raw_api_object_id_resolves_retained_canonical_identity(monkeypatch):
+    vault_uuid = str(UUID(int=5))
+    canonical_id = str(UUID(int=6))
+    monkeypatch.setattr(
+        "app.services.indexer.resolve_canonical_object_id",
+        lambda value: canonical_id if value == vault_uuid else value,
+    )
+
+    assert resolve_event_object_id({"object_id": vault_uuid, "uuid": vault_uuid}) == canonical_id
 
 
 def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
