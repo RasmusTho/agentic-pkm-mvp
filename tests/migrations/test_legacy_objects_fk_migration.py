@@ -391,6 +391,34 @@ def test_decisions_projection_rebuild_rejects_legacy_parent_before_truncate(
         assert conn.execute("SELECT key FROM decisions").fetchall() == [("keep",)]
 
 
+def test_decisions_producers_reject_additional_legacy_foreign_key(
+    scratch_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A canonical FK plus any extra legacy FK is not migration-complete."""
+    _upgrade("head")
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "ALTER TABLE decisions ADD CONSTRAINT decisions_object_id_legacy_extra_fk "
+            "FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE SET NULL"
+        )
+
+    from app.stores.postgres import PgDecisions
+
+    monkeypatch.setenv("DATABASE_URL", scratch_dsn)
+    with pytest.raises(RuntimeError, match=r"alembic upgrade head.*Schema shape is stale"):
+        PgDecisions().put(
+            object_id=str(uuid.uuid4()),
+            agent="test",
+            kind="classification",
+            key="type",
+            value={"type": "note"},
+        )
+
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM decisions").fetchone() == (0,)
+
+
 def test_deferred_then_unchanged_sync_materializes_canonical_parent(
     scratch_dsn: str,
     tmp_path: Path,

@@ -46,6 +46,7 @@ def assert_decisions_schema(conn: Any) -> None:
             SELECT
                 object_id_column.is_nullable,
                 id_column.column_default,
+                fk.fk_count,
                 fk.referenced_table_schema,
                 fk.referenced_table_name,
                 fk.referenced_column_name,
@@ -57,10 +58,11 @@ def assert_decisions_schema(conn: Any) -> None:
              AND id_column.column_name = 'id'
             LEFT JOIN (
                 SELECT
-                    ccu.table_schema AS referenced_table_schema,
-                    ccu.table_name AS referenced_table_name,
-                    ccu.column_name AS referenced_column_name,
-                    rc.delete_rule
+                    COUNT(*) AS fk_count,
+                    MIN(ccu.table_schema) AS referenced_table_schema,
+                    MIN(ccu.table_name) AS referenced_table_name,
+                    MIN(ccu.column_name) AS referenced_column_name,
+                    MIN(rc.delete_rule) AS delete_rule
                 FROM information_schema.table_constraints AS tc
                 JOIN information_schema.key_column_usage AS kcu
                   ON tc.constraint_name = kcu.constraint_name
@@ -75,7 +77,6 @@ def assert_decisions_schema(conn: Any) -> None:
                   AND tc.table_name = 'decisions'
                   AND tc.constraint_type = 'FOREIGN KEY'
                   AND kcu.column_name = 'object_id'
-                LIMIT 1
             ) AS fk ON TRUE
             WHERE object_id_column.table_schema = 'public'
               AND object_id_column.table_name = 'decisions'
@@ -96,9 +97,10 @@ def assert_decisions_schema(conn: Any) -> None:
                         "referenced_column_name",
                         "delete_rule",
                     ),
-                    start=2,
+                    start=3,
                 )
             )
             != ("public", "store_objects", "object_id", "SET NULL")
+            or _row_value(shape_row, "fk_count", 2) != 1
         ):
             raise RuntimeError(f"{_DECISIONS_MIGRATION_HINT} Schema shape is stale.")
