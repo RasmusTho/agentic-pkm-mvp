@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from app.journaling.day_context import assemble_day_context
+from app.journaling.day_context import DayContextItem, assemble_day_context
 from app.journaling.draft import (
     JOURNAL_DRAFT_WRITE_ACTION,
     JournalDraftBlockedError,
@@ -698,6 +698,58 @@ def test_non_proposal_capture_posture_blocks_before_cognition_or_staging(
             vault_context=context,
             for_date=DAY,
             session_id=session_id,
+            write_guard=_allowing_guard(),
+            reasoning_fn=forbidden_cognition,
+        )
+
+    assert cognition_called is False
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_colliding_session_and_context_identity_blocks_before_cognition(
+    tmp_path: Path,
+) -> None:
+    root, context, original_session_id, _capture = _seed_inputs(tmp_path)
+    session = next((root / ".chats" / "reflection").glob("*.md"))
+    session.write_text(
+        session.read_text(encoding="utf-8").replace(
+            f"session_id: {original_session_id}", "session_id: collision.md"
+        ),
+        encoding="utf-8",
+    )
+    colliding_context = root / "session:collision.md"
+    colliding_context.write_text(
+        "---\nreview_state: accepted\n---\ncontext\n", encoding="utf-8"
+    )
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    sections = dict(bundle.sections)
+    sections["captures"] = sections["captures"].model_copy(
+        update={
+            "items": (
+                DayContextItem(
+                    provenance_ref="session:collision.md",
+                    content={"summary": "distinct accepted context"},
+                ),
+            )
+        }
+    )
+    bundle = bundle.model_copy(update={"sections": sections})
+    cognition_called = False
+
+    def forbidden_cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(JournalDraftBlockedError, match="source identity collision"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id="collision.md",
+            day_context=bundle,
             write_guard=_allowing_guard(),
             reasoning_fn=forbidden_cognition,
         )

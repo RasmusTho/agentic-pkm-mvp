@@ -157,6 +157,7 @@ def draft_journal_entry(
         source_ids = tuple(session.source_id for session in sessions) + tuple(
             item.provenance_ref for item in context_items
         )
+        _reject_colliding_source_ids(source_ids)
         review_states = _source_review_states(vault_root, sessions, context_items)
         activation = evaluate_journal_draft_activation(
             source_ids,
@@ -605,6 +606,19 @@ def _source_review_states(
             state = _review_state(frontmatter, default=None)
         states[item.provenance_ref] = state
     return states
+
+
+def _reject_colliding_source_ids(source_ids: tuple[str, ...]) -> None:
+    seen: set[str] = set()
+    collisions: list[str] = []
+    for source_id in source_ids:
+        if source_id in seen and source_id not in collisions:
+            collisions.append(source_id)
+        seen.add(source_id)
+    if collisions:
+        raise JournalDraftBlockedError(
+            "journal draft source identity collision: " + ", ".join(collisions)
+        )
 
 
 def _review_state_value(state: ReviewState | None) -> str:
