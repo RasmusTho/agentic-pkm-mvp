@@ -13,6 +13,22 @@ _deploy_channel_env_value() {
   ' "${file_path}"
 }
 
+_deploy_channel_uses_full_host_vault_path() {
+  local vault_path="${1:?vault path required}"
+  python3 - "${vault_path}" <<'PY'
+import os
+import sys
+
+path = os.path.realpath(sys.argv[1])
+roots = ("/Users", "/Volumes")
+raise SystemExit(
+    0
+    if any(path == root or path.startswith(f"{root}/") for root in roots)
+    else 1
+)
+PY
+}
+
 deploy_channel_compose() {
   local root="${1:?repo root required}"
   local channel="${2:?channel required}"
@@ -21,7 +37,7 @@ deploy_channel_compose() {
   local channel_env_file="${5:?channel env file required}"
   shift 5
 
-  local runtime_env_ref runtime_env_file vault_host_root
+  local runtime_env_ref runtime_env_file vault_host_root vault_container_root
   local -a compose_args
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
@@ -46,8 +62,15 @@ deploy_channel_compose() {
     vault_host_root="$(_deploy_channel_env_value "${runtime_env_file}" VAULT_HOST_ROOT)"
   fi
 
+  vault_container_root=""
   if [ -n "${vault_host_root}" ]; then
-    compose_args+=(-f "${root}/docker-compose.legacy-vault.yml")
+    if _deploy_channel_uses_full_host_vault_path "${vault_host_root}"; then
+      vault_container_root="${vault_host_root}"
+      compose_args+=(-f "${root}/docker-compose.full-host-vault.yml")
+    else
+      vault_container_root="/app/vault"
+      compose_args+=(-f "${root}/docker-compose.legacy-vault.yml")
+    fi
     if [ "${channel}" = "test" ]; then
       compose_args+=(-f "${root}/docker-compose.test-vault.yml")
     fi
@@ -68,8 +91,10 @@ deploy_channel_compose() {
     fi
     if [ -n "${vault_host_root}" ]; then
       export VAULT_HOST_ROOT="${vault_host_root}"
+      export DEPLOY_VAULT_CONTAINER_ROOT="${vault_container_root}"
     else
       unset VAULT_HOST_ROOT
+      unset DEPLOY_VAULT_CONTAINER_ROOT
     fi
 
     docker compose \

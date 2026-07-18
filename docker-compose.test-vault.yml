@@ -4,21 +4,21 @@
 # docker-compose.legacy-vault.yml. The required interpolation keeps it from
 # being used without the selected host vault mount, while the hard-coded
 # container values prevent hostile parent-shell watcher settings from
-# diverging from that mount.
+# diverging from the access path selected by the deploy helper.
 x-requires-explicit-test-vault: "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to activate the TEST vault}"
 
 services:
   api:
     environment:
       WATCHER_ENABLE: "1"
-      WATCHER_VAULT_PATH: /app/vault
+      WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:-/app/vault}
 
   worker:
     environment:
       WATCHER_ENABLE: "1"
-      WATCHER_VAULT_PATH: /app/vault
+      WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:-/app/vault}
 
   watcher:
     environment:
       WATCHER_ENABLE: "1"
-      WATCHER_VAULT_PATH: /app/vault
+      WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:-/app/vault}

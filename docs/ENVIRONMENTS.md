@@ -5,8 +5,8 @@ Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 Temporal class: operational
 Review cadence: as environment/channel posture changes
-Last reviewed: 2026-06-16
-Last verified against: docs/RELEASE_CHANNELS/README.md, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
+Last reviewed: 2026-07-18
+Last verified against: docs/RELEASE_CHANNELS/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
 
 ## Overview
 
@@ -113,7 +113,7 @@ After Option-2 (#2309/#2325) the human selects any vault on any disk in-process,
 
 **Write guardrail.** A broader mount widens what is *selectable / readable*, not what is *writable beyond the selected vault*. Vault writes go through `write_note_from_absolute`, which enforces `resolved_path.relative_to(vault_root)` (`app/knowledge/write_ops.py`), and `app/write_guard.py` gates vault writes; a write cannot escape the selected vault regardless of mount breadth.
 
-**Legacy `/app/vault` mount (re-baselined, #2386).** The legacy `/app/vault` mount is **no longer in the base `docker-compose.yaml`**, and the base compose no longer carries the old `${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}` source — a no-vault idle startup (#2005) therefore cannot synthesize a repo-local `./vault` bind. The mount is retained only as an **explicit compatibility path** in the `docker-compose.legacy-vault.yml` overlay, which `scripts/start_full_system.sh` includes **only when a vault is explicitly bound** (`VAULT_HOST_ROOT` set). Its source uses the required-variable form `${VAULT_HOST_ROOT:?…}:/app/vault`, so Compose errors rather than falling back to `./vault` if no vault is configured. This compatibility mount exists for the remaining eager `resolve_vault_root()` consumers (Slices 05A–05C of #2311) that still read `/app/vault`; once those are fully migrated it can be dropped entirely. The additive `/Users` + `/Volumes` same-path mounts (#2310) are unaffected and stay in the base compose.
+**Legacy `/app/vault` mount (re-baselined, #2386).** The legacy `/app/vault` mount is **no longer in the base `docker-compose.yaml`**, and the base compose no longer carries the old `${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}` source — a no-vault idle startup (#2005) therefore cannot synthesize a repo-local `./vault` bind. The mount is retained only as an **explicit compatibility path** in the `docker-compose.legacy-vault.yml` overlay, which `scripts/start_full_system.sh` includes **only when a vault is explicitly bound** (`VAULT_HOST_ROOT` set). Pinned deploy/rollback narrows that compatibility further: a governed source already reachable through the base same-path `/Users` or `/Volumes` mounts uses `docker-compose.full-host-vault.yml` and does not bind the same tree again at `/app/vault`; sources outside those shared roots keep the legacy overlay. The legacy source uses the required-variable form `${VAULT_HOST_ROOT:?…}:/app/vault`, so Compose errors rather than falling back to `./vault` if no vault is configured. This compatibility mount exists for the remaining eager `resolve_vault_root()` consumers (Slices 05A–05C of #2311) that still require it; once those are fully migrated it can be dropped entirely. The additive `/Users` + `/Volumes` same-path mounts (#2310) are unaffected and stay in the base compose.
 
 ## Code vs Environment Separation
 
