@@ -203,8 +203,10 @@ adapter and the risk of semantically parallel abstractions remains.
 ## Owner decision receipt
 
 The owner ratified **Option B — shared neutral contract kernel, separate execution fabrics** on
-2026-07-17. This accepted ADR and its PR review history are the durable public decision receipt;
-private deliberation is intentionally not republished. The selected architectural answer is:
+2026-07-17. The authenticated
+[public owner decision receipt](https://github.com/RasmusTho/agentic-pkm-mvp/pull/3970#issuecomment-5012163248)
+records that ratification; private deliberation is intentionally not republished. The selected
+architectural answer is:
 
 > Builder Capability Runtime shares a neutral LLM Contract Kernel with Mimer Product LLM Fabric,
 > while each runtime retains separate policy, registry, credentials, provider sessions, fallback,
