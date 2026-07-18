@@ -113,7 +113,7 @@ def resolve_vault_uuid(object_id: str) -> str | None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT COALESCE(legacy.uuid, canonical.object_id) AS vault_uuid
+                    SELECT legacy.uuid AS vault_uuid
                     FROM store_objects canonical
                     LEFT JOIN objects legacy ON legacy.id = canonical.object_id
                     WHERE canonical.object_id = %s

@@ -322,11 +322,14 @@ def truncate_pg_tables() -> None:
     _ensure_tables()
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE store_objects")
-            cur.execute("TRUNCATE TABLE store_vector_index")
-            cur.execute("TRUNCATE TABLE store_relations")
-            cur.execute("TRUNCATE TABLE store_relation_memberships")
-            cur.execute("TRUNCATE TABLE vector_index_meta")
+            # Do not CASCADE a truncate through durable consumers (decisions,
+            # audit, etc.).  Ordered DELETE keeps their declared FK semantics
+            # (for example SET NULL) and leaves the reset atomic/fail-loud.
+            cur.execute("DELETE FROM store_vector_index")
+            cur.execute("DELETE FROM store_relation_memberships")
+            cur.execute("DELETE FROM store_relations")
+            cur.execute("DELETE FROM vector_index_meta")
+            cur.execute("DELETE FROM store_objects")
 
 
 def reset_vector_index(cur) -> None:

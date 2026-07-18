@@ -531,7 +531,7 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
     on for their own purge+upsert writes -- this handler does not need its
     own bespoke cache-eviction path to stay consistent with that contract.
     """
-    raw_uuid = payload.get("uuid")
+    raw_uuid = payload.get("object_id") or payload.get("uuid")
     object_id: UUID | None = None
     if raw_uuid:
         try:

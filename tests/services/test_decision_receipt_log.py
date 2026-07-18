@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 from typing import Any
 
 import pytest
@@ -151,6 +152,16 @@ def test_write_appends_receipt_then_db(
     assert rec["value"]["trace_id"] == "trace-ac1"
     assert rec["value"]["allow"] is True
     assert rec["created_at"]
+
+
+def test_resolve_vault_uuid_never_invents_canonical_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A canonical-only row has no proven frontmatter continuity identity."""
+    conn = MagicMock()
+    cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value = (None,)
+    monkeypatch.setattr(receipt_log, "conn_rw", lambda: conn)
+
+    assert receipt_log.resolve_vault_uuid("canonical-id") is None
 
 
 # ---------------------------------------------------------------------------

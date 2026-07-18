@@ -84,7 +84,7 @@ def _infer_dim_from_error(exc: Exception) -> int | None:
 
 
 def handle_ingest_object_created(obj: Dict[str, object]) -> None:
-    incoming_uuid = obj.get("uuid")
+    incoming_uuid = obj.get("object_id") or obj.get("uuid")
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = str(obj.get("content") or "")

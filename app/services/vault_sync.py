@@ -389,7 +389,12 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                     "reason": "vault_note_deleted",
                     "source": "vault_sync.delete_note",
                 }
-                delete_payload["uuid"] = effective_uuid
+                # Outbox consumers use ``uuid`` as the lifecycle key.  It must
+                # therefore be the canonical FK parent, not frontmatter's
+                # retained continuity uuid (which may differ from objects.id).
+                delete_payload["uuid"] = canonical_object_id
+                delete_payload["object_id"] = canonical_object_id
+                delete_payload["vault_uuid"] = effective_uuid
         if deleted and delete_payload is not None:
             # KERNEL-01 atomicity (#2864): enqueue on the SAME connection,
             # before the commit, so the file_state delete + objects path-null +
@@ -502,7 +507,9 @@ def upsert_object_from_note(
             topic = INGEST_OBJECT_METADATA
         if topic:
             payload = {
-                "uuid": uuid_value,
+                "uuid": canonical_object_id,
+                "object_id": canonical_object_id,
+                "vault_uuid": uuid_value,
                 "title": title,
                 "review_state": review_state,
                 "content": body,
@@ -727,6 +734,9 @@ def sync_markdown(path: str) -> dict[str, Any]:
             ),
         )
 
+        obj_payload["uuid"] = canonical_object_id
+        obj_payload["object_id"] = canonical_object_id
+        obj_payload["vault_uuid"] = uuid_value
         _enqueue(topic, obj_payload, conn=conn, observation=mtime.isoformat())
 
         _upsert_file_state(
