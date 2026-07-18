@@ -96,8 +96,13 @@ def current_user_id() -> str:
 def _legacy_store_mtimes(root: Path) -> tuple[float, ...]:
     """Inventory legacy stores recursively without following symlinked trees."""
 
+    def fail_on_walk_error(error: OSError) -> None:
+        raise error
+
     mtimes: list[float] = []
-    for directory, child_dirs, files in os.walk(root, followlinks=False):
+    for directory, child_dirs, files in os.walk(
+        root, followlinks=False, onerror=fail_on_walk_error
+    ):
         directory_path = Path(directory)
         child_dirs[:] = [
             name for name in child_dirs if not (directory_path / name).is_symlink()
@@ -176,6 +181,7 @@ def _validate_host_cutover_ack(state_dir: Path) -> None:
             )
             and len(set(participating_roots)) == len(participating_roots)
             and len(set(roots)) == len(roots)
+            and all(root.is_dir() for root in roots)
             and len(participating_repos) == len(roots)
             and cwd_is_in_inventory
         )

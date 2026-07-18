@@ -324,6 +324,47 @@ def test_host_ack_rejects_broad_secondary_root_with_newer_nested_store(
         builderops_config._validate_host_cutover_ack(state_dir)
 
 
+def test_host_ack_rejects_non_directory_secondary_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_repo = tmp_path / "repo-a"
+    current_repo.mkdir()
+    non_directory = tmp_path / "not-a-repository-root"
+    non_directory.write_text("not a directory", encoding="utf-8")
+    state_dir = tmp_path / "host-state" / "builderops"
+    monkeypatch.chdir(current_repo)
+    _write_cutover_ack(
+        state_dir,
+        ["owner/repo-a", "owner/not-a-root"],
+        roots=[current_repo, non_directory],
+    )
+
+    with pytest.raises(ValueError, match="fresh inventory epoch"):
+        builderops_config._validate_host_cutover_ack(state_dir)
+
+
+def test_host_ack_fails_closed_on_inventory_traversal_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir = tmp_path / "host-state" / "builderops"
+    monkeypatch.chdir(repo)
+    _write_cutover_ack(state_dir, ["owner/repo"], roots=[repo])
+
+    def failing_walk(root, *, followlinks, onerror):
+        assert Path(root) == repo
+        assert followlinks is False
+        onerror(PermissionError("inventory denied"))
+        return iter(())
+
+    monkeypatch.setattr(builderops_config.os, "walk", failing_walk)
+    with pytest.raises(ValueError, match="fresh inventory epoch"):
+        builderops_config._validate_host_cutover_ack(state_dir)
+
+
 def test_host_ack_rejects_future_timestamp_and_permissive_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
