@@ -41,14 +41,24 @@ def _ensure_decisions(conn) -> None:
             )
         cur.execute(
             """
-            SELECT object_id_column.is_nullable, id_column.column_default, fk.delete_rule
+            SELECT
+                object_id_column.is_nullable,
+                id_column.column_default,
+                fk.table_schema,
+                fk.table_name,
+                fk.column_name,
+                fk.delete_rule
             FROM information_schema.columns AS object_id_column
             JOIN information_schema.columns AS id_column
               ON id_column.table_schema = object_id_column.table_schema
              AND id_column.table_name = object_id_column.table_name
              AND id_column.column_name = 'id'
             LEFT JOIN (
-                SELECT rc.delete_rule
+                SELECT
+                    ccu.table_schema,
+                    ccu.table_name,
+                    ccu.column_name,
+                    rc.delete_rule
                 FROM information_schema.table_constraints AS tc
                 JOIN information_schema.key_column_usage AS kcu
                   ON tc.constraint_name = kcu.constraint_name
@@ -75,7 +85,8 @@ def _ensure_decisions(conn) -> None:
             shape_row is None
             or shape_row[0] != "YES"
             or "gen_random_uuid" not in (shape_row[1] or "")
-            or shape_row[2] != "SET NULL"
+            or tuple(shape_row[2:])
+            != ("public", "store_objects", "object_id", "SET NULL")
         ):
             raise RuntimeError(f"{_DECISIONS_MIGRATION_HINT} Schema shape is stale.")
 

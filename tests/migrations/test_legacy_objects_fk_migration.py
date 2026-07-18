@@ -331,6 +331,35 @@ def test_active_decision_writer_preflights_before_receipt_on_pre_cutover_schema(
         assert conn.execute("SELECT count(*) FROM decisions").fetchone() == (0,)
 
 
+def test_legacy_pg_decisions_writer_rejects_set_null_objects_parent_before_row(
+    scratch_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The deprecated adapter must not accept the pre-#3510 SET NULL FK."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
+            (object_id,),
+        )
+
+    from app.stores.postgres import PgDecisions
+
+    monkeypatch.setenv("DATABASE_URL", scratch_dsn)
+    with pytest.raises(RuntimeError, match=r"alembic upgrade head.*Schema shape is stale"):
+        PgDecisions().put(
+            object_id=str(object_id),
+            agent="test",
+            kind="classification",
+            key="type",
+            value={"type": "note"},
+        )
+
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM decisions").fetchone() == (0,)
+
+
 def test_deferred_then_unchanged_sync_materializes_canonical_parent(
     scratch_dsn: str,
     tmp_path: Path,
