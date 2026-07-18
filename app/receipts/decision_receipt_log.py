@@ -18,8 +18,10 @@ Design (from the spec):
   ``insert_decision`` writes the log *first*, then the DB projection.
 - ``vault_uuid`` resolution: best-effort at write time. ``decisions.object_id`` is the
   canonical ``store_objects.object_id``. Retained rows may still carry an older continuity UUID
-  in ``objects.uuid``; fresh ingest uses the canonical id itself. When neither resolves
-  (no row, or the durable lookup is unavailable) we write ``vault_uuid: null`` — honest,
+  in ``objects.uuid``. Fresh canonical-only rows have no proven frontmatter continuity identity,
+  so they use ``vault_uuid: null``; the same honest null is used when no row resolves or the
+  durable lookup is unavailable. Historical receipts that already contain the former canonical-id
+  fallback remain replay-compatible,
   never invented. Carrying it lets the projection rebuild re-link a decision whose
   ``object_id`` was re-minted (§5 decoupling payoff, Slice 2).
 
@@ -102,11 +104,10 @@ def decisions_receipts_dir(vault_root: Path | None = None) -> Path:
 def resolve_vault_uuid(object_id: str) -> str | None:
     """Best-effort resolve the vault frontmatter uuid for a runtime ``object_id``.
 
-    ``decisions.object_id`` references ``store_objects.object_id``. Prefer the retained
-    ``objects.uuid`` continuity mapping when present; otherwise fresh vault ingest uses
-    the canonical object id itself. Returns the resolved uuid,
-    or ``None`` when it cannot be resolved (no matching object row, or the durable
-    lookup is unavailable). Never invents a mapping — ``None`` is honest.
+    ``decisions.object_id`` references ``store_objects.object_id``. Return the retained
+    ``objects.uuid`` continuity mapping when present. Fresh canonical-only rows have no
+    proven frontmatter UUID, so return ``None`` rather than inventing one; ``None`` is also
+    returned when no matching object row exists or the durable lookup is unavailable.
     """
     try:
         with conn_rw() as conn:

@@ -43,10 +43,12 @@ index; the in-memory store is a cache-through), applied to the judgment log.
   `store_objects.object_id` (revision `7e4f2a1c9d30`), not to the retained `objects` compatibility
   table. Receipt writes still preserve continuity where that retained table has useful history:
   `resolve_vault_uuid()` uses the matching `objects.uuid` for a canonical object id when present,
-  and otherwise uses the canonical `store_objects.object_id` itself for fresh canonical-only
-  objects. Rebuild first keeps a receipt's `object_id` when it is an existing canonical id; only
+  while fresh canonical-only objects carry `vault_uuid: null` because no frontmatter continuity
+  identity has been proven. Rebuild first keeps a receipt's `object_id` when it is an existing canonical id; only
   otherwise does it attempt to re-link through the receipt's `vault_uuid` using the same retained
-  UUID/canonical-id mapping. A receipt is an unresolved orphan only when neither route resolves.
+  UUID/canonical-id mapping. Historical receipts that already contain the former canonical-id
+  fallback remain accepted by that same replay path. A receipt is an unresolved orphan only when
+  neither route resolves.
   This keeps the compatibility mapping available for continuity without making `objects` the FK
   parent or claiming that every historical compatibility surface has been removed.
 - **Volume:** low — one row per governance action, event-driven (not per-turn). JSONL-append is
@@ -81,8 +83,10 @@ index; the in-memory store is a cache-through), applied to the judgment log.
   fast index — but it is now **derived**: `rebuild_decisions_projection()` replays the JSONL log into
   the table. Replay accepts an existing `store_objects.object_id` directly; when that id no longer
   exists, it re-links via the receipt's `vault_uuid` against retained `objects.uuid` continuity,
-  with canonical ids also serving as the fallback UUID for fresh canonical-only objects. A doctor
-  check asserts the projection matches the log (verify-the-verifier).
+  including historical receipts that already carry the former canonical-id fallback. New
+  canonical-only receipts carry `vault_uuid: null` and therefore depend on their canonical
+  `object_id` remaining present. A doctor check asserts the projection matches the log
+  (verify-the-verifier).
 - This flips `runtime-semantics.md` row 12 canonicality: canonical = the vault receipt log; DB =
   projection. That doc update *resolves* the rule-4 tension the recon found (it aligns the advisory
   doc with the owner contract), and is bundled into the read-cutover slice.
