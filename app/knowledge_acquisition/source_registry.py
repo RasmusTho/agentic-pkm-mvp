@@ -563,6 +563,26 @@ class _MemorySourceRegistryBackend:
             self._rows[binding_id] = updated_target
             return _copy_binding(updated_target)
 
+    def update_state(
+        self,
+        binding_id: str,
+        *,
+        enabled: bool | None,
+        last_error: dict[str, Any] | None,
+    ) -> SourceBinding:
+        with self._lock:
+            row = self._rows.get(binding_id)
+            if row is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            updated = replace(
+                row,
+                enabled=row.enabled if enabled is None else enabled,
+                last_error=deepcopy(last_error),
+                updated_at=_now_iso(),
+            )
+            self._rows[binding_id] = updated
+            return _copy_binding(updated)
+
     def clear(self) -> None:
         with self._lock:
             self._rows.clear()
@@ -944,8 +964,54 @@ class _PgSourceRegistryBackend:
         assert result is not None  # just wrote it
         return result
 
+    def update_state(
+        self,
+        binding_id: str,
+        *,
+        enabled: bool | None,
+        last_error: dict[str, Any] | None,
+    ) -> SourceBinding:
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            now = _now_iso()
+            cur = conn.cursor()
+            last_error_json = json.dumps(last_error) if last_error is not None else None
+            # cursor is deliberately never in the SET list: an auth degradation
+            # or disconnect must not mutate a source cursor (INV-YSS-1/INV-YSS-4).
+            if enabled is None:
+                cur.execute(
+                    f"UPDATE {_TABLE} SET last_error = %s::jsonb, updated_at = %s::timestamptz "
+                    "WHERE binding_id = %s",
+                    (last_error_json, now, binding_id),
+                )
+            else:
+                cur.execute(
+                    f"UPDATE {_TABLE} SET enabled = %s, last_error = %s::jsonb, "
+                    "updated_at = %s::timestamptz WHERE binding_id = %s",
+                    (enabled, last_error_json, now, binding_id),
+                )
+            if cur.rowcount == 0:
+                raise KeyError(f"no such binding: {binding_id}")
+        finally:
+            conn.close()
+        result = self.get(binding_id)
+        assert result is not None  # just wrote it
+        return result
+
 
 # --- Service layer -------------------------------------------------------
+
+
+def _build_last_error(reason_code: str, detail: Any) -> dict[str, Any]:
+    """Build a portable ``{reason_code, detail, at}`` last_error payload."""
+    if not isinstance(reason_code, str) or not reason_code.strip():
+        raise SourceRegistryValidationError("reason_code must be a non-empty string")
+    payload = {"reason_code": reason_code, "detail": detail, "at": _now_iso()}
+    result = _portable_json_copy(payload, field="last_error")
+    if not isinstance(result, dict):  # pragma: no cover - fixed object above
+        raise SourceRegistryValidationError("last_error must be a JSON object")
+    return result
 
 
 class SourceRegistry:
@@ -1081,6 +1147,35 @@ class SourceRegistry:
 
     def list_for_account(self, account_binding_id: str | None) -> tuple[SourceBinding, ...]:
         return self._backend.list_for_account(_normalize_account_binding_id(account_binding_id))
+
+    def record_source_degradation(
+        self, binding_id: str, *, reason_code: str, detail: Any = None
+    ) -> SourceBinding:
+        """Stamp an auth/degradation reason on a source's ``last_error`` without
+        touching its cursor or ``enabled`` flag.
+
+        INV-YSS-4: an auth failure mutates no cursor and does not disable the
+        source -- it is degraded (legible, recoverable), not disconnected. Used
+        by ``youtube_oauth`` to degrade dependent authenticated sources when the
+        account binding's auth is revoked/expired/key-missing.
+        """
+        return self._backend.update_state(
+            binding_id, enabled=None, last_error=_build_last_error(reason_code, detail)
+        )
+
+    def disable_source_for_auth(
+        self, binding_id: str, *, reason_code: str, detail: Any = None
+    ) -> SourceBinding:
+        """Disable a source and stamp the auth reason (operator disconnect path).
+
+        Sets ``enabled = false`` + ``last_error`` in one write; the row, cursor,
+        and history are kept (disabled sources keep rows, cursors, and history).
+        The cursor is never mutated (INV-YSS-1). Used by
+        ``youtube_oauth.disconnect`` for the account's dependent sources.
+        """
+        return self._backend.update_state(
+            binding_id, enabled=False, last_error=_build_last_error(reason_code, detail)
+        )
 
 
 __all__ = [
