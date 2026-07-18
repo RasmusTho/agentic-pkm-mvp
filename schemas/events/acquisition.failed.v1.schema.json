@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/acquisition.failed.v1.schema.json",
+  "title": "acquisition.failed payload (v1)",
+  "description": "Payload of the acquisition.failed outbox event (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Event topics). Producer: app/knowledge_acquisition/acquisition_requests.py::AcquisitionRequests.fail / .dead_letter — one drain attempt failed, retryable (terminal=false, with the backoff gate) or terminal (terminal=true: explicit dead-letter or attempts exhaustion). Idempotency key basis: (topic, request_id, attempt). reason_code follows the contract taxonomy; error text is exception-class + safe message, never token material (INV-YSS-5). Lineage posture: no dispatched consumer.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["request_id", "attempt", "reason_code", "terminal"],
+  "properties": {
+    "request_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "reason_code": { "type": "string", "minLength": 1 },
+    "terminal": { "type": "boolean" },
+    "next_attempt_at": { "type": ["string", "null"] }
+  }
+}

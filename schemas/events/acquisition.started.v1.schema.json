@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/acquisition.started.v1.schema.json",
+  "title": "acquisition.started payload (v1)",
+  "description": "Payload of the acquisition.started outbox event (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Event topics). Producer: app/knowledge_acquisition/acquisition_requests.py::AcquisitionRequests.claim_batch — one drain attempt began. Idempotency key basis: (topic, request_id, attempt); each attempt is a distinct event, a duplicate delivery of the same attempt dedups. Lineage posture: no dispatched consumer.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["request_id", "attempt"],
+  "properties": {
+    "request_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 }
+  }
+}
