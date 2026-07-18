@@ -144,6 +144,41 @@ def test_explicit_overrides_unchanged(tmp_path: Path) -> None:
     ) == str(explicit_db_path)
 
 
+@pytest.mark.parametrize("variable", ["BUILDEROPS_STATE_DIR", "BUILDEROPS_DB_PATH"])
+def test_blank_override_is_not_an_acknowledgement_bypass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+) -> None:
+    state_dir = tmp_path / "host-state" / "builderops"
+    monkeypatch.setattr(builderops_config, "default_state_dir", lambda: state_dir)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="cutover acknowledgement is required"):
+        builderops_config.load_paths({variable: "   "})
+
+    assert not (tmp_path / "builderops.sqlite3").exists()
+
+
+def test_nonblank_override_keeps_exact_path_semantics(tmp_path: Path) -> None:
+    from app.ops.builderops_startup import _builderops_db_path
+
+    raw_db_path = f" {tmp_path / 'pinned.sqlite3'} "
+    paths = builderops_config.load_paths({"BUILDEROPS_DB_PATH": raw_db_path})
+
+    assert str(paths.db_path) == raw_db_path
+    assert _builderops_db_path(tmp_path, {"BUILDEROPS_DB_PATH": raw_db_path}) == raw_db_path
+
+    raw_state_dir = f" {tmp_path / 'pinned-state'} "
+    state_paths = builderops_config.load_paths({"BUILDEROPS_STATE_DIR": raw_state_dir})
+
+    assert str(state_paths.state_dir) == raw_state_dir
+    assert str(state_paths.db_path) == str(Path(raw_state_dir) / "builderops.sqlite3")
+    assert _builderops_db_path(
+        tmp_path, {"BUILDEROPS_STATE_DIR": raw_state_dir}
+    ) == str(tmp_path / Path(raw_state_dir) / "builderops.sqlite3")
+
+
 def test_explicit_db_override_does_not_require_resolvable_home(tmp_path: Path) -> None:
     explicit_db = tmp_path / "explicit" / "builderops.sqlite3"
     code = f"""

@@ -292,10 +292,11 @@ def _signboard_export(
 
 
 def _builderops_db_path(root: Path, env: dict[str, str]) -> str:
-    if env.get("BUILDEROPS_DB_PATH"):
-        return env["BUILDEROPS_DB_PATH"]
+    configured_db_path = env.get("BUILDEROPS_DB_PATH")
+    if configured_db_path is not None and configured_db_path.strip():
+        return configured_db_path
     configured_state_dir = env.get("BUILDEROPS_STATE_DIR")
-    if configured_state_dir is None:
+    if configured_state_dir is None or not configured_state_dir.strip():
         return str(default_state_dir() / DEFAULT_DB_NAME)
     state_dir = Path(configured_state_dir).expanduser()
     if not state_dir.is_absolute():

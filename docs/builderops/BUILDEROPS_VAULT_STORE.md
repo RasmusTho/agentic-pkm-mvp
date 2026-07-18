@@ -132,6 +132,8 @@ the consolidated DB is opened. Error text remains privacy-safe; host paths and c
 printed.
 
 `BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, and CLI `--db-path` bypass the acknowledgement gate.
+Environment overrides must be non-blank after trimming; blank values are treated as absent and
+therefore follow the acknowledged implicit host-store path.
 They remain the operator path for keeping the current store pinned before cutover and selecting the
 reconciled store during cutover. This PR does not create the acknowledgement, inventory repos,
 reconcile records, migrate data, stop writers, or perform the live cutover.

@@ -45,8 +45,14 @@ def load_paths(
     db_path_override: Path | None = None,
 ) -> BuilderOpsPaths:
     src = env if env is not None else os.environ
-    configured_state_dir = src.get("BUILDEROPS_STATE_DIR")
-    configured_db_path = src.get("BUILDEROPS_DB_PATH")
+    raw_state_dir = src.get("BUILDEROPS_STATE_DIR")
+    raw_db_path = src.get("BUILDEROPS_DB_PATH")
+    configured_state_dir = (
+        raw_state_dir if raw_state_dir is not None and raw_state_dir.strip() else None
+    )
+    configured_db_path = (
+        raw_db_path if raw_db_path is not None and raw_db_path.strip() else None
+    )
     exact_db_path = (
         db_path_override if db_path_override is not None else configured_db_path
     )
