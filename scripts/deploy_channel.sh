@@ -262,22 +262,42 @@ recreate_channel_services() {
 }
 
 rollback_failed_startup() {
-  local reason="$1"
-  echo "${reason}; attempting rollback to previous pin" >&2
+  local reason="$1" original_status="$2" forward_only_count="0"
+  echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
+  if [ -n "${MIGRATION_RECEIPT_JSON:-}" ]; then
+    forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
+  fi
+  if [ "${forward_only_count}" != "0" ]; then
+    echo "rollback limitation: acknowledged forward-only migration(s) are not auto-reversed; restoring code and services only" >&2
+  fi
   if [ -n "${current_sha}" ]; then
-    write_pin "${pin_file}" "${current_sha}"
+    if ! write_pin "${pin_file}" "${current_sha}"; then
+      echo "rollback pin restore failed for previous pin ${current_sha}" >&2
+      return 0
+    fi
     if ! compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
+  else
+    echo "rollback unavailable: no previous pin was recorded" >&2
+  fi
+}
+
+run_postmutation_gate() {
+  local reason="$1" rc=0
+  shift
+  "$@" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    rollback_failed_startup "${reason}" "${rc}"
+    return "${rc}"
   fi
 }
 
 capture_watch_gate() {
   # Surface a broken heimdal-capture-watch (e.g. missing/invalid HEIMDAL_RAW_STORE_KEY, which
   # its own healthcheck fails loud on) at deploy time instead of letting it sit unhealthy and
-  # silent. Deliberately does NOT roll back api/worker: capture-watch runs its own
-  # healthcheck/restart loop and must not block unrelated services (docker-compose.yaml). A
-  # failure here fails the deploy loudly (non-zero exit) after the api deploy is already recorded.
+  # silent. This is a required post-mutation gate: a failure routes through the shared rollback
+  # path before a successful deploy receipt is recorded.
   local cid deadline status
   cid="$(compose ps -q heimdal-capture-watch 2>/dev/null | head -1)"
   if [ -z "${cid}" ]; then
@@ -379,22 +399,23 @@ version_gate() {
 }
 
 fleet_model_fitness_gate() {
-  local receipt_json
-  if ! receipt_json="$("${PYTHON}" -m app.release_channels.fleet_model_fitness "${channel}" --root "${ROOT}" --json --require-pinned)"; then
+  local receipt_json rc=0
+  receipt_json="$("${PYTHON}" -m app.release_channels.fleet_model_fitness "${channel}" --root "${ROOT}" --json --require-pinned)" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
     echo "fleet-model fitness gate failed" >&2
     if [ -n "${receipt_json}" ]; then
       echo "${receipt_json}" >&2
     fi
-    return 1
+    return "${rc}"
   fi
   FLEET_MODEL_FITNESS_JSON="${receipt_json}"
   export FLEET_MODEL_FITNESS_JSON
 }
 
 record_receipt() {
-  local receipt_path timestamp
+  local receipt_path timestamp rc
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  mkdir -p "${receipt_dir}"
+  mkdir -p "${receipt_dir}" || return $?
   receipt_path="${receipt_dir}/${channel}-latest.json"
   "${PYTHON}" - "$receipt_path" <<PY
 import json
@@ -415,11 +436,19 @@ payload = {
         os.environ.get("DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK", "0") == "1"
     ),
 }
-Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+receipt_path = Path(sys.argv[1])
+temporary_path = receipt_path.with_name(receipt_path.name + ".tmp")
+temporary_path.write_text(
+    json.dumps(payload, indent=2, sort_keys=True) + "\\n",
+    encoding="utf-8",
+)
+os.replace(temporary_path, receipt_path)
 PY
+  rc=$?
+  [ "${rc}" -eq 0 ] || return "${rc}"
   if [ "${channel}" = "prod" ]; then
-    mkdir -p "${promotion_dir}"
-    cp "${receipt_path}" "${promotion_dir}/prod-deploy-${target_sha}.json"
+    mkdir -p "${promotion_dir}" || return $?
+    cp "${receipt_path}" "${promotion_dir}/prod-deploy-${target_sha}.json" || return $?
   fi
   echo "recorded deploy receipt: ${receipt_path}"
 }
@@ -456,22 +485,22 @@ if [ -n "${current_sha}" ]; then
 fi
 write_pin "${pin_file}" "${target_sha}"
 
-compose pull api worker watcher heimdal-capture-watch companion-ui
-if ! recreate_channel_services; then
-  rollback_failed_startup "service recreate/liveness gate failed"
-  exit 1
-fi
-if ! health_gate; then
-  rollback_failed_startup "health gate failed"
-  exit 1
-fi
-version_gate
-fleet_model_fitness_gate
-COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED="${ack_embedding_rebuild_required}" \
-  COMPANION_UI_EXPECTED_SHA="${target_sha}" \
-  scripts/companion_ui_postdeploy_smoke.sh "${channel}"
-record_receipt
-capture_watch_gate || {
-  echo "deploy: heimdal-capture-watch is not healthy (api/worker left in place and receipt recorded); resolve its config and re-check" >&2
-  exit 1
+postdeploy_smoke_gate() {
+  COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED="${ack_embedding_rebuild_required}" \
+    COMPANION_UI_EXPECTED_SHA="${target_sha}" \
+    scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 }
+
+run_postmutation_gate "image pull failed" \
+  compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+run_postmutation_gate "service recreate/liveness gate failed" \
+  recreate_channel_services || exit $?
+run_postmutation_gate "health gate failed" health_gate || exit $?
+run_postmutation_gate "version gate failed" version_gate || exit $?
+run_postmutation_gate "fleet-model fitness gate failed" \
+  fleet_model_fitness_gate || exit $?
+run_postmutation_gate "companion UI post-deploy smoke failed" \
+  postdeploy_smoke_gate || exit $?
+run_postmutation_gate "required capture-watch gate failed" \
+  capture_watch_gate || exit $?
+run_postmutation_gate "deploy receipt creation failed" record_receipt || exit $?

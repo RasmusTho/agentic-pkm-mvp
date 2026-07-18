@@ -57,7 +57,7 @@ if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MA
 fi
 case "$*" in
   *" ps -q "*) printf '%s\\n' fake-capture-watch ;;
-  inspect*) printf '%s\\n' healthy ;;
+  inspect*) printf '%s\\n' "${{FAKE_CAPTURE_WATCH_STATUS:-healthy}}" ;;
 esac
 exit 0
 """,
@@ -68,8 +68,8 @@ exit 0
 set -eu
 printf 'curl %s\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
 case "$*" in
-  *"/version"*) printf '{"git_sha":"%s"}\\n' "$FAKE_SHA" ;;
-  *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "$FAKE_SHA" ;;
+  *"/version"*) printf '{"git_sha":"%s"}\\n' "${FAKE_VERSION_SHA:-$FAKE_SHA}" ;;
+  *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}" ;;
   *"/healthz"*)
     if [ "${FAKE_API_LIVENESS:-pass}" = "fail" ]; then
       exit 22
@@ -110,11 +110,23 @@ if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "pytest" ]; then
         ;;
     esac
   fi
+  if [ "${{FAKE_POSTDEPLOY_SMOKE:-pass}}" = "fail" ]; then
+    echo 'fake postdeploy smoke diagnostic' >&2
+    exit "${{FAKE_POSTDEPLOY_SMOKE_RC:-73}}"
+  fi
   exit 0
 fi
 if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "app.release_channels.fleet_model_fitness" ]; then
+  if [ "${{FAKE_FLEET_MODEL_FITNESS:-pass}}" = "fail" ]; then
+    echo 'fake fleet-model fitness diagnostic' >&2
+    exit "${{FAKE_FLEET_MODEL_FITNESS_RC:-41}}"
+  fi
   printf '%s\\n' '{{"ok":true}}'
   exit 0
+fi
+if [ "${{1:-}}" = "-" ] && [[ "${{2:-}}" == */ops/deployments/* ]] && [ "${{FAKE_RECEIPT_WRITE:-pass}}" = "fail" ]; then
+  echo 'fake receipt write diagnostic' >&2
+  exit "${{FAKE_RECEIPT_WRITE_RC:-52}}"
 fi
 exec {sys.executable!s} "$@"
 """,

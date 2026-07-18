@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
 import yaml
+
+from tests.deploy.test_deploy_channel import (
+    _deploy_events,
+    _deploy_harness,
+    _run_deploy,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -119,7 +125,7 @@ def test_health_gate_blocks_and_triggers_rollback() -> None:
     assert "http://127.0.0.1:${ui_port}/healthz" in text
     assert 'wait_json_ok "http://127.0.0.1:${ui_port}/healthz"' in text
     assert "isinstance(data, dict)" in text
-    assert 'rollback_failed_startup "health gate failed"' in text
+    assert 'run_postmutation_gate "health gate failed"' in text
     run_block = text.split('echo "deploy plan:', 1)[1]
     assert run_block.index("recreate_channel_services") < run_block.index("health_gate")
     assert run_block.index("health_gate") < run_block.index("version_gate")
@@ -132,7 +138,8 @@ def test_rollback_uses_previous_pin_and_skips_forward_only_reversal() -> None:
     assert "Do not auto-reverse forward-only migrations" not in text
     assert "forward_only" in text
     assert "ack_forward_only" in text
-    assert "reverse" not in re.sub(r"reversibility|reversible", "", text)
+    assert "forward-only migration(s) are not auto-reversed" in text
+    assert "alembic downgrade" not in text
 
 
 def test_rollback_dry_run_without_sha_parses_flag_and_skips_writes(tmp_path: Path) -> None:
@@ -214,3 +221,126 @@ def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     assert run_block.index("health_gate") < run_block.index("version_gate")
     assert run_block.index("version_gate") < run_block.index("fleet_model_fitness_gate")
     assert run_block.index("fleet_model_fitness_gate") < run_block.index("record_receipt")
+
+
+def _seed_previous_pin(root: Path, previous_sha: str) -> Path:
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    return pin_path
+
+
+def test_postdeploy_smoke_failure_rolls_back_previous_pin_and_services(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "1" * 40
+    pin_path = _seed_previous_pin(root, previous_sha)
+    env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
+    env["FAKE_POSTDEPLOY_SMOKE_RC"] = "73"
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 73
+    assert "fake postdeploy smoke diagnostic" in result.stderr
+    assert "companion UI post-deploy smoke failed" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    recreate = (
+        "up -d --force-recreate api worker watcher "
+        "heimdal-capture-watch companion-ui"
+    )
+    assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 2
+    assert not (root / "ops/deployments/dev-latest.json").exists()
+
+
+@pytest.mark.parametrize(
+    (
+        "failure_env",
+        "failure_value",
+        "expected_status",
+        "diagnostic",
+        "expected_recreate_attempts",
+    ),
+    [
+        ("FAKE_DOCKER_FAIL_MATCH", " pull ", 24, "image pull failed", 1),
+        (
+            "FAKE_DOCKER_FAIL_MATCH",
+            "up -d --force-recreate",
+            24,
+            "service recreate/liveness gate failed",
+            2,
+        ),
+        ("FAKE_API_LIVENESS", "fail", 1, "health gate failed", 2),
+        ("FAKE_VERSION_SHA", "wrong-sha", 1, "/version reported wrong-sha", 2),
+        (
+            "FAKE_FLEET_MODEL_FITNESS",
+            "fail",
+            41,
+            "fake fleet-model fitness diagnostic",
+            2,
+        ),
+        (
+            "FAKE_RECEIPT_WRITE",
+            "fail",
+            52,
+            "fake receipt write diagnostic",
+            2,
+        ),
+        (
+            "FAKE_CAPTURE_WATCH_STATUS",
+            "unhealthy",
+            1,
+            "capture-watch gate: container unhealthy",
+            2,
+        ),
+    ],
+)
+def test_every_postmutation_gate_has_fail_closed_terminal_handling(
+    tmp_path: Path,
+    failure_env: str,
+    failure_value: str,
+    expected_status: int,
+    diagnostic: str,
+    expected_recreate_attempts: int,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "2" * 40
+    pin_path = _seed_previous_pin(root, previous_sha)
+    env[failure_env] = failure_value
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == expected_status
+    assert diagnostic in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    recreate = (
+        "up -d --force-recreate api worker watcher "
+        "heimdal-capture-watch companion-ui"
+    )
+    assert (
+        sum(event.endswith(recreate) for event in _deploy_events(env))
+        == expected_recreate_attempts
+    )
+    assert not (root / "ops/deployments/dev-latest.json").exists()
+
+
+def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "3" * 40
+    pin_path = _seed_previous_pin(root, previous_sha)
+    migration = root / "app/alembic/versions/999_forward_only.py"
+    migration.write_text('reversibility = "forward-only"\n', encoding="utf-8")
+    env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-forward-only")
+
+    assert result.returncode == 73
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert "forward-only migration" in result.stderr
+    assert "not auto-reversed" in result.stderr
+    assert "code and services only" in result.stderr
