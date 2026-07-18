@@ -566,6 +566,68 @@ def test_reconcile_purges_vector_for_present_non_indexable_source(tmp_path, monk
 
 
 @pytest.mark.pg
+def test_explicit_empty_selected_body_converges_through_doctor_and_reconcile(
+    tmp_path, monkeypatch
+) -> None:
+    """A durable empty vault-body selection must not fall through to raw frontmatter."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from click.testing import CliRunner
+
+    from app.cli import cli
+    from app.index.doctor import inspect_unembedded_pg_objects, reset_diagnose_cache
+    from app.stores import get_object_store
+    from app.stores.pg import _connect
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    try:
+        oid = uuid4()
+        payload = {
+            "content": "",
+            "text": "",
+            "raw_text": "---\ntitle: Panel only\n---\n%% AI:Start %%\ntransient\n%% AI:End %%\n",
+            "indexable_text_source": "content",
+        }
+        get_object_store().put(
+            oid,
+            kind="note",
+            source_ref="unit-test://explicit-empty-vault-body",
+            payload=payload,
+        )
+
+        reset_diagnose_cache()
+        assert inspect_unembedded_pg_objects(limit=10) == (0, [])
+        result = CliRunner().invoke(
+            cli,
+            ["index", "reconcile", "--backend", "pg", "--json", "--strict"],
+            env=dict(os.environ),
+        )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)
+        assert summary["reconciled"] == 0
+        assert summary["purged_non_indexable"] == 0
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) AS total FROM store_vector_index WHERE object_id = %s",
+                    (oid,),
+                )
+                assert cur.fetchone()["total"] == 0
+        reset_diagnose_cache()
+        assert inspect_unembedded_pg_objects(limit=10) == (0, [])
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
 def test_reconcile_purges_equal_empty_hash_panel_only_vector(tmp_path, monkeypatch) -> None:
     """A legacy panel vector is purgeable even when its hash already looks clean."""
     if not _pg_available():

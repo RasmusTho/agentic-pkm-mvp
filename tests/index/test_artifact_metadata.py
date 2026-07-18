@@ -62,6 +62,17 @@ def test_panel_only_canonicalization_collapses_whitespace_only_remainder() -> No
     assert canonicalize_indexable_text({"content": meaningful_whitespace}) == meaningful_whitespace
 
 
+def test_explicit_empty_selected_source_does_not_fall_through_to_raw_text() -> None:
+    assert canonicalize_indexable_text(
+        {
+            "content": "",
+            "text": "",
+            "raw_text": "---\ntitle: Panel only\n---\n",
+            "indexable_text_source": "content",
+        }
+    ) == ""
+
+
 def test_indexed_unit_payload_binds_aliases_and_hash_to_exact_text() -> None:
     identity = EmbeddingIdentity(provider="mock", model="mock-embedding", dim=3, normalize=True)
     canonical = "retained canonical bytes"

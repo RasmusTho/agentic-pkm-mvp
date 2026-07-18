@@ -14,6 +14,7 @@ from app.ingest.episode_ref import episode_ref_from_frontmatter
 # re-run, independent of a chunk-policy or model change.
 EMBED_PIPELINE_VERSION = "v1"
 INDEXABLE_TEXT_KEYS = ("content", "text", "raw_text")
+INDEXABLE_TEXT_SOURCE_KEY = "indexable_text_source"
 
 
 def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
@@ -58,6 +59,10 @@ def extract_indexable_text(payload: dict | None) -> str:
     and reconcile must not independently choose a different alias.
     """
     data = payload or {}
+    selected_key = data.get(INDEXABLE_TEXT_SOURCE_KEY)
+    if selected_key in INDEXABLE_TEXT_KEYS:
+        value = data.get(selected_key)
+        return "" if value is None else str(value)
     for key in INDEXABLE_TEXT_KEYS:
         value = data.get(key)
         if value:
@@ -169,4 +174,5 @@ __all__ = [
     "extract_indexable_text",
     "EMBED_PIPELINE_VERSION",
     "INDEXABLE_TEXT_KEYS",
+    "INDEXABLE_TEXT_SOURCE_KEY",
 ]

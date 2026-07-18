@@ -105,6 +105,7 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         # through to raw_text would re-index YAML/frontmatter for a panel-only
         # note whose authoritative body is empty.
         canonical_content = canonicalize_indexed_text(content)
+        payload["indexable_text_source"] = "content"
     else:
         canonical_content = canonicalize_indexable_text(payload)
     # Carry the note's vault-canonical episode_ref (ERE-03/ERE-05, invariant->producers): the

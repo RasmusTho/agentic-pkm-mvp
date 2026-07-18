@@ -283,6 +283,8 @@ def test_vault_event_preserves_explicitly_empty_canonical_body(monkeypatch):
     assert source is not None
     assert source.payload["content"] == ""
     assert source.payload["raw_text"].startswith("---\n")
+    assert source.payload["indexable_text_source"] == "content"
+    assert canonicalize_indexable_text(source.payload) == ""
     assert purge_calls == [(UUID(event["uuid"]), "markdown.semantic")]
 
 
