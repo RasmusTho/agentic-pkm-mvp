@@ -133,8 +133,10 @@ class CkmStore:
             initial_revision = 1 if legacy else 0 if not existing_tables else None
             self._initialize_or_validate_state(conn, initial_revision=initial_revision)
             citations_changed = self._backfill_public_identities(conn)
-            self._register_existing_public_identities(conn)
-            if existing_tables and not legacy and citations_changed:
+            identity_lifecycle_changed = self._register_existing_public_identities(conn)
+            if existing_tables and not legacy and (
+                citations_changed or identity_lifecycle_changed
+            ):
                 self._advance_state_revision(conn)
             for statement in CKM_DDL_STATEMENTS:
                 if "CREATE UNIQUE INDEX" in statement and (
@@ -246,30 +248,79 @@ class CkmStore:
             conn.execute(
                 "UPDATE ckm_evidence_edge SET public_id = ? WHERE id = ?", (public_id, row["id"])
             )
-        for row in conn.execute("SELECT * FROM ckm_evidence_edge_history ORDER BY history_id").fetchall():
+        history_identity_by_edge: dict[str, str] = {}
+        edge_by_history_identity: dict[str, str] = {}
+        for row in conn.execute(
+            "SELECT * FROM ckm_evidence_edge_history ORDER BY history_id"
+        ).fetchall():
             public_id = str(row["public_id"] or "")
-            if not public_id:
-                active = conn.execute(
-                    "SELECT public_id FROM ckm_evidence_edge WHERE id = ?", (row["edge_id"],)
+            active = conn.execute(
+                "SELECT public_id FROM ckm_evidence_edge WHERE id = ?",
+                (row["edge_id"],),
+            ).fetchone()
+            if active is not None:
+                active_public_id = str(active["public_id"])
+                history_public_id = CkmStore._edge_public_id(
+                    conn,
+                    str(row["artifact_id"]),
+                    str(row["capability_id"]),
+                    str(row["basis"]),
+                )
+                if history_public_id != active_public_id:
+                    raise CkmValidationError(
+                        "unsupported evidence-edge history identity conflicts with "
+                        f"active edge {row['edge_id']!r}"
+                    )
+                if public_id and public_id != active_public_id:
+                    raise CkmValidationError(
+                        "unsupported evidence-edge history identity conflicts with "
+                        f"active edge {row['edge_id']!r}"
+                    )
+                public_id = active_public_id
+            elif not public_id:
+                artifact = conn.execute(
+                    "SELECT public_id FROM ckm_artifact WHERE id = ?",
+                    (row["artifact_id"],),
                 ).fetchone()
-                if active:
-                    public_id = str(active["public_id"])
-                else:
-                    artifact = conn.execute(
-                        "SELECT public_id FROM ckm_artifact WHERE id = ?", (row["artifact_id"],)
-                    ).fetchone()
-                    artifact_public_id = (
-                        str(artifact["public_id"])
-                        if artifact
-                        else stable_public_id("artifact", str(row["source_ref"]))
-                    )
-                    public_id = CkmStore._edge_public_id_from_refs(
-                        artifact_public_id=artifact_public_id,
-                        capability_public_id=CkmStore._referenced_public_id(
-                            conn, "ckm_capability", str(row["capability_id"])
-                        ),
-                        basis=str(row["basis"]),
-                    )
+                artifact_public_id = (
+                    str(artifact["public_id"])
+                    if artifact
+                    else stable_public_id("artifact", str(row["source_ref"]))
+                )
+                public_id = CkmStore._edge_public_id_from_refs(
+                    artifact_public_id=artifact_public_id,
+                    capability_public_id=CkmStore._referenced_public_id(
+                        conn, "ckm_capability", str(row["capability_id"])
+                    ),
+                    basis=str(row["basis"]),
+                )
+            edge_id = str(row["edge_id"])
+            prior_public_id = history_identity_by_edge.get(edge_id)
+            if prior_public_id is not None and prior_public_id != public_id:
+                raise CkmValidationError(
+                    "unsupported history-only evidence edge maps one internal edge id "
+                    "to multiple public identities"
+                )
+            prior_edge_id = edge_by_history_identity.get(public_id)
+            if prior_edge_id is not None and prior_edge_id != edge_id:
+                raise CkmValidationError(
+                    "unsupported history-only evidence edge maps multiple internal edge ids "
+                    "to one public identity"
+                )
+            active_identity_owner = conn.execute(
+                "SELECT id FROM ckm_evidence_edge WHERE public_id = ?",
+                (public_id,),
+            ).fetchone()
+            if (
+                active_identity_owner is not None
+                and str(active_identity_owner["id"]) != edge_id
+            ):
+                raise CkmValidationError(
+                    "unsupported history-only evidence edge maps multiple internal edge ids "
+                    "to one public identity"
+                )
+            history_identity_by_edge[edge_id] = public_id
+            edge_by_history_identity[public_id] = edge_id
             conn.execute(
                 "UPDATE ckm_evidence_edge_history SET public_id = ? WHERE history_id = ?",
                 (public_id, row["history_id"]),
@@ -365,28 +416,104 @@ class CkmStore:
         return changed
 
     @staticmethod
-    def _register_existing_public_identities(conn: sqlite3.Connection) -> None:
+    def _register_existing_public_identities(conn: sqlite3.Connection) -> bool:
+        changed = False
         now = utc_now()
         for table, resource_type in (
             ("ckm_capability", "capability"),
             ("ckm_artifact", "artifact"),
             ("ckm_evidence_edge", "evidence_edge"),
-            ("ckm_evidence_edge_history", "evidence_edge"),
             ("ckm_assessment", "assessment"),
             ("ckm_finding", "finding"),
         ):
             for row in conn.execute(
                 f"SELECT DISTINCT public_id FROM {table} WHERE public_id != ''"
             ).fetchall():
+                existing = conn.execute(
+                    "SELECT resource_type, status FROM ckm_public_identity WHERE public_id = ?",
+                    (row["public_id"],),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        existing["resource_type"] != resource_type
+                        or existing["status"] != "active"
+                    ):
+                        raise CkmValidationError(
+                            f"active {resource_type} content conflicts with public identity "
+                            f"{row['public_id']!r}"
+                        )
+                    continue
                 conn.execute(
                     """
                     INSERT INTO ckm_public_identity
                         (public_id, resource_type, status, created_at, tombstoned_at)
                     VALUES (?, ?, 'active', ?, NULL)
-                    ON CONFLICT(public_id) DO NOTHING
                     """,
                     (row["public_id"], resource_type, now),
                 )
+                changed = True
+        for row in conn.execute(
+            """
+            SELECT h.public_id,
+                   MIN(h.created_at) AS created_at,
+                   MAX(h.retired_at) AS retired_at,
+                   MAX(CASE WHEN e.public_id IS NOT NULL THEN 1 ELSE 0 END) AS is_active
+            FROM ckm_evidence_edge_history AS h
+            LEFT JOIN ckm_evidence_edge AS e ON e.public_id = h.public_id
+            WHERE h.public_id != ''
+            GROUP BY h.public_id
+            ORDER BY h.public_id
+            """
+        ).fetchall():
+            desired_status = "active" if row["is_active"] else "tombstone"
+            existing = conn.execute(
+                "SELECT resource_type, status, created_at FROM ckm_public_identity "
+                "WHERE public_id = ?",
+                (row["public_id"],),
+            ).fetchone()
+            if existing is not None:
+                if existing["resource_type"] != "evidence_edge":
+                    raise CkmValidationError(
+                        "unsupported evidence-edge history lifecycle conflicts with "
+                        f"public identity {row['public_id']!r}"
+                    )
+                if existing["status"] == desired_status:
+                    continue
+                if desired_status == "tombstone" and existing["status"] == "active":
+                    created_at = min(
+                        timestamp
+                        for timestamp in (existing["created_at"], row["created_at"])
+                        if timestamp
+                    )
+                    conn.execute(
+                        """
+                        UPDATE ckm_public_identity
+                        SET status = 'tombstone', created_at = ?, tombstoned_at = ?
+                        WHERE public_id = ?
+                        """,
+                        (created_at, row["retired_at"] or now, row["public_id"]),
+                    )
+                    changed = True
+                    continue
+                raise CkmValidationError(
+                    "unsupported evidence-edge history lifecycle conflicts with "
+                    f"public identity {row['public_id']!r}"
+                )
+            conn.execute(
+                """
+                INSERT INTO ckm_public_identity
+                    (public_id, resource_type, status, created_at, tombstoned_at)
+                VALUES (?, 'evidence_edge', ?, ?, ?)
+                """,
+                (
+                    row["public_id"],
+                    desired_status,
+                    row["created_at"] or now,
+                    None if desired_status == "active" else row["retired_at"] or now,
+                ),
+            )
+            changed = True
+        return changed
 
     @staticmethod
     def _claim_public_identity(
