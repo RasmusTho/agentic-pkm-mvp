@@ -74,6 +74,19 @@ def upgrade() -> None:
 
             IF EXISTS (
                 SELECT 1
+                FROM public.objects legacy
+                JOIN public.store_objects canonical
+                  ON canonical.object_id = legacy.uuid
+                WHERE legacy.uuid IS NOT NULL
+                  AND legacy.id IS DISTINCT FROM legacy.uuid
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = '#3510 unsupported data: retained vault UUID already names a different canonical object',
+                    HINT = 'Reconcile the store_objects row keyed by objects.uuid with the retained objects.id identity, then rerun alembic upgrade head.';
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
                 FROM pg_constraint c
                 WHERE c.contype = 'f'
                   AND c.confrelid = 'public.objects'::regclass

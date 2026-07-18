@@ -43,8 +43,9 @@ class DomainObject:
     created_at: datetime
 
 
-# In-process mirror used by the explicit memory backend and as a read-through
-# cache. It is never a fallback for a failed durable write (I-S4).
+# In-process storage for the explicit memory backend. Durable backends always
+# read their own committed state: this dictionary has no transaction-aware
+# invalidation protocol and therefore must not act as a Postgres cache (I-S4).
 _MEMORY_STORE: dict[str, DomainObject] = {}
 
 
@@ -83,25 +84,20 @@ class ObjectStore:
 
     Fail-loud contract (KERNEL-03 / audit invariant I-S4): backend resolution
     and durable store errors propagate to the caller. The in-process mirror is
-    only the storage for the explicit memory backend and a read-through cache
-    for durable rows — never an error fallback.
+    only stores the explicit memory backend; durable reads always consult their
+    canonical store and never fall back to process memory.
     """
 
     def get_object(self, object_id: str, *, strict_backend: bool = False) -> DomainObject | None:
         # ``strict_backend`` is retained for signature compatibility; store
         # errors always propagate now.
-        if object_id in _MEMORY_STORE:
-            return _MEMORY_STORE[object_id]
-
         binding = resolve_object_store_port()
         if binding.backend == "memory":
             return _MEMORY_STORE.get(object_id)
         record = binding.store.get(UUID(str(object_id)))
         if not record:
-            return _MEMORY_STORE.get(object_id)
-        domain = _to_domain(record)
-        _MEMORY_STORE[domain.uuid] = domain
-        return domain
+            return None
+        return _to_domain(record)
 
     def save_object(
         self,
@@ -144,9 +140,9 @@ class ObjectStore:
                 source="object_store",
                 observation=payload_fingerprint(obj.payload),
             )
-        # Mirror only after the durable write succeeded — the mirror must never
-        # hold state the durable store does not (I-S4).
-        _MEMORY_STORE[obj.uuid] = obj
+        # Do not mirror durable state in-process: transactional producers can
+        # commit through another connection, so a process-local cache cannot be
+        # invalidated atomically with every canonical write.
 
     def list_objects(
         self,
@@ -157,10 +153,7 @@ class ObjectStore:
         if binding.backend == "memory":
             return _list_from_memory(kind, limit)
         rows = list(binding.store.list_objects(kind=kind, limit=limit))
-        out = [_to_domain(row if isinstance(row, dict) else dict(row)) for row in rows]
-        for domain in out:
-            _MEMORY_STORE[domain.uuid] = domain
-        return out
+        return [_to_domain(row if isinstance(row, dict) else dict(row)) for row in rows]
 
     def count_objects(self, kind: Optional[str] = None) -> int:
         binding = resolve_object_store_port()
@@ -189,9 +182,8 @@ def save_object_in_transaction(conn: Any, obj: DomainObject) -> None:
         source_ref=obj.source_ref,
         payload=dict(obj.payload or {}),
     )
-    # Evict instead of refreshing before commit: if a later statement rolls
-    # the surrounding transaction back, the next read safely reloads the old
-    # durable row instead of exposing uncommitted state from this process.
+    # Defensive cleanup for processes that populated this key while using the
+    # explicit memory backend. Postgres reads never consult this dictionary.
     _MEMORY_STORE.pop(str(obj.uuid), None)
 
 

@@ -590,3 +590,21 @@ def test_migration_rejects_ambiguous_retained_uuid_mapping(scratch_dsn: str) -> 
 
     with pytest.raises(Exception, match="duplicate non-null objects.uuid"):
         _upgrade("head")
+
+
+def test_migration_rejects_cross_key_canonical_identity_collision(scratch_dsn: str) -> None:
+    _upgrade(PRE_CUTOVER_REVISION)
+    retained_id = uuid.uuid4()
+    vault_uuid = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (retained_id, vault_uuid),
+        )
+        conn.execute(
+            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
+            (vault_uuid,),
+        )
+
+    with pytest.raises(Exception, match="retained vault UUID already names a different canonical"):
+        _upgrade("head")
