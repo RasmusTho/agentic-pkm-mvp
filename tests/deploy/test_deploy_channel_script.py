@@ -400,6 +400,28 @@ def test_failed_manual_rollback_retains_the_known_good_rollback_target(
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
 
 
+def test_manual_rollback_never_runs_target_forward_migration_authority(tmp_path: Path) -> None:
+    root, env, rollback_sha = _deploy_harness(tmp_path)
+    pre_rollback_sha = "7" * 40
+    pin_path = _seed_previous_pin(root, pre_rollback_sha)
+    migration = root / "app/alembic/versions/reversible_current_only.py"
+    migration.write_text(
+        'revision = "reversible_current_only"\n'
+        f'down_revision = "{rollback_sha[:12]}"\n'
+        'reversibility = "reversible"\n'
+        "def downgrade():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    result = _run_rollback(root, env, rollback_sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert not any(" stop api worker watcher" in event for event in events)
+    assert not any("exit-code-from migrate" in event for event in events)
+
+
 def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(
     tmp_path: Path,
 ) -> None:

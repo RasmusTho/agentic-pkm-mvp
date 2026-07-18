@@ -271,7 +271,10 @@ recreate_channel_services() {
 }
 
 apply_changed_migrations() {
-  if [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+  # Rollback migrations are governed separately by rollback-promotion. Running
+  # an older target image's `alembic upgrade head` against a newer stamped
+  # database would fail before the known-good runtime can be restored.
+  if [ "${action}" != "deploy" ] || [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
     return 0
   fi
 

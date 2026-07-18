@@ -132,7 +132,7 @@ class _FakeCursor:
             self.rowcount = 1
             return
         if normalized.startswith("select id::text, count(*) over ()"):
-            (uuid_value,) = params
+            canonical_alias, uuid_value = params
             row = next(
                 (
                     candidate
@@ -141,7 +141,11 @@ class _FakeCursor:
                 ),
                 None,
             )
-            self._fetchone = (row["id"], 1) if row else None
+            self._fetchone = (
+                (row["id"], 1, str(canonical_alias) in self.conn.store_objects)
+                if row
+                else None
+            )
             return
         if normalized.startswith("select exists(select 1 from store_objects"):
             canonical_id, _id, uuid_value, expected, _again = params
