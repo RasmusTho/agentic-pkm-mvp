@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/acquisition.requested.v1.schema.json",
+  "title": "acquisition.requested payload (v1)",
+  "description": "Payload of the acquisition.requested outbox event (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Event topics). Producer: app/knowledge_acquisition/acquisition_requests.py::AcquisitionRequests.enqueue — emitted exactly once, when the durable request row is first created. Idempotency key basis: (topic, request_id, policy_version). Lineage posture: no dispatched consumer.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["request_id", "source_kind", "item_ref", "policy_version", "priority", "trigger_count"],
+  "properties": {
+    "request_id": { "type": "string", "minLength": 1 },
+    "source_kind": { "type": "string", "minLength": 1 },
+    "item_ref": { "type": "string", "minLength": 1 },
+    "policy_version": { "type": "integer", "minimum": 1 },
+    "priority": { "type": "string", "enum": ["high", "normal"] },
+    "trigger_count": { "type": "integer", "minimum": 1 }
+  }
+}

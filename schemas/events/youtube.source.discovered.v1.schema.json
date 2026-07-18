@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/youtube.source.discovered.v1.schema.json",
+  "title": "youtube.source.discovered payload (v1)",
+  "description": "Payload of the youtube.source.discovered outbox event (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Event topics). Producer: app/knowledge_acquisition/acquisition_requests.py::AcquisitionRequests.enqueue — a not-previously-disposed item was seen in a synced source. Idempotency key basis: (topic, binding_id, item_ref), so re-discovery of the same item in the same source dedups. Lineage posture: no dispatched consumer.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["binding_id", "collection_kind", "collection_ref", "item_ref", "trigger"],
+  "properties": {
+    "binding_id": { "type": "string", "minLength": 1 },
+    "collection_kind": { "type": "string", "minLength": 1 },
+    "collection_ref": { "type": "string", "minLength": 1 },
+    "item_ref": { "type": "string", "minLength": 1 },
+    "playlist_item_id": { "type": ["string", "null"] },
+    "trigger": { "type": "string", "enum": ["poll", "backfill", "manual"] }
+  }
+}
