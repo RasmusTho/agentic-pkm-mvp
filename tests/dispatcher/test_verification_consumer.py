@@ -1526,6 +1526,75 @@ def _closure_evidence_with_graphql_event(
     )
 
 
+def _closure_evidence_with_timestamp_sources(
+    *,
+    closed_at: str,
+    event_created_at: str,
+    repository_created_at: str,
+    actor: str = "verification-closer",
+    closer_number: int | None = 3603,
+    closer_repository: str = REPO,
+    closer_sha: str | None = "b" * 40,
+    repository_event: str = "closed",
+) -> dict[str, object]:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if command[:3] == ["gh", "api", "graphql"]:
+            return Result(
+                _graphql_result(
+                    _graphql_issue(
+                        3603,
+                        created_at=closed_at,
+                        event=_graphql_closed_event(
+                            event_created_at,
+                            actor=actor,
+                            closer_number=closer_number,
+                            closer_repository=closer_repository,
+                            closer_sha=closer_sha,
+                        ),
+                    )
+                )
+            )
+        endpoint = command[-1]
+        if endpoint == f"repos/{REPO}/issues/events?per_page=100&page=1":
+            return Result(
+                [
+                    _repository_issue_event(
+                        20,
+                        number=3603,
+                        created_at=repository_created_at,
+                        event=repository_event,
+                    ),
+                    _repository_issue_event(
+                        19,
+                        number=4998,
+                        created_at="2026-07-14T23:59:59Z",
+                        event="labeled",
+                    ),
+                ]
+            )
+        if endpoint == f"repos/{REPO}/issues/3603":
+            return Result(_rest_issue(3603))
+        raise AssertionError(endpoint)
+
+    return dict(
+        GhCliVerificationSource(runner=runner).issue_set_closure_evidence(
+            REPO,
+            3603,
+            issue_numbers=[3603],
+            observed_issue_numbers=[],
+            merged_at="2026-07-15T00:00:00Z",
+            merge_commit_sha="b" * 40,
+            actor_login="verification-closer",
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("closer_number", "closed_by_pull_requests"),
     [(None, []), (3603, [3603])],
@@ -1551,6 +1620,108 @@ def test_gh_source_accepts_only_explicit_or_exact_target_expected_closure(
             "state": "closed",
         }
     ]
+
+
+def test_gh_source_accepts_one_second_closed_at_event_skew_with_matching_rest_event(
+) -> None:
+    evidence = _closure_evidence_with_timestamp_sources(
+        closed_at="2026-07-15T00:00:02Z",
+        event_created_at="2026-07-15T00:00:03Z",
+        repository_created_at="2026-07-15T00:00:03Z",
+    )
+
+    assert evidence["observed_closing_issues"] == [3603]
+    assert evidence["issue_evidence"] == [
+        {
+            "closed_at": "2026-07-15T00:00:02Z",
+            "closed_by_delivery": True,
+            "closed_by_pull_requests": [3603],
+            "number": 3603,
+            "state": "closed",
+        }
+    ]
+
+
+def test_gh_source_rejects_closed_at_event_skew_over_one_second() -> None:
+    with pytest.raises(
+        RuntimeError, match="GraphQL issue closure timestamp mismatch"
+    ):
+        _closure_evidence_with_timestamp_sources(
+            closed_at="2026-07-15T00:00:01Z",
+            event_created_at="2026-07-15T00:00:03Z",
+            repository_created_at="2026-07-15T00:00:03Z",
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_error", "expected_observed"),
+    [
+        (
+            {"repository_created_at": "2026-07-15T00:00:02Z"},
+            "does not match REST closure",
+            None,
+        ),
+        (
+            {"repository_event": "labeled"},
+            "matching REST closure",
+            None,
+        ),
+        (
+            {"closed_at": "2026-07-15T00:00:02"},
+            "closure timestamp mismatch",
+            None,
+        ),
+        (
+            {"actor": "unrelated-closer"},
+            "closer actor mismatch",
+            None,
+        ),
+        (
+            {"closer_repository": "other/repository"},
+            "closer identity mismatch",
+            None,
+        ),
+        (
+            {"closer_sha": "c" * 40},
+            "closer identity mismatch",
+            None,
+        ),
+        (
+            {"closer_number": 4999},
+            None,
+            [],
+        ),
+    ],
+    ids=[
+        "rest-event-race",
+        "missing-rest-event",
+        "naive-closed-at",
+        "actor",
+        "closer-repository",
+        "closer-sha",
+        "foreign-pr",
+    ],
+)
+def test_gh_source_bounded_timestamp_skew_preserves_attribution_fences(
+    overrides: dict[str, object],
+    expected_error: str | None,
+    expected_observed: list[int] | None,
+) -> None:
+    arguments: dict[str, object] = {
+        "closed_at": "2026-07-15T00:00:02Z",
+        "event_created_at": "2026-07-15T00:00:03Z",
+        "repository_created_at": "2026-07-15T00:00:03Z",
+    }
+    arguments.update(overrides)
+
+    if expected_error is not None:
+        with pytest.raises(RuntimeError, match=expected_error):
+            _closure_evidence_with_timestamp_sources(**arguments)
+        return
+
+    evidence = _closure_evidence_with_timestamp_sources(**arguments)
+    assert evidence["observed_closing_issues"] == expected_observed
+    assert evidence["issue_evidence"][0]["closed_by_delivery"] is False
 
 
 def test_foreign_pr_closer_cannot_complete_authenticated_expected_issue(
