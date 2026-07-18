@@ -47,7 +47,7 @@ APP_ROOT = REPO_ROOT / "app"
 # NEVER run against a real vault -- they are not part of this census.
 
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 175): (
+    ("app/services/indexer.py", 176): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize)."
@@ -1469,12 +1469,12 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 175): (
+    ("app/services/indexer.py", 176): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge."
     ),
-    ("app/services/indexer.py", 255): (
+    ("app/services/indexer.py", 256): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index."
     ),

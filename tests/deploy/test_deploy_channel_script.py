@@ -370,10 +370,10 @@ def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
     result = _run_deploy(root, env, sha, "--ack-forward-only")
 
     assert result.returncode == 73
-    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
     assert "forward-only migration" in result.stderr
     assert "not auto-reversed" in result.stderr
-    assert "code and services only" in result.stderr
+    assert "target pin is retained for a compatible forward fix" in result.stderr
 
 
 def test_failed_manual_rollback_retains_the_known_good_rollback_target(

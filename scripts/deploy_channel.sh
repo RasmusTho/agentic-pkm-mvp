@@ -146,6 +146,9 @@ resolve_target_sha() {
 
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
+MIGRATIONS_CHECKED=0
+FORWARD_ONLY_COUNT=0
+FORWARD_ONLY_MIGRATION_APPLIED=0
 
 list_changed_migrations() {
   local from_sha="$1" to_sha="$2"
@@ -211,6 +214,8 @@ PY
   }
   forward_count="$("${PYTHON}" -c 'import json,sys; print(len(json.loads(sys.stdin.read()).get("forward_only", [])))' <<<"${receipt_json}")"
   echo "migration gate ok: ${#migration_paths[@]} migration(s), forward_only=${forward_count}"
+  MIGRATIONS_CHECKED="${#migration_paths[@]}"
+  FORWARD_ONLY_COUNT="${forward_count}"
   MIGRATION_RECEIPT_JSON="${receipt_json}"
   export MIGRATION_RECEIPT_JSON
 }
@@ -265,13 +270,29 @@ recreate_channel_services() {
   compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
 }
 
+apply_changed_migrations() {
+  if [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+    return 0
+  fi
+
+  # A pre-cutover producer blocked on the migration's table lock must not be
+  # allowed to resume after commit and create a legacy-only row. Drain every
+  # runtime writer before Alembic takes its snapshot, then run the one-shot
+  # migration authority explicitly before any target runtime is recreated.
+  compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
+  compose up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate || return $?
+  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
+    FORWARD_ONLY_MIGRATION_APPLIED=1
+  fi
+}
+
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
   if [ -n "${MIGRATION_RECEIPT_JSON:-}" ]; then
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
-  if [ "${forward_only_count}" != "0" ]; then
-    echo "${reason} (status ${original_status}); forward-only migration(s) were applied, so the target pin is retained for a compatible forward fix instead of restoring a potentially schema-incompatible previous image" >&2
+  if [ "${forward_only_count}" != "0" ] && [ "${FORWARD_ONLY_MIGRATION_APPLIED}" = "1" ]; then
+    echo "${reason} (status ${original_status}); forward-only migration(s) are not auto-reversed; they were applied, so the target pin is retained for a compatible forward fix instead of restoring a potentially schema-incompatible previous image" >&2
     return 0
   fi
   echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
@@ -590,6 +611,7 @@ postdeploy_smoke_gate() {
 
 run_postmutation_gate "image pull failed" \
   compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+run_postmutation_gate "migration execution failed" apply_changed_migrations || exit $?
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?
 rollback_target_recreated=1
