@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from app.db.db import conn_rw
+from app.db.decisions_schema import assert_decisions_schema
 from app.receipts.decision_receipt_log import iter_decision_receipts
-from app.stores.postgres import assert_decisions_schema
 
 
 @dataclass
