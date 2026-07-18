@@ -25,9 +25,12 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "scripts/lib").mkdir(parents=True)
     (root / "config/deploy").mkdir(parents=True)
     (root / "app/alembic/versions").mkdir(parents=True)
+    (root / "app/release_channels").mkdir(parents=True)
     (root / "ops/deployments").mkdir(parents=True)
 
     for relative in (
+        "app/release_channels/__init__.py",
+        "app/release_channels/reversibility.py",
         "scripts/deploy_channel.sh",
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/lib/deploy_channel_compose.sh",
@@ -57,7 +60,7 @@ if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MA
 fi
 case "$*" in
   *" ps -q "*) printf '%s\\n' fake-capture-watch ;;
-  inspect*) printf '%s\\n' healthy ;;
+  inspect*) printf '%s\\n' "${{FAKE_CAPTURE_WATCH_STATUS:-healthy}}" ;;
 esac
 exit 0
 """,
@@ -68,8 +71,14 @@ exit 0
 set -eu
 printf 'curl %s\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
 case "$*" in
-  *"/version"*) printf '{"git_sha":"%s"}\\n' "$FAKE_SHA" ;;
-  *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "$FAKE_SHA" ;;
+  *"/version"*)
+    if [ "${FAKE_VERSION_CURL:-pass}" = "fail" ]; then
+      echo 'fake version curl diagnostic' >&2
+      exit "${FAKE_VERSION_CURL_RC:-7}"
+    fi
+    printf '{"git_sha":"%s"}\\n' "${FAKE_VERSION_SHA:-$FAKE_SHA}"
+    ;;
+  *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}" ;;
   *"/healthz"*)
     if [ "${FAKE_API_LIVENESS:-pass}" = "fail" ]; then
       exit 22
@@ -78,6 +87,17 @@ case "$*" in
     ;;
   *) printf '{"ok":true}\\n' ;;
 esac
+""",
+    )
+    _write_executable(
+        bin_dir / "cp",
+        """#!/usr/bin/env bash
+set -eu
+if [ "${FAKE_PROMOTION_RECEIPT_COPY:-pass}" = "fail" ] && [[ "${2:-}" == */ops/promotions/* ]]; then
+  echo 'fake promotion receipt copy diagnostic' >&2
+  exit "${FAKE_PROMOTION_RECEIPT_COPY_RC:-61}"
+fi
+exec /bin/cp "$@"
 """,
     )
     python_wrapper = bin_dir / "python"
@@ -110,11 +130,23 @@ if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "pytest" ]; then
         ;;
     esac
   fi
+  if [ "${{FAKE_POSTDEPLOY_SMOKE:-pass}}" = "fail" ]; then
+    echo 'fake postdeploy smoke diagnostic' >&2
+    exit "${{FAKE_POSTDEPLOY_SMOKE_RC:-73}}"
+  fi
   exit 0
 fi
 if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "app.release_channels.fleet_model_fitness" ]; then
+  if [ "${{FAKE_FLEET_MODEL_FITNESS:-pass}}" = "fail" ]; then
+    echo 'fake fleet-model fitness diagnostic' >&2
+    exit "${{FAKE_FLEET_MODEL_FITNESS_RC:-41}}"
+  fi
   printf '%s\\n' '{{"ok":true}}'
   exit 0
+fi
+if [ "${{1:-}}" = "-" ] && [[ "${{2:-}}" == */ops/deployments/* ]] && [ "${{FAKE_RECEIPT_WRITE:-pass}}" = "fail" ]; then
+  echo 'fake receipt write diagnostic' >&2
+  exit "${{FAKE_RECEIPT_WRITE_RC:-52}}"
 fi
 exec {sys.executable!s} "$@"
 """,
@@ -452,7 +484,7 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert "service recreate/liveness gate failed" in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     events = _deploy_events(env)
@@ -487,7 +519,7 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
-    assert result.returncode != 0
+    assert result.returncode == 24
     assert "service recreate/liveness gate failed" in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     events = _deploy_events(env)
