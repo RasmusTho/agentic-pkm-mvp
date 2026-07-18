@@ -122,7 +122,9 @@ every participating repository on the host, and reconciling or explicitly retain
 stores. The marker is bound to the actual hostname and numeric UID. `participating_repos` names
 the bounded logical inventory; `participating_roots` lists the same number of unique, resolved,
 absolute local roots in matching inventory order, and the current working directory must equal one
-of those exact roots. A broad ancestor cannot stand in for nested repositories. The UUID
+of those exact roots. Every listed root is recursively inventoried for nested
+`runtime/builderops/builderops.sqlite3` stores without following symlinks, so a broad secondary
+root cannot hide a newer nested legacy store. The UUID
 `inventory_epoch` and timezone-aware timestamp identify the
 reconciliation pass. A future timestamp, a legacy DB written after that pass, a copied host/user
 identity, an unlisted current root, wrong ownership/mode, or a missing/malformed field fails before

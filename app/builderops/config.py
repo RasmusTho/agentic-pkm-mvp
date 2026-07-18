@@ -93,6 +93,30 @@ def current_user_id() -> str:
     return str(os.getuid())
 
 
+def _legacy_store_mtimes(root: Path) -> tuple[float, ...]:
+    """Inventory legacy stores recursively without following symlinked trees."""
+
+    mtimes: list[float] = []
+    for directory, child_dirs, files in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        child_dirs[:] = [
+            name for name in child_dirs if not (directory_path / name).is_symlink()
+        ]
+        if (
+            directory_path.name == "builderops"
+            and directory_path.parent.name == "runtime"
+            and DEFAULT_DB_NAME in files
+        ):
+            candidate = directory_path / DEFAULT_DB_NAME
+            candidate_stat = candidate.lstat()
+            if stat.S_ISLNK(candidate_stat.st_mode) or not stat.S_ISREG(
+                candidate_stat.st_mode
+            ):
+                raise ValueError
+            mtimes.append(candidate_stat.st_mtime)
+    return tuple(mtimes)
+
+
 def _validate_host_cutover_ack(state_dir: Path) -> None:
     """Require bounded host-global evidence before implicit store selection."""
 
@@ -117,12 +141,9 @@ def _validate_host_cutover_ack(state_dir: Path) -> None:
         cwd_is_in_inventory = cwd in roots
         latest_legacy_write = max(
             (
-                datetime.fromtimestamp(
-                    (root / "runtime" / "builderops" / DEFAULT_DB_NAME).stat().st_mtime,
-                    tz=timezone.utc,
-                )
+                datetime.fromtimestamp(mtime, tz=timezone.utc)
                 for root in roots
-                if (root / "runtime" / "builderops" / DEFAULT_DB_NAME).is_file()
+                for mtime in _legacy_store_mtimes(root)
             ),
             default=None,
         )

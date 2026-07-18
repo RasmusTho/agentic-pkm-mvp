@@ -839,3 +839,41 @@ def test_inquiry_run_dry_run_uses_common_runner(tmp_path: Path) -> None:
     assert payload["dry_run"] is True
     assert payload["unavailable_roles"] == ["fable", "gpt_codex"]
     assert ModelInquiryService.from_env(env).trace("inq_test_cli_run") == before
+
+
+def test_inquiry_start_honors_group_db_path_without_host_ack(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault"
+    vault.mkdir()
+    question = tmp_path / "question.md"
+    question.write_text("Which store should this inquiry use?", encoding="utf-8")
+    explicit_db = tmp_path / "pinned" / "builderops.sqlite3"
+    env = {
+        "BUILDEROPS_VAULT_ROOT": str(vault),
+        "HOME": str(tmp_path / "home-without-cutover-marker"),
+    }
+
+    result = CliRunner().invoke(
+        builderops_root,
+        [
+            "builderops",
+            "--db-path",
+            str(explicit_db),
+            "inquiry",
+            "start",
+            "--question-file",
+            str(question),
+            "--workflow",
+            "fable-gpt-architecture",
+            "--inquiry-id",
+            "inq_test_explicit_db_bypass",
+            "--json",
+        ],
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        json.loads(result.output)["inquiry"]["inquiry_id"]
+        == "inq_test_explicit_db_bypass"
+    )

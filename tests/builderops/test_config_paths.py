@@ -295,6 +295,35 @@ def test_host_ack_rejects_broad_parent_that_hides_newer_nested_legacy_store(
         builderops_config._validate_host_cutover_ack(state_dir)
 
 
+def test_host_ack_rejects_broad_secondary_root_with_newer_nested_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_repo = tmp_path / "repo-a"
+    broad_root = tmp_path / "workspace-b"
+    nested_repo = broad_root / "repo-b"
+    current_repo.mkdir()
+    nested_repo.mkdir(parents=True)
+    legacy_db = nested_repo / "runtime" / "builderops" / "builderops.sqlite3"
+    legacy_db.parent.mkdir(parents=True)
+    legacy_db.write_bytes(b"SQLite format 3\x00")
+    acknowledged_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    newer = acknowledged_at + timedelta(seconds=30)
+    os.utime(legacy_db, (newer.timestamp(), newer.timestamp()))
+    state_dir = tmp_path / "host-state" / "builderops"
+    monkeypatch.chdir(current_repo)
+
+    _write_cutover_ack(
+        state_dir,
+        ["owner/repo-a", "owner/workspace-b"],
+        roots=[current_repo, broad_root],
+        acknowledged_at=acknowledged_at,
+    )
+
+    with pytest.raises(ValueError, match="fresh inventory epoch"):
+        builderops_config._validate_host_cutover_ack(state_dir)
+
+
 def test_host_ack_rejects_future_timestamp_and_permissive_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
