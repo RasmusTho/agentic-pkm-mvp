@@ -13,6 +13,8 @@ from app.ingest.episode_ref import episode_ref_from_frontmatter
 # changes in a way that would make existing vectors stale relative to a
 # re-run, independent of a chunk-policy or model change.
 EMBED_PIPELINE_VERSION = "v1"
+INDEXABLE_TEXT_KEYS = ("content", "text", "raw_text")
+INDEXABLE_TEXT_SOURCE_KEY = "indexable_text_source"
 
 
 def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
@@ -49,6 +51,52 @@ def compute_content_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+def extract_indexable_text(payload: dict | None) -> str:
+    """Select source text with the same precedence used by index rebuild.
+
+    ``store_objects`` can carry compatibility aliases simultaneously.  The
+    producer contract is content-first, then text, then raw_text; diagnosis
+    and reconcile must not independently choose a different alias.
+    """
+    data = payload or {}
+    selected_key = data.get(INDEXABLE_TEXT_SOURCE_KEY)
+    if selected_key in INDEXABLE_TEXT_KEYS:
+        value = data.get(selected_key)
+        return "" if value is None else str(value)
+    for key in INDEXABLE_TEXT_KEYS:
+        value = data.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def canonicalize_indexable_text(payload: dict | None) -> str:
+    """Return the exact producer text used for embedding and provenance."""
+    return canonicalize_indexed_text(extract_indexable_text(payload))
+
+
+def canonicalize_indexed_text(text: str) -> str:
+    """Strip panels while preserving meaningful source whitespace.
+
+    Panel removal can leave only separator newlines around an otherwise
+    panel-only note.  Such a remainder has no semantic bytes to embed and must
+    converge with contentless source handling, while text-bearing notes retain
+    their exact post-panel bytes.
+    """
+    canonical = strip_ai_panels(text or "")
+    return canonical if canonical.strip() else ""
+
+
+def compute_indexed_content_hash(text: str) -> str:
+    """Hash text with the producer's AI-panel canonicalization."""
+    return compute_content_hash(canonicalize_indexed_text(text))
+
+
+def compute_payload_content_hash(payload: dict | None) -> str:
+    """Hash the producer-selected text from a durable object payload."""
+    return compute_content_hash(canonicalize_indexable_text(payload))
+
+
 def build_indexed_unit_payload(
     *,
     object_id: Any,
@@ -57,15 +105,22 @@ def build_indexed_unit_payload(
     payload: dict | None,
     text: str | None = None,
     embedding_identity: Any = None,
+    bind_text_aliases: bool = True,
 ) -> dict:
     payload_out = dict(payload or {})
     safe_object_id = str(object_id)
     safe_source_ref = str(source_ref)
     safe_kind = str(kind or "note")
 
-    if text is not None:
-        payload_out.setdefault("text", text)
-        payload_out.setdefault("content", text)
+    canonical_text = canonicalize_indexed_text(
+        text if text is not None else extract_indexable_text(payload_out)
+    )
+    if text is not None and bind_text_aliases:
+        # A derived vector payload must expose exactly the bytes that produced
+        # both its embedding and provenance hash.  Assignment is intentional:
+        # compatibility aliases copied from a source row may be stale/raw.
+        payload_out["text"] = canonical_text
+        payload_out["content"] = canonical_text
     payload_out.setdefault("object_type", safe_kind)
     payload_out.setdefault("system_intent", "learn")
     payload_out.setdefault("emergent_tags", [])
@@ -99,8 +154,6 @@ def build_indexed_unit_payload(
     # note (idempotent no-op on panel-free text). Hashing the enriched body
     # instead makes content_hash non-deterministic and breaks reingest
     # idempotence + cold-rebuild (registry_chain).
-    embedded_text = text if text is not None else str(payload_out.get("text") or payload_out.get("content") or "")
-    canonical_text = strip_ai_panels(embedded_text)
     payload_out["provenance"] = {
         "source_ref": safe_source_ref,
         "content_hash": compute_content_hash(canonical_text),
@@ -113,6 +166,13 @@ def build_indexed_unit_payload(
 
 __all__ = [
     "build_indexed_unit_payload",
+    "canonicalize_indexable_text",
+    "canonicalize_indexed_text",
     "compute_content_hash",
+    "compute_indexed_content_hash",
+    "compute_payload_content_hash",
+    "extract_indexable_text",
     "EMBED_PIPELINE_VERSION",
+    "INDEXABLE_TEXT_KEYS",
+    "INDEXABLE_TEXT_SOURCE_KEY",
 ]

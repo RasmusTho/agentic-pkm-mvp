@@ -11,9 +11,14 @@ from uuid import UUID
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
-from app.index.artifact_metadata import build_indexed_unit_payload
+from app.index.artifact_metadata import (
+    build_indexed_unit_payload,
+    canonicalize_indexable_text,
+    compute_payload_content_hash,
+)
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app import objects as domain_objects
+from app.outbox.events import DEFAULT_EMBEDDING_VIEW
 from app.stores import get_vector_index, resolve_store_backend
 
 FAILURES_PATH_ENV = "INDEX_REBUILD_FAILURES_PATH"
@@ -38,12 +43,7 @@ _RETRYABLE_NAMES = {"SerializationFailure", "DeadlockDetected", "TooManyRequests
 
 
 def _extract_text(payload: dict | None) -> str:
-    data = payload or {}
-    for key in ("content", "text", "raw_text"):
-        val = data.get(key)
-        if val:
-            return str(val)
-    return ""
+    return canonicalize_indexable_text(payload)
 
 
 def _load_objects(limit: int | None) -> Tuple[List[domain_objects.DomainObject], str]:
@@ -272,6 +272,10 @@ def rebuild(
             summary["skipped"] = int(summary["skipped"]) + 1
             continue
 
+        indexed_payload = dict(domain_obj.payload or {})
+        indexed_payload["content"] = text
+        indexed_payload["text"] = text
+
         embedding: list | None = None
         try:
             embedding = embed_with_retry(
@@ -320,7 +324,7 @@ def rebuild(
                     object_id=UUID(str(domain_obj.uuid)),
                     kind=str(domain_obj.kind or "note"),
                     source_ref=str(domain_obj.source_ref or ""),
-                    payload=dict(domain_obj.payload or {}),
+                    payload=indexed_payload,
                     text=text,
                     embedding_identity=identity,
                 ),
@@ -408,7 +412,6 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
     ``inspect_pg_content_hash_staleness`` reports them separately as
     ``unstamped_count`` for visibility.
     """
-    from app.index.artifact_metadata import compute_content_hash
     from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
@@ -418,7 +421,7 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
                        v.payload AS payload, v.provider AS provider, v.model AS model,
                        v.dim AS dim, v.normalize AS normalize,
                        v.payload->'provenance'->>'content_hash' AS stored_hash,
-                       COALESCE(o.payload->>'text', o.payload->>'content', '') AS current_text
+                       o.payload AS current_payload
                 FROM store_vector_index AS v
                 JOIN store_objects AS o ON o.object_id = v.object_id
                 WHERE v.payload->'provenance'->>'content_hash' IS NOT NULL
@@ -430,19 +433,56 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
     stale = [
         row
         for row in candidates
-        if compute_content_hash(row.get("current_text") or "") != row.get("stored_hash")
+        if compute_payload_content_hash(dict(row.get("current_payload") or {}))
+        != row.get("stored_hash")
     ]
     if limit is not None:
         stale = stale[:limit]
     return stale
 
 
-def _reconcile_object_text(object_id, vector_payload: dict | None) -> str:
-    """Resolve the source text to re-embed for a row.
+def _present_non_indexable_rows(limit: int | None) -> List[dict]:
+    """Return derived rows whose present source now has no canonical text.
+
+    This candidate class is independent of identity and content hash.  Legacy
+    panel-bearing vectors can already carry the current primary identity and a
+    hash of the empty canonical body, so neither ordinary reconcile selector
+    can prove that their stale retrieval bytes must be purged.
+    """
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT v.object_id AS object_id, v.kind AS kind,
+                       v.source_ref AS source_ref, v.payload AS payload,
+                       v.provider AS provider, v.model AS model,
+                       v.dim AS dim, v.normalize AS normalize,
+                       o.payload AS current_payload
+                FROM store_vector_index AS v
+                JOIN store_objects AS o ON o.object_id = v.object_id
+                ORDER BY v.object_id
+                """
+            )
+            candidates = list(cur.fetchall())
+
+    rows = [
+        row
+        for row in candidates
+        if not canonicalize_indexable_text(dict(row.get("current_payload") or {}))
+    ]
+    if limit is not None:
+        rows = rows[:limit]
+    return rows
+
+
+def _reconcile_object_payload(object_id, vector_payload: dict | None) -> Tuple[dict, bool]:
+    """Resolve the authoritative payload to re-embed for a row.
 
     Prefer the authoritative ``store_objects`` payload (the durable object of
-    record); fall back to the text carried in the vector-index row payload when the
-    object row is absent, so an orphaned index row can still be reconciled.
+    record); fall back to the vector-index row payload when the object row is
+    absent, so an orphaned index row can still be reconciled.
     """
     from app.stores.pg import _connect  # local import: pg backend is optional
 
@@ -453,11 +493,9 @@ def _reconcile_object_text(object_id, vector_payload: dict | None) -> str:
                 (object_id,),
             )
             row = cur.fetchone()
-    if row and row.get("payload"):
-        text = _extract_text(dict(row["payload"]))
-        if text:
-            return text
-    return _extract_text(vector_payload or {})
+    if row is not None:
+        return dict(row.get("payload") or {}), True
+    return dict(vector_payload or {}), False
 
 
 @index.command("reconcile", help="Re-embed non-primary-identity vectors under the primary identity (converge a mixed index).")
@@ -490,8 +528,11 @@ def reconcile(
     the run is interrupted (SIGINT, crash, embed failure), already-processed rows carry
     the primary identity and unprocessed rows retain their prior (fallback) identity —
     the index is still mixed but never missing a vector or partially written. A row is
-    never deleted; a failed re-embed leaves the original fallback vector in place and is
-    dead-lettered for retry.
+    never deleted because an embed/upsert failed; a failed re-embed leaves the original
+    fallback vector in place and is dead-lettered for retry. The one semantic deletion
+    is a derived vector
+    whose present authoritative source has become canonically non-indexable;
+    explicit reconcile purges that row so retrieval cannot serve stale bytes.
     """
     if backend:
         os.environ["STORE_BACKEND"] = backend
@@ -500,7 +541,9 @@ def reconcile(
     summary: Dict[str, object] = {
         "backend": resolved_backend,
         "total_mismatched": 0,
+        "total_present_non_indexable": 0,
         "reconciled": 0,
+        "purged_non_indexable": 0,
         "skipped": 0,
         "errors": [],
     }
@@ -535,9 +578,15 @@ def reconcile(
     stale_content_rows = [
         row for row in _stale_content_hash_rows(limit) if row["object_id"] not in seen_ids
     ]
-    rows = identity_rows + stale_content_rows
+    seen_ids.update(row["object_id"] for row in stale_content_rows)
+    present_non_indexable_rows = _present_non_indexable_rows(limit)
+    additional_non_indexable_rows = [
+        row for row in present_non_indexable_rows if row["object_id"] not in seen_ids
+    ]
+    rows = identity_rows + stale_content_rows + additional_non_indexable_rows
     summary["total_mismatched"] = len(identity_rows)
     summary["total_stale_content_hash"] = len(stale_content_rows)
+    summary["total_present_non_indexable"] = len(present_non_indexable_rows)
 
     if not as_json:
         click.echo(
@@ -546,9 +595,10 @@ def reconcile(
         )
         click.echo(f"Mismatched rows: {len(identity_rows)}")
         click.echo(f"Stale content-hash rows: {len(stale_content_rows)}")
+        click.echo(f"Present non-indexable source rows: {len(present_non_indexable_rows)}")
 
     if dry_run:
-        summary["message"] = "Dry run complete; no vectors re-embedded."
+        summary["message"] = "Dry run complete; no vectors re-embedded or purged."
         _emit_reconcile_summary(summary, as_json)
         return
 
@@ -560,18 +610,75 @@ def reconcile(
         kind = str(row.get("kind") or "note")
         source_ref = str(row.get("source_ref") or "")
         vector_payload = dict(row.get("payload") or {})
+        source_payload, authoritative_source_present = _reconcile_object_payload(
+            object_id, vector_payload
+        )
         domain_obj = domain_objects.DomainObject(
             uuid=str(object_id),
             kind=kind,
             source_ref=source_ref,
-            payload=vector_payload,
+            payload=source_payload,
             created_at=datetime.now(timezone.utc),
         )
 
-        text = _reconcile_object_text(object_id, vector_payload)
+        text = _extract_text(source_payload)
         if not text:
-            summary["skipped"] = int(summary["skipped"]) + 1
-            continue
+            if authoritative_source_present:
+                try:
+                    classification = (
+                        index_store.purge_vector_if_present_source_non_indexable(
+                            UUID(str(object_id)), view=DEFAULT_EMBEDDING_VIEW
+                        )
+                    )
+                except Exception as purge_exc:
+                    _record_failure(
+                        summary,
+                        path,
+                        identity_info,
+                        domain_obj,
+                        "purge",
+                        purge_exc,
+                        1,
+                        False,
+                    )
+                    continue
+
+                if classification.source_present and not classification.source_indexable:
+                    summary["purged_non_indexable"] = int(
+                        summary["purged_non_indexable"]
+                    ) + int(classification.purged)
+                    continue
+
+                if classification.source_present:
+                    # The source became indexable after the candidate read.
+                    # Reclassify and embed the locked-read payload instead of
+                    # deleting its derived row from stale evidence.
+                    source_payload = dict(classification.source_payload or {})
+                else:
+                    # The source disappeared after the candidate read.  The
+                    # present-source purge contract no longer applies; retain
+                    # and, where possible, reconcile from vector fallback.
+                    source_payload = vector_payload
+                domain_obj = domain_objects.DomainObject(
+                    uuid=str(object_id),
+                    kind=kind,
+                    source_ref=source_ref,
+                    payload=source_payload,
+                    created_at=datetime.now(timezone.utc),
+                )
+                text = _extract_text(source_payload)
+
+            if not text:
+                summary["skipped"] = int(summary["skipped"]) + 1
+                continue
+
+        # ``store_vector_index`` is a derived retrieval projection.  Keep both
+        # compatibility aliases bound to the exact producer-selected source
+        # text so a successful reconcile cannot leave retrieval serving a
+        # stale legacy ``text`` value while provenance already reports clean.
+        indexed_payload = dict(source_payload)
+        indexed_payload["content"] = text
+        indexed_payload["text"] = text
 
         embedding: list | None = None
         try:
@@ -593,7 +700,7 @@ def reconcile(
             _oid=object_id,
             _kind=kind,
             _source_ref=source_ref,
-            _payload=vector_payload,
+            _payload=indexed_payload,
             _text=text,
             _embedding=embedding,
         ) -> None:
@@ -640,6 +747,7 @@ def _emit_reconcile_summary(summary: Dict[str, object], as_json: bool) -> None:
     click.echo(
         f"total_mismatched={summary.get('total_mismatched', 0)} "
         f"total_stale_content_hash={summary.get('total_stale_content_hash', 0)} "
+        f"total_present_non_indexable={summary.get('total_present_non_indexable', 0)} "
         f"reconciled={summary.get('reconciled', 0)} "
         f"skipped={summary.get('skipped', 0)} "
         f"errors={summary['error_count']}"

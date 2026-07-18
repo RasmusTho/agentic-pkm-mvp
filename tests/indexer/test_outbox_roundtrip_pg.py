@@ -302,6 +302,32 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
             emit_outbox=False,
             trace_id="trace-fail-loud",
         )
+        contentless_oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(contentless_oid),
+                kind="knowledge_acquisition.raw",
+                payload={"url": "https://example.invalid/contentless-source"},
+                source_ref="unit-test:contentless",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-contentless",
+        )
+        panel_only_oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(panel_only_oid),
+                kind="note",
+                payload={
+                    "content": "\n%% AI:Start %%\nTransient panel only.\n%% AI:End %%\n\n"
+                },
+                source_ref="unit-test:panel-only",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-panel-only",
+        )
         events.emit_index_embedding_requested(
             {"object_id": oid, "trace_id": "trace-fail-loud", "source": "test"}
         )
@@ -314,10 +340,19 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
 
         # Drive the REAL production verifier (app.index.doctor.verify_object_embedded),
         # not a self-defined raiser, against the objects-present/no-vector state.
-        from app.index.doctor import IndexDriftError, verify_object_embedded
+        from app.index.doctor import (
+            IndexDriftError,
+            inspect_unembedded_pg_objects,
+            verify_object_embedded,
+        )
 
         with pytest.raises(IndexDriftError, match="present in store_objects but has no embedded"):
             verify_object_embedded(str(oid))
+        unembedded_total, unembedded_samples = inspect_unembedded_pg_objects(limit=10)
+        assert unembedded_total == 1
+        assert str(oid) in unembedded_samples
+        assert str(contentless_oid) not in unembedded_samples
+        assert str(panel_only_oid) not in unembedded_samples
         from app.index.doctor import diagnose_index, reset_diagnose_cache
 
         reset_diagnose_cache()
@@ -330,6 +365,8 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
         assert processed_total >= 1
         reset_diagnose_cache()
         verify_object_embedded(str(oid))
+        diagnosis = diagnose_index()
+        assert not any("store_objects rows have no embedded" in issue for issue in diagnosis["issues"])
     finally:
         _reset_store_backend_cache_only()
         _drop_schema(base_dsn, schema)

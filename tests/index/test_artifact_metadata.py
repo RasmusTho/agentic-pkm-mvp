@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 
 from app.components.embeddings import EmbeddingIdentity
-from app.index.artifact_metadata import _embedding_identity_dict
+from app.index.artifact_metadata import (
+    _embedding_identity_dict,
+    build_indexed_unit_payload,
+    canonicalize_indexable_text,
+    compute_content_hash,
+    compute_indexed_content_hash,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -44,3 +50,42 @@ def test_embedding_identity_dict_variants() -> None:
 
     duck_typed = _DuckIdentity(provider="mock", model="mock-embedding", dim=3, normalize=True)
     assert _embedding_identity_dict(duck_typed) == expected
+
+
+def test_panel_only_canonicalization_collapses_whitespace_only_remainder() -> None:
+    panel_only = "\n%% AI:Start %%\nTransient panel text.\n%% AI:End %%\n\n"
+
+    assert canonicalize_indexable_text({"content": panel_only}) == ""
+    assert compute_indexed_content_hash(panel_only) == compute_content_hash("")
+
+    meaningful_whitespace = "\n  Retained text.  \n"
+    assert canonicalize_indexable_text({"content": meaningful_whitespace}) == meaningful_whitespace
+
+
+def test_explicit_empty_selected_source_does_not_fall_through_to_raw_text() -> None:
+    assert canonicalize_indexable_text(
+        {
+            "content": "",
+            "text": "",
+            "raw_text": "---\ntitle: Panel only\n---\n",
+            "indexable_text_source": "content",
+        }
+    ) == ""
+
+
+def test_indexed_unit_payload_binds_aliases_and_hash_to_exact_text() -> None:
+    identity = EmbeddingIdentity(provider="mock", model="mock-embedding", dim=3, normalize=True)
+    canonical = "retained canonical bytes"
+
+    payload = build_indexed_unit_payload(
+        object_id="11111111-1111-1111-1111-111111111111",
+        kind="note",
+        source_ref="unit-test://exact-aliases",
+        payload={"content": "stale raw content", "text": "stale raw text"},
+        text=canonical,
+        embedding_identity=identity,
+    )
+
+    assert payload["content"] == canonical
+    assert payload["text"] == canonical
+    assert payload["provenance"]["content_hash"] == compute_content_hash(canonical)

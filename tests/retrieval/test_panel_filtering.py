@@ -56,6 +56,29 @@ def test_strip_ai_panels_removes_heading_only_panels() -> None:
     assert "This is after." in stripped
 
 
+def test_strip_ai_panels_reaches_fixed_point_for_mixed_formats() -> None:
+    markdown = "\n".join(
+        (
+            "Real content before.",
+            "%% AI:Start %%",
+            "Fenced panel text.",
+            "%% AI:End %%",
+            "## AI-instruktion",
+            "Legacy panel text.",
+            "## Retained section",
+            "Real content after.",
+        )
+    )
+
+    expected = "\n".join(
+        ("Real content before.", "## Retained section", "Real content after.")
+    )
+    stripped = strip_ai_panels(markdown)
+
+    assert stripped == expected
+    assert strip_ai_panels(stripped) == stripped
+
+
 def test_hybrid_store_does_not_contain_panel_text() -> None:
     markdown = textwrap.dedent(
         """

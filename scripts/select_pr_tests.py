@@ -325,6 +325,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/memory/",
             "app/retrieval/",
             "app/index/",
+            # Index rebuild is the memory-retrieval CLI producer for the
+            # canonical vector rows exercised by the index suites.
+            "app/cli/index_rebuild.py",
+            # Runtime vector producers share the same canonical-byte and
+            # provenance contract as rebuild/reconcile. Keep changes to these
+            # exact seams on the index/search acceptance surface instead of
+            # failing closed as unowned after implementation has already run.
+            "app/indexer/consumer.py",
+            "app/search/service.py",
+            "app/services/indexer.py",
             "tests/agent_memory/",
             "tests/retrieval/",
             "tests/indexer/",
@@ -332,7 +342,17 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_promotion_intent_to_index.py",
             "tests/e2e/test_reality_mvp_pipeline.py",
         ),
-        ("tests/agent_memory", "tests/retrieval", "tests/indexer", "tests/search", *E2E_TARGETS["memory_retrieval"]),
+        (
+            "tests/agent_memory",
+            "tests/retrieval",
+            "tests/index",
+            "tests/indexer",
+            "tests/search",
+            "tests/services/test_indexer_worker.py",
+            "tests/cli/test_index_rebuild_resilience.py",
+            "tests/cli/test_index_doctor_mixed_identity.py",
+            *E2E_TARGETS["memory_retrieval"],
+        ),
     ),
     (
         "episodes",

@@ -10,19 +10,26 @@ def strip_ai_panels(full_markdown: str) -> str:
       - fenced blocks between AI fences (%% ...AI... %%),
       - OR (fallback) heading-based panels with ## AI-instruktion/## AI-åtgärder/## AI-logg.
     """
-    lines = full_markdown.splitlines()
-    state = parse_panel(full_markdown)
-    spans = state.spans or []
-    if not spans:
-        return full_markdown
-    to_skip: set[int] = set()
-    for start, end in spans:
-        if start is None or end is None:
-            continue
-        for idx in range(max(0, start), min(len(lines) - 1, end) + 1):
-            to_skip.add(idx)
-    kept = [line for idx, line in enumerate(lines) if idx not in to_skip]
-    return "\n".join(kept)
+    # A note can contain both fenced and legacy heading panels. ``parse_panel``
+    # deliberately prioritizes fenced spans, so removing one format can expose
+    # the other on the next parse. Iterate to a fixed point: every successful
+    # pass removes at least one line, which keeps this bounded by input length.
+    current = full_markdown
+    while True:
+        lines = current.splitlines()
+        spans = parse_panel(current).spans or []
+        if not spans:
+            return current
+        to_skip: set[int] = set()
+        for start, end in spans:
+            if start is None or end is None:
+                continue
+            for idx in range(max(0, start), min(len(lines) - 1, end) + 1):
+                to_skip.add(idx)
+        stripped = "\n".join(line for idx, line in enumerate(lines) if idx not in to_skip)
+        if stripped == current:
+            return current
+        current = stripped
 
 
 __all__ = ["strip_ai_panels", "is_ai_fence"]

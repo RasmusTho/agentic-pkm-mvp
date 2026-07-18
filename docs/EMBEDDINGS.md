@@ -308,6 +308,19 @@ Indexer MUST NOT call deterministic/test-only helpers in production paths.
 
 ## Indexing behavior and invariants
 
+Every document producer MUST select `content` → `text` → `raw_text`, remove AI panels to a fixed
+point once, and use that exact canonical result for the provider call, `provenance.content_hash`, and
+the derived row's `content`/`text` aliases. Producers MUST NOT stamp a canonical hash onto an
+embedding generated from different bytes. A canonical result containing only whitespace is
+non-indexable: do not call the embedder or upsert a vector, and purge any previous derived vector for
+that object/view. A legacy event carrying a precomputed vector is accepted only when its selected
+payload text is already canonical byte-for-byte; otherwise it is discarded fail-closed.
+
+`index reconcile` may purge a derived row for a present, canonically non-indexable source only after
+re-reading and locking that source and performing the conditional delete in the same transaction. If
+the source became indexable, reclassify and embed it; if it disappeared, preserve the vector-payload
+fallback. This prevents a stale candidate read from deleting a vector after source update/deletion.
+
 ### Success
 
 For each object:

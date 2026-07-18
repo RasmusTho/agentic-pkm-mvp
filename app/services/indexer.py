@@ -7,7 +7,11 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from app.components.embeddings import get_embedding_client, get_embedding_identity
-from app.index.artifact_metadata import build_indexed_unit_payload
+from app.index.artifact_metadata import (
+    build_indexed_unit_payload,
+    canonicalize_indexable_text,
+    canonicalize_indexed_text,
+)
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
@@ -83,7 +87,7 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     incoming_uuid = obj.get("uuid")
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
-    content = obj.get("content") or ""
+    content = str(obj.get("content") or "")
     obj_payload = obj.get("payload") or {}
     payload = {
         "title": obj.get("title"),
@@ -94,6 +98,24 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         "raw_text": obj_payload.get("raw_text"),
         "text": content,
     }
+    frontmatter = obj_payload.get("frontmatter")
+    if isinstance(frontmatter, dict) and "content" in obj:
+        # Vault-change events carry the already selected note body explicitly.
+        # Preserve that selection even when it canonicalizes to empty: falling
+        # through to raw_text would re-index YAML/frontmatter for a panel-only
+        # note whose authoritative body is empty.
+        canonical_content = canonicalize_indexed_text(content)
+        payload["indexable_text_source"] = "content"
+    else:
+        canonical_content = canonicalize_indexable_text(payload)
+        payload["indexable_text_source"] = next(
+            (
+                key
+                for key in ("content", "text", "raw_text")
+                if payload.get(key)
+            ),
+            "content",
+        )
     # Carry the note's vault-canonical episode_ref (ERE-03/ERE-05, invariant->producers): the
     # POST /ingest → outbox → this-handler path builds a FRESH store_objects/store_vector_index
     # payload. When the event carries frontmatter (the ingest.vault.changed path), that frontmatter
@@ -102,7 +124,6 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     # (the raw POST /ingest path), episode_ref is deliberately left off `payload` so the merge
     # PRESERVES any existing DB binding and the build_indexed_unit_payload choke defaults a fresh
     # object to the honest 'unbound' -- never clobbering a real binding with 'unbound'.
-    frontmatter = obj_payload.get("frontmatter")
     if isinstance(frontmatter, dict):
         payload["episode_ref"] = episode_ref_from_frontmatter(frontmatter)
     trace_id = obj.get("trace_id")
@@ -132,9 +153,17 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         kind=domain.kind,
         source_ref=domain.source_ref or "",
         payload=domain.payload,
-        text=str(content or ""),
+        text=canonical_content,
+        bind_text_aliases=False,
     )
     store.save_object(domain, emit_outbox=False, trace_id=trace_id)
+
+    if not canonical_content:
+        vector_index = get_vector_index()
+        vector_index.purge_vectors(
+            _uuid.UUID(str(object_uuid)), view=DEFAULT_EMBEDDING_VIEW
+        )
+        return
 
     identity = get_embedding_identity()
     actual_identity = identity
@@ -144,11 +173,11 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
 
     try:
         embedding, actual_identity, is_fallback = embed_with_fallback(
-            content,
+            canonical_content,
             primary_identity=identity,
             object_id=object_uuid,
             primary_embed_callable=lambda: llm_embed_text(
-                text=content,
+                text=canonical_content,
                 provider=identity.provider,
                 model=identity.model,
                 dim=identity.dim,
@@ -198,7 +227,7 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
                     kind=domain.kind,
                     source_ref=domain.source_ref or "",
                     payload=domain.payload,
-                    text=str(content or ""),
+                    text=canonical_content,
                     embedding_identity=actual_identity,
                 ),
                 "embedding": embedding,

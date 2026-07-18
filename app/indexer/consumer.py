@@ -8,7 +8,12 @@ from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import coerce_floats
-from app.index.artifact_metadata import build_indexed_unit_payload
+from app.index.artifact_metadata import (
+    build_indexed_unit_payload,
+    canonicalize_indexable_text,
+    canonicalize_indexed_text,
+    extract_indexable_text,
+)
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
 from app.llm.embeddings import EMBED_MODEL
@@ -30,20 +35,20 @@ def _extract_object_id(evt: Dict[str, Any]) -> str | None:
 
 
 def _extract_text(obj_payload: Dict[str, Any]) -> str:
-    for key in ("content", "text", "raw_text"):
-        val = obj_payload.get(key)
-        if val:
-            return str(val)
-    return ""
+    return canonicalize_indexable_text(obj_payload)
 
 
-def _purge_vectors(idx: object, object_id: UUID) -> int:
+def _purge_vectors(idx: object, object_id: UUID, *, required: bool = False) -> int:
     purge = getattr(idx, "purge_vectors", None)
     if purge is None:
+        if required:
+            raise RuntimeError("vector index does not support required purge_vectors")
         return 0
     try:
         return purge(object_id, view=outbox_events.DEFAULT_EMBEDDING_VIEW)
     except Exception:
+        if required:
+            raise
         return 0
 
 
@@ -62,12 +67,22 @@ def process_event(evt: Dict[str, Any]) -> None:
         identity = EmbeddingIdentity(provider="legacy-event", model=model, dim=len(embedding))
 
         idx = get_vector_index()
+        raw_text = extract_indexable_text(payload)
+        text = canonicalize_indexed_text(raw_text)
+        # A precomputed legacy vector does not carry the bytes it embedded as
+        # independently verifiable evidence.  Accept it only when the selected
+        # payload text is already canonical byte-for-byte; otherwise fail
+        # closed instead of stamping a canonical hash onto a raw-panel vector.
+        if not text or text != raw_text:
+            _purge_vectors(idx, object_id, required=True)
+            return
         _purge_vectors(idx, object_id)
         payload = build_indexed_unit_payload(
             object_id=object_id,
             kind=kind,
             source_ref=source_ref,
             payload=payload,
+            text=text,
             embedding_identity=identity,
         )
         idx.upsert(
@@ -114,6 +129,10 @@ def process_event(evt: Dict[str, Any]) -> None:
     obj_uuid = UUID(str(obj.uuid))
     obj_payload = dict(obj.payload or {})
     text = _extract_text(obj_payload)
+    idx = get_vector_index()
+    if not text:
+        _purge_vectors(idx, obj_uuid, required=True)
+        return
 
     embedder = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
     identity = get_embedding_identity(client=embedder)
@@ -140,7 +159,6 @@ def process_event(evt: Dict[str, Any]) -> None:
         )
         return
 
-    idx = get_vector_index()
     _purge_vectors(idx, obj_uuid)
     upsert_kwargs = {
         "kind": str(obj.kind or "note"),

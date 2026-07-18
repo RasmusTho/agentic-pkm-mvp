@@ -15,6 +15,7 @@ from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.db.dsn import resolve_dsn
 from app.db.errors import StoreSchemaMissingError
 from app.embedding_config import coerce_floats, l2_normalize
+from app.index.artifact_metadata import canonicalize_indexable_text
 
 from .base import ObjectStore, RelationIndex, RelationMembership, VectorIndex, _IDENTITY_HASH_LEN
 
@@ -445,6 +446,16 @@ class _VectorHit:
     score: float
 
 
+@dataclass(frozen=True)
+class ConditionalVectorPurgeResult:
+    """Atomic classification receipt for reconcile's semantic purge."""
+
+    source_present: bool
+    source_payload: dict | None
+    source_indexable: bool
+    purged: int
+
+
 class PgVectorIndex(VectorIndex):
     rebuild_source = "PgObjectStore payloads + embedding model (see docs/EMBEDDINGS.md)"
 
@@ -619,6 +630,54 @@ class PgVectorIndex(VectorIndex):
                     (object_id,),
                 )
                 return cur.rowcount or 0
+
+    def purge_vector_if_present_source_non_indexable(
+        self, object_id: UUID, *, view: str
+    ) -> ConditionalVectorPurgeResult:
+        """Purge only while a locked authoritative source is non-indexable.
+
+        Reconcile's earlier candidate read is advisory: the source can change
+        before mutation.  This method reclassifies the source under
+        ``FOR UPDATE`` and performs the derived-row deletion in the same
+        transaction, closing that read/purge TOCTOU window.
+        """
+        del view
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT payload FROM store_objects "
+                    "WHERE object_id = %s FOR UPDATE",
+                    (object_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return ConditionalVectorPurgeResult(
+                        source_present=False,
+                        source_payload=None,
+                        source_indexable=False,
+                        purged=0,
+                    )
+
+                source_payload = dict(row.get("payload") or {})
+                if canonicalize_indexable_text(source_payload):
+                    return ConditionalVectorPurgeResult(
+                        source_present=True,
+                        source_payload=source_payload,
+                        source_indexable=True,
+                        purged=0,
+                    )
+
+                cur.execute(
+                    "DELETE FROM store_vector_index WHERE object_id = %s",
+                    (object_id,),
+                )
+                return ConditionalVectorPurgeResult(
+                    source_present=True,
+                    source_payload=source_payload,
+                    source_indexable=False,
+                    purged=cur.rowcount or 0,
+                )
 
     def count_vectors(self) -> int:
         _ensure_tables()
@@ -922,14 +981,14 @@ def inspect_pg_content_hash_staleness(*, limit: int = 5) -> dict:
                 """
                 SELECT v.object_id AS object_id,
                        v.payload->'provenance'->>'content_hash' AS stored_hash,
-                       COALESCE(o.payload->>'text', o.payload->>'content', '') AS current_text
+                       o.payload AS current_payload
                 FROM store_vector_index AS v
                 JOIN store_objects AS o ON o.object_id = v.object_id
                 """
             )
             rows = cur.fetchall()
 
-    from app.index.artifact_metadata import compute_content_hash
+    from app.index.artifact_metadata import compute_payload_content_hash
 
     stale_ids: list[str] = []
     unstamped_ids: list[str] = []
@@ -938,7 +997,7 @@ def inspect_pg_content_hash_staleness(*, limit: int = 5) -> dict:
         if not stored_hash:
             unstamped_ids.append(str(row["object_id"]))
             continue
-        current_hash = compute_content_hash(row.get("current_text") or "")
+        current_hash = compute_payload_content_hash(dict(row.get("current_payload") or {}))
         if current_hash != stored_hash:
             stale_ids.append(str(row["object_id"]))
 
