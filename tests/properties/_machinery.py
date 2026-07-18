@@ -47,7 +47,7 @@ APP_ROOT = REPO_ROOT / "app"
 # NEVER run against a real vault -- they are not part of this census.
 
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 139): (
+    ("app/services/indexer.py", 150): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize)."
@@ -1432,11 +1432,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
         "-> store_vector_index."
     ),
-    ("app/indexer/consumer.py", 84): (
+    ("app/indexer/consumer.py", 88): (
         "carries_via_indexed_unit_builder: legacy embedding-in-event path; payload = "
         "build_indexed_unit_payload(...) -> idx.upsert -> store_vector_index."
     ),
-    ("app/indexer/consumer.py", 176): (
+    ("app/indexer/consumer.py", 180): (
         "carries_via_indexed_unit_builder: INDEX_EMBEDDING_REQUESTED path; upsert_kwargs['payload'] "
         "= build_indexed_unit_payload(payload=dict(obj.payload)) -> store_vector_index."
     ),
@@ -1444,12 +1444,12 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 139): (
+    ("app/services/indexer.py", 150): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge."
     ),
-    ("app/services/indexer.py", 219): (
+    ("app/services/indexer.py", 230): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index."
     ),
