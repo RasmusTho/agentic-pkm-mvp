@@ -379,6 +379,38 @@ def put_object_with_connection(
         )
 
 
+def resolve_vault_uuid_with_connection(conn, vault_uuid: str) -> str:
+    """Resolve a retained vault UUID to one unambiguous canonical object id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text, count(*) OVER () AS match_count
+            FROM objects
+            WHERE uuid = %s
+            ORDER BY id
+            LIMIT 1
+            """,
+            (vault_uuid,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return str(vault_uuid)
+    object_id = row.get("id") if isinstance(row, dict) else row[0]
+    match_count = row.get("match_count") if isinstance(row, dict) else row[1]
+    if int(match_count or 0) > 1:
+        raise RuntimeError(
+            "ambiguous retained vault UUID mapping; reconcile duplicate objects.uuid rows "
+            "before retrying"
+        )
+    return str(object_id or vault_uuid)
+
+
+def resolve_vault_uuid(vault_uuid: str) -> str:
+    """Resolve retained identity through the canonical Postgres store boundary."""
+    with _connect() as conn:
+        return resolve_vault_uuid_with_connection(conn, vault_uuid)
+
+
 def update_object_source_ref_with_connection(
     conn,
     *,

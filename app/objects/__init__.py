@@ -191,28 +191,9 @@ def save_object_in_transaction(conn: Any, obj: DomainObject) -> None:
 
 def resolve_canonical_object_id_in_transaction(conn: Any, vault_uuid: str) -> str:
     """Resolve a retained vault UUID to the canonical object id on ``conn``."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id::text, count(*) OVER () AS match_count
-            FROM objects
-            WHERE uuid = %s
-            ORDER BY id
-            LIMIT 1
-            """,
-            (vault_uuid,),
-        )
-        row = cur.fetchone()
-    if not row:
-        return str(vault_uuid)
-    object_id = row.get("id") if isinstance(row, dict) else row[0]
-    match_count = row.get("match_count") if isinstance(row, dict) else row[1]
-    if int(match_count or 0) > 1:
-        raise RuntimeError(
-            "ambiguous retained vault UUID mapping; reconcile duplicate objects.uuid rows "
-            "before retrying"
-        )
-    return str(object_id or vault_uuid)
+    from app.stores.pg import resolve_vault_uuid_with_connection
+
+    return resolve_vault_uuid_with_connection(conn, vault_uuid)
 
 
 def resolve_canonical_object_id(vault_uuid: str) -> str:
@@ -228,10 +209,9 @@ def resolve_canonical_object_id(vault_uuid: str) -> str:
     if binding.backend != "pg":
         return str(vault_uuid)
 
-    from app.db.db import conn_ro
+    from app.stores.pg import resolve_vault_uuid
 
-    with conn_ro() as conn:
-        return resolve_canonical_object_id_in_transaction(conn, str(vault_uuid))
+    return resolve_vault_uuid(str(vault_uuid))
 
 
 def update_object_source_ref_in_transaction(

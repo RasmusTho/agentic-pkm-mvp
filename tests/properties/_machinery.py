@@ -47,7 +47,7 @@ APP_ROOT = REPO_ROOT / "app"
 # NEVER run against a real vault -- they are not part of this census.
 
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 159): (
+    ("app/services/indexer.py", 175): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize)."
@@ -98,7 +98,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "event-emission and object-materialization -- see formal-model.md T-materialize); "
         "this call is the eventual T-materialize-equivalent write for the API path."
     ),
-    ("app/ingest/vault_alpha.py", 564): (
+    ("app/ingest/vault_alpha.py", 566): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run. Line drifted "
@@ -210,9 +210,7 @@ class EventSpy:
 
 
 @contextmanager
-def spy_on_object_store(
-    monkeypatch: pytest.MonkeyPatch, spy: EventSpy
-) -> Iterator[EventSpy]:
+def spy_on_object_store(monkeypatch: pytest.MonkeyPatch, spy: EventSpy) -> Iterator[EventSpy]:
     """Wrap the REAL ``ObjectStore.save_object`` and ``insert_object_and_outbox``
     seams with recording spies, calling straight through to the original
     implementation. This is a spy (observe + delegate), not a stub/fake --
@@ -349,7 +347,7 @@ REGISTERED_HEAL_TRANSITIONS: dict[str, HealTransition] = {
         justification=(
             "T-uuid-heal (formal-model.md Q4, case 1): heals a note missing "
             "frontmatter.uuid on first read via resolve_note_artifact_identity. "
-            "WG-gated at the seam (assert_writes_allowed(\"ensure uuid\")) -- a "
+            'WG-gated at the seam (assert_writes_allowed("ensure uuid")) -- a '
             "denying guard degrades to identity_state=unresolved_missing_uuid "
             "instead of writing, per note_uuid.py / artifact_identity.py."
         ),
@@ -525,7 +523,11 @@ def _immediate_caller_qualname() -> str:
         if outer is None:
             return "<unknown>"
         module_name = outer.f_globals.get("__name__", "<unknown>")
-        qualname = outer.f_code.co_qualname if hasattr(outer.f_code, "co_qualname") else outer.f_code.co_name
+        qualname = (
+            outer.f_code.co_qualname
+            if hasattr(outer.f_code, "co_qualname")
+            else outer.f_code.co_name
+        )
         return f"{module_name}::{qualname}"
     finally:
         del frame
@@ -562,9 +564,7 @@ class WriteSpy:
 
 
 @contextmanager
-def spy_on_durable_writes(
-    monkeypatch: pytest.MonkeyPatch, spy: WriteSpy
-) -> Iterator[WriteSpy]:
+def spy_on_durable_writes(monkeypatch: pytest.MonkeyPatch, spy: WriteSpy) -> Iterator[WriteSpy]:
     """Wrap the REAL write-primitive seams with recording spies that still
     delegate to the original implementation -- observe, don't fake."""
     import app.vault.markdown_settings as markdown_settings_mod
@@ -573,7 +573,9 @@ def spy_on_durable_writes(
     original_write_frontmatter = markdown_settings_mod.MarkdownSettingsStore.write_frontmatter
     original_write_note_from_absolute = write_ops_mod.write_note_from_absolute
 
-    def traced_write_frontmatter(self: Any, path: Any, frontmatter: Any, *, body: Any = None) -> Any:
+    def traced_write_frontmatter(
+        self: Any, path: Any, frontmatter: Any, *, body: Any = None
+    ) -> Any:
         spy.record(
             seam="app.vault.markdown_settings::MarkdownSettingsStore.write_frontmatter",
             caller=_immediate_caller_qualname(),
@@ -581,7 +583,9 @@ def spy_on_durable_writes(
         )
         return original_write_frontmatter(self, path, frontmatter, body=body)
 
-    def traced_write_note_from_absolute(path: Any, content: Any, *, vault_root: Any, **kwargs: Any) -> Any:
+    def traced_write_note_from_absolute(
+        path: Any, content: Any, *, vault_root: Any, **kwargs: Any
+    ) -> Any:
         spy.record(
             seam="app.knowledge.write_ops::write_note_from_absolute",
             caller=_immediate_caller_qualname(),
@@ -839,9 +843,7 @@ def find_write_note_relative_call_sites(
                 func = node.func
                 is_write_note_relative = (
                     isinstance(func, ast.Name) and func.id == "write_note_relative"
-                ) or (
-                    isinstance(func, ast.Attribute) and func.attr == "write_note_relative"
-                )
+                ) or (isinstance(func, ast.Attribute) and func.attr == "write_note_relative")
                 if is_write_note_relative:
                     qualname = ".".join(self.scope) or "<module>"
                     ordinal = self.call_counts.get(qualname, 0) + 1
@@ -874,7 +876,9 @@ class RegisteredWriteSeam:
     unchanged_paths: _Callable[[Path], dict[Path, bytes]]
 
 
-def _knowledge_port_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> _Callable[[], None]:
+def _knowledge_port_invoke(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> _Callable[[], None]:
     """The knowledge write port itself (#2910 scope item 1)."""
     from app.knowledge.write_ops import write_note_from_absolute
 
@@ -938,7 +942,9 @@ def _identity_heal_snapshot(tmp_path: Path) -> dict[Path, bytes]:
     return {p: p.read_bytes() for p in sorted(vault.rglob("*")) if p.is_file()}
 
 
-def _checkbox_rollback_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> _Callable[[], None]:
+def _checkbox_rollback_invoke(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> _Callable[[], None]:
     """Checkbox-projection rollback write (#2910 scope item 3).
 
     Forces ``run_panel_note_execution`` to raise after the checkbox has been
@@ -983,7 +989,10 @@ def _checkbox_rollback_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch")
         from app.text.helpers import content_hash as _content_hash
 
         options = extract_panel_selectable_options(
-            content, artifact_id="seam-note", note_path="panel.md", content_hash=_content_hash(content)
+            content,
+            artifact_id="seam-note",
+            note_path="panel.md",
+            content_hash=_content_hash(content),
         )
         option = next(o for o in options if o.option_id == "opt_1")
         service = CheckboxProjectionService(idempotency_store=CheckboxProjectionIdempotencyStore())
@@ -1024,7 +1033,9 @@ def _checkbox_rollback_snapshot(tmp_path: Path) -> dict[Path, bytes]:
     return {p: p.read_bytes() for p in sorted(vault.rglob("*")) if p.is_file()}
 
 
-def _mcp_vault_tools_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> _Callable[[], None]:
+def _mcp_vault_tools_invoke(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> _Callable[[], None]:
     """The named live violator (#2953): ``app/mcp/vault_tools.py::append_note``
     reaches ``write_note_relative`` with NO caller-side WriteGuard assert on
     `main` -- the issue's concrete example of why the relative-path port
@@ -1156,8 +1167,10 @@ def find_store_payload_sink_sites(root: Path = APP_ROOT) -> list[tuple[str, int]
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            name = func.id if isinstance(func, ast.Name) else (
-                func.attr if isinstance(func, ast.Attribute) else None
+            name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else (func.attr if isinstance(func, ast.Attribute) else None)
             )
             if name not in _SINK_METHOD_NAMES:
                 continue
@@ -1198,7 +1211,9 @@ def _name_assignments(name: str, func: ast.AST) -> list[ast.AST]:
     return values
 
 
-def _dict_keys_reachable(expr: ast.AST, func: ast.AST, seen: frozenset[str] = frozenset()) -> set[str]:
+def _dict_keys_reachable(
+    expr: ast.AST, func: ast.AST, seen: frozenset[str] = frozenset()
+) -> set[str]:
     """String keys reachable from ``expr`` as a payload dict, following ``Name`` assignments,
     ``**unpack``, and ``dict(<name>)`` wrappers within ``func`` (bounded, cycle-guarded)."""
     keys: set[str] = set()
@@ -1222,7 +1237,9 @@ def _dict_keys_reachable(expr: ast.AST, func: ast.AST, seen: frozenset[str] = fr
     return keys
 
 
-def _domain_object_payload_expr(expr: ast.AST, func: ast.AST, seen: frozenset[str] = frozenset()) -> ast.AST | None:
+def _domain_object_payload_expr(
+    expr: ast.AST, func: ast.AST, seen: frozenset[str] = frozenset()
+) -> ast.AST | None:
     """Resolve the payload expression written by ``save_object(<expr>)`` -- ``<expr>`` is a
     DomainObject/shim (inline or a Name). Returns the payload= kwarg's value (or the last
     ``<name>.payload = ...`` reassignment before the call)."""
@@ -1267,7 +1284,11 @@ def _kwargs_payload_expr(star_name: str, func: ast.AST) -> ast.AST | None:
             for k, v in zip(value.keys, value.values):
                 if isinstance(k, ast.Constant) and k.value == "payload":
                     return v
-        elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "dict":
+        elif (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "dict"
+        ):
             for kw in value.keywords:
                 if kw.arg == "payload":
                     return kw.value
@@ -1290,7 +1311,11 @@ def _resolve_payload_expr(rel_path: str, lineno: int) -> tuple[ast.AST | None, a
         if not (isinstance(node, ast.Call) and node.lineno == lineno):
             continue
         fn = node.func
-        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        name = (
+            fn.id
+            if isinstance(fn, ast.Name)
+            else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        )
         # direct payload= kwarg
         for kw in node.keywords:
             if kw.arg == "payload":
@@ -1363,16 +1388,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 564): (
+    ("app/ingest/vault_alpha.py", 566): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 598): (
+    ("app/ingest/vault_alpha.py", 601): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 612): (
+    ("app/ingest/vault_alpha.py", 615): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
     ("app/ingest/vault_root.py", 91): (
@@ -1444,12 +1469,12 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 159): (
+    ("app/services/indexer.py", 175): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge."
     ),
-    ("app/services/indexer.py", 239): (
+    ("app/services/indexer.py", 255): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index."
     ),
@@ -1494,7 +1519,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/objects/__init__.py", 120): (
+    ("app/objects/__init__.py", 116): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
         "(every save_object caller is itself a classified producer above)."
@@ -1505,7 +1530,10 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries episode_ref in canonical_payload."
     ),
     # -- harness_excluded: dev/CI seeders (formal-model.md 2.3) -----------------------------------
-    ("app/cli/smoke.py", 115): "harness_excluded: smoke reality-probe seeder; never a real vault producer.",
+    (
+        "app/cli/smoke.py",
+        115,
+    ): "harness_excluded: smoke reality-probe seeder; never a real vault producer.",
     ("app/cli/smoke.py", 139): "harness_excluded: smoke reality-probe seeder.",
     ("app/cli/smoke.py", 277): "harness_excluded: smoke ASK-corpus seeder.",
     ("app/cli/smoke.py", 281): "harness_excluded: smoke ASK-corpus seeder (index_ingest_object).",
