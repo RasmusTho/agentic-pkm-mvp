@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/acquisition.completed.v1.schema.json",
+  "title": "acquisition.completed payload (v1)",
+  "description": "Payload of the acquisition.completed outbox event (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Event topics). Producer: app/knowledge_acquisition/acquisition_requests.py::AcquisitionRequests.complete — the request reached the KA pipeline's terminal candidate outcome (note written or traced dedup no-op; INV-YSS-3). Idempotency key basis: (topic, request_id, attempt). Lineage posture: no dispatched consumer.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["request_id", "attempt", "content_identity", "dedup_noop"],
+  "properties": {
+    "request_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "content_identity": { "type": "string", "minLength": 1 },
+    "artifact_path": { "type": ["string", "null"] },
+    "dedup_noop": { "type": "boolean" }
+  }
+}

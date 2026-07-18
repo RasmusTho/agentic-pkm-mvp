@@ -110,6 +110,18 @@ SETTINGS_WRITE_RECEIPT = "settings.write.receipt"
 KNOWLEDGE_ACQUISITION_STAGE_COMPLETED = "knowledge_acquisition.stage.completed"
 KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_lettered"
 
+# YSS-04 (#3919): YouTube Source Sync acquisition-queue lineage topics
+# (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Event topics). Emitted by
+# app/knowledge_acquisition/acquisition_requests.py on the canonical DB outbox
+# with KERNEL-08 registered schemas. Lineage/receipt posture, NOT dispatched
+# commands — no `outbox_worker._dispatch_topic` branch; a future consumer
+# follows the KA-07 route pattern.
+YOUTUBE_SOURCE_DISCOVERED = "youtube.source.discovered"
+ACQUISITION_REQUESTED = "acquisition.requested"
+ACQUISITION_STARTED = "acquisition.started"
+ACQUISITION_COMPLETED = "acquisition.completed"
+ACQUISITION_FAILED = "acquisition.failed"
+
 # Heimdal entity register v0 mutation events (Epic #3019 slice A1, #3038).
 # Register mutations (mint / merge / split / redirect-fold) are audit/lineage
 # events on the existing DB outbox, mirroring the Knowledge Acquisition stage
@@ -224,6 +236,11 @@ __all__ = [
     "SETTINGS_WRITE_RECEIPT",
     "KNOWLEDGE_ACQUISITION_STAGE_COMPLETED",
     "KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED",
+    "YOUTUBE_SOURCE_DISCOVERED",
+    "ACQUISITION_REQUESTED",
+    "ACQUISITION_STARTED",
+    "ACQUISITION_COMPLETED",
+    "ACQUISITION_FAILED",
     "HEIMDAL_REGISTER_ENTITY_MINTED",
     "HEIMDAL_REGISTER_ENTITY_MERGED",
     "HEIMDAL_REGISTER_ENTITY_SPLIT",
