@@ -108,6 +108,8 @@ def test_legacy_objects_fk_migration_rejects_objects_uuid_fk_even_for_known_cons
 
 def test_legacy_objects_fk_migration_backfills_existing_parents(scratch_dsn: str) -> None:
     _upgrade(PRE_CUTOVER_REVISION)
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute("ALTER TABLE objects DROP COLUMN IF EXISTS updated_at")
     object_id = uuid.uuid4()
     with psycopg.connect(scratch_dsn) as conn:
         conn.execute(
@@ -124,14 +126,15 @@ def test_legacy_objects_fk_migration_backfills_existing_parents(scratch_dsn: str
 
     with psycopg.connect(scratch_dsn) as conn:
         parent = conn.execute(
-            "SELECT kind, source_ref, payload FROM store_objects WHERE object_id = %s",
+            "SELECT kind, source_ref, payload, created_at, updated_at FROM store_objects WHERE object_id = %s",
             (object_id,),
         ).fetchone()
         fk_target = conn.execute(
             "SELECT confrelid::regclass::text FROM pg_constraint "
             "WHERE conrelid = 'public.decisions'::regclass AND contype = 'f'"
         ).fetchone()
-    assert parent == ("note", None, {"title": "Legacy"})
+    assert parent[0:3] == ("note", None, {"title": "Legacy"})
+    assert parent[3] == parent[4]
     assert fk_target == ("store_objects",)
 
 

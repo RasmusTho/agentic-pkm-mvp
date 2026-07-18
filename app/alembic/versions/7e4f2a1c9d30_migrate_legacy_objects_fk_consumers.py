@@ -47,6 +47,7 @@ def upgrade() -> None:
             delete_action text;
             update_action text;
             source_expression text;
+            updated_expression text;
         BEGIN
             IF to_regclass('public.objects') IS NULL THEN
                 RAISE EXCEPTION USING
@@ -121,14 +122,22 @@ def upgrade() -> None:
                 source_expression := 'NULL::text';
             END IF;
 
+            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'objects' AND column_name = 'updated_at') THEN
+                updated_expression := 'COALESCE(updated_at, created_at, now())';
+            ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'objects' AND column_name = 'created_at') THEN
+                updated_expression := 'COALESCE(created_at, now())';
+            ELSE
+                updated_expression := 'now()';
+            END IF;
+
             EXECUTE format(
                 'INSERT INTO public.store_objects '
                 || '(object_id, kind, source_ref, payload, created_at, updated_at) '
                 || 'SELECT id, COALESCE(kind, ''legacy''), %s, '
                 || 'COALESCE(payload::jsonb, ''{}''::jsonb), COALESCE(created_at, now()), '
-                || 'COALESCE(updated_at, now()) FROM public.objects '
+                || '%s FROM public.objects '
                 || 'ON CONFLICT (object_id) DO NOTHING',
-                source_expression
+                source_expression, updated_expression
             );
 
             FOR fk IN
