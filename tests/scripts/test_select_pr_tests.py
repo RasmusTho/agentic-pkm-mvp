@@ -251,6 +251,21 @@ def test_journaling_change_has_a_ci_owner() -> None:
     assert "tests/journaling" in selection.targets
 
 
+def test_journal_activation_and_compilation_seams_have_ci_owners() -> None:
+    selection = select_tests(
+        [
+            "app/activation/journal_draft.py",
+            "app/knowledge_compilation/proposal_builders.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("journaling",)
+    assert selection.unowned_paths == ()
+    assert "tests/activation/test_journal_draft_activation.py" in selection.targets
+    assert "tests/knowledge_compilation/test_proposal_builders.py" in selection.targets
+
+
 def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
     selection = select_tests(["app/stores/postgres.py", "tests/ingest/test_vault_root_ingest_pg.py"])
 
