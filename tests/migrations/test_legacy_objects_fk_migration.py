@@ -637,3 +637,26 @@ def test_migration_locks_both_identity_producer_tables() -> None:
     ).read_text(encoding="utf-8")
 
     assert "LOCK TABLE public.objects, public.store_objects IN SHARE ROW EXCLUSIVE MODE" in migration
+
+
+def test_runtime_bootstrap_preserves_objects_primary_key_after_cutover(scratch_dsn: str) -> None:
+    """Vault-sync bootstrap must not rebuild the legacy PK after FKs move away."""
+    from app.db import db as db_module
+
+    _upgrade("head")
+    with psycopg.connect(scratch_dsn) as conn:
+        before = conn.execute(
+            "SELECT oid FROM pg_constraint "
+            "WHERE conrelid = 'public.objects'::regclass AND contype = 'p'"
+        ).fetchone()
+        assert before is not None
+
+        db_module.ensure_schema(conn)
+        db_module.ensure_schema(conn)
+
+        after = conn.execute(
+            "SELECT oid FROM pg_constraint "
+            "WHERE conrelid = 'public.objects'::regclass AND contype = 'p'"
+        ).fetchone()
+
+    assert after == before

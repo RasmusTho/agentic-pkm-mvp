@@ -532,6 +532,41 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
     )
 
 
+def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_test.py"
+    migration.write_text(
+        'revision = "forward_only_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_API_LIVENESS"] = "fail"
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 1
+    assert "target pin is retained for a compatible forward fix" in result.stderr
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    strict_recreates = [
+        event
+        for event in _deploy_events(env)
+        if event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+    ]
+    assert len(strict_recreates) == 1
+
+
 def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutation(
     tmp_path: Path,
 ) -> None:

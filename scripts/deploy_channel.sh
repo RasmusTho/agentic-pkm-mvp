@@ -267,13 +267,14 @@ recreate_channel_services() {
 
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
-  echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
   if [ -n "${MIGRATION_RECEIPT_JSON:-}" ]; then
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
   if [ "${forward_only_count}" != "0" ]; then
-    echo "rollback limitation: acknowledged forward-only migration(s) are not auto-reversed; restoring code and services only" >&2
+    echo "${reason} (status ${original_status}); forward-only migration(s) were applied, so the target pin is retained for a compatible forward fix instead of restoring a potentially schema-incompatible previous image" >&2
+    return 0
   fi
+  echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
   if [ -n "${current_sha}" ]; then
     if ! write_pin "${pin_file}" "${current_sha}"; then
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
