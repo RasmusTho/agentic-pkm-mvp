@@ -80,6 +80,17 @@ case "$*" in
 esac
 """,
     )
+    _write_executable(
+        bin_dir / "cp",
+        """#!/usr/bin/env bash
+set -eu
+if [ "${FAKE_PROMOTION_RECEIPT_COPY:-pass}" = "fail" ] && [[ "${2:-}" == */ops/promotions/* ]]; then
+  echo 'fake promotion receipt copy diagnostic' >&2
+  exit "${FAKE_PROMOTION_RECEIPT_COPY_RC:-61}"
+fi
+exec /bin/cp "$@"
+""",
+    )
     python_wrapper = bin_dir / "python"
     _write_executable(
         python_wrapper,

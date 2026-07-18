@@ -182,6 +182,8 @@ Rollback reuses the deploy mechanism in reverse, against the previous known-good
 
 Rollback is a tag-bump + recreate because images are immutable and retained in the registry — the same property that makes promotion cheap makes rollback cheap.
 
+Once a manual rollback has selected and pinned the previous known-good target, a failing post-mutation verification gate preserves that failure's status and diagnostics but retains the rollback target. It does not automatically restore the pre-rollback candidate that the operator is trying to leave. A successful rollback receipt is still withheld until every required gate passes.
+
 ## Live post-deploy UI smoke
 
 A deploy is verified by an **end-to-end UI smoke against the live gateway**, not only by container health. This closes the gap noted in memory `project_companion_gateway_topology` (failures observed were transient `[Errno 61]` connection refusals and stale code after a pull-without-restart, with no live post-deploy UI check to catch them).

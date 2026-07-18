@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from tests.deploy.test_deploy_channel import (
+    _configure_prod_retry_preflight,
     _deploy_events,
     _deploy_harness,
     _run_deploy,
@@ -223,14 +224,29 @@ def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     assert run_block.index("fleet_model_fitness_gate") < run_block.index("record_receipt")
 
 
-def _seed_previous_pin(root: Path, previous_sha: str) -> Path:
-    pin_path = root / "config/deploy/dev.env"
+def _seed_previous_pin(
+    root: Path, previous_sha: str, *, channel: str = "dev"
+) -> Path:
+    pin_path = root / f"config/deploy/{channel}.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
         f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     return pin_path
+
+
+def _run_rollback(
+    root: Path, env: dict[str, str], sha: str, *, channel: str = "dev"
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "scripts/deploy_channel.sh", "rollback", channel, sha],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_postdeploy_smoke_failure_rolls_back_previous_pin_and_services(
@@ -344,3 +360,47 @@ def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
     assert "forward-only migration" in result.stderr
     assert "not auto-reversed" in result.stderr
     assert "code and services only" in result.stderr
+
+
+def test_failed_manual_rollback_retains_the_known_good_rollback_target(
+    tmp_path: Path,
+) -> None:
+    root, env, rollback_sha = _deploy_harness(tmp_path)
+    pre_rollback_sha = "4" * 40
+    pin_path = _seed_previous_pin(root, pre_rollback_sha)
+    env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
+
+    result = _run_rollback(root, env, rollback_sha)
+
+    assert result.returncode == 73
+    assert "manual rollback gate failed" in result.stderr
+    assert "retaining rollback target" in result.stderr
+    assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={pre_rollback_sha}" not in pin_path.read_text(
+        encoding="utf-8"
+    )
+    recreate = (
+        "up -d --force-recreate api worker watcher "
+        "heimdal-capture-watch companion-ui"
+    )
+    assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
+
+
+def test_prod_promotion_receipt_failure_does_not_publish_latest_receipt(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "5" * 40
+    pin_path = _seed_previous_pin(root, previous_sha, channel="prod")
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    env["FAKE_PROMOTION_RECEIPT_COPY"] = "fail"
+    env["FAKE_PROMOTION_RECEIPT_COPY_RC"] = "61"
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode == 61
+    assert "fake promotion receipt copy diagnostic" in result.stderr
+    assert "deploy receipt creation failed" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert not (root / "ops/deployments/prod-latest.json").exists()
+    assert not (root / f"ops/promotions/prod-deploy-{sha}.json").exists()

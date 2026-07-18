@@ -288,7 +288,11 @@ run_postmutation_gate() {
   shift
   "$@" || rc=$?
   if [ "${rc}" -ne 0 ]; then
-    rollback_failed_startup "${reason}" "${rc}"
+    if [ "${action}" = "deploy" ]; then
+      rollback_failed_startup "${reason}" "${rc}"
+    else
+      echo "manual rollback gate failed: ${reason} (status ${rc}); retaining rollback target ${target_sha} instead of restoring pre-rollback pin ${current_sha:-unset}" >&2
+    fi
     return "${rc}"
   fi
 }
@@ -413,11 +417,12 @@ fleet_model_fitness_gate() {
 }
 
 record_receipt() {
-  local receipt_path timestamp rc
+  local receipt_path receipt_tmp promotion_path promotion_tmp promotion_backup timestamp rc
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   mkdir -p "${receipt_dir}" || return $?
   receipt_path="${receipt_dir}/${channel}-latest.json"
-  "${PYTHON}" - "$receipt_path" <<PY
+  receipt_tmp="$(mktemp "${receipt_path}.tmp.XXXXXX")" || return $?
+  "${PYTHON}" - "$receipt_tmp" <<PY
 import json
 import os
 import sys
@@ -436,19 +441,78 @@ payload = {
         os.environ.get("DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK", "0") == "1"
     ),
 }
-receipt_path = Path(sys.argv[1])
-temporary_path = receipt_path.with_name(receipt_path.name + ".tmp")
-temporary_path.write_text(
+Path(sys.argv[1]).write_text(
     json.dumps(payload, indent=2, sort_keys=True) + "\\n",
     encoding="utf-8",
 )
-os.replace(temporary_path, receipt_path)
 PY
   rc=$?
-  [ "${rc}" -eq 0 ] || return "${rc}"
+  if [ "${rc}" -ne 0 ]; then
+    rm -f "${receipt_tmp}"
+    return "${rc}"
+  fi
   if [ "${channel}" = "prod" ]; then
-    mkdir -p "${promotion_dir}" || return $?
-    cp "${receipt_path}" "${promotion_dir}/prod-deploy-${target_sha}.json" || return $?
+    mkdir -p "${promotion_dir}" || {
+      rc=$?
+      rm -f "${receipt_tmp}"
+      return "${rc}"
+    }
+    promotion_path="${promotion_dir}/prod-deploy-${target_sha}.json"
+    promotion_tmp="$(mktemp "${promotion_path}.tmp.XXXXXX")" || {
+      rc=$?
+      rm -f "${receipt_tmp}"
+      return "${rc}"
+    }
+    promotion_backup=""
+    if [ -f "${promotion_path}" ]; then
+      promotion_backup="$(mktemp "${promotion_path}.backup.XXXXXX")" || {
+        rc=$?
+        rm -f "${receipt_tmp}" "${promotion_tmp}"
+        return "${rc}"
+      }
+      rc=0
+      cp "${promotion_path}" "${promotion_backup}" || rc=$?
+      if [ "${rc}" -ne 0 ]; then
+        rm -f "${receipt_tmp}" "${promotion_tmp}" "${promotion_backup}"
+        return "${rc}"
+      fi
+    fi
+    rc=0
+    cp "${receipt_tmp}" "${promotion_tmp}" || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+      rm -f "${receipt_tmp}" "${promotion_tmp}"
+      if [ -n "${promotion_backup}" ]; then
+        rm -f "${promotion_backup}"
+      fi
+      return "${rc}"
+    fi
+    rc=0
+    mv "${promotion_tmp}" "${promotion_path}" || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+      rm -f "${receipt_tmp}" "${promotion_tmp}"
+      if [ -n "${promotion_backup}" ]; then
+        rm -f "${promotion_backup}"
+      fi
+      return "${rc}"
+    fi
+  fi
+  rc=0
+  mv "${receipt_tmp}" "${receipt_path}" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    rm -f "${receipt_tmp}"
+    if [ "${channel}" = "prod" ]; then
+      if [ -n "${promotion_backup}" ]; then
+        if ! mv "${promotion_backup}" "${promotion_path}"; then
+          echo "deploy receipt rollback failed to restore existing promotion receipt ${promotion_path}" >&2
+        fi
+      else
+        rm -f "${promotion_path}"
+      fi
+    fi
+    return "${rc}"
+  fi
+  if [ -n "${promotion_backup:-}" ]; then
+    rm -f "${promotion_backup}"
   fi
   echo "recorded deploy receipt: ${receipt_path}"
 }
