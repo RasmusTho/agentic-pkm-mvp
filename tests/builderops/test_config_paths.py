@@ -36,7 +36,9 @@ def _write_cutover_ack(
                 "host_id": host_id or builderops_config.current_host_id(),
                 "user_id": user_id or builderops_config.current_user_id(),
                 "legacy_stores_reconciled": True,
-                "participating_repos": repos or [],
+                "participating_repos": repos
+                if repos is not None
+                else [f"local/repo-{index}" for index, _root in enumerate(roots or [Path.cwd()])],
                 "participating_roots": [
                     str(root.resolve()) for root in (roots or [Path.cwd()])
                 ],
@@ -223,7 +225,7 @@ def test_valid_host_ack_allows_implicit_cli_outside_git(tmp_path: Path) -> None:
     consolidated_db = state_dir / "builderops.sqlite3"
     _write_cutover_ack(
         state_dir,
-        ["owner/repo-a", "owner/repo-b"],
+        ["owner/repo-a"],
         roots=[outside_git],
     )
 
@@ -262,6 +264,33 @@ def test_host_ack_is_bound_to_host_user_inventory_and_reconciliation_epoch(
     other_repo.mkdir()
     _write_cutover_ack(state_dir, roots=[repo])
     monkeypatch.chdir(other_repo)
+    with pytest.raises(ValueError, match="fresh inventory epoch"):
+        builderops_config._validate_host_cutover_ack(state_dir)
+
+
+def test_host_ack_rejects_broad_parent_that_hides_newer_nested_legacy_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    repo = workspace / "repo-a"
+    repo.mkdir(parents=True)
+    legacy_db = repo / "runtime" / "builderops" / "builderops.sqlite3"
+    legacy_db.parent.mkdir(parents=True)
+    legacy_db.write_bytes(b"SQLite format 3\x00")
+    acknowledged_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    newer = acknowledged_at + timedelta(seconds=30)
+    os.utime(legacy_db, (newer.timestamp(), newer.timestamp()))
+    state_dir = tmp_path / "host-state" / "builderops"
+    monkeypatch.chdir(repo)
+
+    _write_cutover_ack(
+        state_dir,
+        ["owner/workspace"],
+        roots=[workspace],
+        acknowledged_at=acknowledged_at,
+    )
+
     with pytest.raises(ValueError, match="fresh inventory epoch"):
         builderops_config._validate_host_cutover_ack(state_dir)
 

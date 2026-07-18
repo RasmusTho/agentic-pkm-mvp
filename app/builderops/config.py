@@ -114,7 +114,7 @@ def _validate_host_cutover_ack(state_dir: Path) -> None:
         participating_roots = payload["participating_roots"]
         roots = tuple(Path(root).resolve(strict=True) for root in participating_roots)
         cwd = Path.cwd().resolve()
-        cwd_is_in_inventory = any(cwd == root or root in cwd.parents for root in roots)
+        cwd_is_in_inventory = cwd in roots
         latest_legacy_write = max(
             (
                 datetime.fromtimestamp(
@@ -154,6 +154,8 @@ def _validate_host_cutover_ack(state_dir: Path) -> None:
                 for root in participating_roots
             )
             and len(set(participating_roots)) == len(participating_roots)
+            and len(set(roots)) == len(roots)
+            and len(participating_repos) == len(roots)
             and cwd_is_in_inventory
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):

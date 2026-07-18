@@ -120,8 +120,10 @@ host-stable database unless the operator has installed this host-level acknowled
 The operator creates this owner-only `0600`, non-symlink marker only after stopping BuilderOps writers, inventorying
 every participating repository on the host, and reconciling or explicitly retaining its legacy
 stores. The marker is bound to the actual hostname and numeric UID. `participating_repos` names
-the bounded logical inventory; `participating_roots` lists its absolute local roots and must cover
-the current working tree. The UUID `inventory_epoch` and timezone-aware timestamp identify the
+the bounded logical inventory; `participating_roots` lists the same number of unique, resolved,
+absolute local roots in matching inventory order, and the current working directory must equal one
+of those exact roots. A broad ancestor cannot stand in for nested repositories. The UUID
+`inventory_epoch` and timezone-aware timestamp identify the
 reconciliation pass. A future timestamp, a legacy DB written after that pass, a copied host/user
 identity, an unlisted current root, wrong ownership/mode, or a missing/malformed field fails before
 the consolidated DB is opened. Error text remains privacy-safe; host paths and contents are not
