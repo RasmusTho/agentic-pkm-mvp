@@ -290,6 +290,9 @@ run_postmutation_gate() {
   if [ "${rc}" -ne 0 ]; then
     if [ "${action}" = "deploy" ]; then
       rollback_failed_startup "${reason}" "${rc}"
+    elif [ "${rollback_target_recreated:-0}" != "1" ]; then
+      echo "manual rollback failed before target services were established; restoring pre-rollback pin and services" >&2
+      rollback_failed_startup "${reason}" "${rc}"
     else
       echo "manual rollback gate failed: ${reason} (status ${rc}); retaining rollback target ${target_sha} instead of restoring pre-rollback pin ${current_sha:-unset}" >&2
     fi
@@ -548,6 +551,7 @@ if [ -n "${current_sha}" ]; then
   write_pin "${previous_pin_file}" "${current_sha}"
 fi
 write_pin "${pin_file}" "${target_sha}"
+rollback_target_recreated=0
 
 postdeploy_smoke_gate() {
   COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED="${ack_embedding_rebuild_required}" \
@@ -559,6 +563,7 @@ run_postmutation_gate "image pull failed" \
   compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?
+rollback_target_recreated=1
 run_postmutation_gate "health gate failed" health_gate || exit $?
 run_postmutation_gate "version gate failed" version_gate || exit $?
 run_postmutation_gate "fleet-model fitness gate failed" \

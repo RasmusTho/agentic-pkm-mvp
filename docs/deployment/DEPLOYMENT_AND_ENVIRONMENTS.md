@@ -182,7 +182,7 @@ Rollback reuses the deploy mechanism in reverse, against the previous known-good
 
 Rollback is a tag-bump + recreate because images are immutable and retained in the registry — the same property that makes promotion cheap makes rollback cheap.
 
-Once a manual rollback has selected and pinned the previous known-good target, a failing post-mutation verification gate preserves that failure's status and diagnostics but retains the rollback target. It does not automatically restore the pre-rollback candidate that the operator is trying to leave. A successful rollback receipt is still withheld until every required gate passes.
+Once a manual rollback has selected and pinned the previous known-good target, failure handling follows the actual service state. If image pull or service recreate fails before the target service set is established, the executor restores the pre-rollback pin and recreates that service set so pin and runtime identity do not diverge. After the rollback target has been recreated successfully, a later verification-gate failure preserves that failure's status and diagnostics and retains the rollback target; it does not automatically restore the pre-rollback candidate that the operator is trying to leave. A successful rollback receipt is still withheld until every required gate passes.
 
 ## Live post-deploy UI smoke
 

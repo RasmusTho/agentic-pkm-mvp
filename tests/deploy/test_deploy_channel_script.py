@@ -386,6 +386,27 @@ def test_failed_manual_rollback_retains_the_known_good_rollback_target(
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
 
 
+def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(
+    tmp_path: Path,
+) -> None:
+    root, env, rollback_sha = _deploy_harness(tmp_path)
+    pre_rollback_sha = "6" * 40
+    pin_path = _seed_previous_pin(root, pre_rollback_sha)
+    env["FAKE_DOCKER_FAIL_MATCH"] = " pull "
+
+    result = _run_rollback(root, env, rollback_sha)
+
+    assert result.returncode == 24
+    assert "failed before target services were established" in result.stderr
+    assert f"APP_IMAGE_TAG={pre_rollback_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={rollback_sha}" not in pin_path.read_text(encoding="utf-8")
+    recreate = (
+        "up -d --force-recreate api worker watcher "
+        "heimdal-capture-watch companion-ui"
+    )
+    assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
+
+
 def test_prod_promotion_receipt_failure_does_not_publish_latest_receipt(
     tmp_path: Path,
 ) -> None:

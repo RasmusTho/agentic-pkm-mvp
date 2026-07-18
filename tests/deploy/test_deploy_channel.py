@@ -25,9 +25,12 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "scripts/lib").mkdir(parents=True)
     (root / "config/deploy").mkdir(parents=True)
     (root / "app/alembic/versions").mkdir(parents=True)
+    (root / "app/release_channels").mkdir(parents=True)
     (root / "ops/deployments").mkdir(parents=True)
 
     for relative in (
+        "app/release_channels/__init__.py",
+        "app/release_channels/reversibility.py",
         "scripts/deploy_channel.sh",
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/lib/deploy_channel_compose.sh",
