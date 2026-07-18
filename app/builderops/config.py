@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import stat
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 DEFAULT_DB_NAME = "builderops.sqlite3"
 CUTOVER_ACK_NAME = "host-store-cutover-v1.json"
@@ -78,29 +81,80 @@ def host_cutover_ack_path(state_dir: Path | None = None) -> Path:
     return (state_dir if state_dir is not None else default_state_dir()) / CUTOVER_ACK_NAME
 
 
+def current_host_id() -> str:
+    """Return the local host identity recorded in cutover evidence."""
+
+    return platform.node().strip()
+
+
+def current_user_id() -> str:
+    """Return the local OS user identity recorded in cutover evidence."""
+
+    return str(os.getuid())
+
+
 def _validate_host_cutover_ack(state_dir: Path) -> None:
     """Require bounded host-global evidence before implicit store selection."""
 
     path = host_cutover_ack_path(state_dir)
     try:
-        if path.is_symlink():
+        path_stat = path.lstat()
+        if (
+            stat.S_ISLNK(path_stat.st_mode)
+            or not stat.S_ISREG(path_stat.st_mode)
+            or stat.S_IMODE(path_stat.st_mode) != 0o600
+            or path_stat.st_uid != os.getuid()
+        ):
             raise ValueError
         payload: Any = json.loads(path.read_text(encoding="utf-8"))
         acknowledged_at = datetime.fromisoformat(
             str(payload["acknowledged_at"]).replace("Z", "+00:00")
         )
         participating_repos = payload["participating_repos"]
+        participating_roots = payload["participating_roots"]
+        roots = tuple(Path(root).resolve(strict=True) for root in participating_roots)
+        cwd = Path.cwd().resolve()
+        cwd_is_in_inventory = any(cwd == root or root in cwd.parents for root in roots)
+        latest_legacy_write = max(
+            (
+                datetime.fromtimestamp(
+                    (root / "runtime" / "builderops" / DEFAULT_DB_NAME).stat().st_mtime,
+                    tz=timezone.utc,
+                )
+                for root in roots
+                if (root / "runtime" / "builderops" / DEFAULT_DB_NAME).is_file()
+            ),
+            default=None,
+        )
+        now = datetime.now(timezone.utc)
         valid = (
             isinstance(payload, dict)
             and payload.get("schema_version") == CUTOVER_ACK_SCHEMA
             and payload.get("scope") == "same-user-same-host"
+            and payload.get("host_id") == current_host_id()
+            and payload.get("user_id") == current_user_id()
             and payload.get("legacy_stores_reconciled") is True
             and isinstance(payload.get("actor"), str)
             and bool(payload["actor"].strip())
             and acknowledged_at.tzinfo is not None
+            and acknowledged_at <= now + timedelta(minutes=5)
+            and (
+                latest_legacy_write is None
+                or latest_legacy_write <= acknowledged_at
+            )
+            and isinstance(payload.get("inventory_epoch"), str)
+            and bool(UUID(payload["inventory_epoch"]))
             and isinstance(participating_repos, list)
             and all(isinstance(repo, str) and repo.strip() for repo in participating_repos)
             and len(set(participating_repos)) == len(participating_repos)
+            and isinstance(participating_roots, list)
+            and bool(participating_roots)
+            and all(
+                isinstance(root, str) and Path(root).is_absolute()
+                for root in participating_roots
+            )
+            and len(set(participating_roots)) == len(participating_roots)
+            and cwd_is_in_inventory
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         valid = False
@@ -110,7 +164,8 @@ def _validate_host_cutover_ack(state_dir: Path) -> None:
         "Refusing implicit host-stable BuilderOps store selection: a valid "
         "same-user/same-host cutover acknowledgement is required. Stop BuilderOps "
         "writers, reconcile legacy stores across every participating repository, "
-        "then install the documented host-store-cutover-v1 acknowledgement or set "
+        "bind a fresh inventory epoch to this host, user, and every participating "
+        "root, then install the documented host-store-cutover-v1 acknowledgement or set "
         "BUILDEROPS_DB_PATH / BUILDEROPS_STATE_DIR explicitly."
     )
 

@@ -106,19 +106,26 @@ host-stable database unless the operator has installed this host-level acknowled
 {
   "schema_version": "builderops.host-store-cutover.v1",
   "scope": "same-user-same-host",
+  "host_id": "actual local hostname",
+  "user_id": "actual local numeric uid",
   "legacy_stores_reconciled": true,
   "participating_repos": ["owner/repo-a", "owner/repo-b"],
+  "participating_roots": ["/absolute/repo-a", "/absolute/repo-b"],
+  "inventory_epoch": "7afaf9af-b94f-4b5e-8242-c3cb45fc70fb",
   "actor": "operator identity",
   "acknowledged_at": "2026-07-15T00:00:00Z"
 }
 ```
 
-The operator creates this non-symlink marker only after stopping BuilderOps writers, inventorying
+The operator creates this owner-only `0600`, non-symlink marker only after stopping BuilderOps writers, inventorying
 every participating repository on the host, and reconciling or explicitly retaining its legacy
-stores. `participating_repos` is that bounded inventory (an empty list is valid for a verified new
-host). The timestamp must be timezone-aware, the actor must be non-empty, and every listed repo
-must be a unique non-empty string. Missing or malformed evidence produces the same privacy-safe
-fail-loud error; host paths and store contents are never printed.
+stores. The marker is bound to the actual hostname and numeric UID. `participating_repos` names
+the bounded logical inventory; `participating_roots` lists its absolute local roots and must cover
+the current working tree. The UUID `inventory_epoch` and timezone-aware timestamp identify the
+reconciliation pass. A future timestamp, a legacy DB written after that pass, a copied host/user
+identity, an unlisted current root, wrong ownership/mode, or a missing/malformed field fails before
+the consolidated DB is opened. Error text remains privacy-safe; host paths and contents are not
+printed.
 
 `BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, and CLI `--db-path` bypass the acknowledgement gate.
 They remain the operator path for keeping the current store pinned before cutover and selecting the
