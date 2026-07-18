@@ -738,8 +738,13 @@ def test_ambiguous_history_only_edge_state_rolls_back_without_half_init(
     assert _ckm_storage_snapshot(db_path) == before_migration
 
 
+@pytest.mark.parametrize(
+    "registry_created_at",
+    ["2099-01-01T00:00:00Z", "2020-01-01T00:00:00Z"],
+    ids=["late-prior-v5-value", "legitimate-earlier-value"],
+)
 def test_current_schema_repairs_history_only_active_lifecycle_idempotently(
-    tmp_path: Path,
+    tmp_path: Path, registry_created_at: str
 ) -> None:
     db_path = tmp_path / "old-v5-history-lifecycle.sqlite3"
     legacy = CkmStore(db_path)
@@ -753,17 +758,18 @@ def test_current_schema_repairs_history_only_active_lifecycle_idempotently(
     migrated = CkmStore(db_path)
     migrated.ensure_schema()
     with sqlite3.connect(db_path) as conn:
-        public_id, retired_at = conn.execute(
-            "SELECT public_id, retired_at FROM ckm_evidence_edge_history WHERE edge_id = ?",
+        public_id, history_created_at, retired_at = conn.execute(
+            "SELECT public_id, created_at, retired_at "
+            "FROM ckm_evidence_edge_history WHERE edge_id = ?",
             (edge.id,),
         ).fetchone()
         conn.execute(
             """
             UPDATE ckm_public_identity
-            SET status = 'active', tombstoned_at = NULL
+            SET status = 'active', created_at = ?, tombstoned_at = NULL
             WHERE public_id = ?
             """,
-            (public_id,),
+            (registry_created_at, public_id),
         )
         conn.commit()
 
@@ -773,10 +779,16 @@ def test_current_schema_repairs_history_only_active_lifecycle_idempotently(
     assert after_repair.state_revision == before_repair.state_revision + 1
     with sqlite3.connect(db_path) as conn:
         lifecycle = conn.execute(
-            "SELECT status, tombstoned_at FROM ckm_public_identity WHERE public_id = ?",
+            "SELECT status, created_at, tombstoned_at "
+            "FROM ckm_public_identity WHERE public_id = ?",
             (public_id,),
         ).fetchone()
-    assert lifecycle == ("tombstone", retired_at)
+    assert lifecycle == (
+        "tombstone",
+        min(registry_created_at, history_created_at),
+        retired_at,
+    )
+    assert lifecycle[1] <= lifecycle[2]
     assert migrated.identity_lifecycle(public_id)["status"] == "tombstone"
 
     migrated.ensure_schema()

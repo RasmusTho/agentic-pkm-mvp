@@ -467,7 +467,8 @@ class CkmStore:
         ).fetchall():
             desired_status = "active" if row["is_active"] else "tombstone"
             existing = conn.execute(
-                "SELECT resource_type, status FROM ckm_public_identity WHERE public_id = ?",
+                "SELECT resource_type, status, created_at FROM ckm_public_identity "
+                "WHERE public_id = ?",
                 (row["public_id"],),
             ).fetchone()
             if existing is not None:
@@ -479,13 +480,18 @@ class CkmStore:
                 if existing["status"] == desired_status:
                     continue
                 if desired_status == "tombstone" and existing["status"] == "active":
+                    created_at = min(
+                        timestamp
+                        for timestamp in (existing["created_at"], row["created_at"])
+                        if timestamp
+                    )
                     conn.execute(
                         """
                         UPDATE ckm_public_identity
-                        SET status = 'tombstone', tombstoned_at = ?
+                        SET status = 'tombstone', created_at = ?, tombstoned_at = ?
                         WHERE public_id = ?
                         """,
-                        (row["retired_at"] or now, row["public_id"]),
+                        (created_at, row["retired_at"] or now, row["public_id"]),
                     )
                     changed = True
                     continue
