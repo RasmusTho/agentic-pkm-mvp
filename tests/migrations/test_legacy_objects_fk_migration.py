@@ -608,3 +608,32 @@ def test_migration_rejects_cross_key_canonical_identity_collision(scratch_dsn: s
 
     with pytest.raises(Exception, match="retained vault UUID already names a different canonical"):
         _upgrade("head")
+
+
+def test_migration_rejects_legacy_alias_that_collides_with_another_id(scratch_dsn: str) -> None:
+    _upgrade(PRE_CUTOVER_REVISION)
+    other_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, NULL, 'note', '{}'::jsonb)",
+            (other_id,),
+        )
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (uuid.uuid4(), other_id),
+        )
+
+    with pytest.raises(Exception, match="retained vault UUID collides with another objects.id"):
+        _upgrade("head")
+
+
+def test_migration_locks_both_identity_producer_tables() -> None:
+    migration = (
+        REPO_ROOT
+        / "app"
+        / "alembic"
+        / "versions"
+        / "7e4f2a1c9d30_migrate_legacy_objects_fk_consumers.py"
+    ).read_text(encoding="utf-8")
+
+    assert "LOCK TABLE public.objects, public.store_objects IN SHARE ROW EXCLUSIVE MODE" in migration

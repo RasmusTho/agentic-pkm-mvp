@@ -60,6 +60,12 @@ def upgrade() -> None:
                     HINT = 'Run the store-schema migrations before retrying this migration.';
             END IF;
 
+            -- Promotion applies migrations before restarting the old runtime.
+            -- Hold both producer tables against concurrent writes for the full
+            -- preflight/backfill/FK-cutover transaction so the retained-row
+            -- census cannot change underneath the snapshot.
+            LOCK TABLE public.objects, public.store_objects IN SHARE ROW EXCLUSIVE MODE;
+
             IF EXISTS (
                 SELECT 1
                 FROM public.objects
@@ -83,6 +89,19 @@ def upgrade() -> None:
                 RAISE EXCEPTION USING
                     MESSAGE = '#3510 unsupported data: retained vault UUID already names a different canonical object',
                     HINT = 'Reconcile the store_objects row keyed by objects.uuid with the retained objects.id identity, then rerun alembic upgrade head.';
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
+                FROM public.objects legacy
+                JOIN public.objects canonical
+                  ON canonical.id = legacy.uuid
+                 AND canonical.id IS DISTINCT FROM legacy.id
+                WHERE legacy.uuid IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = '#3510 unsupported data: retained vault UUID collides with another objects.id',
+                    HINT = 'Reconcile the cross-key alias so every retained UUID names only its own canonical objects.id, then rerun alembic upgrade head.';
             END IF;
 
             IF EXISTS (
