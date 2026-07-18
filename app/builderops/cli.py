@@ -273,7 +273,10 @@ def _handle_create(
     "--db-path",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
-    help="Override BuilderOps SQLite DB path. Defaults to BUILDEROPS_DB_PATH or runtime/builderops/builderops.sqlite3.",
+    help=(
+        "Override BuilderOps SQLite DB path. Defaults to BUILDEROPS_DB_PATH "
+        "or the host-stable ~/.local/state/builderops/builderops.sqlite3."
+    ),
 )
 @click.pass_context
 def builderops(ctx: click.Context, db_path: Path | None) -> None:
@@ -292,6 +295,15 @@ def _effective_paths(ctx: click.Context) -> BuilderOpsPaths:
         return load_paths(db_path_override=obj.get("db_path"))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _model_inquiry_service(ctx: click.Context) -> ModelInquiryService:
+    paths = _effective_paths(ctx)
+    if paths.vault_root is None:
+        raise click.ClickException(
+            "BUILDEROPS_VAULT_ROOT is required for model inquiries"
+        )
+    return ModelInquiryService(paths.vault_root)
 
 
 @builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")
@@ -617,7 +629,9 @@ def inquiry() -> None:
 @click.option("--source-ref", multiple=True)
 @click.option("--created-by", default=None)
 @click.option("--json", "as_json", is_flag=True)
+@click.pass_context
 def inquiry_start(
+    ctx: click.Context,
     question_file: Path,
     workflow: str,
     inquiry_id: str | None,
@@ -632,7 +646,7 @@ def inquiry_start(
             if source_ref
             else [{"ref_type": "file", "ref": str(question_file.resolve())}]
         )
-        payload = ModelInquiryService.from_env().start(
+        payload = _model_inquiry_service(ctx).start(
             question=question,
             workflow=workflow,
             inquiry_id=inquiry_id,
@@ -648,9 +662,12 @@ def inquiry_start(
 @click.argument("inquiry_id")
 @click.option("--include-delivery", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
-def inquiry_trace(inquiry_id: str, include_delivery: bool, as_json: bool) -> None:
+@click.pass_context
+def inquiry_trace(
+    ctx: click.Context, inquiry_id: str, include_delivery: bool, as_json: bool
+) -> None:
     try:
-        payload = ModelInquiryService.from_env().trace(
+        payload = _model_inquiry_service(ctx).trace(
             inquiry_id,
             include_delivery=include_delivery,
         )
@@ -663,13 +680,15 @@ def inquiry_trace(inquiry_id: str, include_delivery: bool, as_json: bool) -> Non
 @click.argument("inquiry_id")
 @click.option("--created-by", default=None)
 @click.option("--json", "as_json", is_flag=True)
+@click.pass_context
 def inquiry_evaluate(
+    ctx: click.Context,
     inquiry_id: str,
     created_by: str | None,
     as_json: bool,
 ) -> None:
     try:
-        service = ModelInquiryService.from_env()
+        service = _model_inquiry_service(ctx)
         gateway = ModelInquiryPromotionGateway(service)
         payload = gateway.evaluate(inquiry_id, actor=_parse_actor(created_by))
         payload["human_readable_report"] = str(
@@ -687,7 +706,9 @@ def inquiry_evaluate(
 @click.option("--label", "labels", multiple=True)
 @click.option("--created-by", default=None)
 @click.option("--json", "as_json", is_flag=True)
+@click.pass_context
 def inquiry_promote(
+    ctx: click.Context,
     inquiry_id: str,
     create_issue: bool,
     repository: str | None,
@@ -705,7 +726,7 @@ def inquiry_promote(
             "--repository or BUILDEROPS_GITHUB_REPOSITORY is required"
         )
     try:
-        service = ModelInquiryService.from_env()
+        service = _model_inquiry_service(ctx)
         gateway = ModelInquiryPromotionGateway(
             service,
             repository=repository,
@@ -726,14 +747,16 @@ def inquiry_promote(
 @click.option("--delivery-ref", required=True, help="JSON ref or ref_type:ref shorthand.")
 @click.option("--created-by", default=None)
 @click.option("--json", "as_json", is_flag=True)
+@click.pass_context
 def inquiry_link_delivery(
+    ctx: click.Context,
     inquiry_id: str,
     delivery_ref: str,
     created_by: str | None,
     as_json: bool,
 ) -> None:
     try:
-        service = ModelInquiryService.from_env()
+        service = _model_inquiry_service(ctx)
         trace = service.trace(inquiry_id)
         payload = service.commit_delivery_reference(
             inquiry_id,
@@ -749,9 +772,10 @@ def inquiry_link_delivery(
 @inquiry.command("resume", help="Plan restart continuation without executing a provider.")
 @click.argument("inquiry_id")
 @click.option("--json", "as_json", is_flag=True)
-def inquiry_resume(inquiry_id: str, as_json: bool) -> None:
+@click.pass_context
+def inquiry_resume(ctx: click.Context, inquiry_id: str, as_json: bool) -> None:
     try:
-        payload = ModelInquiryService.from_env().resume(inquiry_id)
+        payload = _model_inquiry_service(ctx).resume(inquiry_id)
     except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
@@ -762,9 +786,16 @@ def inquiry_resume(inquiry_id: str, as_json: bool) -> None:
 @click.option("--dry-run", is_flag=True, help="Return a deterministic plan without mutations.")
 @click.option("--max-rounds", default=3, show_default=True, type=click.IntRange(1, 20))
 @click.option("--json", "as_json", is_flag=True)
-def inquiry_run(inquiry_id: str, dry_run: bool, max_rounds: int, as_json: bool) -> None:
+@click.pass_context
+def inquiry_run(
+    ctx: click.Context,
+    inquiry_id: str,
+    dry_run: bool,
+    max_rounds: int,
+    as_json: bool,
+) -> None:
     try:
-        service = ModelInquiryService.from_env()
+        service = _model_inquiry_service(ctx)
         payload = ModelInquiryRunner(service).run(
             inquiry_id,
             max_rounds=max_rounds,

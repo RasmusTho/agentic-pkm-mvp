@@ -5,8 +5,8 @@ Owner: BuilderOps governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: app/builderops, app/cli/builderops.py, ADR-0010, BuilderOps object model
-Last reviewed: 2026-06-01
-Last verified against: issues #1501/#1502/#1507/#1508
+Last reviewed: 2026-07-14
+Last verified against: issues #1501/#1502/#1507/#1508/#3686
 
 # BuilderOps Vault Store and CLI
 
@@ -72,8 +72,13 @@ or transitioned.
 Default state path:
 
 ```text
-runtime/builderops/builderops.sqlite3
+~/.local/state/builderops/builderops.sqlite3
 ```
+
+The default expands to an absolute, host-stable path in the current user's home directory. It is
+independent of the process working directory, so agents launched from separate checkouts or
+worktrees on the same host share one SQLite database and one lease table. The store remains
+single-host; this default does not add cross-host coordination.
 
 Override mechanisms:
 
@@ -85,8 +90,56 @@ Override mechanisms:
 - API/tool callers may set `builderops_db_path` through tool settings or `BUILDEROPS_DB_PATH`
   through the environment; see `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`.
 
-The default path is repo-local runtime state and is ignored by Git via `runtime/builderops/`. It is
-not `$CODEX_HOME`, not local hidden memory, not repo authority, and not a reviewed docs surface.
+The default path is machine-local operating-plane state outside repository checkouts. It is not
+`$CODEX_HOME`, not runtime/user memory, not repo authority, and not a reviewed docs surface.
+Existing legacy stores under `<checkout>/runtime/builderops/` are not migrated, merged, deleted, or
+silently treated as the consolidated store by this code change. Absence of a legacy store in the
+current repository is not evidence that other participating repositories have no legacy state.
+With neither store override set, path loading therefore fails before opening or initializing the
+host-stable database unless the operator has installed this host-level acknowledgement:
+
+```text
+~/.local/state/builderops/host-store-cutover-v1.json
+```
+
+```json
+{
+  "schema_version": "builderops.host-store-cutover.v1",
+  "scope": "same-user-same-host",
+  "host_id": "actual local hostname",
+  "user_id": "actual local numeric uid",
+  "legacy_stores_reconciled": true,
+  "participating_repos": ["owner/repo-a", "owner/repo-b"],
+  "participating_roots": ["/absolute/repo-a", "/absolute/repo-b"],
+  "inventory_epoch": "7afaf9af-b94f-4b5e-8242-c3cb45fc70fb",
+  "actor": "operator identity",
+  "acknowledged_at": "2026-07-15T00:00:00Z"
+}
+```
+
+The operator creates this owner-only `0600`, non-symlink marker only after stopping BuilderOps writers, inventorying
+every participating repository on the host, and reconciling or explicitly retaining its legacy
+stores. The marker is bound to the actual hostname and numeric UID. `participating_repos` names
+the bounded logical inventory; `participating_roots` lists the same number of unique, resolved,
+absolute local roots in matching inventory order, and the current working directory must equal one
+of those exact roots. Every listed root is recursively inventoried for nested
+`runtime/builderops/builderops.sqlite3` stores without following symlinks, so a broad secondary
+root cannot hide a newer nested legacy store. The UUID
+`inventory_epoch` and timezone-aware timestamp identify the
+reconciliation pass. A future timestamp, a legacy DB written after that pass, a copied host/user
+identity, an unlisted current root, wrong ownership/mode, or a missing/malformed field fails before
+the consolidated DB is opened. Error text remains privacy-safe; host paths and contents are not
+printed.
+
+`BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, and CLI `--db-path` bypass the acknowledgement gate.
+Environment overrides must be non-blank after trimming; blank values are treated as absent and
+therefore follow the acknowledged implicit host-store path.
+They remain the operator path for keeping the current store pinned before cutover and selecting the
+reconciled store during cutover. This PR does not create the acknowledgement, inventory repos,
+reconcile records, migrate data, stop writers, or perform the live cutover.
+
+Default home-directory resolution is lazy. An absolute explicit DB/state/CLI override therefore
+continues to work in hostless automation where no user home can be resolved.
 
 ### Shared artifact vault and advisory claim signals
 
@@ -182,9 +235,10 @@ worktrees that regenerate checked-in projection views should set the intended st
 generator may fail loud before overwriting existing generated projections with records from an empty
 or incomplete worktree-local store.
 
-**Store durability and regen diff expectations:** The default store at `runtime/builderops/` is
-gitignored, machine-local, and mutable. It is not shared across devices, not preserved across
-worktree pruning, and not reproducible over time. Checked-in projections under
+**Store durability and regen diff expectations:** The default store at
+`~/.local/state/builderops/builderops.sqlite3` is machine-local and mutable. It is not shared across
+devices and is not reproducible over time. Unlike the former worktree-local default, worktree
+pruning does not remove it. Checked-in projections under
 `docs/generated/builderops/` are non-authoritative views over this ephemeral store; records that
 appear in a checked-in projection may be absent in the current local store after any store rotation,
 device change, or worktree lifecycle event. A regen diff — records appearing or disappearing between

@@ -112,15 +112,16 @@ change only through their explicit owner workflows and promotion gates.
 ## Non-Authoritative and Non-Reproducible
 
 Checked-in BuilderOps projections under `docs/generated/builderops/` are **non-authoritative
-repo-readable views** over a gitignored, machine-local, mutable SQLite store
-(`runtime/builderops/builderops.sqlite3`). They are **not reproducible** across devices or over
-time.
+repo-readable views** over a machine-local, mutable SQLite store
+(`~/.local/state/builderops/builderops.sqlite3` by default). They are **not reproducible** across
+devices or over time.
 
 Consequences:
 
 - A regen diff (records appearing or disappearing between regeneration runs) is **expected, not data
-  loss**. The backing store is ephemeral and may not contain the same records on a different machine,
-  in a different worktree, or at a different time.
+  loss**. The backing store may not contain the same records on a different machine or at a different
+  time. Separate worktrees on one host share the default store; explicit overrides can still select
+  a different store deliberately.
 - Checked-in projection records are not a durable authority surface. Records that were once visible
   in a checked-in projection may be absent in the current local store; this is the designed behaviour
   of a non-persistent view over an ephemeral backing store.

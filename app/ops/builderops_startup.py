@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from app.builderops.config import DEFAULT_DB_NAME, default_state_dir, load_paths
+
 DEFAULT_REPOS = ("RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost")
 DEFAULT_RATE_LIMIT_MIN = 25
 
@@ -218,8 +220,17 @@ def _builderops_readiness(*, root: Path, env: dict[str, str], result: dict[str, 
     builderops: dict[str, Any] = {
         "status": "ok",
         "wrapper": str(wrapper.relative_to(root)),
-        "db_path": _builderops_db_path(root, env),
+        "db_path": None,
     }
+    try:
+        load_paths(env)
+    except ValueError as exc:
+        builderops["status"] = "degraded"
+        builderops["reason"] = "builderops_path_preflight_failed"
+        builderops["detail"] = str(exc)
+        _append_reason(result, "builderops_path_preflight_failed")
+        return builderops
+    builderops["db_path"] = _builderops_db_path(root, env)
     if not wrapper.exists():
         builderops["status"] = "degraded"
         builderops["reason"] = "builderops_wrapper_missing"
@@ -281,12 +292,16 @@ def _signboard_export(
 
 
 def _builderops_db_path(root: Path, env: dict[str, str]) -> str:
-    if env.get("BUILDEROPS_DB_PATH"):
-        return env["BUILDEROPS_DB_PATH"]
-    state_dir = Path(env.get("BUILDEROPS_STATE_DIR", "runtime/builderops")).expanduser()
+    configured_db_path = env.get("BUILDEROPS_DB_PATH")
+    if configured_db_path is not None and configured_db_path.strip():
+        return configured_db_path
+    configured_state_dir = env.get("BUILDEROPS_STATE_DIR")
+    if configured_state_dir is None or not configured_state_dir.strip():
+        return str(default_state_dir() / DEFAULT_DB_NAME)
+    state_dir = Path(configured_state_dir).expanduser()
     if not state_dir.is_absolute():
         state_dir = root / state_dir
-    return str(state_dir / "builderops.sqlite3")
+    return str(state_dir / DEFAULT_DB_NAME)
 
 
 def _project_reconciliation() -> dict[str, Any]:

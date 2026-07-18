@@ -4,10 +4,39 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _write_cutover_ack(state_dir: Path) -> None:
+    from app.builderops import config as builderops_config
+
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = builderops_config.host_cutover_ack_path(state_dir)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": builderops_config.CUTOVER_ACK_SCHEMA,
+                "scope": "same-user-same-host",
+                "host_id": builderops_config.current_host_id(),
+                "user_id": builderops_config.current_user_id(),
+                "legacy_stores_reconciled": True,
+                "participating_repos": ["local/repo"],
+                "participating_roots": [str(Path.cwd().resolve())],
+                "inventory_epoch": str(uuid4()),
+                "actor": "operator-test",
+                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
 
 
 def test_default_repos_include_agentic_and_bifrost() -> None:
@@ -59,6 +88,86 @@ def test_builderops_bootstrap_environment_guard_covers_dev_and_prod_only() -> No
     assert "dev|prod)" in guard
     assert "test)" not in guard
     assert "scripts/start_builderops_services.sh" in guard
+
+
+def test_builderops_readiness_degrades_before_implicit_cutover_without_host_ack(
+    tmp_path: Path,
+) -> None:
+    from app.ops.builderops_startup import _builderops_readiness
+
+    result: dict[str, object] = {"reasons": []}
+    receipt = _builderops_readiness(
+        root=REPO_ROOT,
+        env={"HOME": str(tmp_path / "home")},
+        result=result,
+    )
+
+    assert receipt["status"] == "degraded"
+    assert receipt["reason"] == "builderops_path_preflight_failed"
+    assert receipt["db_path"] is None
+    assert "same-user/same-host cutover acknowledgement is required" in str(
+        receipt["detail"]
+    )
+    assert result["reasons"] == ["builderops_path_preflight_failed"]
+    assert not (tmp_path / "home" / ".local" / "state" / "builderops").exists()
+
+
+@pytest.mark.parametrize("variable", ["BUILDEROPS_STATE_DIR", "BUILDEROPS_DB_PATH"])
+def test_builderops_readiness_does_not_treat_blank_override_as_explicit(
+    tmp_path: Path,
+    variable: str,
+) -> None:
+    from app.ops.builderops_startup import _builderops_readiness
+
+    result: dict[str, object] = {"reasons": []}
+    receipt = _builderops_readiness(
+        root=REPO_ROOT,
+        env={"HOME": str(tmp_path / "home"), variable: "   "},
+        result=result,
+    )
+
+    assert receipt["status"] == "degraded"
+    assert receipt["reason"] == "builderops_path_preflight_failed"
+    assert receipt["db_path"] is None
+    assert "same-user/same-host cutover acknowledgement is required" in str(
+        receipt["detail"]
+    )
+    assert result["reasons"] == ["builderops_path_preflight_failed"]
+    assert not (tmp_path / "home" / ".local" / "state" / "builderops").exists()
+
+
+@pytest.mark.parametrize("variable", ["BUILDEROPS_STATE_DIR", "BUILDEROPS_DB_PATH"])
+def test_builderops_readiness_reports_implicit_store_for_blank_override_after_ack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+) -> None:
+    from app.builderops import config as builderops_config
+    from app.ops import builderops_startup
+
+    state_dir = tmp_path / "host-state" / "builderops"
+    _write_cutover_ack(state_dir)
+    monkeypatch.setattr(builderops_config, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(builderops_startup, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(
+        builderops_startup,
+        "_run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="[]", stderr=""
+        ),
+    )
+
+    result: dict[str, object] = {"reasons": []}
+    receipt = builderops_startup._builderops_readiness(
+        root=REPO_ROOT,
+        env={variable: "   "},
+        result=result,
+    )
+
+    assert receipt["status"] == "ok"
+    assert receipt["db_path"] == str(state_dir / "builderops.sqlite3")
+    assert receipt["record_count"] == 0
+    assert result["reasons"] == []
 
 
 def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> None:
