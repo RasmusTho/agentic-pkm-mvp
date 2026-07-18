@@ -1087,6 +1087,17 @@ run_docker_compose() {
   fi
 }
 
+ensure_prod_instance_state_volume() {
+  if [ "${COMPOSE_PROJECT_NAME:-}" != "pkm-prod" ]; then
+    return 0
+  fi
+  if docker volume inspect pkm-prod_instance-state >/dev/null 2>&1; then
+    return 0
+  fi
+  docker volume create --label agentic-pkm.surface=instance-state \
+    pkm-prod_instance-state >/dev/null
+}
+
 check_compose_port_conflicts() {
   local target_services=("$@")
   local config_json
@@ -1159,6 +1170,7 @@ PY
 }
 
 run_preflight
+ensure_prod_instance_state_volume
 start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
 
 llm_provider="${LLM_PROVIDER:-}"

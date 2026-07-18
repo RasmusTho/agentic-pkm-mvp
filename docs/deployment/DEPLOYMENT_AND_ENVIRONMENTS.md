@@ -55,15 +55,21 @@ Notes on the current model:
 
 ### Multi-vault instance-state rollout boundary
 
-MVR-01A introduces the dormant `app.instance.vault_registry` store and its private-file,
+MVR-01A provides the dormant `app.instance.vault_registry` store and its private-file,
 cross-process lock, CAS, physical-root identity, crash-recoverable transaction journal, snapshot,
-and corruption-recovery contracts. It does not change current channel mounts or make that schema
-authoritative. The production picker continues to write the legacy scalar app-local payload.
+and corruption-recovery contracts. MVR-01B now provides the protected channel-scoped
+`/app/instance-state` named volume, the shared private `/app/instance-ownership` host ledger/key,
+and identical fail-loud preflight for API, worker, watcher, and Heimdal capture watcher. The
+`instance-state-init` producer establishes owner-only state before those consumers start; their
+resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`.
 
-The protected per-channel `/app/instance-state` volume, cross-consumer mount/preflight, backup and
-rollback transformer are MVR-01B work. MVR-01C owns the guarded authority cutover. A deployment must
-therefore not infer that the presence of the dormant schema permits a second active production
-binding or retire the legacy source before those later gates are present.
+The 01B recovery boundary also includes post-quiescence legacy export/import, verified
+registry/ledger/key backup and restore, canonical-root overlap rejection, and dormant recoverable
+lifecycle lineage. It deliberately leaves `authority: dormant`: the production picker continues to
+read and write the legacy scalar app-local payload, second-registration and lifecycle producers
+remain sealed, and the independently durable legacy source must not be retired. MVR-01C alone owns
+the guarded rollback gateway and authority cutover; the presence of the 01B volume or prepared
+registry is never evidence that cutover has occurred.
 
 ### Target
 

@@ -51,6 +51,13 @@ if [ "${{1:-}}" = "ps" ]; then
   exit 0
 fi
 
+if [ "${{1:-}}" = "volume" ]; then
+  case "${{2:-}}" in
+    inspect) exit 1 ;;
+    create) exit 0 ;;
+  esac
+fi
+
 if [ "${{1:-}}" = "compose" ]; then
   shift
   while [ "$#" -gt 0 ]; do

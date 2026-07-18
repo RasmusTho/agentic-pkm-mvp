@@ -225,6 +225,17 @@ compose() {
     "$@"
 }
 
+ensure_prod_instance_state_volume() {
+  if [ "${channel}" != "prod" ]; then
+    return 0
+  fi
+  if docker volume inspect pkm-prod_instance-state >/dev/null 2>&1; then
+    return 0
+  fi
+  docker volume create --label agentic-pkm.surface=instance-state \
+    pkm-prod_instance-state >/dev/null
+}
+
 wait_json_ok() {
   local url="$1" deadline body
   deadline=$((SECONDS + health_timeout))
@@ -570,6 +581,8 @@ fi
 if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
   prod_pending_retry_preflight || exit 87
 fi
+
+ensure_prod_instance_state_volume
 
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK

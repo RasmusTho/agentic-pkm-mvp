@@ -1,9 +1,9 @@
 # Multi-vault runtime selection
 
-State: Active future-state capability specification. Parent validation hub **#2143** remains
-blocked and must never be claimed as an implementation issue. The 17 executable children are filed
-as **#3853–#3869**; only #3853 is initially pickup-ready. No text in this directory claims that
-multi-vault runtime behavior is shipped.
+State: Active capability specification with the MVR-01A/01B mechanical substrate delivered.
+Parent validation hub **#2143** remains blocked and must never be claimed as an implementation
+issue. The 17 executable children are filed as **#3853–#3869**. The 01B substrate does not activate
+multi-vault runtime authority; #3855 (01C) and the remaining children still govern that cutover.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -111,6 +111,17 @@ this contract; worker/watcher/Heimdal readers do not invent independent writers.
 Promotion/startup preflight must prove the volume, ownership, identical resolved path, and lock
 semantics across processes before recreate. Post-recreate verification must prove the same
 registry revision from API, worker, watcher, and Heimdal capture watcher.
+
+The shipped MVR-01B boundary installs that mechanical substrate without changing production
+authority. Compose provides one project-scoped `instance-state` volume to API, worker, watcher,
+and Heimdal capture watcher, while `/app/instance-ownership` is a private host-global ledger/key
+surface shared across channels. Each consumer fail-exits through the same startup preflight and
+resolves `/app/instance-state/agentic-pkm/vault-registry.md`; the root-ownership bootstrap producer,
+final post-quiescence legacy export/import, checksum-verified registry/ledger/key backup and
+restore, root-overlap fence, and recoverable transfer/removal lineage are present. The prepared
+registry remains `authority: dormant`: production reads still use the legacy scalar app-local
+store, every second-registration producer and lifecycle mutation stays capability-gated, and only
+MVR-01C may install the rollback gateway and perform authority cutover.
 
 `app/vault/app_local.py` moves to `app/instance/vault_registry.py` when the registry becomes
 first-class. The old import path remains a bounded compatibility re-export until the final

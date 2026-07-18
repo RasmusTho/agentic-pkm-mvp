@@ -54,12 +54,13 @@ def test_base_service_defined() -> None:
     assert svc["command"] == [
         "/bin/bash",
         "-c",
-        "mkdir -p /app/tmp && python -m app.cli heimdal capture-watch",
+        "mkdir -p /app/tmp && python -m app.instance.runtime preflight --channel \"$${PKM_ENVIRONMENT:-dev}\" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer heimdal-capture-watch && exec python -m app.cli heimdal capture-watch",
     ]
     assert svc["restart"] == "unless-stopped"
     assert "/Users:/Users" in svc["volumes"]
     assert "/Volumes:/Volumes" in svc["volumes"]
     assert "runtime-tmp:/app/tmp" in svc["volumes"]
+    assert "instance-state:/app/instance-state" in svc["volumes"]
     assert svc["depends_on"]["db"]["condition"] == "service_healthy"
     assert svc["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
 

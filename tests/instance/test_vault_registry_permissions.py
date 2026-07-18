@@ -21,6 +21,7 @@ def test_registry_transaction_files_are_private(tmp_path) -> None:
     assert store.lock_path.stat().st_mode & 0o777 == 0o600
     assert store.snapshot_path.stat().st_mode & 0o777 == 0o600
     assert store.snapshot_checksum_path.stat().st_mode & 0o777 == 0o600
+    assert store.rollback_export_path.stat().st_mode & 0o777 == 0o600
     assert not store.transaction_path.exists()
     assert not list(path.parent.glob(f".{path.name}.*"))
 

@@ -98,16 +98,21 @@ The channel is the operational identity; the environment is the runtime selector
 
 ### Multi-vault registry rollout state
 
-The codebase contains a dormant, versioned instance-vault registry boundary under
-`app.instance.vault_registry`; the legacy scalar app-local store remains authoritative for every
-release channel. This first slice supplies private atomic persistence, locking/CAS, migration and
-recovery behavior for validation, including prepared/committed restart recovery and physical-root
-alias rejection, but it does not authorize channel storage cutover or a second production
-registration.
+Each channel now has a protected named `instance-state` volume mounted at `/app/instance-state` in
+API, worker, watcher, and Heimdal capture watcher; prod's `pkm-prod_instance-state` volume is
+external and the canonical prod startup/deploy wrappers provision it idempotently. All four
+consumers fail-exit through one resolved-path/permissions preflight before starting and use
+`/app/instance-state/agentic-pkm/vault-registry.md`. A separate private host bind at
+`/app/instance-ownership` carries the HMAC-keyed canonical-root ledger shared across dev/test/prod,
+preventing equal or overlapping content roots from becoming active in different channels.
 
-No release-channel procedure may treat that dormant file as authoritative until MVR-01B has
-installed the protected per-channel instance-state volume plus rollback exporter/transformer and
-MVR-01C has passed the previous-image guard and atomically activated the new authority floor.
+MVR-01B also provides the channel-fenced final post-stop legacy export/import, latest-revision
+scalar transformer boundary, and verified backup/restore of registry plus the actual ownership
+ledger/key generation. Those recovery facilities do not authorize cutover. The registry remains
+`authority: dormant`, the legacy scalar app-local store remains authoritative in every channel,
+and second-registration, transfer, relocation, and removal producers remain sealed. No release
+procedure may retire the durable legacy source or treat prepared registry state as authoritative
+until MVR-01C passes the previous-image guard and atomically installs the new authority floor.
 
 ## Invariants (MUST hold)
 
