@@ -1,7 +1,7 @@
 State: Accepted (owner decision, 2026-07-17). Selects a neutral shared LLM Contract Kernel with separate Product and Builder execution/policy runtimes; changes no shipped runtime, registry authority, credentials, fallback policy, or provider execution path by itself.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the dependency direction and compatibility contract between Product and Builder LLM runtimes. `docs/LLM_ROUTING.md` remains authoritative for the current Product LLM Fabric; ADR-0010 and ADR-0062 remain authoritative for BuilderOps and Product/Builder separation.
-Owner: Architecture (Rasmus)
+Owner: Architecture
 Temporal class: Durable architecture decision; supersede through a later ADR.
 Source of truth: Current-state behavior remains in `docs/LLM_ROUTING.md`, `docs/LLM.md`, and code. Builder authority remains in ADR-0010, ADR-0062, `docs/BUILDEROPS_MODEL_INQUIRY/`, and `docs/BUILDEROPS_CONTROL_PLANE/`. Evidence and migration analysis are in `docs/audits/LLM_RUNTIME_COORDINATION_2026-07-17.md`.
 
