@@ -328,6 +328,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Index rebuild is the memory-retrieval CLI producer for the
             # canonical vector rows exercised by the index suites.
             "app/cli/index_rebuild.py",
+            # Runtime vector producers share the same canonical-byte and
+            # provenance contract as rebuild/reconcile. Keep changes to these
+            # exact seams on the index/search acceptance surface instead of
+            # failing closed as unowned after implementation has already run.
+            "app/indexer/consumer.py",
+            "app/search/service.py",
+            "app/services/indexer.py",
             "tests/agent_memory/",
             "tests/retrieval/",
             "tests/indexer/",
