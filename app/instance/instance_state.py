@@ -168,6 +168,8 @@ class InstanceStateBackup:
         os.chmod(destination, 0o700)
         artifacts = {
             "vault-registry.md": self.layout.registry_path,
+            "vault-registry.md.last-good": registry_store.snapshot_path,
+            "vault-registry.md.last-good.sha256": registry_store.snapshot_checksum_path,
             "vault-registry.md.legacy-export": registry_store.rollback_export_path,
             "ownership-ledger.json": self.ledger.path,
             "ownership-key.json": self.ledger.key_path,
@@ -204,6 +206,8 @@ class InstanceStateBackup:
         required = {
             "manifest.json",
             "vault-registry.md",
+            "vault-registry.md.last-good",
+            "vault-registry.md.last-good.sha256",
             "vault-registry.md.legacy-export",
             "ownership-ledger.json",
             "ownership-key.json",
@@ -214,6 +218,13 @@ class InstanceStateBackup:
             manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
             if manifest.get("schema") != _BACKUP_SCHEMA:
                 raise ValueError
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise InstanceStatePreflightError("backup verification failed") from exc
+        if manifest.get("channel_id") != self.layout.channel_id:
+            raise InstanceStatePreflightError(
+                "backup channel_id does not match restore target"
+            )
+        try:
             checksums = manifest["checksums"]
             for name in required - {"manifest.json"}:
                 actual = hashlib.sha256((source / name).read_bytes()).hexdigest()
@@ -224,11 +235,17 @@ class InstanceStateBackup:
         self.layout.ensure()
         self.ledger.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.ledger.root, 0o700)
+        registry_store = VaultRegistryStore(self.layout.registry_path)
         _atomic_private_write(
-            self.layout.registry_path, (source / "vault-registry.md").read_bytes()
+            registry_store.snapshot_path,
+            (source / "vault-registry.md.last-good").read_bytes(),
         )
         _atomic_private_write(
-            VaultRegistryStore(self.layout.registry_path).rollback_export_path,
+            registry_store.snapshot_checksum_path,
+            (source / "vault-registry.md.last-good.sha256").read_bytes(),
+        )
+        _atomic_private_write(
+            registry_store.rollback_export_path,
             (source / "vault-registry.md.legacy-export").read_bytes(),
         )
         _atomic_private_write(
@@ -237,7 +254,10 @@ class InstanceStateBackup:
         _atomic_private_write(
             self.ledger.key_path, (source / "ownership-key.json").read_bytes()
         )
-        VaultRegistryStore(self.layout.registry_path).load()
+        _atomic_private_write(
+            self.layout.registry_path, (source / "vault-registry.md").read_bytes()
+        )
+        registry_store.load()
         self.ledger.load()
         return InstanceStateRestoreReceipt(str(manifest["registry_checksum"]))
 

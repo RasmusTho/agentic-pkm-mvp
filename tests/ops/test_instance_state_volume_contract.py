@@ -185,6 +185,10 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     )
     backup = InstanceStateBackup(layout, runtime.ledger).create(tmp_path / "backup")
     expected = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    assert {
+        "vault-registry.md.last-good",
+        "vault-registry.md.last-good.sha256",
+    } <= expected["checksums"].keys()
 
     for path in layout.root.iterdir():
         if path.is_file():
@@ -200,6 +204,70 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
     assert runtime.ledger.load().leases
 
+    layout.registry_path.unlink()
+    assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
+    layout.registry_path.write_bytes(b"torn registry write")
+    os.chmod(layout.registry_path, 0o600)
+    assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
+
     (tmp_path / "backup" / "ownership-key.json").unlink()
     with pytest.raises(InstanceStatePreflightError, match="complete ledger/key"):
         InstanceStateBackup(layout, runtime.ledger).restore(tmp_path / "backup", live_channels=())
+
+
+def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_path) -> None:
+    source_layout = InstanceStateLayout.for_channel(tmp_path / "dev-state", "dev")
+    source_runtime = InstanceRegistryRuntime.for_paths(
+        source_layout,
+        tmp_path / "dev-host-global",
+    )
+    source_root = tmp_path / "dev-vault"
+    source_root.mkdir()
+    source_runtime.bootstrap_env_binding(
+        vault_root=source_root,
+        watcher_vault_path=source_root,
+    )
+    InstanceStateBackup(source_layout, source_runtime.ledger).create(
+        tmp_path / "dev-backup"
+    )
+
+    target_layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    target_runtime = InstanceRegistryRuntime.for_paths(
+        target_layout,
+        tmp_path / "prod-host-global",
+    )
+    target_root = tmp_path / "prod-vault"
+    target_root.mkdir()
+    target_runtime.bootstrap_env_binding(
+        vault_root=target_root,
+        watcher_vault_path=target_root,
+    )
+    target_runtime.registry.set_extension_state(
+        default_vault_binding_id="prod-default",
+        dimensions={"prod": ["prod-default"]},
+        principal_state={"operator": "prod"},
+        background_state={"mode": "prod"},
+        runtime_floors={"registry": "prod"},
+    )
+
+    target_roots = (target_layout.root, target_runtime.ledger.root)
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for root in target_roots
+        for path in root.iterdir()
+        if path.is_file()
+    }
+
+    with pytest.raises(InstanceStatePreflightError, match="channel_id"):
+        InstanceStateBackup(target_layout, target_runtime.ledger).restore(
+            tmp_path / "dev-backup",
+            live_channels=(),
+        )
+
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for root in target_roots
+        for path in root.iterdir()
+        if path.is_file()
+    }
+    assert after == before
