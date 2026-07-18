@@ -290,6 +290,13 @@ def test_postdeploy_smoke_failure_rolls_back_previous_pin_and_services(
             2,
         ),
         ("FAKE_API_LIVENESS", "fail", 1, "health gate failed", 2),
+        (
+            "FAKE_VERSION_CURL",
+            "fail",
+            7,
+            "fake version curl diagnostic",
+            2,
+        ),
         ("FAKE_VERSION_SHA", "wrong-sha", 1, "/version reported wrong-sha", 2),
         (
             "FAKE_FLEET_MODEL_FITNESS",

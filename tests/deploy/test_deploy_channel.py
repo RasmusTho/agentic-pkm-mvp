@@ -71,7 +71,13 @@ exit 0
 set -eu
 printf 'curl %s\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
 case "$*" in
-  *"/version"*) printf '{"git_sha":"%s"}\\n' "${FAKE_VERSION_SHA:-$FAKE_SHA}" ;;
+  *"/version"*)
+    if [ "${FAKE_VERSION_CURL:-pass}" = "fail" ]; then
+      echo 'fake version curl diagnostic' >&2
+      exit "${FAKE_VERSION_CURL_RC:-7}"
+    fi
+    printf '{"git_sha":"%s"}\\n' "${FAKE_VERSION_SHA:-$FAKE_SHA}"
+    ;;
   *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}" ;;
   *"/healthz"*)
     if [ "${FAKE_API_LIVENESS:-pass}" = "fail" ]; then

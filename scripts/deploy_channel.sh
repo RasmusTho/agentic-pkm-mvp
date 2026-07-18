@@ -390,11 +390,30 @@ print(line)
 }
 
 version_gate() {
-  local version_json health_json version_sha health_sha
-  version_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/version")"
-  health_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/api/health")"
-  version_sha="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("git_sha", ""))' <<<"${version_json}")"
-  health_sha="$("${PYTHON}" -c 'import json,sys; data=json.load(sys.stdin); value=data.get("version"); print(value.get("git_sha", "") if isinstance(value, dict) else (value if isinstance(value, str) else ""))' <<<"${health_json}")"
+  local version_json health_json version_sha health_sha rc=0
+  version_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/version")" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "version gate: /version fetch failed (status ${rc})" >&2
+    return "${rc}"
+  fi
+  rc=0
+  health_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/api/health")" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "version gate: /api/health fetch failed (status ${rc})" >&2
+    return "${rc}"
+  fi
+  rc=0
+  version_sha="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("git_sha", ""))' <<<"${version_json}")" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "version gate: /version response parse failed (status ${rc})" >&2
+    return "${rc}"
+  fi
+  rc=0
+  health_sha="$("${PYTHON}" -c 'import json,sys; data=json.load(sys.stdin); value=data.get("version"); print(value.get("git_sha", "") if isinstance(value, dict) else (value if isinstance(value, str) else ""))' <<<"${health_json}")" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "version gate: /api/health response parse failed (status ${rc})" >&2
+    return "${rc}"
+  fi
   [ "${version_sha}" = "${target_sha}" ] || {
     echo "/version reported ${version_sha}, expected ${target_sha}" >&2
     return 1
