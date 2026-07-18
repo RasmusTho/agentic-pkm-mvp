@@ -191,6 +191,43 @@ def save_object_in_transaction(conn: Any, obj: DomainObject) -> None:
     )
 
 
+def resolve_canonical_object_id_in_transaction(conn: Any, vault_uuid: str) -> str:
+    """Resolve a retained vault UUID to the canonical object id on ``conn``."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text
+            FROM objects
+            WHERE uuid = %s
+            LIMIT 1
+            """,
+            (vault_uuid,),
+        )
+        row = cur.fetchone()
+    if isinstance(row, dict):
+        return str(row.get("id") or vault_uuid)
+    return str(row[0]) if row and row[0] is not None else str(vault_uuid)
+
+
+def resolve_canonical_object_id(vault_uuid: str) -> str:
+    """Resolve runtime vault identity without weakening durable fail-loud behavior.
+
+    The explicit memory backend has no retained compatibility table, so its
+    vault UUID is already the object id.  The Postgres backend must consult the
+    retained ``objects.uuid -> objects.id`` mapping before any canonical write
+    or lifecycle event; database failures propagate just like the write that
+    follows.
+    """
+    binding = resolve_object_store_port()
+    if binding.backend != "pg":
+        return str(vault_uuid)
+
+    from app.db.db import conn_ro
+
+    with conn_ro() as conn:
+        return resolve_canonical_object_id_in_transaction(conn, str(vault_uuid))
+
+
 def update_object_source_ref_in_transaction(
     conn: Any,
     *,
@@ -216,5 +253,7 @@ __all__ = [
     "ScoredNeighbor",
     "VectorIndex",
     "save_object_in_transaction",
+    "resolve_canonical_object_id",
+    "resolve_canonical_object_id_in_transaction",
     "update_object_source_ref_in_transaction",
 ]

@@ -34,6 +34,7 @@ from app.events.types import (
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.objects import (
     DomainObject,
+    resolve_canonical_object_id_in_transaction,
     save_object_in_transaction,
     update_object_source_ref_in_transaction,
 )
@@ -108,20 +109,7 @@ def _canonical_object_id(conn: psycopg.Connection, uuid_value: str) -> str:
     retained row may have a distinct ``objects.id``; using the UUID as the
     canonical key in that case would split one note across two parents.
     """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id::text
-            FROM objects
-            WHERE uuid = %s
-            LIMIT 1
-            """,
-            (uuid_value,),
-        )
-        row = cur.fetchone()
-    if isinstance(row, dict):
-        return str(row.get("id") or uuid_value)
-    return str(row[0]) if row and row[0] is not None else uuid_value
+    return resolve_canonical_object_id_in_transaction(conn, uuid_value)
 
 
 def _object_materialization_state(

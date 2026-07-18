@@ -504,6 +504,12 @@ def test_run_watcher_tick_prefers_companion_identity(
             type("C", (), {"uuid": companion_uuid})() if source_ref == "Concepts/C.md" else None
         ),
     )
+    canonical_uuid = str(uuid4())
+    monkeypatch.setattr(
+        vault_watcher,
+        "resolve_canonical_object_id",
+        lambda vault_uuid: canonical_uuid,
+    )
     emitted: list[dict] = []
     monkeypatch.setattr(
         vault_watcher,
@@ -533,7 +539,9 @@ def test_run_watcher_tick_prefers_companion_identity(
     )
 
     assert len(emitted) == 1
-    assert emitted[0]["uuid"] == companion_uuid
+    assert emitted[0]["uuid"] == canonical_uuid
+    assert emitted[0]["object_id"] == canonical_uuid
+    assert emitted[0]["vault_uuid"] == companion_uuid
 
 
 def test_run_watcher_tick_rename_does_not_purge_live_identity(

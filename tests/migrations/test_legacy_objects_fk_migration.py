@@ -548,3 +548,25 @@ def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
     assert split_parent == (0,)
     assert decision == (canonical_id,)
     assert mirror == (canonical_id, watcher_uuid)
+
+
+def test_runtime_identity_resolver_preserves_distinct_legacy_id(
+    scratch_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Vault-alpha and fallback tombstones resolve the migrated canonical key."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    canonical_id = uuid.uuid4()
+    vault_uuid = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (canonical_id, vault_uuid),
+        )
+    _upgrade("head")
+
+    monkeypatch.setenv("DATABASE_URL", scratch_dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    from app.objects import resolve_canonical_object_id
+
+    assert resolve_canonical_object_id(str(vault_uuid)) == str(canonical_id)

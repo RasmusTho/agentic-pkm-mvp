@@ -26,7 +26,7 @@ from app.services.outbox import insert_object_and_outbox
 from app.services.vault_sync import delete_note
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
-from app.objects import ObjectStore
+from app.objects import ObjectStore, resolve_canonical_object_id
 from app.watcher.events import emit_watcher_run_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.vault.manager import iter_vault_markdown_files
@@ -369,6 +369,7 @@ def _emit_watcher_delete_event(
     companion = find_companion_by_source_ref(vault_root, str(rel_deleted))
     companion_uuid = companion.uuid if companion else ""
     note_uuid = vault_alpha._derive_note_uuid("", companion_uuid, rel_deleted)
+    canonical_object_id = resolve_canonical_object_id(note_uuid)
     live_companion = read_companion(vault_root, note_uuid)
     if live_companion is not None and live_companion.source_ref:
         live_path = vault_root / live_companion.source_ref
@@ -381,7 +382,9 @@ def _emit_watcher_delete_event(
         "deleted": True,
         "reason": "vault_note_deleted",
         "source": "vault_watcher.run_watcher_tick",
-        "uuid": note_uuid,
+        "uuid": canonical_object_id,
+        "object_id": canonical_object_id,
+        "vault_uuid": note_uuid,
     }
     insert_object_and_outbox(
         payload,

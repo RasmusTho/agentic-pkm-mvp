@@ -35,7 +35,7 @@ from app.services.companion_note import (
     write_companion,
 )
 from app.services.note_uuid import ensure_note_uuid
-from app.objects import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
@@ -487,6 +487,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid, rel_path, invalid_frontmatter=True)
     else:
         note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
+    canonical_object_id = resolve_canonical_object_id(note_uuid)
 
     companion_settings = load_companion_settings(vault_root)
     is_rename = companion is not None and companion.source_ref != str(rel_path)
@@ -528,7 +529,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         )
 
     core6 = {
-        "id": note_uuid,
+        "id": canonical_object_id,
         "title": title,
         "review_state": review_state,
         "origin": "vault",
@@ -551,10 +552,11 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         # throws this is the surviving store_objects row -- an absent episode_ref is blind-dropped to
         # 'unbound' on the next cold rebuild.
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
+        "vault_uuid": note_uuid,
     }
 
     obj = DomainObject(
-        uuid=note_uuid,
+        uuid=canonical_object_id,
         kind="note",
         payload=payload,
         source_ref=str(path),
@@ -564,12 +566,12 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     ObjectStore().save_object(obj, emit_outbox=False, trace_id=trace_id)
 
     try:
-        classify_res = classify_run(note_uuid, trace_id=trace_id)
+        classify_res = classify_run(canonical_object_id, trace_id=trace_id)
     except Exception:
         classify_res = {}
 
     try:
-        object_uuid = uuid.UUID(note_uuid)
+        object_uuid = uuid.UUID(canonical_object_id)
     except Exception:
         object_uuid = uuid.uuid4()
 
@@ -591,6 +593,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         # Vault-canonical episode binding (ERE-03/ERE-05): carry the frontmatter's episode_ref into
         # the DB projection so a reingest never blind-drops a stamped binding (round-2 Finding 1).
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
+        "vault_uuid": note_uuid,
     }
 
     try:
@@ -621,7 +624,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
 
     normalize_payload = {
         "event": "ingest.normalize",
-        "object_id": note_uuid,
+        "object_id": canonical_object_id,
         "core6": core6,
         "payload": payload,
         "trace_id": trace_id,
@@ -629,7 +632,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     try:
         append_jsonl(
             {
-                "object_id": note_uuid,
+                "object_id": canonical_object_id,
                 "kind": "pipeline",
                 "source_ref": str(path),
                 "payload": {"normalize": normalize_payload, "classify": classify_res},
@@ -638,7 +641,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     except Exception:
         pass
 
-    return note_uuid
+    return canonical_object_id
 
 
 def run_vault_alpha_ingest(
@@ -821,7 +824,7 @@ def _ingest_candidates(
             if note_uuid and not force and not cold_rebuild:
                 parsed_uuid = None
                 try:
-                    parsed_uuid = uuid.UUID(note_uuid)
+                    parsed_uuid = uuid.UUID(resolve_canonical_object_id(note_uuid))
                 except Exception:
                     parsed_uuid = None
                 existing = store.get(parsed_uuid) if parsed_uuid else None
