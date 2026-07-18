@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +15,10 @@ TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
 EXPLICIT_VAULT_COMPOSE = REPO_ROOT / "docker-compose.legacy-vault.yml"
 TEST_VAULT_COMPOSE = REPO_ROOT / "docker-compose.test-vault.yml"
 TEST_ENV = REPO_ROOT / "config/deploy/test.env"
+pytestmark = pytest.mark.skipif(
+    shutil.which("docker") is None,
+    reason="docker executable not found on PATH",
+)
 
 
 def _merged_compose(
