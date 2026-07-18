@@ -20,12 +20,16 @@ def _dsn() -> str:
     return url.replace("+psycopg", "")
 
 
-def _ensure_decisions(conn) -> None:
+def _row_value(row, key: str, index: int):
+    return row.get(key) if isinstance(row, dict) else row[index]
+
+
+def assert_decisions_schema(conn) -> None:
     """Assert the Alembic-owned decisions schema without mutating it at runtime."""
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('public.decisions')")
         table_row = cur.fetchone()
-        if table_row is None or table_row[0] is None:
+        if table_row is None or _row_value(table_row, "to_regclass", 0) is None:
             raise RuntimeError(_DECISIONS_MIGRATION_HINT)
         cur.execute(
             """
@@ -35,7 +39,9 @@ def _ensure_decisions(conn) -> None:
             """
         )
         required_columns = {"id", "object_id", "agent", "kind", "key", "value", "created_at"}
-        if missing_columns := required_columns - {row[0] for row in cur.fetchall()}:
+        if missing_columns := required_columns - {
+            _row_value(row, "column_name", 0) for row in cur.fetchall()
+        }:
             raise RuntimeError(
                 f"{_DECISIONS_MIGRATION_HINT} Missing columns: {', '.join(sorted(missing_columns))}."
             )
@@ -44,9 +50,9 @@ def _ensure_decisions(conn) -> None:
             SELECT
                 object_id_column.is_nullable,
                 id_column.column_default,
-                fk.table_schema,
-                fk.table_name,
-                fk.column_name,
+                fk.referenced_table_schema,
+                fk.referenced_table_name,
+                fk.referenced_column_name,
                 fk.delete_rule
             FROM information_schema.columns AS object_id_column
             JOIN information_schema.columns AS id_column
@@ -55,9 +61,9 @@ def _ensure_decisions(conn) -> None:
              AND id_column.column_name = 'id'
             LEFT JOIN (
                 SELECT
-                    ccu.table_schema,
-                    ccu.table_name,
-                    ccu.column_name,
+                    ccu.table_schema AS referenced_table_schema,
+                    ccu.table_name AS referenced_table_name,
+                    ccu.column_name AS referenced_column_name,
                     rc.delete_rule
                 FROM information_schema.table_constraints AS tc
                 JOIN information_schema.key_column_usage AS kcu
@@ -83,9 +89,21 @@ def _ensure_decisions(conn) -> None:
         shape_row = cur.fetchone()
         if (
             shape_row is None
-            or shape_row[0] != "YES"
-            or "gen_random_uuid" not in (shape_row[1] or "")
-            or tuple(shape_row[2:])
+            or _row_value(shape_row, "is_nullable", 0) != "YES"
+            or "gen_random_uuid"
+            not in (_row_value(shape_row, "column_default", 1) or "")
+            or tuple(
+                _row_value(shape_row, key, index)
+                for index, key in enumerate(
+                    (
+                        "referenced_table_schema",
+                        "referenced_table_name",
+                        "referenced_column_name",
+                        "delete_rule",
+                    ),
+                    start=2,
+                )
+            )
             != ("public", "store_objects", "object_id", "SET NULL")
         ):
             raise RuntimeError(f"{_DECISIONS_MIGRATION_HINT} Schema shape is stale.")
@@ -113,7 +131,7 @@ class PgDecisions:
         conn = psycopg.connect(_dsn())
         try:
             with conn:
-                _ensure_decisions(conn)
+                assert_decisions_schema(conn)
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO decisions (id, object_id, agent, kind, key, value, created_at) "

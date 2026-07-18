@@ -360,6 +360,37 @@ def test_legacy_pg_decisions_writer_rejects_set_null_objects_parent_before_row(
         assert conn.execute("SELECT count(*) FROM decisions").fetchone() == (0,)
 
 
+def test_decisions_projection_rebuild_rejects_legacy_parent_before_truncate(
+    scratch_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Projection replay must fail with the migration hint before destructive work."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
+            (object_id,),
+        )
+        conn.execute(
+            "INSERT INTO decisions (object_id, key, value) VALUES (%s, 'keep', '{}'::jsonb)",
+            (object_id,),
+        )
+
+    import app.db.db as db
+    from app.jobs import decisions_projection
+
+    monkeypatch.setenv("DATABASE_URL", scratch_dsn)
+    monkeypatch.setattr(db, "_SCHEMA_INITIALIZED", True)
+    monkeypatch.setattr(decisions_projection, "iter_decision_receipts", lambda _root: [])
+
+    with pytest.raises(RuntimeError, match=r"alembic upgrade head.*Schema shape is stale"):
+        decisions_projection.rebuild_decisions_projection()
+
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT key FROM decisions").fetchall() == [("keep",)]
+
+
 def test_deferred_then_unchanged_sync_materializes_canonical_parent(
     scratch_dsn: str,
     tmp_path: Path,

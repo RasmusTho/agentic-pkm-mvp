@@ -29,6 +29,7 @@ from typing import Any
 
 from app.db.db import conn_rw
 from app.receipts.decision_receipt_log import iter_decision_receipts
+from app.stores.postgres import assert_decisions_schema
 
 
 @dataclass
@@ -115,6 +116,7 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
 
     with conn_rw() as conn:
         with conn.cursor() as cur:
+            assert_decisions_schema(conn)
             existing_ids = _existing_object_ids(cur)
             uuid_to_id = _uuid_to_id_map(cur)
 
