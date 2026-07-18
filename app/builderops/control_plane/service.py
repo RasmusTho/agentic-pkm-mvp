@@ -8,11 +8,22 @@ from collections.abc import Callable
 from collections.abc import Mapping
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
-from app.builderops.control_plane.api_models import LeaseClaimRequest, RecordCommitRequest
+from app.builderops.control_plane.api_models import (
+    AttemptCommitRequest,
+    InquiryCommitRequest,
+    LeaseClaimRequest,
+    LeaseInput,
+    OutboxClaimRequest,
+    PromotionCommitRequest,
+    RecordCommitRequest,
+    TaskClaimRequest,
+    TaskCompleteRequest,
+    TaskHeartbeatRequest,
+)
 from app.builderops.control_plane.auth import (
     Credential,
     CredentialConfigurationError,
@@ -21,11 +32,17 @@ from app.builderops.control_plane.auth import (
 )
 from app.builderops.control_plane.health import HealthService, LiveOperationalStatusProvider
 from app.builderops.control_plane.models import (
+    STALE_AUTHORITY_EPOCH_DETAIL,
     AuthorityEnvelope,
     ControlPlaneError,
     IdempotencyConflict,
+    Lease,
+    LeaseRequired,
     LeaseUnavailable,
+    StaleFencingToken,
+    StateConflict,
     StorePort,
+    canonical_repository,
 )
 from app.builderops.control_plane.selection import database_environment, production_store
 from app.middleware.trace import TraceIdMiddleware
@@ -47,6 +64,24 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
         "token_length",
     }
 )
+# Structural authority fields whose names collide with the credential-key
+# heuristic (``fencing_token`` ends in ``_token``) but which are never secrets.
+# The exemption is scoped to BOTH the FULL ancestor path from the request
+# root (not merely the immediate parent key — a "lease" object nested at any
+# depth inside free-form payload/request content must not qualify) AND a
+# strict int value type — never the bare key name anywhere in the tree. Every
+# request model that carries a real lease puts it at the top level
+# (``TaskHeartbeatRequest.lease``, ``TaskCompleteRequest.lease``,
+# ``AttemptCommitRequest.lease``, ``PromotionCommitRequest.lease``), so the
+# only legitimate path is exactly ``("lease", "fencing_token")``. As a second,
+# independent layer, the value-type gate rejects a string even if some future
+# path were added here by mistake: no BuilderOps credential/secret in this
+# system is ever numeric (they are opaque strings from secret files), so a
+# raw credential can never satisfy the int check regardless of path.
+_STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
+_STRUCTURAL_SAFE_FIELD_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
+    "fencing_token": frozenset({("lease", "fencing_token")})
+}
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
     {
         "authorization",
@@ -170,6 +205,7 @@ def _assert_durable_payload_safe(
     registry: CredentialRegistry,
     *,
     key: str = "",
+    _path: tuple[str, ...] = (),
     _remaining_chars: list[int] | None = None,
     _remaining_nodes: list[int] | None = None,
 ) -> None:
@@ -188,11 +224,30 @@ def _assert_durable_payload_safe(
     if remaining_nodes[0] < 0:
         raise ValueError("durable BuilderOps request exceeds the value node limit")
     normalized_key = _canonical_durable_key(key)
+    # The full ancestor chain from the request root down to and including
+    # this node's own key — not just the immediate parent. ``_path`` is the
+    # chain ABOVE this node, threaded in from the caller.
+    current_path = (*_path, normalized_key) if normalized_key else _path
     if normalized_key in _ALLOWED_SECRET_METADATA_KEYS:
         _assert_secret_metadata_shape(normalized_key, value)
+    # The structural exemption requires the EXACT full path from the request
+    # root (not just an immediate parent name — a "lease" object nested at
+    # ANY depth inside free-form payload/request content must not qualify)
+    # plus a strict int value type. A free-form payload/request field named
+    # "fencing_token" is only exempt if BOTH its full path matches the one
+    # genuine top-level lease field AND its value is literally an int; a raw
+    # secret string can never satisfy the type gate, so it always falls
+    # through to the forbidden-key check below regardless of path.
+    is_exempt_structural_field = (
+        normalized_key in _STRUCTURAL_SAFE_KEYS
+        and current_path in _STRUCTURAL_SAFE_FIELD_PATHS.get(normalized_key, frozenset())
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+    )
     if (
         normalized_key
         and normalized_key not in _ALLOWED_SECRET_METADATA_KEYS
+        and not is_exempt_structural_field
         and (
             _FORBIDDEN_DURABLE_KEYS.search(normalized_key)
             or normalized_key.replace("_", "") in _FORBIDDEN_COMPACT_DURABLE_KEYS
@@ -214,6 +269,7 @@ def _assert_durable_payload_safe(
                 child,
                 registry,
                 key=durable_key,
+                _path=current_path,
                 _remaining_chars=remaining_chars,
                 _remaining_nodes=remaining_nodes,
             )
@@ -222,12 +278,18 @@ def _assert_durable_payload_safe(
         for child in value:
             # The collection shape above owns metadata validation. Children
             # still receive the value scan without being mistaken for a whole
-            # `scopes` collection.
+            # `scopes` collection. A list does not introduce its own path
+            # segment: its items reuse this node's key (as `child_key` does
+            # below) and inherit the SAME ancestor path this node received
+            # (not `current_path`, which already includes this node's own
+            # key) so the item's own path computation adds exactly one
+            # segment, matching the non-list case instead of duplicating it.
             child_key = "" if normalized_key in _ALLOWED_SECRET_METADATA_KEYS else key
             _assert_durable_payload_safe(
                 child,
                 registry,
                 key=child_key,
+                _path=_path,
                 _remaining_chars=remaining_chars,
                 _remaining_nodes=remaining_nodes,
             )
@@ -249,11 +311,90 @@ def _assert_durable_payload_safe(
 
 
 def _control_plane_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, (IdempotencyConflict, LeaseUnavailable)):
+    if isinstance(exc, HTTPException):
+        # A scope/auth/epoch rejection raised inside the handler body must keep
+        # its typed status code instead of collapsing into a 503.
+        return exc
+    if isinstance(
+        exc,
+        (
+            IdempotencyConflict,
+            LeaseUnavailable,
+            StaleFencingToken,
+            StateConflict,
+            LeaseRequired,
+        ),
+    ):
         return HTTPException(status_code=409, detail=type(exc).__name__)
     if isinstance(exc, (ControlPlaneError, ValueError)):
         return HTTPException(status_code=400, detail=type(exc).__name__)
     return HTTPException(status_code=503, detail="BuilderOps store unavailable")
+
+
+def _enforce_repo_scope(credential: Credential, repository: str) -> None:
+    """Fail closed when a credential addresses a repository outside its scope.
+
+    The mandatory single-``RepoRef`` rule (BCP-04) is enforced here so that no
+    credential granted authority for one repository can mutate another. The
+    repository is canonicalized first so scope checks are not bypassable by
+    case or owner/name spelling.
+    """
+    try:
+        canonical = canonical_repository(repository)
+    except Exception as exc:  # EnvelopeValidationError and any parse failure
+        raise HTTPException(status_code=400, detail="invalid repository reference") from exc
+    if not credential.may_address(canonical):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="credential is not scoped to the addressed repository",
+        )
+
+
+def _lease_from_input(repository: str, lease: LeaseInput) -> Lease:
+    """Reconstruct a fenced :class:`Lease` from client-echoed lease fields."""
+    return Lease(
+        repository=repository,
+        resource_id=lease.resource_id,
+        holder=lease.holder,
+        fencing_token=lease.fencing_token,
+        expires_at=lease.expires_at,
+        lease_kind=lease.lease_kind,
+    )
+
+
+def _transition_response(result: Any) -> dict[str, Any]:
+    return {
+        "repository": result.repository,
+        "task_id": result.task_id,
+        "state": result.state,
+        "receipt_sequence": result.receipt_sequence,
+        "recovery_lsn": result.recovery_lsn,
+        "operation_key": result.operation_key,
+        "replayed": result.replayed,
+    }
+
+
+def _authority_object_response(result: Any) -> dict[str, Any]:
+    return {
+        "repository": result.repository,
+        "object_kind": result.object_kind,
+        "object_id": result.object_id,
+        "state": result.state,
+        "receipt_sequence": result.receipt_sequence,
+        "recovery_lsn": result.recovery_lsn,
+        "replayed": result.replayed,
+    }
+
+
+def _lease_response(lease: Lease) -> dict[str, Any]:
+    return {
+        "repository": lease.repository,
+        "resource_id": lease.resource_id,
+        "holder": lease.holder,
+        "fencing_token": lease.fencing_token,
+        "expires_at": lease.expires_at.isoformat(),
+        "lease_kind": lease.lease_kind,
+    }
 
 
 def create_app(
@@ -288,6 +429,46 @@ def create_app(
     metrics_read = _credential_dependency(credentials, rate_limiter, "metrics:read")
     lease_write = _credential_dependency(credentials, rate_limiter, "leases:write")
     record_write = _credential_dependency(credentials, rate_limiter, "records:write")
+    inquiry_write = _credential_dependency(credentials, rate_limiter, "inquiries:write")
+    task_write = _credential_dependency(credentials, rate_limiter, "tasks:write")
+    attempt_write = _credential_dependency(credentials, rate_limiter, "attempts:write")
+    promotion_write = _credential_dependency(credentials, rate_limiter, "promotions:write")
+    receipt_read = _credential_dependency(credentials, rate_limiter, "receipts:read")
+    # The outbox/executor scope is the privileged capability a normal MacBook
+    # client credential never holds; only the host-privileged executor is
+    # granted it.
+    outbox_write = _credential_dependency(credentials, rate_limiter, "outbox:write")
+
+    async def require_authority_epoch(
+        x_builderops_authority_epoch: str | None = Header(default=None),
+    ) -> None:
+        """Fence a client pinned to a superseded authority epoch (fail closed).
+
+        The header is optional so read-only probes and legacy callers still
+        work, but a client that pins an epoch is rejected when a recovery epoch
+        has advanced past it, rather than silently mutating the new authority.
+        """
+        if x_builderops_authority_epoch is None:
+            return
+        try:
+            pinned = int(x_builderops_authority_epoch)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid authority epoch header",
+            ) from exc
+        try:
+            readiness = await run_in_threadpool(store.readiness)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="BuilderOps store unavailable",
+            ) from exc
+        if pinned != readiness.get("authority_epoch"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=STALE_AUTHORITY_EPOCH_DETAIL,
+            )
 
     @application.get("/healthz")
     async def healthz(_credential: Credential = Depends(health_read)) -> dict[str, bool]:
@@ -322,7 +503,9 @@ def create_app(
     async def claim_lease(
         request: LeaseClaimRequest,
         credential: Credential = Depends(lease_write),
+        _epoch: None = Depends(require_authority_epoch),
     ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
         try:
             # Every client-controlled field below becomes durable authority,
             # idempotency, or lease state. Validate the complete request before
@@ -364,7 +547,9 @@ def create_app(
     async def commit_record(
         request: RecordCommitRequest,
         credential: Credential = Depends(record_write),
+        _epoch: None = Depends(require_authority_epoch),
     ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
         try:
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
             result = await run_in_threadpool(
@@ -378,14 +563,238 @@ def create_app(
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
+        return _authority_object_response(result)
+
+    @application.post("/v1/inquiries")
+    async def commit_inquiry(
+        request: InquiryCommitRequest,
+        credential: Credential = Depends(inquiry_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            result = await run_in_threadpool(
+                store.commit_record,
+                envelope=_envelope(request.envelope, credential),
+                record_id=request.inquiry_id,
+                record_type="ModelInquiry",
+                state=request.state,
+                payload=request.payload,
+                idempotency_key=request.idempotency_key,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return _authority_object_response(result)
+
+    @application.post("/v1/tasks/claim")
+    async def claim_task(
+        request: TaskClaimRequest,
+        credential: Credential = Depends(task_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            result, lease = await run_in_threadpool(
+                store.claim_task,
+                envelope=_envelope(request.envelope, credential),
+                task_id=request.task_id,
+                holder=credential.principal,
+                idempotency_key=request.idempotency_key,
+                request=request.request,
+                ttl_seconds=request.ttl_seconds,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"result": _transition_response(result), "lease": _lease_response(lease)}
+
+    @application.post("/v1/tasks/heartbeat")
+    async def heartbeat_task(
+        request: TaskHeartbeatRequest,
+        credential: Credential = Depends(task_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            envelope = _envelope(request.envelope, credential)
+            result, lease = await run_in_threadpool(
+                store.heartbeat_lease,
+                envelope=envelope,
+                lease=_lease_from_input(envelope.repository, request.lease),
+                idempotency_key=request.idempotency_key,
+                request=request.request,
+                ttl_seconds=request.ttl_seconds,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"result": _transition_response(result), "lease": _lease_response(lease)}
+
+    @application.post("/v1/tasks/complete")
+    async def complete_task(
+        request: TaskCompleteRequest,
+        credential: Credential = Depends(task_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            envelope = _envelope(request.envelope, credential)
+            result = await run_in_threadpool(
+                store.complete_task,
+                envelope=envelope,
+                lease=_lease_from_input(envelope.repository, request.lease),
+                idempotency_key=request.idempotency_key,
+                request=request.request,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"result": _transition_response(result)}
+
+    @application.post("/v1/attempts")
+    async def commit_attempt(
+        request: AttemptCommitRequest,
+        credential: Credential = Depends(attempt_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            envelope = _envelope(request.envelope, credential)
+            result = await run_in_threadpool(
+                store.commit_attempt,
+                envelope=envelope,
+                task_id=request.task_id,
+                attempt_id=request.attempt_id,
+                state=request.state,
+                payload=request.payload,
+                idempotency_key=request.idempotency_key,
+                lease=_lease_from_input(envelope.repository, request.lease),
+                expected_states=(
+                    tuple(request.expected_states)
+                    if request.expected_states is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return _authority_object_response(result)
+
+    @application.post("/v1/promotions")
+    async def commit_promotion(
+        request: PromotionCommitRequest,
+        credential: Credential = Depends(promotion_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            envelope = _envelope(request.envelope, credential)
+            result = await run_in_threadpool(
+                store.commit_promotion,
+                envelope=envelope,
+                promotion_id=request.promotion_id,
+                status=request.status,
+                payload=request.payload,
+                idempotency_key=request.idempotency_key,
+                lease=(
+                    _lease_from_input(envelope.repository, request.lease)
+                    if request.lease is not None
+                    else None
+                ),
+                expected_states=(
+                    tuple(request.expected_states)
+                    if request.expected_states is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return _authority_object_response(result)
+
+    @application.get("/v1/status")
+    async def authority_status(
+        _credential: Credential = Depends(status_read),
+    ) -> dict[str, Any]:
+        try:
+            readiness = await run_in_threadpool(store.readiness)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="BuilderOps store unavailable",
+            ) from exc
         return {
-            "repository": result.repository,
-            "object_kind": result.object_kind,
-            "object_id": result.object_id,
-            "state": result.state,
-            "receipt_sequence": result.receipt_sequence,
-            "recovery_lsn": result.recovery_lsn,
-            "replayed": result.replayed,
+            "authority_epoch": readiness.get("authority_epoch"),
+            "schema_version": readiness.get("schema_version"),
+        }
+
+    @application.get("/v1/receipts/{object_kind}/{object_id}")
+    async def read_receipt(
+        object_kind: str,
+        object_id: str,
+        repository: str,
+        task_id: str | None = None,
+        credential: Credential = Depends(receipt_read),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, repository)
+        canonical = canonical_repository(repository)
+        try:
+            if object_kind == "records":
+                receipt = await run_in_threadpool(store.get_record, canonical, object_id)
+            elif object_kind == "promotions":
+                receipt = await run_in_threadpool(store.get_promotion, canonical, object_id)
+            elif object_kind == "attempts":
+                if not task_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="attempt receipts require task_id",
+                    )
+                receipt = await run_in_threadpool(
+                    store.get_attempt, canonical, task_id, object_id
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="unknown receipt object kind",
+                )
+        except HTTPException:
+            raise
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="receipt not found"
+            ) from exc
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(receipt)
+
+    @application.post("/v1/executor/outbox/claim")
+    async def claim_outbox(
+        request: OutboxClaimRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            claim = await run_in_threadpool(
+                store.claim_outbox,
+                envelope=_envelope(request.envelope, credential),
+                operation_key=request.operation_key,
+                worker_id=request.worker_id,
+                claim_ttl_seconds=request.claim_ttl_seconds,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {
+            "repository": claim.repository,
+            "operation_key": claim.operation_key,
+            "worker_id": claim.worker_id,
+            "fencing_token": claim.fencing_token,
+            "intent_lsn": claim.intent_lsn,
+            "claim_lsn": claim.claim_lsn,
+            "receipt_sequence": claim.receipt_sequence,
+            "expires_at": claim.expires_at.isoformat(),
         }
 
     return application

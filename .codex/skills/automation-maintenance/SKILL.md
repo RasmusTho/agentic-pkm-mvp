@@ -56,6 +56,20 @@ specific justified exception. The redirect workspace
 
 ## BuilderOps CLI dependency setup
 
+**Two separate BuilderOps systems exist; use the right client for each.** This section's
+`scripts/builderops_cli.sh` wraps the pre-existing local BuilderOps **Vault record** store
+(`LearningSignal`/worklog/promotion/receipt vault artifacts and `generate-projections`
+exports) — a system distinct from the newer BuilderOps **control plane** (task/lease/
+attempt/promotion/receipt coordination authority for the build process itself, hosted on
+the independent control-plane host). For control-plane operations, use the authenticated
+API-only client instead:
+`scripts/builderops_api_client.sh` (`python -m app.builderops.control_plane`; see
+`docs/BUILDEROPS_CONTROL_PLANE/API_ONLY_CLIENT_CUTOVER.md`). Do not redirect the Vault-record
+commands below (`list`, `create-learning-signal`, `generate-projections`) to the new client:
+their read/projection path still depends on the local Vault SQLite store until BCP-03/06
+import that authority into the control plane, and writing new records through the new
+client alone would make them invisible to `list`/`generate-projections` (a split-brain).
+
 BuilderOps CLI commands require `click`, `pydantic`, and `sqlite3`.  Host Python
 interpreters (e.g. `/opt/homebrew/bin/python3`) typically lack these packages.
 

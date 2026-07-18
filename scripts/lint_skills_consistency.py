@@ -70,6 +70,7 @@ KNOWN_NON_SKILL_TERMS = {
     "stable-prev",  # release-channel ref name
     "test-candidate",  # promotion vocabulary
     "generate-projections",  # builderops CLI subcommand
+    "create-learning-signal",  # builderops CLI subcommand
 }
 
 RETIRED_PHRASE = "Do not batch to end of task"

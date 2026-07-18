@@ -14,7 +14,11 @@ from app.builderops.control_plane.auth import (
     CredentialRegistry,
 )
 from app.builderops.control_plane.health import HealthService, OperationalStatus
-from app.builderops.control_plane.service import create_app, database_environment
+from app.builderops.control_plane.service import (
+    _assert_durable_payload_safe,
+    create_app,
+    database_environment,
+)
 
 
 class _Operational:
@@ -96,6 +100,7 @@ def _registry(tmp_path: Path) -> CredentialRegistry:
                             "leases:write",
                             "records:write",
                         ],
+                        "repositories": ["RasmusTho/agentic-pkm-mvp"],
                         "rotation_generation": 1,
                     },
                     {
@@ -305,6 +310,7 @@ def test_verifier_only_registered_bearer_cannot_be_embedded_in_durable_text(
                         "verifier_sha256": hashlib.sha256(secret.encode()).hexdigest(),
                         "token_length": len(secret),
                         "scopes": ["records:write"],
+                        "repositories": ["RasmusTho/agentic-pkm-mvp"],
                         "rotation_generation": 1,
                     }
                 ]
@@ -340,6 +346,7 @@ def test_verifier_only_registered_bearer_cannot_be_a_nested_mapping_key(
                         "verifier_sha256": hashlib.sha256(secret.encode()).hexdigest(),
                         "token_length": len(secret),
                         "scopes": ["records:write", "leases:write"],
+                        "repositories": ["RasmusTho/agentic-pkm-mvp"],
                         "rotation_generation": 1,
                     }
                 ]
@@ -423,39 +430,357 @@ def test_raw_credentials_are_rejected_from_every_client_controlled_durable_field
     client = TestClient(create_app(store=store, credentials=registry, health=health))  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer client-token"}
 
+    # The `repository` mutation is a distinct case: the credential is scoped to
+    # exactly "RasmusTho/agentic-pkm-mvp" (see `_registry()`), so redirecting
+    # the envelope at the canary-shaped repository string is caught by the
+    # earlier, more specific repo-scope gate (403) before the request ever
+    # reaches the durable-payload scanner. Every other field is untouched by
+    # repo-scope routing and is still caught by the durable-payload scanner (400).
     lease_mutations = (
-        lambda body: body["envelope"].update(repository=canary),
-        lambda body: body["envelope"].update(scope=canary),
-        lambda body: body["envelope"].update(stack=canary),
-        lambda body: body["envelope"].update(source_refs=[canary]),
-        lambda body: body.update(resource_id=canary),
-        lambda body: body.update(idempotency_key=canary),
-        lambda body: body.update(request={"command": canary}),
+        (lambda body: body["envelope"].update(repository=canary), 403),
+        (lambda body: body["envelope"].update(scope=canary), 400),
+        (lambda body: body["envelope"].update(stack=canary), 400),
+        (lambda body: body["envelope"].update(source_refs=[canary]), 400),
+        (lambda body: body.update(resource_id=canary), 400),
+        (lambda body: body.update(idempotency_key=canary), 400),
+        (lambda body: body.update(request={"command": canary}), 400),
     )
-    for mutate in lease_mutations:
+    for mutate, expected_status in lease_mutations:
         body = _lease_payload()
         mutate(body)
         response = client.post("/v1/leases/claim", headers=headers, json=body)
-        assert response.status_code == 400
+        assert response.status_code == expected_status
         assert canary not in response.text
 
     record_mutations = (
-        lambda body: body["envelope"].update(repository=canary),
-        lambda body: body["envelope"].update(scope=canary),
-        lambda body: body["envelope"].update(stack=canary),
-        lambda body: body["envelope"].update(source_refs=[canary]),
-        lambda body: body.update(record_id=canary),
-        lambda body: body.update(record_type=canary),
-        lambda body: body.update(state=canary),
-        lambda body: body.update(payload={"summary": canary}),
-        lambda body: body.update(idempotency_key=canary),
+        (lambda body: body["envelope"].update(repository=canary), 403),
+        (lambda body: body["envelope"].update(scope=canary), 400),
+        (lambda body: body["envelope"].update(stack=canary), 400),
+        (lambda body: body["envelope"].update(source_refs=[canary]), 400),
+        (lambda body: body.update(record_id=canary), 400),
+        (lambda body: body.update(record_type=canary), 400),
+        (lambda body: body.update(state=canary), 400),
+        (lambda body: body.update(payload={"summary": canary}), 400),
+        (lambda body: body.update(idempotency_key=canary), 400),
     )
-    for mutate in record_mutations:
+    for mutate, expected_status in record_mutations:
         body = _record_payload({"summary": "safe"})
         mutate(body)
         response = client.post("/v1/records", headers=headers, json=body)
-        assert response.status_code == 400
+        assert response.status_code == expected_status
         assert canary not in response.text
 
     assert store.claims == {}
     assert store.last_actor is None
+
+
+def _scoped_registry(tmp_path: Path) -> CredentialRegistry:
+    """A normal MacBook client: repo-scoped writes, no executor/outbox scope."""
+    secret = tmp_path / "normal.secret"
+    secret.write_text("normal-token\n", encoding="utf-8")
+    manifest = tmp_path / "scoped-credentials.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "credentials": [
+                    {
+                        "id": "normal-client",
+                        "principal": "client:macbook",
+                        "secret_ref": "host-secret:normal-client",
+                        "secret_file": str(secret),
+                        "scopes": ["records:write", "leases:write", "tasks:write"],
+                        "repositories": ["RasmusTho/agentic-pkm-mvp"],
+                        "rotation_generation": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return CredentialRegistry(manifest)
+
+
+def test_normal_client_cannot_use_executor_or_cross_repo_scope(tmp_path: Path) -> None:
+    store = _Store()
+    registry = _scoped_registry(tmp_path)
+    health = HealthService(store, registry, _Operational())  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry, health=health))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer normal-token"}
+
+    # Positive control: the credential works for its own repository.
+    granted = client.post(
+        "/v1/records", headers=headers, json=_record_payload({"summary": "ok"})
+    )
+    assert granted.status_code == 200
+    assert store.last_actor == "client:macbook"
+
+    # A normal client credential holds no executor/outbox scope: the privileged
+    # executor operation is forbidden (403), not silently downgraded.
+    executor = client.post(
+        "/v1/executor/outbox/claim",
+        headers=headers,
+        json={
+            "envelope": _lease_payload()["envelope"],
+            "operation_key": "outbox-3790",
+            "worker_id": "worker:test-executor",
+            "claim_ttl_seconds": 300,
+        },
+    )
+    assert executor.status_code == 403
+
+    # A credential scoped to one repository cannot address another repository;
+    # the cross-repo write is rejected before it can reach the store.
+    cross_repo = _record_payload({"summary": "ok"})
+    cross_repo["envelope"] = {
+        **_lease_payload()["envelope"],
+        "repository": "OtherOwner/other-repo",
+    }
+    cross_repo["idempotency_key"] = "record-cross-repo"
+    rejected = client.post("/v1/records", headers=headers, json=cross_repo)
+    assert rejected.status_code == 403
+
+
+def _unscoped_registry(tmp_path: Path) -> CredentialRegistry:
+    """A credential with no ``repositories`` key and no ``all_repositories`` opt-in."""
+    secret = tmp_path / "unscoped.secret"
+    secret.write_text("unscoped-token\n", encoding="utf-8")
+    manifest = tmp_path / "unscoped-credentials.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "credentials": [
+                    {
+                        "id": "unscoped-client",
+                        "principal": "client:unscoped",
+                        "secret_ref": "host-secret:unscoped-client",
+                        "secret_file": str(secret),
+                        "scopes": ["records:write", "leases:write"],
+                        "rotation_generation": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return CredentialRegistry(manifest)
+
+
+def test_credential_with_no_repositories_key_cannot_address_any_repository(
+    tmp_path: Path,
+) -> None:
+    """The default must fail closed: omitting ``repositories`` grants NO repo,
+    not every repo. This is the explicit regression test for the credential
+    fail-open default fixed for issue #3791 (a credential provisioned without
+    listing repos previously had unrestricted cross-repo authority)."""
+    store = _Store()
+    registry = _unscoped_registry(tmp_path)
+    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer unscoped-token"}
+
+    for repository in (
+        "RasmusTho/agentic-pkm-mvp",
+        "RasmusTho/example-second-repo",
+        "OtherOwner/other-repo",
+    ):
+        body = _record_payload({"summary": "ok"})
+        body["envelope"] = {**body["envelope"], "repository": repository}
+        body["idempotency_key"] = f"record-{repository.replace('/', '-')}"
+        response = client.post("/v1/records", headers=headers, json=body)
+        assert response.status_code == 403, (
+            f"credential with no repositories/all_repositories should not "
+            f"address {repository}, got {response.status_code}"
+        )
+    assert store.last_actor is None
+
+
+def test_all_repositories_opt_in_is_explicit_and_distinct_from_empty_list(
+    tmp_path: Path,
+) -> None:
+    """``all_repositories: true`` is a distinct, explicit opt-in (e.g. for the
+    privileged executor); it must never be implied by an absent/empty
+    ``repositories`` list, and combining both fails closed as ambiguous."""
+    secret = tmp_path / "executor.secret"
+    secret.write_text("executor-token\n", encoding="utf-8")
+    manifest = tmp_path / "executor-credentials.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "credentials": [
+                    {
+                        "id": "executor",
+                        "principal": "executor:build-host",
+                        "secret_ref": "host-secret:executor",
+                        "secret_file": str(secret),
+                        "scopes": ["records:write"],
+                        "all_repositories": True,
+                        "rotation_generation": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = _Store()
+    client = TestClient(create_app(store=store, credentials=CredentialRegistry(manifest)))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer executor-token"}
+
+    for repository in ("RasmusTho/agentic-pkm-mvp", "RasmusTho/example-second-repo"):
+        body = _record_payload({"summary": "ok"})
+        body["envelope"] = {**body["envelope"], "repository": repository}
+        body["idempotency_key"] = f"executor-record-{repository.replace('/', '-')}"
+        response = client.post("/v1/records", headers=headers, json=body)
+        assert response.status_code == 200
+
+    # Combining all_repositories with an explicit repositories list is
+    # ambiguous and must fail closed at manifest-parse time, not silently
+    # pick one interpretation.
+    ambiguous_manifest = tmp_path / "ambiguous-credentials.json"
+    ambiguous_manifest.write_text(
+        json.dumps(
+            {
+                "credentials": [
+                    {
+                        "id": "ambiguous",
+                        "principal": "client:ambiguous",
+                        "secret_ref": "host-secret:ambiguous",
+                        "secret_file": str(secret),
+                        "scopes": ["records:write"],
+                        "all_repositories": True,
+                        "repositories": ["RasmusTho/agentic-pkm-mvp"],
+                        "rotation_generation": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(CredentialConfigurationError):
+        CredentialRegistry(ambiguous_manifest).status()
+
+
+def test_fencing_token_key_in_free_form_payload_is_not_exempt(tmp_path: Path) -> None:
+    """The structural ``fencing_token`` exemption is scoped to ``lease.fencing_token``
+    with an int value; a free-form ``payload``/``request`` field that happens to
+    be named ``fencing_token`` must still be rejected, even carrying a value
+    that would NOT trip the weaker value-content heuristics (no bearer/ghp_/sk-/
+    postgres:// shape, not equal to any registered credential) — proving the
+    key-name-anywhere loophole (issue #3791 review finding C2) is closed."""
+    store = _Store()
+    registry = _registry(tmp_path)
+    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer client-token"}
+
+    plausible_but_unregistered = "foreign-service-opaque-credential-9f8e7d6c5b4a3210"
+
+    # A top-level free-form payload field named "fencing_token" is rejected by
+    # key-name alone (its parent is "payload", not "lease").
+    smuggled = _record_payload({"fencing_token": plausible_but_unregistered})
+    response = client.post("/v1/records", headers=headers, json=smuggled)
+    assert response.status_code == 400
+    assert plausible_but_unregistered not in response.text
+
+    # Nesting an attacker-supplied "lease" key inside free-form payload content
+    # must not resurrect the exemption either: the value is a string, not an
+    # int, so the type gate still rejects it independent of the path match.
+    nested = _record_payload({"lease": {"fencing_token": plausible_but_unregistered}})
+    nested["idempotency_key"] = "record-nested-lease-fencing-token"
+    nested_response = client.post("/v1/records", headers=headers, json=nested)
+    assert nested_response.status_code == 400
+    assert plausible_but_unregistered not in nested_response.text
+
+    assert store.last_actor is None
+
+
+def test_fencing_token_nested_at_any_depth_with_int_value_is_still_rejected(
+    tmp_path: Path,
+) -> None:
+    """Round-2 review finding: the structural exemption's path check must
+    inspect the FULL ancestor chain from the request root, not just the
+    immediate parent key. A "lease" object nested at arbitrary depth inside
+    free-form payload/request content must not qualify for the exemption even
+    when its fencing_token value IS a genuine int — proving the path check
+    itself is load-bearing, independent of the value-type gate (which would
+    otherwise be the only thing stopping a hypothetical future numeric
+    secret from smuggling through this route)."""
+    registry = _registry(tmp_path)
+
+    # Empirically reproduces the reviewer's exact bypass: a "lease" key
+    # nested four levels deep inside a free-form payload field, carrying an
+    # int fencing_token. Only the full-path check (not an immediate-parent
+    # check) can reject this, since the immediate parent IS literally "lease".
+    deeply_nested_int = {
+        "envelope": {
+            "repository": "RasmusTho/agentic-pkm-mvp",
+            "scope": "issue:3790",
+            "stack": "builderops-control-plane",
+            "source_refs": ["github:issue:3790"],
+        },
+        "record_id": "learning-3790",
+        "record_type": "LearningSignal",
+        "state": "active",
+        "payload": {"foo": {"bar": {"lease": {"fencing_token": 123}}}},
+        "idempotency_key": "record-deeply-nested-lease",
+    }
+    with pytest.raises(ValueError):
+        _assert_durable_payload_safe(deeply_nested_int, registry)
+
+    # A single hop of nesting (the original, narrower gap this exemption once
+    # had) must also be rejected: the full path is
+    # ("payload", "lease", "fencing_token"), not ("lease", "fencing_token").
+    one_hop_nested_int = {
+        **deeply_nested_int,
+        "payload": {"lease": {"fencing_token": 999}},
+        "idempotency_key": "record-one-hop-nested-lease",
+    }
+    with pytest.raises(ValueError):
+        _assert_durable_payload_safe(one_hop_nested_int, registry)
+
+    # Same check through the real HTTP route, confirming the API never
+    # persists it either.
+    store = _Store()
+    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    headers = {"Authorization": "Bearer client-token"}
+    response = client.post(
+        "/v1/records",
+        headers=headers,
+        json={
+            "envelope": deeply_nested_int["envelope"],
+            "record_id": "learning-3790",
+            "record_type": "LearningSignal",
+            "state": "active",
+            "payload": {"foo": {"bar": {"lease": {"fencing_token": 123}}}},
+            "idempotency_key": "record-deeply-nested-lease-http",
+        },
+    )
+    assert response.status_code == 400
+    assert store.last_actor is None
+
+
+def test_fencing_token_exemption_still_allows_the_legitimate_lease_field(
+    tmp_path: Path,
+) -> None:
+    """Positive control: the real ``lease.fencing_token`` int field (as sent by
+    every lease-carrying request the client issues) is unaffected by the C2
+    narrowing — it is a direct child of a top-level ``lease`` object and its
+    value is a genuine int."""
+    registry = _registry(tmp_path)
+    legitimate_request = {
+        "envelope": {
+            "repository": "RasmusTho/agentic-pkm-mvp",
+            "scope": "issue:3790",
+            "stack": "builderops-control-plane",
+            "source_refs": ["github:issue:3790"],
+        },
+        "lease": {
+            "resource_id": "issue-3790-task",
+            "holder": "client:macbook",
+            "fencing_token": 1,
+            "expires_at": "2026-07-17T19:58:27.710736Z",
+            "lease_kind": "task",
+        },
+        "idempotency_key": "heartbeat-legit",
+        "request": {},
+        "ttl_seconds": 5400,
+    }
+    # Must not raise: the exemption still covers the genuine typed field.
+    _assert_durable_payload_safe(legitimate_request, registry)

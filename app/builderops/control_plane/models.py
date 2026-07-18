@@ -44,6 +44,26 @@ class UnknownEffectNeedsReconciliation(ControlPlaneError):
     """Raised when readback is mandatory before an external-effect retry."""
 
 
+# The service's HTTP 409 ``detail`` classification and the client's stale-vs-
+# generic-conflict matching share these exact identifiers, so a class rename
+# here cannot silently desync from the client's classification (BCP-04 review
+# finding H3). ``STALE_AUTHORITY_EPOCH_DETAIL`` is not backed by an exception
+# class here: the authority-epoch fence is a service/HTTP-layer concern
+# (``require_authority_epoch`` in service.py), not a store-layer one.
+STALE_FENCING_TOKEN_DETAIL = StaleFencingToken.__name__
+LEASE_UNAVAILABLE_DETAIL = LeaseUnavailable.__name__
+LEASE_REQUIRED_DETAIL = LeaseRequired.__name__
+STALE_AUTHORITY_EPOCH_DETAIL = "StaleAuthorityEpoch"
+STALE_DETAIL_NAMES = frozenset(
+    {
+        STALE_FENCING_TOKEN_DETAIL,
+        LEASE_UNAVAILABLE_DETAIL,
+        LEASE_REQUIRED_DETAIL,
+        STALE_AUTHORITY_EPOCH_DETAIL,
+    }
+)
+
+
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 

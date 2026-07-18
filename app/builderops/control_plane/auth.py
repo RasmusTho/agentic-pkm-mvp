@@ -17,6 +17,9 @@ class CredentialConfigurationError(RuntimeError):
     """Raised when the host-owned credential configuration is unusable."""
 
 
+_REPOSITORY_SCOPE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
 @dataclass(frozen=True)
 class Credential:
     credential_id: str
@@ -26,6 +29,24 @@ class Credential:
     scopes: frozenset[str]
     rotation_generation: int
     token_length: int
+    repositories: frozenset[str] = frozenset()
+    all_repositories: bool = False
+
+    def may_address(self, repository: str) -> bool:
+        """Return whether this credential is granted authority for ``repository``.
+
+        Fail closed by default: a credential that declares neither
+        ``repositories`` nor the explicit ``all_repositories`` opt-in may
+        address NO repository. A credential that declares ``repositories`` is
+        bound to exactly that set (canonical ``owner/name``, lowercased).
+        ``all_repositories=True`` is a distinct, explicit, unambiguous opt-in
+        for the small set of credentials (e.g. the privileged executor) that
+        legitimately need unrestricted repo addressing; it is never implied by
+        an absent or empty ``repositories`` list.
+        """
+        if self.all_repositories:
+            return True
+        return repository.strip().lower() in self.repositories
 
 
 class CredentialRegistry:
@@ -102,6 +123,31 @@ class CredentialRegistry:
                     "BuilderOps credential scopes must be unique bounded identifiers"
                 )
             scopes = frozenset(scopes_raw)
+            repositories_raw = raw.get("repositories", [])
+            if not isinstance(repositories_raw, list) or not all(
+                isinstance(repository, str)
+                and _REPOSITORY_SCOPE.fullmatch(repository.strip()) is not None
+                and not any(part in {".", ".."} for part in repository.strip().split("/"))
+                for repository in repositories_raw
+            ):
+                raise CredentialConfigurationError(
+                    "BuilderOps credential repositories must be bounded owner/name references"
+                )
+            repositories = frozenset(repository.strip().lower() for repository in repositories_raw)
+            if len(repositories) != len(repositories_raw):
+                raise CredentialConfigurationError(
+                    "BuilderOps credential repositories must be unique"
+                )
+            all_repositories_raw = raw.get("all_repositories", False)
+            if type(all_repositories_raw) is not bool:
+                raise CredentialConfigurationError(
+                    "BuilderOps credential all_repositories must be a boolean"
+                )
+            if all_repositories_raw and repositories:
+                raise CredentialConfigurationError(
+                    "a BuilderOps credential must not combine all_repositories with an "
+                    "explicit repositories list; the combination is ambiguous"
+                )
             revoked = raw.get("revoked", False)
             if type(revoked) is not bool:
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata")
@@ -160,6 +206,8 @@ class CredentialRegistry:
                         scopes=scopes,
                         rotation_generation=generation,
                         token_length=token_length,
+                        repositories=repositories,
+                        all_repositories=all_repositories_raw,
                     ),
                     verifier,
                 )
@@ -235,6 +283,8 @@ class CredentialRegistry:
                     "secret_ref": entry.secret_ref,
                     "fingerprint": entry.fingerprint,
                     "scopes": sorted(entry.scopes),
+                    "repositories": sorted(entry.repositories),
+                    "all_repositories": entry.all_repositories,
                     "rotation_generation": entry.rotation_generation,
                     "token_length": entry.token_length,
                 }

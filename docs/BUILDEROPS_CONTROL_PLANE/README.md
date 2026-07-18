@@ -1,4 +1,4 @@
-State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 is implemented in the development baseline by #3792/PR #3852; the repo/deployment contract for BCP-02 is implemented by #3790; BCP-03 is implemented in the development baseline by #3789/PR #3929 (mechanism only, no cutover); live authority activation remains forbidden until BCP-03 through BCP-06 complete. BCP-04 is now dependency-unblocked, BCP-05 still waits for BCP-04, and BCP-06/07 remain dependency-blocked. Existing issues #3603 and #3690 are reconciled into the sequence.
+State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 is implemented in the development baseline by #3792/PR #3852; the repo/deployment contract for BCP-02 is implemented by #3790; BCP-03 is implemented in the development baseline by #3789/PR #3929 (mechanism only, no cutover); BCP-04 is implemented in the development baseline by #3791 (client transport and gates only, non-authoritative); live authority activation remains forbidden until BCP-03 through BCP-06 complete. BCP-05 still waits for BCP-04 acceptance, and BCP-06/07 remain dependency-blocked. Existing issues #3603 and #3690 are reconciled into the sequence.
 Doc role: Specification directory
 Authority: Owns the bounded task decomposition and cross-task invariants after merge. ADR-0062 owns the architectural decision; ADR-0010 owns the repo/BuilderOps authority seam; shipped owner docs win for current behavior.
 Owner: BuilderOps governance / Architecture spine
@@ -42,6 +42,19 @@ mechanism only: no production cutover, writer disablement, or PostgreSQL adapter
 (BCP-06 owns the freeze window and the sink adapter), and remote-host env snapshots are a
 recorded preflight limitation.
 
+BCP-04 (#3791) adds the versioned authenticated control-plane client
+(`app/builderops/control_plane/client.py`), its API-only CLI
+(`python -m app.builderops.control_plane`) and `scripts/builderops_api_client.sh`
+wrapper, delivery-manifest `(RepoRef, stack, task-class)` routing, the
+client-facing service routes (records, inquiries, tasks claim/heartbeat/complete,
+attempts, promotions, receipts, status, and the executor outbox claim), repo and
+executor scope enforcement, typed fail-closed transport/auth/scope/conflict/
+stale-lease errors with idempotent retry, and the control-plane store-boundary
+and governance gates. This is not a production cutover either: the client targets
+whatever service/store backend is configured and ships non-authoritative; the
+legacy direct-SQLite `app.dispatcher`/`app.builderops` CLIs remain in place, and
+BCP-06 owns activating production authority and freezing those legacy writers.
+
 ## Target boundary
 
 - Demerzel hosts the independently deployed BuilderOps API, PostgreSQL store, migration gate, and
@@ -72,10 +85,11 @@ Execution order:
 `BCP-02 -> BCP-04 -> BCP-05`; `BCP-03 + BCP-04 + BCP-05 -> BCP-06 -> BCP-07`.
 
 Parent validation hub: #3788. BCP-01 is implemented in the development baseline by #3792/PR #3852,
-BCP-02's repo/deployment contract is implemented by #3790 without live authority activation, and
-BCP-03 (#3789) is implemented in the development baseline by PR #3929 (mechanism only). BCP-04
-(#3791) is the next dependency-unblocked candidate; the BCP-05 migration (#3603) follows BCP-04,
-and BCP-06/07 remain blocked.
+BCP-02's repo/deployment contract is implemented by #3790 without live authority activation,
+BCP-03 (#3789) is implemented in the development baseline by PR #3929 (mechanism only), and
+BCP-04 (#3791) is implemented in the development baseline (client transport and gates only,
+non-authoritative). The BCP-05 migration (#3603) follows BCP-04 acceptance, and BCP-06/07 remain
+blocked.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
 not by rewriting that merge.
