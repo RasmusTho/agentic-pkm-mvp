@@ -3,13 +3,20 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_HELPER = REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
 DEPLOY_SCRIPT = REPO_ROOT / "scripts/deploy_channel.sh"
 IMAGE_SHA = "fff07f13665d7e79270e20f8453b06da7b9f53d7"
+requires_docker = pytest.mark.skipif(
+    shutil.which("docker") is None,
+    reason="docker executable not found on PATH",
+)
 
 
 def _render_deploy_compose(
@@ -116,6 +123,7 @@ def _mount_source(service: dict[str, object], target: str) -> str | None:
     return None
 
 
+@requires_docker
 def test_deploy_channel_test_no_vault_keeps_idle_overlay_set(tmp_path: Path) -> None:
     services = _services(
         _render_deploy_compose(tmp_path, channel="test", explicit_vault=False)
@@ -133,6 +141,7 @@ def test_deploy_channel_test_no_vault_keeps_idle_overlay_set(tmp_path: Path) -> 
         assert service["image"] == f"ghcr.io/rasmustho/pkm-app:{IMAGE_SHA}"
 
 
+@requires_docker
 def test_deploy_channel_test_explicit_vault_uses_governed_overlay_order(
     tmp_path: Path,
 ) -> None:
@@ -158,6 +167,7 @@ def test_deploy_channel_test_explicit_vault_uses_governed_overlay_order(
     assert migrate["LLM_PROVIDER"] == "mock"
 
 
+@requires_docker
 def test_deploy_channel_non_test_explicit_vault_uses_legacy_overlay_only(
     tmp_path: Path,
 ) -> None:
@@ -177,6 +187,7 @@ def test_deploy_channel_non_test_explicit_vault_uses_legacy_overlay_only(
         assert env["DB_DSN"].endswith("/app")
 
 
+@requires_docker
 def test_full_host_vault_does_not_add_deadlocking_duplicate_legacy_mount(
     tmp_path: Path,
 ) -> None:
@@ -203,6 +214,7 @@ def test_full_host_vault_does_not_add_deadlocking_duplicate_legacy_mount(
         assert env["WATCHER_VAULT_PATH"] == str(selected_vault)
 
 
+@requires_docker
 def test_symlink_outside_full_host_mount_does_not_select_native_path_overlay(
     tmp_path: Path,
 ) -> None:
@@ -229,6 +241,7 @@ def test_symlink_outside_full_host_mount_does_not_select_native_path_overlay(
         assert env["WATCHER_VAULT_PATH"] == ""
 
 
+@requires_docker
 def test_test_overlay_selection_preserves_idle_and_explicit_vault_modes(
     tmp_path: Path,
 ) -> None:
