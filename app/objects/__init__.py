@@ -173,7 +173,9 @@ def save_object_in_transaction(conn: Any, obj: DomainObject) -> None:
     its outbox/file-state writes atomically without becoming a second SQL
     writer for ``store_objects``.
     """
-    from app.stores.pg import put_object_with_connection
+    from app.stores.pg import assert_store_schema_with_connection, put_object_with_connection
+
+    assert_store_schema_with_connection(conn)
 
     put_object_with_connection(
         conn,

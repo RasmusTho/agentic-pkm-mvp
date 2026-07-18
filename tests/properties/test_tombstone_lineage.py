@@ -71,6 +71,7 @@ class _FakeCursor:
         self.conn = conn
         self.rowcount = 0
         self._fetchone: Any = None
+        self._fetchall: list[Any] = []
 
     def __enter__(self) -> "_FakeCursor":
         return self
@@ -82,6 +83,23 @@ class _FakeCursor:
         normalized = " ".join(sql.split()).lower()
         self.rowcount = 0
         self._fetchone = None
+        self._fetchall = []
+
+        if normalized.startswith("select to_regclass(%s) as oid"):
+            self._fetchone = (params[0],)
+            return
+        if "from pg_attribute" in normalized:
+            self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
+            return
+        if normalized.startswith("update store_vector_index"):
+            return
+        if normalized.startswith(
+            "select payload from store_objects where object_id = %s for update"
+        ):
+            (object_id,) = params
+            row = self.conn.store_objects.get(str(object_id))
+            self._fetchone = (row["payload"],) if row else None
+            return
 
         if normalized.startswith("insert into objects(id, kind, payload, path)"):
             object_id, kind, payload_json, path = params
@@ -128,8 +146,15 @@ class _FakeCursor:
         if normalized.startswith("select exists(select 1 from store_objects"):
             canonical_id, _id, uuid_value, expected, _again = params
             canonical = str(canonical_id) in self.conn.store_objects
-            mirror = any(str(row.get("uuid") or row["id"]) == uuid_value for row in self.conn.objects.values())
-            self._fetchone = (canonical, mirror, canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected)
+            mirror = any(
+                str(row.get("uuid") or row["id"]) == uuid_value
+                for row in self.conn.objects.values()
+            )
+            self._fetchone = (
+                canonical,
+                mirror,
+                canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected,
+            )
             return
         if normalized.startswith("update store_objects"):
             source_ref, object_id = params
@@ -202,6 +227,9 @@ class _FakeCursor:
 
     def fetchone(self):  # type: ignore[no-untyped-def]
         return self._fetchone
+
+    def fetchall(self):  # type: ignore[no-untyped-def]
+        return self._fetchall
 
 
 class _FakeConn:

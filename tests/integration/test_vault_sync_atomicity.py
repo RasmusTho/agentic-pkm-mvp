@@ -111,6 +111,16 @@ def _canonical_objects_row_count(dsn: str) -> int:
             return int(row[0] or 0) if row else 0
 
 
+def _canonical_payload(dsn: str, object_id: str) -> dict[str, object]:
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("select payload from store_objects where object_id = %s", (object_id,))
+            row = cur.fetchone()
+            assert row is not None
+            assert isinstance(row[0], dict)
+            return row[0]
+
+
 def _file_state_row_count(dsn: str) -> int:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
@@ -307,5 +317,83 @@ def test_rename_atomic(tmp_path, monkeypatch) -> None:
         assert result["updated"] is True
         assert _file_state_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
         assert _objects_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
+    finally:
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_sync_markdown_edit_preserves_richer_canonical_payload(tmp_path, monkeypatch) -> None:
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        note_path = tmp_path / "metadata.md"
+        uuid_value = str(uuid4())
+        _write_note(note_path, uuid_value, "Metadata Note", "first body")
+        vault_sync.sync_markdown(str(note_path))
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                """
+                update store_objects
+                set payload = payload || %s::jsonb
+                where object_id = %s
+                """,
+                (
+                    '{"episode_ref":"episode:1","trust":"reviewed","language":"sv","stable_id":"stable:1"}',
+                    uuid_value,
+                ),
+            )
+
+        _write_note(note_path, uuid_value, "Metadata Note", "edited body")
+        vault_sync.sync_markdown(str(note_path))
+
+        payload = _canonical_payload(dsn, uuid_value)
+        assert payload["content"] == "edited body"
+        assert payload["episode_ref"] == "episode:1"
+        assert payload["trust"] == "reviewed"
+        assert payload["language"] == "sv"
+        assert payload["stable_id"] == "stable:1"
+    finally:
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_pure_rename_preserves_richer_canonical_payload(tmp_path, monkeypatch) -> None:
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        old_path = tmp_path / "before.md"
+        new_path = tmp_path / "after.md"
+        uuid_value = str(uuid4())
+        _write_note(old_path, uuid_value, "Rename Metadata", "unchanged body")
+        vault_sync.sync_markdown(str(old_path))
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                """
+                update store_objects
+                set payload = payload || %s::jsonb
+                where object_id = %s
+                """,
+                ('{"episode_ref":"episode:2","ingest_fingerprint":"fingerprint:2"}', uuid_value),
+            )
+
+        old_path.rename(new_path)
+        vault_sync.handle_rename(str(old_path), str(new_path))
+
+        payload = _canonical_payload(dsn, uuid_value)
+        assert payload["episode_ref"] == "episode:2"
+        assert payload["ingest_fingerprint"] == "fingerprint:2"
+        assert payload["content"] == "unchanged body"
     finally:
         _drop_schema(base_dsn, schema)

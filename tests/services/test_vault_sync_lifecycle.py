@@ -18,6 +18,7 @@ class _FakeCursor:
         self.conn = conn
         self.rowcount = 0
         self._fetchone = None
+        self._fetchall = []
 
     def __enter__(self) -> "_FakeCursor":
         return self
@@ -29,6 +30,15 @@ class _FakeCursor:
         normalized = " ".join(sql.split()).lower()
         self.rowcount = 0
         self._fetchone = None
+        self._fetchall = []
+        if normalized.startswith("select to_regclass(%s) as oid"):
+            self._fetchone = (params[0],)
+            return
+        if "from information_schema.columns" in normalized or "from pg_attribute" in normalized:
+            self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
+            return
+        if normalized.startswith("update store_vector_index"):
+            return
         if normalized.startswith("update objects set path=%s where uuid=%s"):
             new_path, uuid_value = params
             if uuid_value in self.conn.objects_path:
@@ -56,9 +66,17 @@ class _FakeCursor:
             )
             self._fetchone = (canonical_exists, mirror_exists, locator_complete)
             return
+        if normalized.startswith(
+            "select payload from store_objects where object_id = %s for update"
+        ):
+            (object_id,) = params
+            payload = self.conn.canonical_payload.get(str(object_id))
+            self._fetchone = (payload,) if payload is not None else None
+            return
         if normalized.startswith("insert into store_objects"):
-            object_id, _kind, source_ref, _payload = params
+            object_id, _kind, source_ref, payload = params
             self.conn.canonical_source[str(object_id)] = source_ref
+            self.conn.canonical_payload[str(object_id)] = payload
             self.rowcount = 1
             return
         if normalized.startswith("update store_objects"):
@@ -132,12 +150,16 @@ class _FakeCursor:
     def fetchone(self):  # type: ignore[no-untyped-def]
         return self._fetchone
 
+    def fetchall(self):  # type: ignore[no-untyped-def]
+        return self._fetchall
+
 
 class _FakeConn:
     def __init__(self) -> None:
         self.file_state: dict[str, dict[str, object]] = {}
         self.objects_path: dict[str, str | None] = {}
         self.canonical_source: dict[str, str | None] = {}
+        self.canonical_payload: dict[str, object] = {}
 
     def __enter__(self) -> "_FakeConn":
         return self

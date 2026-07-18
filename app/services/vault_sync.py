@@ -112,6 +112,27 @@ def _canonical_object_id(conn: psycopg.Connection, uuid_value: str) -> str:
     return resolve_canonical_object_id_in_transaction(conn, uuid_value)
 
 
+def _merge_canonical_payload(
+    conn: psycopg.Connection,
+    *,
+    object_id: str,
+    updates: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge watcher-owned fields without erasing richer canonical metadata."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT payload FROM store_objects WHERE object_id = %s FOR UPDATE",
+            (object_id,),
+        )
+        row = cur.fetchone()
+    existing: Any = row.get("payload") if isinstance(row, dict) else (row[0] if row else {})
+    if isinstance(existing, str):
+        existing = json.loads(existing)
+    if not isinstance(existing, dict):
+        existing = {}
+    return {**existing, **updates}
+
+
 def _object_materialization_state(
     conn: psycopg.Connection,
     *,
@@ -269,7 +290,11 @@ def _update_path_only(
         DomainObject(
             uuid=canonical_object_id,
             kind="note",
-            payload=payload,
+            payload=_merge_canonical_payload(
+                conn,
+                object_id=canonical_object_id,
+                updates=payload,
+            ),
             source_ref=new_path,
             created_at=mtime,
         ),
@@ -498,7 +523,11 @@ def upsert_object_from_note(
             DomainObject(
                 uuid=canonical_object_id,
                 kind="note",
-                payload=canonical_payload,
+                payload=_merge_canonical_payload(
+                    conn,
+                    object_id=canonical_object_id,
+                    updates=canonical_payload,
+                ),
                 source_ref=path_str,
                 created_at=mtime,
             ),
@@ -746,7 +775,11 @@ def sync_markdown(path: str) -> dict[str, Any]:
             DomainObject(
                 uuid=canonical_object_id,
                 kind="note",
-                payload=json.loads(payload_json),
+                payload=_merge_canonical_payload(
+                    conn,
+                    object_id=canonical_object_id,
+                    updates=json.loads(payload_json),
+                ),
                 source_ref=str(note_path),
                 created_at=mtime,
             ),

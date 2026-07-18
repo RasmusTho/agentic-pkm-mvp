@@ -100,6 +100,7 @@ def test_transactional_writes_evict_explicit_memory_entries(monkeypatch):
         created_at=datetime.now(timezone.utc),
     )
     legacy._MEMORY_STORE[object_id] = cached
+    monkeypatch.setattr("app.stores.pg.assert_store_schema_with_connection", lambda *_a, **_k: None)
     monkeypatch.setattr("app.stores.pg.put_object_with_connection", lambda *_a, **_k: None)
     monkeypatch.setattr(
         "app.stores.pg.update_object_source_ref_with_connection", lambda *_a, **_k: None

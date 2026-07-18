@@ -42,6 +42,7 @@ class _RecCursor:
         self.conn = conn
         self.rowcount = 0
         self._fetch: object | None = None
+        self._fetchall: list[object] = []
 
     def __enter__(self) -> "_RecCursor":
         return self
@@ -53,6 +54,17 @@ class _RecCursor:
         norm = " ".join(sql.split()).lower()
         self.rowcount = 0
         self._fetch = None
+        self._fetchall = []
+        if norm.startswith("select to_regclass(%s) as oid"):
+            self._fetch = (params[0],)
+            return
+        if "from information_schema.columns" in norm or "from pg_attribute" in norm:
+            self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
+            return
+        if norm.startswith("update store_vector_index"):
+            return
+        if norm.startswith("select payload from store_objects"):
+            return
         if norm.startswith("insert into objects"):
             self.conn.log.append("objects_write")
             self.rowcount = 1
@@ -97,7 +109,7 @@ class _RecCursor:
         return self._fetch
 
     def fetchall(self):
-        return []
+        return self._fetchall
 
 
 class _RecConn:
