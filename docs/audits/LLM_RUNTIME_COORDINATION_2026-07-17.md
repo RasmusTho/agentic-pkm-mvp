@@ -368,9 +368,10 @@ No big-bang rewrite, registry merge, or automatic two-way synchronization is per
 | Closed #3144 / CKM semantic association | Preserve delivered behavior; record the direct Product Fabric import as migration debt rather than reopening the merged slice. |
 | Open #3429 / Product model cards | Product registry work only; it does not create Builder registry authority. |
 
-The 2026-07-17 GitHub search found no existing issue or PR that owns the neutral-kernel decision or
-the full Product/Builder LLM compatibility seam. This audit creates no duplicate backlog. If the ADR
-is accepted, `feature-breakdown` should reconcile again before filing M0-M5 tasks.
+The 2026-07-17 GitHub search found no pre-existing issue or PR that owned the neutral-kernel decision
+or the full Product/Builder LLM compatibility seam. Accepted ADR-0063 completes M0. Before filing
+the remaining M1-M5 tasks, `feature-breakdown` must reconcile live backlog again so it does not
+duplicate work created after this audit.
 
 ## 11. SBS reconciliation
 

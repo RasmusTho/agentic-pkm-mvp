@@ -202,8 +202,9 @@ adapter and the risk of semantically parallel abstractions remains.
 
 ## Owner decision receipt
 
-The owner accepted option 1 in the governing Codex task on 2026-07-17 with the explicit response
-“vi tar modl 1”, selecting this architectural answer:
+The owner ratified **Option B — shared neutral contract kernel, separate execution fabrics** on
+2026-07-17. This accepted ADR and its PR review history are the durable public decision receipt;
+private deliberation is intentionally not republished. The selected architectural answer is:
 
 > Builder Capability Runtime shares a neutral LLM Contract Kernel with Mimer Product LLM Fabric,
 > while each runtime retains separate policy, registry, credentials, provider sessions, fallback,
