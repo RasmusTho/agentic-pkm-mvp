@@ -139,6 +139,11 @@ ALLOW_FILES = (
     # (acquisition_source_registry) with a self-contained dual memory/pg
     # backend, direct DSN connection, no ORM layer to route through.
     'app/knowledge_acquisition/source_registry.py',
+    # YouTube Source Sync durable account-binding registry (YSS-02, #3917). Same
+    # bounded pattern as source_registry.py above: a dedicated table
+    # (youtube_account_binding) with a self-contained dual memory/pg backend,
+    # direct DSN connection, no ORM layer to route through.
+    'app/knowledge_acquisition/youtube_account_binding.py',
 )
 
 def _allowed(p: Path) -> bool:
