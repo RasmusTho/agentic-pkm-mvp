@@ -44,7 +44,11 @@ from app.workers.metrics import (
     WORKER_PROCESSED,
     maybe_start_worker_metrics_server,
 )
-from app.services.indexer import handle_ingest_object_created, purge_object_vectors
+from app.services.indexer import (
+    handle_ingest_object_created,
+    purge_object_vectors,
+    resolve_event_object_id,
+)
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
@@ -531,7 +535,7 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
     on for their own purge+upsert writes -- this handler does not need its
     own bespoke cache-eviction path to stay consistent with that contract.
     """
-    raw_uuid = payload.get("object_id") or payload.get("uuid")
+    raw_uuid = resolve_event_object_id(dict(payload))
     object_id: UUID | None = None
     if raw_uuid:
         try:

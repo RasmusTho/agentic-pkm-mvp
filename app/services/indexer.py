@@ -17,7 +17,7 @@ from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
-from app.objects import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
 from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,22 @@ def _is_valid_uuid(value: str | None) -> bool:
     return True
 
 
+def resolve_event_object_id(obj: Dict[str, object]) -> object:
+    """Return canonical identity for current and queued pre-cutover events.
+
+    Current producers carry ``object_id`` explicitly. Older vault-sync rows
+    carry only the retained frontmatter UUID, which must cross the retained
+    ``objects.uuid -> objects.id`` mapping before replay after #3510.
+    """
+    object_id = obj.get("object_id")
+    if object_id:
+        return object_id
+    vault_uuid = obj.get("uuid")
+    if _is_valid_uuid(vault_uuid):
+        return resolve_canonical_object_id(str(vault_uuid))
+    return vault_uuid
+
+
 def _infer_dim_from_error(exc: Exception) -> int | None:
     text = str(exc)
     match = re.search(r"got\s+(\d+)", text, re.IGNORECASE)
@@ -84,7 +100,7 @@ def _infer_dim_from_error(exc: Exception) -> int | None:
 
 
 def handle_ingest_object_created(obj: Dict[str, object]) -> None:
-    incoming_uuid = obj.get("object_id") or obj.get("uuid")
+    incoming_uuid = resolve_event_object_id(obj)
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = str(obj.get("content") or "")

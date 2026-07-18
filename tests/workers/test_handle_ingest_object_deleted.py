@@ -105,6 +105,26 @@ def test_dispatching_delete_event_purges_vectors_end_to_end() -> None:
     )
 
 
+def test_queued_uuid_only_delete_resolves_retained_canonical_id(monkeypatch) -> None:
+    vault_uuid = uuid4()
+    canonical_id = uuid4()
+    idx = _seed_vector(canonical_id)
+    monkeypatch.setattr(
+        "app.services.indexer.resolve_canonical_object_id",
+        lambda value: str(canonical_id) if value == str(vault_uuid) else value,
+    )
+
+    _dispatch_delete(
+        {
+            "uuid": str(vault_uuid),
+            "path": "/vault/Inbox/queued-before-cutover.md",
+            "deleted": True,
+        }
+    )
+
+    assert idx.count_vectors() == 0
+
+
 def test_delete_event_does_not_touch_object_store_tombstone() -> None:
     """The handler purges vectors only; it must never delete or resurrect the
     ``store_objects`` row. D-2 tombstone semantics (path=NULL, row persists)

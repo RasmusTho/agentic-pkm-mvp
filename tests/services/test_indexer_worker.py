@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
-from app.services.indexer import handle_ingest_object_created
+from app.services.indexer import handle_ingest_object_created, resolve_event_object_id
 from app import objects as object_store_module
 from app.index.artifact_metadata import canonicalize_indexable_text, compute_content_hash
 from app.objects import ObjectStore
@@ -21,6 +21,27 @@ def _make_event(source_ref: str = "vault/path", trace_id: str | None = None) -> 
         "review_state": "processed",
         "trace_id": trace_id,
     }
+
+
+def test_uuid_only_legacy_event_resolves_retained_canonical_id(monkeypatch):
+    vault_uuid = str(UUID(int=1))
+    canonical_id = str(UUID(int=2))
+    monkeypatch.setattr(
+        "app.services.indexer.resolve_canonical_object_id",
+        lambda value: canonical_id if value == vault_uuid else value,
+    )
+
+    assert resolve_event_object_id({"uuid": vault_uuid}) == canonical_id
+
+
+def test_explicit_event_object_id_never_reinterprets_canonical_identity(monkeypatch):
+    canonical_id = str(UUID(int=3))
+    monkeypatch.setattr(
+        "app.services.indexer.resolve_canonical_object_id",
+        lambda _value: (_ for _ in ()).throw(AssertionError("must not resolve explicit object_id")),
+    )
+
+    assert resolve_event_object_id({"object_id": canonical_id, "uuid": str(UUID(int=4))}) == canonical_id
 
 
 def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
