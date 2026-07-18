@@ -203,6 +203,32 @@ def test_full_host_vault_does_not_add_deadlocking_duplicate_legacy_mount(
         assert env["WATCHER_VAULT_PATH"] == str(selected_vault)
 
 
+def test_symlink_outside_full_host_mount_does_not_select_native_path_overlay(
+    tmp_path: Path,
+) -> None:
+    selected_vault = tmp_path / "selected-vault-link"
+    selected_vault.symlink_to(
+        "/Users/operator/Library/Mobile Documents/"
+        "iCloud~md~obsidian/Documents/selected-vault",
+        target_is_directory=True,
+    )
+    services = _services(
+        _render_deploy_compose(
+            tmp_path / "render",
+            channel="dev",
+            explicit_vault=True,
+            selected_vault=selected_vault,
+        )
+    )
+
+    for service_name in ("api", "worker", "watcher"):
+        service = services[service_name]
+        env = _environment(service)
+        assert _mount_source(service, "/app/vault") == str(selected_vault)
+        assert env["VAULT_ROOT"] == "/app/vault"
+        assert env["WATCHER_VAULT_PATH"] == ""
+
+
 def test_test_overlay_selection_preserves_idle_and_explicit_vault_modes(
     tmp_path: Path,
 ) -> None:

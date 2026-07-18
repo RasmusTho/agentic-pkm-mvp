@@ -19,11 +19,22 @@ _deploy_channel_uses_full_host_vault_path() {
 import os
 import sys
 
-path = os.path.realpath(sys.argv[1])
+selector = sys.argv[1]
 roots = ("/Users", "/Volumes")
+
+
+def under_full_host_root(path: str) -> bool:
+    return any(path == root or path.startswith(f"{root}/") for root in roots)
+
+
+# The container receives the selector string, not its host-side realpath. Both
+# views must stay under a same-path mount: this rejects relative selectors,
+# outside symlinks into /Users, and /Users symlinks that escape the mounts.
+lexical_path = os.path.normpath(selector) if os.path.isabs(selector) else ""
+resolved_path = os.path.realpath(selector)
 raise SystemExit(
     0
-    if any(path == root or path.startswith(f"{root}/") for root in roots)
+    if under_full_host_root(lexical_path) and under_full_host_root(resolved_path)
     else 1
 )
 PY
