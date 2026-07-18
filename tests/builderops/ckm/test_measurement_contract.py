@@ -738,6 +738,89 @@ def test_ambiguous_history_only_edge_state_rolls_back_without_half_init(
     assert _ckm_storage_snapshot(db_path) == before_migration
 
 
+def test_current_schema_repairs_history_only_active_lifecycle_idempotently(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "old-v5-history-lifecycle.sqlite3"
+    legacy = CkmStore(db_path)
+    legacy.ensure_schema()
+    capability = _capability(legacy)
+    artifact = _artifact(legacy)
+    edge = _edge(legacy, artifact.id, capability.id)
+    legacy.delete_evidence_edge(edge.id)
+    _downgrade_identity_schema_to_v4(db_path)
+
+    migrated = CkmStore(db_path)
+    migrated.ensure_schema()
+    with sqlite3.connect(db_path) as conn:
+        public_id, retired_at = conn.execute(
+            "SELECT public_id, retired_at FROM ckm_evidence_edge_history WHERE edge_id = ?",
+            (edge.id,),
+        ).fetchone()
+        conn.execute(
+            """
+            UPDATE ckm_public_identity
+            SET status = 'active', tombstoned_at = NULL
+            WHERE public_id = ?
+            """,
+            (public_id,),
+        )
+        conn.commit()
+
+    before_repair = migrated.state_identity()
+    migrated.ensure_schema()
+    after_repair = migrated.state_identity()
+    assert after_repair.state_revision == before_repair.state_revision + 1
+    with sqlite3.connect(db_path) as conn:
+        lifecycle = conn.execute(
+            "SELECT status, tombstoned_at FROM ckm_public_identity WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+    assert lifecycle == ("tombstone", retired_at)
+    assert migrated.identity_lifecycle(public_id)["status"] == "tombstone"
+
+    migrated.ensure_schema()
+    assert migrated.state_identity() == after_repair
+
+
+def test_active_edge_history_identity_mismatch_rolls_back_without_half_init(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "active-history-mismatch-v4.sqlite3"
+    legacy = CkmStore(db_path)
+    legacy.ensure_schema()
+    capability = _capability(legacy)
+    artifact = _artifact(legacy)
+    edge = _edge(legacy, artifact.id, capability.id)
+    legacy.upsert_evidence_edge(
+        artifact_id=artifact.id,
+        capability_id=capability.id,
+        evidence_kind=edge.evidence_kind,
+        polarity=edge.polarity,
+        maturity_dimension=edge.maturity_dimension,
+        confidence=0.9,
+        extraction_method=edge.extraction_method,
+        lifecycle=edge.lifecycle,
+        source_ref=edge.source_ref,
+        basis=edge.basis,
+    )
+    _downgrade_identity_schema_to_v4(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE ckm_evidence_edge_history SET basis = ? WHERE edge_id = ?",
+            ("doc:ambiguous-active-history", edge.id),
+        )
+        conn.commit()
+
+    before_migration = _ckm_storage_snapshot(db_path)
+    with pytest.raises(
+        CkmValidationError,
+        match="evidence-edge history identity conflicts with active edge",
+    ):
+        CkmStore(db_path).ensure_schema()
+    assert _ckm_storage_snapshot(db_path) == before_migration
+
+
 def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.sqlite3"
     legacy = CkmStore(db_path)
