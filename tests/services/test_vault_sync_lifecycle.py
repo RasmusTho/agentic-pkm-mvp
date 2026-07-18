@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+
+import pytest
 from uuid import UUID
 
 from app.services import vault_sync
@@ -43,6 +45,17 @@ class _FakeCursor:
             (uuid_value,) = params
             self._fetchone = (uuid_value,) if uuid_value in self.conn.objects_path else None
             return
+        if normalized.startswith("select exists(select 1 from store_objects"):
+            canonical_id, _id_value, uuid_value, expected_source, _canonical_again = params
+            canonical_exists = str(canonical_id) in self.conn.canonical_source
+            mirror_exists = uuid_value in self.conn.objects_path
+            locator_complete = (
+                self.conn.canonical_source.get(str(canonical_id)) == expected_source
+                if canonical_exists
+                else False
+            )
+            self._fetchone = (canonical_exists, mirror_exists, locator_complete)
+            return
         if normalized.startswith("insert into store_objects"):
             object_id, _kind, source_ref, _payload = params
             self.conn.canonical_source[str(object_id)] = source_ref
@@ -83,6 +96,15 @@ class _FakeCursor:
         ):
             (path,) = params
             self._fetchone = self.conn.file_state.get(path)
+            return
+        if normalized.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"
+        ):
+            (uuid_value,) = params
+            self._fetchone = next(
+                (row for row in self.conn.file_state.values() if row.get("uuid") == uuid_value),
+                None,
+            )
             return
         if normalized.startswith("delete from file_state where path = %s"):
             (path,) = params
@@ -211,6 +233,65 @@ def test_delete_note_emits_outbox_event_on_real_delete(monkeypatch) -> None:
     assert payload["uuid"] == UUID3
     assert payload["path"] == "/vault/gone.md"
     assert payload["deleted"] is True
+
+
+def test_deferred_first_rename_keeps_file_state_without_materializing_parent(monkeypatch) -> None:
+    conn = _FakeConn()
+    conn.file_state["/vault/old.md"] = {
+        "path": "/vault/old.md",
+        "uuid": UUID1,
+        "fm_hash": "x",
+        "body_hash": "y",
+        "mtime": datetime.now(timezone.utc),
+    }
+    monkeypatch.setattr(vault_sync, "_conn", lambda: conn)
+    monkeypatch.setattr(vault_sync, "ensure_schema", lambda *_a, **_k: None)
+
+    vault_sync.update_path(UUID1, "/vault/new.md")
+
+    assert "/vault/new.md" in conn.file_state
+    assert conn.canonical_source == {}
+    assert conn.objects_path == {}
+
+
+def test_deferred_first_delete_emits_tombstone_without_parent(monkeypatch) -> None:
+    conn = _FakeConn()
+    conn.file_state["/vault/gone.md"] = {
+        "path": "/vault/gone.md",
+        "uuid": UUID1,
+        "fm_hash": "x",
+        "body_hash": "y",
+        "mtime": datetime.now(timezone.utc),
+    }
+    emitted = []
+    monkeypatch.setattr(vault_sync, "_conn", lambda: conn)
+    monkeypatch.setattr(vault_sync, "ensure_schema", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        vault_sync,
+        "insert_object_and_outbox",
+        lambda payload, topic, trace_id, **kwargs: emitted.append((payload, topic)),
+    )
+
+    assert vault_sync.delete_note("/vault/gone.md", uuid_value=UUID1)
+    assert emitted and emitted[0][0]["uuid"] == UUID1
+    assert conn.canonical_source == {}
+
+
+@pytest.mark.parametrize("canonical, mirror", [(True, False), (False, True)])
+def test_one_sided_materialization_remains_fail_loud(canonical, mirror) -> None:
+    conn = _FakeConn()
+    if canonical:
+        conn.canonical_source[UUID1] = "/vault/note.md"
+    if mirror:
+        conn.objects_path[UUID1] = "/vault/note.md"
+
+    with pytest.raises(RuntimeError, match="inconsistent vault object materialization"):
+        vault_sync._update_materialized_source_ref(
+            conn,
+            canonical_object_id=UUID1,
+            uuid_value=UUID1,
+            source_ref="/vault/note.md",
+        )
 
 
 def test_delete_note_does_not_emit_deleted_event_when_uuid_still_has_other_paths(

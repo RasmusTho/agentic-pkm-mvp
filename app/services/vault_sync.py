@@ -162,6 +162,25 @@ def _object_materialization_state(
     return (bool(row[0]), bool(row[1]), bool(row[2])) if row else (False, False, False)
 
 
+def _update_materialized_source_ref(
+    conn: psycopg.Connection, *, canonical_object_id: str, uuid_value: str, source_ref: str | None
+) -> None:
+    """Update a fully materialized parent; tolerate only deferred no-parent state."""
+    canonical_exists, mirror_exists, _ = _object_materialization_state(
+        conn,
+        uuid_value=uuid_value,
+        canonical_object_id=canonical_object_id,
+        expected_source_ref=source_ref or "",
+    )
+    if not canonical_exists and not mirror_exists:
+        return  # active-edit baseline: file_state exists but no producer has materialized yet
+    if not canonical_exists or not mirror_exists:
+        raise RuntimeError("inconsistent vault object materialization; reconcile before retrying")
+    update_object_source_ref_in_transaction(
+        conn, object_id=canonical_object_id, source_ref=source_ref
+    )
+
+
 def _upsert_file_state(
     conn: psycopg.Connection,
     *,
@@ -312,9 +331,10 @@ def update_path(uuid_value: str, new_path: str) -> None:
                 cur.execute("update objects set path=%s where uuid=%s", (resolved_path, uuid_value))
             except Exception:
                 cur.execute("update objects set path=%s where id=%s", (resolved_path, uuid_value))
-            update_object_source_ref_in_transaction(
+            _update_materialized_source_ref(
                 conn,
-                object_id=canonical_object_id,
+                canonical_object_id=canonical_object_id,
+                uuid_value=uuid_value,
                 source_ref=resolved_path,
             )
             cur.execute(
@@ -377,9 +397,10 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                         cur.execute(
                             "update objects set path = null where id = %s", (effective_uuid,)
                         )
-                    update_object_source_ref_in_transaction(
+                    _update_materialized_source_ref(
                         conn,
-                        object_id=canonical_object_id,
+                        canonical_object_id=canonical_object_id,
+                        uuid_value=effective_uuid,
                         source_ref=None,
                     )
             if deleted and effective_uuid and remaining_for_uuid == 0:
