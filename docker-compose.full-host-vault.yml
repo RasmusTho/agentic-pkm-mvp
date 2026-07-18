@@ -1,0 +1,29 @@
+# Explicit full-host vault binding for a source already visible through the
+# base compose's same-path /Users and /Volumes mounts. This overlay binds the
+# runtime selectors to that same container path without adding a duplicate
+# /app/vault mount, which can deadlock on iCloud-backed filesystems under
+# Colima. The deploy helper derives and pins DEPLOY_VAULT_CONTAINER_ROOT from
+# the governed VAULT_HOST_ROOT; caller-shell selectors cannot replace it.
+x-requires-explicit-full-host-vault: "${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}"
+
+services:
+  api:
+    environment:
+      VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      VAULT_ROOT_TEST: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+
+  worker:
+    environment:
+      VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      VAULT_ROOT_TEST: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+
+  watcher:
+    environment:
+      VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      VAULT_ROOT_TEST: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+      WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}

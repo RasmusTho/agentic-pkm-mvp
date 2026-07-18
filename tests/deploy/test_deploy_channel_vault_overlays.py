@@ -17,7 +17,9 @@ def _render_deploy_compose(
     *,
     channel: str,
     explicit_vault: bool,
+    selected_vault: Path | None = None,
 ) -> dict[str, object]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     runtime_env = tmp_path / f"{channel}-runtime.env"
     runtime_lines = [
         "LLM_PROVIDER=mock",
@@ -27,9 +29,10 @@ def _render_deploy_compose(
         f"WATCHER_ENABLE={'1' if channel == 'test' else '0'}",
         "WATCHER_VAULT_PATH=/app/vault" if channel == "test" else "WATCHER_VAULT_PATH=",
     ]
-    selected_vault = tmp_path / "selected-vault"
+    selected_vault = selected_vault or tmp_path / "selected-vault"
     if explicit_vault:
-        selected_vault.mkdir()
+        if selected_vault.is_relative_to(tmp_path):
+            selected_vault.mkdir()
         runtime_lines.append(f"VAULT_HOST_ROOT={selected_vault}")
     runtime_env.write_text("\n".join(runtime_lines) + "\n", encoding="utf-8")
 
@@ -79,6 +82,7 @@ deploy_channel_compose \
         env.pop(key, None)
     env["VAULT_HOST_ROOT"] = str(hostile_vault)
     env["WATCHER_RUNTIME_ENV_FILE"] = str(hostile_runtime_env)
+    env["DEPLOY_VAULT_CONTAINER_ROOT"] = str(hostile_vault)
     result = subprocess.run(
         ["bash", "-c", command],
         cwd=REPO_ROOT,
@@ -171,6 +175,97 @@ def test_deploy_channel_non_test_explicit_vault_uses_legacy_overlay_only(
         assert env["DEPLOY_RUNTIME_SENTINEL"] == "governed"
         assert env["DATABASE_URL"].endswith("/app")
         assert env["DB_DSN"].endswith("/app")
+
+
+def test_full_host_vault_does_not_add_deadlocking_duplicate_legacy_mount(
+    tmp_path: Path,
+) -> None:
+    selected_vault = Path(
+        "/Users/operator/Library/Mobile Documents/"
+        "iCloud~md~obsidian/Documents/selected-vault"
+    )
+    services = _services(
+        _render_deploy_compose(
+            tmp_path,
+            channel="dev",
+            explicit_vault=True,
+            selected_vault=selected_vault,
+        )
+    )
+
+    for service_name in ("api", "worker", "watcher"):
+        service = services[service_name]
+        env = _environment(service)
+        assert _mount_source(service, "/app/vault") is None
+        assert _mount_source(service, "/Users") == "/Users"
+        assert env["VAULT_ROOT"] == str(selected_vault)
+        assert env["VAULT_ROOT_DEV"] == str(selected_vault)
+        assert env["WATCHER_VAULT_PATH"] == str(selected_vault)
+
+
+def test_symlink_outside_full_host_mount_does_not_select_native_path_overlay(
+    tmp_path: Path,
+) -> None:
+    selected_vault = tmp_path / "selected-vault-link"
+    selected_vault.symlink_to(
+        "/Users/operator/Library/Mobile Documents/"
+        "iCloud~md~obsidian/Documents/selected-vault",
+        target_is_directory=True,
+    )
+    services = _services(
+        _render_deploy_compose(
+            tmp_path / "render",
+            channel="dev",
+            explicit_vault=True,
+            selected_vault=selected_vault,
+        )
+    )
+
+    for service_name in ("api", "worker", "watcher"):
+        service = services[service_name]
+        env = _environment(service)
+        assert _mount_source(service, "/app/vault") == str(selected_vault)
+        assert env["VAULT_ROOT"] == "/app/vault"
+        assert env["WATCHER_VAULT_PATH"] == ""
+
+
+def test_test_overlay_selection_preserves_idle_and_explicit_vault_modes(
+    tmp_path: Path,
+) -> None:
+    for channel in ("dev", "test"):
+        idle_services = _services(
+            _render_deploy_compose(
+                tmp_path / channel,
+                channel=channel,
+                explicit_vault=False,
+            )
+        )
+        for service_name in ("api", "worker", "watcher"):
+            service = idle_services[service_name]
+            env = _environment(service)
+            assert _mount_source(service, "/app/vault") is None
+            assert "VAULT_ROOT" not in env
+            assert "VAULT_ROOT_TEST" not in env
+            assert env["WATCHER_ENABLE"] == "0"
+            assert env["WATCHER_VAULT_PATH"] == ""
+
+    full_host_vault = Path("/Volumes/External/selected-test-vault")
+    explicit_services = _services(
+        _render_deploy_compose(
+            tmp_path / "explicit-test",
+            channel="test",
+            explicit_vault=True,
+            selected_vault=full_host_vault,
+        )
+    )
+    for service_name in ("api", "worker", "watcher"):
+        service = explicit_services[service_name]
+        env = _environment(service)
+        assert _mount_source(service, "/app/vault") is None
+        assert env["VAULT_ROOT"] == str(full_host_vault)
+        assert env["VAULT_ROOT_TEST"] == str(full_host_vault)
+        assert env["WATCHER_ENABLE"] == "1"
+        assert env["WATCHER_VAULT_PATH"] == str(full_host_vault)
 
 
 def test_deploy_and_rollback_share_vault_overlay_selection() -> None:
