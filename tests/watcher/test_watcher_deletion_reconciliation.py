@@ -81,6 +81,12 @@ class _FakeCursor:
             (uuid_value,) = params
             self._fetchone = (uuid_value,) if uuid_value in self.conn.objects else None
             return
+        if normalized.startswith("select exists(select 1 from store_objects"):
+            canonical_id, _id, uuid_value, expected, _again = params
+            canonical = str(canonical_id) in self.conn.store_objects
+            mirror = uuid_value in self.conn.objects
+            self._fetchone = (canonical, mirror, canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected)
+            return
         if normalized.startswith("select count(*) from file_state where uuid = %s"):
             (uuid_value,) = params
             count = sum(1 for row in self.conn.file_state.values() if row.get("uuid") == uuid_value)

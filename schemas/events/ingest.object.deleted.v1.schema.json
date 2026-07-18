@@ -6,7 +6,9 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
-    "uuid": { "type": ["string", "null"] },
+    "uuid": { "type": ["string", "null"], "description": "Canonical lifecycle object id." },
+    "object_id": { "type": ["string", "null"], "description": "Canonical store_objects identity." },
+    "vault_uuid": { "type": ["string", "null"], "description": "Retained frontmatter continuity identity." },
     "path": { "type": ["string", "null"] },
     "deleted": { "type": "boolean" },
     "reason": { "type": ["string", "null"] },

@@ -125,6 +125,12 @@ class _FakeCursor:
             )
             self._fetchone = (row["id"],) if row else None
             return
+        if normalized.startswith("select exists(select 1 from store_objects"):
+            canonical_id, _id, uuid_value, expected, _again = params
+            canonical = str(canonical_id) in self.conn.store_objects
+            mirror = any(str(row.get("uuid") or row["id"]) == uuid_value for row in self.conn.objects.values())
+            self._fetchone = (canonical, mirror, canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected)
+            return
         if normalized.startswith("update store_objects"):
             source_ref, object_id = params
             row = self.conn.store_objects.get(str(object_id))
