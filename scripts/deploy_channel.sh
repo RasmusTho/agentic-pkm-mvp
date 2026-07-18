@@ -148,6 +148,7 @@ current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
 MIGRATIONS_CHECKED=0
 FORWARD_ONLY_COUNT=0
+FORWARD_ONLY_MIGRATION_STARTED=0
 FORWARD_ONLY_MIGRATION_APPLIED=0
 
 list_changed_migrations() {
@@ -283,6 +284,13 @@ apply_changed_migrations() {
   # runtime writer before Alembic takes its snapshot, then run the one-shot
   # migration authority explicitly before any target runtime is recreated.
   compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
+  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
+    # From this point a nonzero Docker result is ambiguous: Alembic may have
+    # committed before the client lost the container result. Fail closed by
+    # retaining the schema-compatible target unless unchanged DB revision is
+    # proven by the governed recovery workflow.
+    FORWARD_ONLY_MIGRATION_STARTED=1
+  fi
   compose up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate || return $?
   if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
     FORWARD_ONLY_MIGRATION_APPLIED=1
@@ -294,8 +302,12 @@ rollback_failed_startup() {
   if [ -n "${MIGRATION_RECEIPT_JSON:-}" ]; then
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
-  if [ "${forward_only_count}" != "0" ] && [ "${FORWARD_ONLY_MIGRATION_APPLIED}" = "1" ]; then
-    echo "${reason} (status ${original_status}); forward-only migration(s) are not auto-reversed; they were applied, so the target pin is retained for a compatible forward fix instead of restoring a potentially schema-incompatible previous image" >&2
+  if [ "${forward_only_count}" != "0" ] && [ "${FORWARD_ONLY_MIGRATION_STARTED}" = "1" ]; then
+    if [ "${FORWARD_ONLY_MIGRATION_APPLIED}" = "1" ]; then
+      echo "${reason} (status ${original_status}); forward-only migration(s) are not auto-reversed; they were applied, so the target pin is retained for a compatible forward fix instead of restoring a potentially schema-incompatible previous image" >&2
+    else
+      echo "${reason} (status ${original_status}); forward-only migration execution started and its commit state is ambiguous; the target pin is retained until unchanged database revision is proven or a compatible forward fix is applied" >&2
+    fi
     return 0
   fi
   echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2

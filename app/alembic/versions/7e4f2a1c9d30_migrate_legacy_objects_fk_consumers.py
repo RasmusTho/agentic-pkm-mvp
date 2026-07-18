@@ -133,6 +133,21 @@ def upgrade() -> None:
                     HINT = 'Inventory this live consumer and add a reviewed child-key translation before retrying.';
             END IF;
 
+            IF EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                WHERE c.contype = 'f'
+                  AND c.confrelid = 'public.objects'::regclass
+                  AND cardinality(c.conkey) = 1
+                  AND cardinality(c.confkey) = 1
+                GROUP BY c.conrelid, c.conkey
+                HAVING count(*) > 1
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = '#3510 unsupported schema: duplicate legacy foreign keys on one child column',
+                    HINT = 'Reconcile each reviewed child column to exactly one objects.id FK, then rerun alembic upgrade head.';
+            END IF;
+
             -- Existing-resource producer: materialize every retained legacy object
             -- in the canonical store before any FK is moved.  Existing canonical
             -- rows win; the legacy row is a continuity source, never a second

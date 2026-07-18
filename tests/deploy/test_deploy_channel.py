@@ -597,6 +597,41 @@ def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_pa
     assert not any("exit-code-from migrate" in event for event in events)
 
 
+def test_ambiguous_forward_only_migration_exit_retains_target_pin(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_test.py"
+    migration.write_text(
+        'revision = "forward_only_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_DOCKER_FAIL_MATCH"] = "exit-code-from migrate"
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 24
+    assert "commit state is ambiguous" in result.stderr
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert any("exit-code-from migrate" in event for event in events)
+    assert not any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+        for event in events
+    )
+
+
 def test_changed_migration_drains_writers_before_cutover_and_runtime_restart(tmp_path: Path) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
     pin_path = root / "config/deploy/dev.env"

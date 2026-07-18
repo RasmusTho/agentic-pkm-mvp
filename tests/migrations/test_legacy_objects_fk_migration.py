@@ -106,6 +106,29 @@ def test_legacy_objects_fk_migration_rejects_objects_uuid_fk_even_for_known_cons
     assert target == ("uuid",), "rejection must roll back before retargeting the child FK"
 
 
+def test_legacy_objects_fk_migration_rejects_duplicate_child_foreign_keys(
+    scratch_dsn: str,
+) -> None:
+    """One reviewed child column must not become two canonical constraints."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "ALTER TABLE decisions ADD CONSTRAINT decisions_object_id_duplicate_fk "
+            "FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE SET NULL"
+        )
+
+    with pytest.raises(Exception, match="duplicate legacy foreign keys"):
+        _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        targets = conn.execute(
+            "SELECT confrelid = 'public.objects'::regclass "
+            "FROM pg_constraint WHERE conrelid = 'public.decisions'::regclass "
+            "AND contype = 'f' ORDER BY conname"
+        ).fetchall()
+    assert targets == [(True,), (True,)], "rejection must precede every FK retarget"
+
+
 def test_legacy_objects_fk_migration_backfills_existing_parents(scratch_dsn: str) -> None:
     _upgrade(PRE_CUTOVER_REVISION)
     with psycopg.connect(scratch_dsn) as conn:
