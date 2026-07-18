@@ -203,15 +203,20 @@ member binding independently. Removing a dimension does not remove its vault reg
 - **#2566** owns the downstream overlay/UI active-vault switcher. It consumes this runtime seam;
   this directory creates no second switcher issue. It stays blocked until the request/session
   runtime contract it needs is delivered.
-- **#3156 / #3163** own the Settings Spine and the single-watcher-follows-single-selection
-  rebind. MVR-05 temporarily preserves that production behavior only for the legacy picker action;
+- **MVR-01B #3854 and MVR-01C #3855** first own the protected instance-state substrate, final
+  legacy-writer fence/export, guarded authority cutover, rollback isolation, and applicable runtime
+  floor. **#3156 / #3163** then own the Settings Spine compatibility rebind as three serial children:
+  dormant durable record, dormant watcher reconciler, and picker/API activation plus aggregate proof.
+  SETTINGS-05 consumes MVR-owned protected authority and never creates a parallel volume, migration,
+  export, backup, or rollback floor. MVR-05 temporarily preserves the activated production behavior
+  only for the legacy picker action;
   generic scoped selections do not drive it. MVR-06 reuses #3163's reload machinery, atomically
   imports the live watcher binding into durable compatibility intent, then retires the bridge while
   the legacy choose/open producer and replacement supervisor preserve the mutation-gate/final-scan/
   quiesce → commit → resume protocol. Wake-up hints remain non-authoritative. Governed
   background administration explicitly transitions to multi-binding `explicit` mode; only then do
-  picker/default events stop changing lifecycle intent. #3163 is not a multi-active implementation,
-  and no duplicate watcher-rebind issue is created here.
+  picker/default events stop changing lifecycle intent. #3163 remains a blocked validation hub, is
+  not a multi-active implementation, and no duplicate watcher-rebind issue is created here.
 - **#2003 / #2311** delivered no-vault startup, runtime switching foundations, and removal of
   silent `./vault` fallback. This capability preserves those contracts.
 - **#2356** delivered the v0 `ActiveContextSet` containment adapter. Task 03 evolves that seam;
@@ -334,7 +339,8 @@ Partial delivery remains fail-closed:
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
 - after issue 05B but before issue 06B, the existing picker and every MVR-02 default set/clear
-  producer prepare #3163's named monotonic cross-process compatibility revision. Compatibility-
+  producer prepare the SETTINGS-05C-activated monotonic cross-process compatibility revision.
+  Compatibility-
   mutation ingress is gated/drained first; an
   enabled watcher scans the old root and acknowledges quiescence on the prepared revision while
   retaining durable old-root event observation through commit, then performs the bracketing

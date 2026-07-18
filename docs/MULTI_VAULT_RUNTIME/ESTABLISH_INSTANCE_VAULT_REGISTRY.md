@@ -27,16 +27,14 @@ This slice promotes the existing seed without changing content-vault authority.
   `vault_binding_id` separately from path and device provenance.
 - Migrate the existing Markdown payload in place, preserving the installed-instance
   `appInstallId`, every registration, `last_active_vault_ref`, timestamps, and unknown
-  forward-compatible fields. If SETTINGS-05 already created `settings_rebind.v1`, the fenced MVR-01
-  migration canonicalizes each recorded legacy reference with the same resolver used by the ownership
-  ledger and atomically adopts its provisional `vault_binding_id` into the matching registration,
-  rewriting prior/candidate/applied references to registry identity in the same commit. A matching
-  existing registration keeps its ID only when it is the provisional ID; aliases coalesce only when
-  they prove the same physical root. Missing, conflicting, relocated-without-lineage, or multiply
-  matching references block registry activation with the original rebind record intact—migration
-  never derives a replacement ID from the current path or attaches lifecycle state by guesswork.
-- For container deployments, adopt the protected SETTINGS-05 `instance-state` volume when it exists,
-  otherwise create the same channel/instance-scoped external volume, mounted at
+  forward-compatible fields. If a fenced pre-MVR `settings_rebind.v1` record exists, canonicalize
+  each recorded legacy reference with the ownership-ledger resolver and atomically adopt its one
+  provisional `vault_binding_id` into the matching registration, rewriting prior/candidate/applied
+  references in the same commit. Aliases coalesce only when they prove one physical root; missing,
+  conflicting, relocated-without-lineage, or multiply matching references block activation with the
+  original record intact. After MVR-01 authority exists, SETTINGS-05 consumes registry IDs and no
+  rebind record or path may mint, replace, or override them.
+- For container deployments, create the protected channel/instance-scoped external volume, mounted at
   `/app/instance-state` in every registry consumer and resolve the production store to
   `/app/instance-state/agentic-pkm/vault-registry.md`. Migrate once from the legacy resolved
   app-local path by atomic validated copy with provenance; never treat the image layer, `$HOME`,
@@ -103,7 +101,8 @@ This slice promotes the existing seed without changing content-vault authority.
   for source-reference repair and source-bound work drain, but does not invent or implement schemas
   owned by later slices. MVR-02 installs the default repair hook, MVR-04 installs the dimension repair
   hook, MVR-05A installs the outbox/queue drain hook, and MVR-05B installs the protected
-  `settings_rebind.v1` compatibility-binding repair hook. MVR-05C is the first slice allowed to require
+  `settings_rebind.v1` compatibility-binding repair hook after SETTINGS-05 has installed that record
+  in the MVR-owned protected store. MVR-05C is the first slice allowed to require
   and invoke all four production implementations: before source retirement, the same transaction
   then clears or explicitly replaces the source default, removes the binding from every source
   dimension with its revision/audit receipt, and drains every pending source-bound row to a terminal
@@ -273,11 +272,15 @@ then carries only its mapped acceptance criteria and validation commands:
    source/destination lineage, latest-revision legacy export/transformer for scalar-representable
    state, protected prod-volume backup/restore, guarded previous-image startup, and cutover owner-doc
    writebacks. It depends on 01A. Its prepared registry state remains non-authoritative and every
-   new-schema mutation stays dormant until 01C performs the guarded authority cutover.
+   new-schema mutation stays dormant until 01C performs the guarded authority cutover. This slice,
+   not SETTINGS-05, owns creation of the protected store, final legacy-writer fence, final export,
+   and backup/restore posture.
 3. **MVR-01C — multi-registration rollback lineage:** explicit scalar target, authenticated
    mutation-filtering gateway/mount restriction, minimum-runtime floor, roll-forward merge, and
    atomic unsealing of second-registration producers only after those rollback mechanisms pass
-   preflight. It depends on 01B and closes the aggregate parent-registry acceptance target.
+   preflight. It depends on 01B, owns guarded authority cutover and the applicable rollback/runtime
+   floor, and closes the aggregate parent-registry acceptance target. SETTINGS-05 may start only
+   after this cutover is delivered.
 
 No issue may borrow an acceptance criterion from a later group merely to bypass its dependency.
 The post-spec issue extraction records three distinct child receipts on #2143.

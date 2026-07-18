@@ -25,14 +25,16 @@ writers. Findings F1-F7 and invariants SET-1..SET-7:
 | 2 | [SINGLE_DEFAULT_REGISTRY.md](SINGLE_DEFAULT_REGISTRY.md) | Every behavior-shaping default declared once; duplicated env-default literals collapsed | SET-4 | — (parallel with 1) |
 | 3 | [CANONICALIZE_SETTINGS_LOCATION.md](CANONICALIZE_SETTINGS_LOCATION.md) | One vault settings root `<vault>/settings/`; legacy paths compat-read with loud deprecation | SET-2 | 1 |
 | 4 | [RECEIPT_EVERY_SETTINGS_WRITE.md](RECEIPT_EVERY_SETTINGS_WRITE.md) | Every settings writer (API, watcher delta, auto-heal, agent) emits a durable actor-tagged receipt | SET-3 | 1 |
-| 5 | [REBIND_ON_VAULT_SELECTION.md](REBIND_ON_VAULT_SELECTION.md) | Vault selection rebinds every vault-scoped settings consumer, watcher included | SET-7 | 1, 3, 4 |
+| 5A–5C | [REBIND_ON_VAULT_SELECTION.md](REBIND_ON_VAULT_SELECTION.md#bounded-implementation-issue-decomposition) | Durable dormant record → dormant watcher reconciler → picker/API activation and aggregate proof | SET-7 | 1, 3, 4, MVR-01B #3854, MVR-01C #3855; then serial A→B→C |
 | 6 | [PROMPTS_AS_SETTINGS.md](PROMPTS_AS_SETTINGS.md) | `settings/prompts/*.md` become the runtime prompt SoT; validation loader migrated, stale mirrors retired once superseded | SET-6 | 3 |
 | 7 | [DEHARDCODE_WAVE_ONE.md](DEHARDCODE_WAVE_ONE.md) | Highest-value hardcoded values (models/voices/rerank/thresholds/watcher tunables) migrate into the registry, tier-gated | SET-4/SET-1 | 2, 3 |
 | 8 | [CONSOLIDATE_SETTINGS_OWNER_DOCS.md](CONSOLIDATE_SETTINGS_OWNER_DOCS.md) | One settings owner doc; orphan schema deleted; location wording reconciled; parent-closure handoff | SET-6 | 1-7 (all — its closure handoff verifies the full capability checklist) |
 
 Tasks 1 and 2 can run in parallel (disjoint surfaces: ingestion wiring vs default declarations).
-After task 1, tasks 3 and 4 may run in parallel; task 5 starts only after both merge because its
-protected-state cutover fences and migrates their canonical-location and receipt writers.
+After task 1, tasks 3 and 4 may run in parallel. SETTINGS-05 starts only after both merge **and**
+MVR-01B/#3854 plus MVR-01C/#3855 have established protected instance-state and guarded authority
+cutover. Its three implementation children then run serially: durable record (dormant), watcher
+reconciler (still dormant from picker), and production activation/aggregate proof.
 
 ## Capability acceptance criteria
 
@@ -47,7 +49,8 @@ protected-state cutover fences and migrates their canonical-location and receipt
       Verify: `tests/settings/test_health_settings_no_vault.py`, `tests/settings/test_watcher_settings_no_vault.py` stay green through every task.
 - [ ] Vault selection through the UI rebinds the watcher ingest path (the real rebind #3119's
       closing fix deliberately deferred; supersedes #2476's "do not converge" per owner ruling).
-      Verify: `tests/watcher/test_ingest_binding_follows_selection.py` (task 5).
+      Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_settings05_parent_acceptance`
+      + runtime receipt on #3163 (task 5C).
 - [ ] `settings explain` names the origin (registry default / instance / vault-shared / vault-local
       / runtime override) of every effective key migrated in tasks 6-7.
       Verify: `tests/cli/test_settings_explain_cli.py` extended per tasks 6-7.
@@ -68,10 +71,15 @@ Tasks 1, 3, 4, 5 and 7 all touch the settings read/write path. The seams:
   receipted; if task 4 has not landed, task 3 records the migration in its PR receipt and task 4's
   backfill scope explicitly includes migration-era writes. A migrated file with no receipt anywhere
   is a defect, not an acceptable interim state.
-- **Rebind implies reload and serialized writers (tasks 1→3/4→5).** Vault selection rebinding (task
-  5) triggers the same reload path task 1 builds—not a second loader—and lands only after tasks 3 and
-  4 have frozen the canonical locations and receipted every writer that its cutover fences. No
-  temporary unreceipted or legacy-location rebind is an accepted partial-delivery state.
+- **Rebind consumes protected authority; it does not create it (MVR-01B/01C→tasks 5A→5B→5C).**
+  MVR-01B owns the protected volume, final legacy-writer fence, export/import, and backup/restore;
+  MVR-01C owns authority cutover, rollback isolation, and the applicable runtime floor. SETTINGS-05
+  starts afterward and may only add its compatibility record and lifecycle transaction to that
+  authority. Task 5A leaves initiation sealed, task 5B leaves the picker sealed, and only 5C activates.
+- **Rebind implies reload and serialized writers (tasks 1→3/4→5C).** Activated vault selection
+  triggers the same reload path task 1 builds—not a second loader—and lands only after tasks 3 and 4
+  have frozen canonical locations and receipted their writers. No unreceipted, legacy-location, or
+  pre-MVR protected-state rebind is an accepted partial-delivery state.
 - **Prompt SoT moves exactly once (tasks 3→6).** Task 6 places prompt files only under the
   canonical location. If task 6 were cut before task 3 merges, it would move the prompt SoT twice;
   the dependency is therefore hard, not advisory.
@@ -87,7 +95,7 @@ Tasks 1, 3, 4, 5 and 7 all touch the settings read/write path. The seams:
 
 Per-task `Verify:` targets are named inline in each task file (behavioral ACs name tests;
 enforcement ACs assert the production call site; non-behavioral ACs name doc/receipt targets).
-Shared/hot-path tasks (1, 3, 5, 7) run the full `not pg` suite plus
+Shared/hot-path tasks (1, 3, 5C, 7) run the full `not pg` suite plus
 `RUN_INTEGRATED_RUNTIME_UAT=1` where the task touches the vault/watcher hot path.
 
 ## Validation / acceptance path
@@ -100,8 +108,10 @@ single owner) is the final child and carries the parent-closure handoff.
 
 ## Relationship to GitHub issues
 
-Parent feature issue #3156; children #3159 (01), #3160 (02), #3161 (03), #3162 (04), #3163 (05),
-#3164 (06), #3165 (07), #3166 (08) — live map and lifecycle rules in `PARENT_FEATURE_ISSUE.md`.
+Parent feature issue #3156; children #3159 (01), #3160 (02), #3161 (03), #3162 (04), #3163
+(SETTINGS-05 blocked validation hub; three serial implementation children are extracted from its
+stable decomposition after this repair), #3164 (06), #3165 (07), #3166 (08) — live map and
+lifecycle rules in `PARENT_FEATURE_ISSUE.md`.
 Reconciliation (do not duplicate): task 5 builds the live rebind that #3119's closing fix
 (PR #3126, visible-warning only) deliberately deferred, superseding #2476's "do not converge"
 verdict per the owner's 2026-07-07 ruling — it closes no open issue, both are already closed;
