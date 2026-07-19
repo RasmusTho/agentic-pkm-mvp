@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
+from typing import NoReturn
 
 import pytest
 
@@ -14,6 +17,20 @@ from scripts.prod_deploy_retry_preflight import _PROD_DB_HOST_PUBLISHED_PORT
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_MACOS_MALLOC_STACK_LOGGING_PREFIX = "MallocStackLogging"
+_DEPLOY_READINESS_TIMEOUT_SECONDS = 30
+_DEPLOY_CLEANUP_TIMEOUT_SECONDS = 5
+
+
+def _without_macos_malloc_stack_logging(
+    source: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    source = os.environ if source is None else source
+    return {
+        name: value
+        for name, value in source.items()
+        if not name.startswith(_MACOS_MALLOC_STACK_LOGGING_PREFIX)
+    }
 
 
 def _write_executable(path: Path, text: str) -> None:
@@ -109,7 +126,13 @@ exec /bin/cp "$@"
 set -eu
 if [ -n "${{FAKE_GIT_SLEEP_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_GIT_SLEEP_MATCH}}"* ]]; then
   touch "${{FAKE_GIT_SLEEP_MARKER:?}}"
-  sleep "${{FAKE_GIT_SLEEP_SECONDS:-2}}"
+  while [ ! -f "${{FAKE_GIT_RELEASE_MARKER:?}}" ]; do
+    # The parent deploy shell can be terminated while this fake git command is
+    # paused. Exit with it so inherited stdout/stderr descriptors cannot keep
+    # the harness Popen alive during failure cleanup.
+    kill -0 "$PPID" 2>/dev/null || exit 143
+    sleep 0.25
+  done
 fi
 if [ -n "${{FAKE_GIT_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_GIT_FAIL_MATCH}}"* ]]; then
   echo 'fake git materialization failure' >&2
@@ -190,7 +213,11 @@ exec {sys.executable!s} "$@"
 """,
     )
 
-    env = os.environ.copy()
+    # Malloc stack logging is a host-only debugging facility. Letting it
+    # propagate into every short-lived fake command makes the concurrency
+    # harness depend on macOS process-startup timing instead of the channel
+    # lock it is meant to prove.
+    env = _without_macos_malloc_stack_logging()
     env.update(
         {
             "PATH": f"{bin_dir}:{env['PATH']}",
@@ -216,6 +243,130 @@ def _run_deploy(
     )
 
 
+def _wait_for_path_or_process_exit(
+    process: subprocess.Popen[str],
+    path: Path,
+    release_marker: Path,
+    *,
+    description: str,
+) -> None:
+    """Wait for an explicit harness signal, failing early if the child exits."""
+    deadline = time.monotonic() + _DEPLOY_READINESS_TIMEOUT_SECONDS
+    while not path.exists():
+        if process.poll() is not None:
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=max(
+                        0.001,
+                        min(
+                            _DEPLOY_CLEANUP_TIMEOUT_SECONDS,
+                            deadline - time.monotonic(),
+                        ),
+                    )
+                )
+            except subprocess.TimeoutExpired:
+                _fail_after_deploy_cleanup(
+                    process,
+                    release_marker,
+                    f"slow deploy exited before {description}, but a descendant retained "
+                    "captured pipes",
+                )
+            pytest.fail(
+                f"slow deploy exited before {description}: {stdout}{stderr}",
+                pytrace=False,
+            )
+        if time.monotonic() >= deadline:
+            _fail_after_deploy_cleanup(
+                process,
+                release_marker,
+                f"slow deploy remained alive without reaching {description} within "
+                f"{_DEPLOY_READINESS_TIMEOUT_SECONDS}s",
+            )
+        time.sleep(0.02)
+
+
+class _DeployCleanupError(RuntimeError):
+    """Controlled cleanup failure that must be appended to the test trigger."""
+
+
+def _signal_deploy_process_group(
+    process: subprocess.Popen[str], sig: signal.Signals
+) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        raise _DeployCleanupError(
+            f"fake deploy process-group {sig.name} cleanup denied; "
+            "refusing unsafe partial cleanup"
+        ) from None
+
+
+def _release_and_reap_deploy(
+    process: subprocess.Popen[str], release_marker: Path
+) -> tuple[str, str]:
+    """Release, terminate, and reap the complete isolated fake-deploy process group."""
+    release_marker.touch()
+    _signal_deploy_process_group(process, signal.SIGTERM)
+    try:
+        return process.communicate(timeout=_DEPLOY_CLEANUP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _signal_deploy_process_group(process, signal.SIGKILL)
+        try:
+            return process.communicate(timeout=_DEPLOY_CLEANUP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise _DeployCleanupError(
+                "fake deploy process group did not close captured pipes after SIGKILL",
+            ) from None
+
+
+def _fail_after_deploy_cleanup(
+    process: subprocess.Popen[str], release_marker: Path, trigger: str
+) -> NoReturn:
+    try:
+        stdout, stderr = _release_and_reap_deploy(process, release_marker)
+    except _DeployCleanupError as cleanup_error:
+        pytest.fail(f"{trigger}; cleanup failed: {cleanup_error}", pytrace=False)
+    pytest.fail(f"{trigger}; cleanup output: {stdout}{stderr}", pytrace=False)
+
+
+def _wait_for_deploy_exit(
+    process: subprocess.Popen[str], release_marker: Path, *, description: str
+) -> tuple[str, str]:
+    """Wait for a released fake deploy to finish, then drain its closed pipes."""
+    deadline = time.monotonic() + _DEPLOY_READINESS_TIMEOUT_SECONDS
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            _fail_after_deploy_cleanup(
+                process,
+                release_marker,
+                f"slow deploy remained alive after {description} for "
+                f"{_DEPLOY_READINESS_TIMEOUT_SECONDS}s",
+            )
+        time.sleep(0.02)
+
+    try:
+        stdout, stderr = process.communicate(
+            timeout=max(
+                0.001,
+                min(
+                    _DEPLOY_CLEANUP_TIMEOUT_SECONDS,
+                    deadline - time.monotonic(),
+                ),
+            )
+        )
+    except subprocess.TimeoutExpired:
+        _fail_after_deploy_cleanup(
+            process,
+            release_marker,
+            f"slow deploy exited after {description}, but a descendant retained "
+            "captured pipes",
+        )
+    assert process.returncode == 0, stdout + stderr
+    return stdout, stderr
+
+
 def test_channel_lock_covers_pin_snapshot_and_migration_classification(tmp_path: Path) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
     pin_path = root / "config/deploy/dev.env"
@@ -235,13 +386,14 @@ def test_channel_lock_covers_pin_snapshot_and_migration_classification(tmp_path:
     subprocess.run(["git", "commit", "-qm", "add overlap migration"], cwd=root, check=True)
     target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     marker = tmp_path / "git-sleep-started"
+    release_marker = tmp_path / "git-sleep-release"
     slow_env = dict(env)
     slow_env.update(
         {
             "FAKE_SHA": target_sha,
             "FAKE_GIT_SLEEP_MATCH": "diff --diff-filter",
             "FAKE_GIT_SLEEP_MARKER": str(marker),
-            "FAKE_GIT_SLEEP_SECONDS": "2",
+            "FAKE_GIT_RELEASE_MARKER": str(release_marker),
         }
     )
     slow = subprocess.Popen(
@@ -251,24 +403,259 @@ def test_channel_lock_covers_pin_snapshot_and_migration_classification(tmp_path:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     try:
-        deadline = time.monotonic() + 5
-        while not marker.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert marker.exists(), "slow deploy never entered migration classification"
+        _wait_for_path_or_process_exit(
+            slow,
+            marker,
+            release_marker,
+            description="migration classification",
+        )
 
         overlapping = _run_deploy(root, env, target_sha)
 
         assert overlapping.returncode == 89
         assert "channel mutation blocked" in overlapping.stderr
-        stdout, stderr = slow.communicate(timeout=15)
-        assert slow.returncode == 0, stdout + stderr
+        release_marker.touch()
+        _wait_for_deploy_exit(
+            slow,
+            release_marker,
+            description="the overlapping deploy rejection",
+        )
         assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
     finally:
-        if slow.poll() is None:
-            slow.terminate()
-            slow.communicate(timeout=5)
+        _release_and_reap_deploy(slow, release_marker)
+
+
+def _cleanup_fixture_env() -> dict[str, str]:
+    fixture_env = _without_macos_malloc_stack_logging()
+    removed_names = set(os.environ) - set(fixture_env)
+    assert removed_names == {
+        name
+        for name in os.environ
+        if name.startswith(_MACOS_MALLOC_STACK_LOGGING_PREFIX)
+    }
+    return fixture_env
+
+
+def _assert_pid_gone(pid: int) -> None:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+    pytest.fail(f"cleanup fixture descendant {pid} remained alive", pytrace=False)
+
+
+def test_wait_for_path_reaps_descendant_holding_pipes_after_parent_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "_DEPLOY_CLEANUP_TIMEOUT_SECONDS", 0.2)
+    child_pid_path = tmp_path / "readiness-child.pid"
+    child_ready_path = tmp_path / "readiness-child-ready"
+    parent_ready_path = tmp_path / "readiness-parent-ready"
+    parent_exit_path = tmp_path / "readiness-parent-exit"
+    release_marker = tmp_path / "readiness-release"
+    fixture_env = _cleanup_fixture_env()
+    fixture_env.update(
+        {
+            "CHILD_PID_PATH": str(child_pid_path),
+            "CHILD_READY_PATH": str(child_ready_path),
+            "PARENT_READY_PATH": str(parent_ready_path),
+            "PARENT_EXIT_PATH": str(parent_exit_path),
+        }
+    )
+    process = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            (
+                "bash -c 'touch \"$CHILD_READY_PATH\"; sleep 60' & child=$!; "
+                "printf '%s\\n' \"$child\" > \"$CHILD_PID_PATH\"; "
+                "while [ ! -f \"$CHILD_READY_PATH\" ]; do sleep 0.01; done; "
+                "touch \"$PARENT_READY_PATH\"; "
+                "while [ ! -f \"$PARENT_EXIT_PATH\" ]; do sleep 0.01; done; "
+                "printf 'original readiness failure\\n' >&2; "
+                "exit 17"
+            ),
+        ],
+        env=fixture_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    _wait_for_path_or_process_exit(
+        process,
+        parent_ready_path,
+        release_marker,
+        description="the parent and child readiness markers",
+    )
+    assert child_ready_path.exists()
+    parent_exit_path.touch()
+
+    with pytest.raises(pytest.fail.Exception) as failure:
+        _wait_for_path_or_process_exit(
+            process,
+            tmp_path / "never-ready",
+            release_marker,
+            description="the impossible readiness marker",
+        )
+
+    assert "descendant retained captured pipes" in str(failure.value)
+    assert "original readiness failure" in str(failure.value)
+    assert release_marker.exists()
+    _assert_pid_gone(int(child_pid_path.read_text(encoding="utf-8").strip()))
+
+
+def test_wait_for_exit_kills_term_ignoring_descendant_holding_pipes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "_DEPLOY_CLEANUP_TIMEOUT_SECONDS", 0.2)
+    child_pid_path = tmp_path / "exit-child.pid"
+    child_ready_path = tmp_path / "exit-child-ready"
+    parent_ready_path = tmp_path / "exit-parent-ready"
+    parent_exit_path = tmp_path / "exit-parent-exit"
+    release_marker = tmp_path / "exit-release"
+    fixture_env = _cleanup_fixture_env()
+    fixture_env.update(
+        {
+            "CHILD_PID_PATH": str(child_pid_path),
+            "CHILD_READY_PATH": str(child_ready_path),
+            "PARENT_READY_PATH": str(parent_ready_path),
+            "PARENT_EXIT_PATH": str(parent_exit_path),
+        }
+    )
+    process = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            (
+                "bash -c 'trap \"\" TERM; touch \"$CHILD_READY_PATH\"; "
+                "while :; do sleep 1; done' & child=$!; "
+                "printf '%s\\n' \"$child\" > \"$CHILD_PID_PATH\"; "
+                "while [ ! -f \"$CHILD_READY_PATH\" ]; do sleep 0.01; done; "
+                "touch \"$PARENT_READY_PATH\"; "
+                "while [ ! -f \"$PARENT_EXIT_PATH\" ]; do sleep 0.01; done; "
+                "printf 'parent exited cleanly\\n'; exit 0"
+            ),
+        ],
+        env=fixture_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    delivered_signals: list[signal.Signals] = []
+    signal_group = _signal_deploy_process_group
+
+    def record_signal(target: subprocess.Popen[str], sig: signal.Signals) -> None:
+        delivered_signals.append(sig)
+        signal_group(target, sig)
+
+    monkeypatch.setattr(sys.modules[__name__], "_signal_deploy_process_group", record_signal)
+    _wait_for_path_or_process_exit(
+        process,
+        parent_ready_path,
+        release_marker,
+        description="the parent and TERM-ignoring child readiness markers",
+    )
+    assert child_ready_path.exists()
+    parent_exit_path.touch()
+
+    with pytest.raises(pytest.fail.Exception) as failure:
+        _wait_for_deploy_exit(
+            process,
+            release_marker,
+            description="the parent process exit",
+        )
+
+    assert "descendant retained captured pipes" in str(failure.value)
+    assert "parent exited cleanly" in str(failure.value)
+    assert delivered_signals == [signal.SIGTERM, signal.SIGKILL]
+    assert release_marker.exists()
+    _assert_pid_gone(int(child_pid_path.read_text(encoding="utf-8").strip()))
+
+
+def test_wait_preserves_trigger_when_group_cleanup_is_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "_DEPLOY_CLEANUP_TIMEOUT_SECONDS", 1)
+    release_marker = tmp_path / "permission-release"
+    child_pid_path = tmp_path / "permission-child.pid"
+    child_ready_path = tmp_path / "permission-child-ready"
+    parent_ready_path = tmp_path / "permission-parent-ready"
+    fixture_env = _cleanup_fixture_env()
+    fixture_env.update(
+        {
+            "CHILD_PID_PATH": str(child_pid_path),
+            "CHILD_READY_PATH": str(child_ready_path),
+            "PARENT_READY_PATH": str(parent_ready_path),
+        }
+    )
+    process = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            (
+                "bash -c 'trap \"\" TERM; touch \"$CHILD_READY_PATH\"; "
+                "while :; do sleep 1; done' & child=$!; "
+                "printf '%s\\n' \"$child\" > \"$CHILD_PID_PATH\"; "
+                "while [ ! -f \"$CHILD_READY_PATH\" ]; do sleep 0.01; done; "
+                "printf 'original cleanup failure\\n' >&2; "
+                "touch \"$PARENT_READY_PATH\"; wait"
+            ),
+        ],
+        env=fixture_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    _wait_for_path_or_process_exit(
+        process,
+        parent_ready_path,
+        release_marker,
+        description="the PermissionError parent and child readiness markers",
+    )
+    assert child_ready_path.exists()
+    child_pid = int(child_pid_path.read_text(encoding="utf-8").strip())
+    parent_pid = process.pid
+    real_killpg = os.killpg
+
+    def deny_group_signal(_process_group: int, _sig: signal.Signals) -> None:
+        raise PermissionError("denied by regression fixture")
+
+    monkeypatch.setattr(os, "killpg", deny_group_signal)
+    monkeypatch.setattr(sys.modules[__name__], "_DEPLOY_READINESS_TIMEOUT_SECONDS", 0.1)
+    try:
+        with pytest.raises(pytest.fail.Exception) as failure:
+            _wait_for_deploy_exit(
+                process,
+                release_marker,
+                description="the denied-cleanup regression trigger",
+            )
+    finally:
+        real_killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate(timeout=_DEPLOY_CLEANUP_TIMEOUT_SECONDS)
+
+    assert "slow deploy remained alive after the denied-cleanup regression trigger" in str(
+        failure.value
+    )
+    assert "cleanup failed" in str(failure.value)
+    assert "process-group SIGTERM cleanup denied" in str(failure.value)
+    assert "refusing unsafe partial cleanup" in str(failure.value)
+    assert "PermissionError" not in str(failure.value)
+    assert "denied by regression fixture" not in str(failure.value)
+    assert stdout == ""
+    assert "original cleanup failure" in stderr
+    assert process.poll() is not None
+    assert release_marker.exists()
+    _assert_pid_gone(child_pid)
+    _assert_pid_gone(parent_pid)
 
 
 _FAKE_PSYCOPG_MODULE = '''\
