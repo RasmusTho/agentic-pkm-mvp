@@ -31,7 +31,7 @@ from app.events.types import (
     INGEST_OBJECT_METADATA,
     INGEST_OBJECT_UPDATED,
 )
-from app.ingest.episode_ref import episode_ref_from_frontmatter
+from app.ingest.episode_ref import EPISODE_REF_SENTINELS, episode_ref_from_frontmatter
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.objects import (
     canonical_event_identity,
@@ -132,7 +132,18 @@ def _merge_canonical_payload(
         existing = json.loads(existing)
     if not isinstance(existing, dict):
         existing = {}
-    return {**existing, **updates}
+    merged = {**existing, **updates}
+    updated_ref = updates.get("episode_ref")
+    existing_ref = existing.get("episode_ref")
+    if updated_ref in EPISODE_REF_SENTINELS and existing_ref not in (
+        None,
+        *EPISODE_REF_SENTINELS,
+    ):
+        # ERE-03: episode_ref is vault-canonical, but a watcher pass whose
+        # frontmatter carries no binding must not blind-drop an established
+        # one; only an explicit non-sentinel value may replace it.
+        merged["episode_ref"] = existing_ref
+    return merged
 
 
 def _canonical_note_payload(
