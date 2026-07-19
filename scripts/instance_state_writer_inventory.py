@@ -30,6 +30,10 @@ COMPOSE_WRITER_SERVICES = {"api", "heimdal-capture-watch", "watcher", "worker"}
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
 TOKEN_RE = re.compile(r"^(?:linux|darwin|docker):[0-9a-f]{64}$")
 PYTHON_RE = re.compile(r"^python(?:3(?:\.\d+)*)?$")
+PF_KTHREAD = 0x00200000
+LINUX_PROCESS_READ_ATTEMPTS = 3
+LINUX_DEAD_STATES = frozenset({"X", "x", "Z"})
+LINUX_PROCESS_STATES = frozenset({"D", "I", "K", "P", "R", "S", "T", "W", "X", "Z", "t", "x"})
 
 
 class InventoryError(RuntimeError):
@@ -43,6 +47,7 @@ class ProcessRecord:
     pgid: int
     start_token: str
     argv: tuple[str, ...]
+    executable_hint: str | None = None
 
 
 def _digest_token(kind: str, *parts: object) -> str:
@@ -50,7 +55,7 @@ def _digest_token(kind: str, *parts: object) -> str:
     return f"{kind}:{hashlib.sha256(raw).hexdigest()}"
 
 
-def _parse_linux_stat(pid: int, raw: str) -> tuple[int, int, str]:
+def _parse_linux_stat(pid: int, raw: str) -> tuple[str, int, int, int, str]:
     close = raw.rfind(")")
     if close < 2 or not raw.startswith(f"{pid} ("):
         raise InventoryError("native process identity is malformed")
@@ -58,40 +63,203 @@ def _parse_linux_stat(pid: int, raw: str) -> tuple[int, int, str]:
     if len(fields) < 20:
         raise InventoryError("native process identity is malformed")
     try:
+        state = fields[0]
         ppid = int(fields[1])
         pgid = int(fields[2])
+        flags = int(fields[6])
         start_ticks = str(int(fields[19]))
     except (TypeError, ValueError) as exc:
         raise InventoryError("native process identity is malformed") from exc
-    return ppid, pgid, start_ticks
+    if (
+        state not in LINUX_PROCESS_STATES
+        or flags < 0
+        or ppid < 0
+        or pgid < 0
+        or int(start_ticks) <= 0
+    ):
+        raise InventoryError("native process identity is malformed")
+    return state, flags, ppid, pgid, start_ticks
 
 
-def _linux_record(pid: int) -> ProcessRecord:
-    proc = Path("/proc") / str(pid)
+def _read_linux_boot_id() -> str:
     try:
-        stat_raw = (proc / "stat").read_text(encoding="utf-8")
-        cmdline_raw = (proc / "cmdline").read_bytes()
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
     except OSError as exc:
         raise InventoryError("native process enumeration failed") from exc
     if not boot_id:
         raise InventoryError("native process identity is malformed")
-    ppid, pgid, start_ticks = _parse_linux_stat(pid, stat_raw)
-    if not cmdline_raw:
-        argv: tuple[str, ...] = ()
-    else:
+    return boot_id
+
+
+def _read_linux_stat(pid: int) -> str:
+    return (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+
+
+def _read_linux_cmdline(pid: int) -> bytes:
+    return (Path("/proc") / str(pid) / "cmdline").read_bytes()
+
+
+def _read_linux_exe(pid: int) -> str:
+    return os.readlink(Path("/proc") / str(pid) / "exe")
+
+
+def _normalize_linux_exe(value: str) -> str:
+    suffix = " (deleted)"
+    normalized = value[: -len(suffix)] if value.endswith(suffix) else value
+    if not normalized.startswith("/") or "\0" in normalized or not _basename(normalized):
+        raise InventoryError("native process executable identity is malformed")
+    return normalized
+
+
+def _linux_pid_is_gone(pid: int) -> bool:
+    try:
+        os.stat(Path("/proc") / str(pid))
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _linux_inert(state: str, flags: int) -> bool:
+    return state in LINUX_DEAD_STATES or bool(flags & PF_KTHREAD)
+
+
+def _linux_gone_result(*, strict_controller: bool) -> None:
+    if strict_controller:
+        raise InventoryError("controller process identity is unavailable")
+    return None
+
+
+def _linux_record(
+    pid: int,
+    boot_id: str,
+    *,
+    strict_controller: bool = False,
+) -> ProcessRecord | None:
+    """Read one PID without binding argv across exit, exec, or PID reuse races."""
+
+    last_error = InventoryError("native process enumeration did not stabilize")
+    for attempt in range(LINUX_PROCESS_READ_ATTEMPTS):
+        final_attempt = attempt == LINUX_PROCESS_READ_ATTEMPTS - 1
+        try:
+            stat_before_raw = _read_linux_stat(pid)
+        except (FileNotFoundError, ProcessLookupError):
+            last_error = InventoryError("native process enumeration failed")
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+        except (PermissionError, OSError):
+            last_error = InventoryError("native process enumeration failed")
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+
+        try:
+            before = _parse_linux_stat(pid, stat_before_raw)
+        except InventoryError as exc:
+            last_error = exc
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+
+        try:
+            cmdline_raw = _read_linux_cmdline(pid)
+        except (FileNotFoundError, ProcessLookupError):
+            last_error = InventoryError("native process enumeration failed")
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+        except (PermissionError, OSError):
+            last_error = InventoryError("native process enumeration failed")
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+
+        executable_hint: str | None = None
+        exec_pair_changed = False
+        if cmdline_raw.endswith(b"\0") and cmdline_raw[:-1].split(b"\0", 1)[0] == b"":
+            try:
+                executable_hint = _normalize_linux_exe(_read_linux_exe(pid))
+                confirmed_cmdline = _read_linux_cmdline(pid)
+                confirmed_executable = _normalize_linux_exe(_read_linux_exe(pid))
+            except (FileNotFoundError, ProcessLookupError):
+                last_error = InventoryError("native process executable identity is unavailable")
+                if final_attempt and _linux_pid_is_gone(pid):
+                    return _linux_gone_result(strict_controller=strict_controller)
+                continue
+            except (PermissionError, OSError):
+                last_error = InventoryError("native process executable identity is unavailable")
+                if final_attempt and _linux_pid_is_gone(pid):
+                    return _linux_gone_result(strict_controller=strict_controller)
+                continue
+            except InventoryError as exc:
+                last_error = exc
+                if final_attempt and _linux_pid_is_gone(pid):
+                    return _linux_gone_result(strict_controller=strict_controller)
+                continue
+            exec_pair_changed = (
+                cmdline_raw != confirmed_cmdline
+                or executable_hint != confirmed_executable
+            )
+
+        try:
+            stat_after_raw = _read_linux_stat(pid)
+        except (FileNotFoundError, ProcessLookupError):
+            last_error = InventoryError("native process enumeration failed")
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+        except (PermissionError, OSError):
+            last_error = InventoryError("native process enumeration failed")
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+
+        try:
+            after = _parse_linux_stat(pid, stat_after_raw)
+        except InventoryError as exc:
+            last_error = exc
+            if final_attempt and _linux_pid_is_gone(pid):
+                return _linux_gone_result(strict_controller=strict_controller)
+            continue
+
+        before_start = before[4]
+        state, flags, ppid, pgid, after_start = after
+        if before_start != after_start:
+            last_error = InventoryError("native process identity changed during enumeration")
+            continue
+        if exec_pair_changed:
+            last_error = InventoryError(
+                "native process exec identity changed during enumeration"
+            )
+            continue
+        if _linux_inert(state, flags):
+            if strict_controller:
+                raise InventoryError("controller process identity is unavailable")
+            return None
+        if not cmdline_raw:
+            last_error = InventoryError("native process argv is unavailable")
+            continue
         if not cmdline_raw.endswith(b"\0"):
-            raise InventoryError("native process argv is malformed")
+            last_error = InventoryError("native process argv is malformed")
+            continue
+
+        # Remove exactly the procfs record terminator. Empty arguments before it
+        # are legal and must remain in their original positions.
         argv = tuple(os.fsdecode(value) for value in cmdline_raw[:-1].split(b"\0"))
-        if not argv or any(not value for value in argv):
-            raise InventoryError("native process argv is malformed")
-    return ProcessRecord(
-        pid=pid,
-        ppid=ppid,
-        pgid=pgid,
-        start_token=_digest_token("linux", boot_id, pid, start_ticks),
-        argv=argv,
-    )
+        return ProcessRecord(
+            pid=pid,
+            ppid=ppid,
+            pgid=pgid,
+            start_token=_digest_token("linux", boot_id, pid, after_start),
+            argv=argv,
+            executable_hint=executable_hint,
+        )
+
+    if _linux_pid_is_gone(pid):
+        return _linux_gone_result(strict_controller=strict_controller)
+    raise last_error
 
 
 _PS_ROW_RE = re.compile(
@@ -155,7 +323,7 @@ def _test_sync(ready_name: str, continue_name: str) -> None:
         raise InventoryError("inventory synchronization hook failed") from exc
 
 
-def _enumerate_linux() -> list[ProcessRecord]:
+def _enumerate_linux(*, boot_id: str) -> list[ProcessRecord]:
     try:
         pids = sorted(int(item.name) for item in Path("/proc").iterdir() if item.name.isdigit())
     except OSError as exc:
@@ -164,7 +332,12 @@ def _enumerate_linux() -> list[ProcessRecord]:
         "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_READY_FD",
         "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_CONTINUE_FD",
     )
-    return [_linux_record(pid) for pid in pids]
+    records: list[ProcessRecord] = []
+    for pid in pids:
+        record = _linux_record(pid, boot_id)
+        if record is not None:
+            records.append(record)
+    return records
 
 
 def _enumerate_macos() -> list[ProcessRecord]:
@@ -180,19 +353,25 @@ def _enumerate_macos() -> list[ProcessRecord]:
     return [_parse_macos_ps_row(line) for line in rows]
 
 
-def _native_processes() -> list[ProcessRecord]:
+def _native_processes(*, linux_boot_id: str | None = None) -> list[ProcessRecord]:
     if sys.platform.startswith("linux"):
-        return _enumerate_linux()
+        if linux_boot_id is None:
+            raise InventoryError("native process identity is malformed")
+        return _enumerate_linux(boot_id=linux_boot_id)
     if sys.platform == "darwin":
         return _enumerate_macos()
     raise InventoryError("unsupported native process inventory platform")
 
 
-def _record_for_pid(pid: int) -> ProcessRecord:
+def _record_for_pid(pid: int, *, linux_boot_id: str | None = None) -> ProcessRecord:
     if pid <= 0:
         raise InventoryError("controller pid is invalid")
     if sys.platform.startswith("linux"):
-        return _linux_record(pid)
+        boot_id = linux_boot_id if linux_boot_id is not None else _read_linux_boot_id()
+        record = _linux_record(pid, boot_id, strict_controller=True)
+        if record is None:
+            raise InventoryError("controller process identity is unavailable")
+        return record
     if sys.platform == "darwin":
         env = {**os.environ, "LC_ALL": "C"}
         output = _run_checked(
@@ -218,10 +397,12 @@ def _basename(value: str) -> str:
     return value.rsplit("/", 1)[-1]
 
 
-def _native_role(argv: tuple[str, ...]) -> str | None:
+def _native_role(
+    argv: tuple[str, ...], *, executable_hint: str | None = None
+) -> str | None:
     if not argv:
         return None
-    executable = _basename(argv[0])
+    executable = _basename(argv[0]) if argv[0] else _basename(executable_hint or "")
     if executable in LAUNCHER_SCRIPTS:
         return executable.removesuffix(".sh")
     if executable in {"bash", "dash", "sh", "zsh"} and len(argv) >= 2:
@@ -302,11 +483,17 @@ def _docker_writers() -> list[dict[str, object]]:
 
 
 def _native_writers(
-    *, controller_pid: int, controller_start_token: str
+    *,
+    controller_pid: int,
+    controller_start_token: str,
+    linux_boot_id: str | None = None,
 ) -> list[dict[str, object]]:
     writers: list[dict[str, object]] = []
-    for process in _native_processes():
-        role = _native_role(process.argv)
+    for process in _native_processes(linux_boot_id=linux_boot_id):
+        role = _native_role(
+            process.argv,
+            executable_hint=process.executable_hint,
+        )
         if role is None:
             continue
         if process.pid == controller_pid and process.start_token == controller_start_token:
@@ -323,12 +510,15 @@ def _native_writers(
 
 
 def _snapshot(*, controller_pid: int, controller_start_token: str) -> dict[str, list[dict[str, object]]]:
-    if controller_token(controller_pid) != controller_start_token:
+    linux_boot_id = _read_linux_boot_id() if sys.platform.startswith("linux") else None
+    controller = _record_for_pid(controller_pid, linux_boot_id=linux_boot_id)
+    if controller.start_token != controller_start_token:
         raise InventoryError("deployment controller identity changed")
     domains: dict[str, list[dict[str, object]]] = {domain: [] for domain in DOMAINS}
     for writer in _docker_writers() + _native_writers(
         controller_pid=controller_pid,
         controller_start_token=controller_start_token,
+        linux_boot_id=linux_boot_id,
     ):
         domain = str(writer.pop("domain"))
         domains[domain].append(writer)

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+import scripts.instance_state_writer_inventory as writer_inventory
+
 from app.instance.instance_state import (
     DeploymentQuiescenceProof,
     InstanceStateBackup,
@@ -37,6 +39,9 @@ from app.instance.vault_registry import (
 from app.release_channels.channel_isolation_preflight import _load_compose
 from app.vault.manager import VaultManager
 from scripts.instance_state_writer_inventory import (
+    InventoryError,
+    PF_KTHREAD,
+    _linux_record,
     _parse_linux_stat,
     _parse_macos_ps_row,
 )
@@ -139,6 +144,63 @@ def _run_quiescence_helper(
         check=False,
     )
     return result, output
+
+
+def _linux_stat_fixture(
+    pid: int,
+    *,
+    state: str = "S",
+    flags: int = 0,
+    ppid: int = 1,
+    pgid: int | None = None,
+    start_ticks: int = 456,
+) -> str:
+    fields = ["0"] * 20
+    fields[0] = state
+    fields[1] = str(ppid)
+    fields[2] = str(pid if pgid is None else pgid)
+    fields[6] = str(flags)
+    fields[19] = str(start_ticks)
+    return f"{pid} (fixture worker) {' '.join(fields)}"
+
+
+def _scripted_linux_read(values):
+    iterator = iter(values)
+
+    def read(_pid: int):
+        value = next(iterator)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    return read
+
+
+def _install_linux_proc_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stats,
+    cmdlines,
+    executables=None,
+    gone: bool = False,
+) -> None:
+    monkeypatch.setattr(
+        writer_inventory,
+        "_read_linux_stat",
+        _scripted_linux_read(stats),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_read_linux_cmdline",
+        _scripted_linux_read(cmdlines),
+    )
+    if executables is not None:
+        monkeypatch.setattr(
+            writer_inventory,
+            "_read_linux_exe",
+            _scripted_linux_read(executables),
+        )
+    monkeypatch.setattr(writer_inventory, "_linux_pid_is_gone", lambda _pid: gone)
 
 
 def test_mvr01a_schema_activation_requires_rollback_capability(tmp_path) -> None:
@@ -657,6 +719,8 @@ def test_native_process_enumeration_error_fails_closed_without_proof(tmp_path) -
 def test_linux_and_macos_process_identity_parsers_are_strict() -> None:
     fields = ["S", "1", "123", "123", *("0" for _ in range(15)), "456"]
     assert _parse_linux_stat(123, f"123 (bash worker) {' '.join(fields)}") == (
+        "S",
+        0,
         1,
         123,
         "456",
@@ -671,6 +735,400 @@ def test_linux_and_macos_process_identity_parsers_are_strict() -> None:
     assert mac.argv == ("/bin/bash", "/opt/pkm/scripts/start_full_system.sh")
     with pytest.raises(RuntimeError, match="malformed"):
         _parse_macos_ps_row("123 malformed")
+
+
+def test_linux_record_preserves_empty_argv_positions(monkeypatch) -> None:
+    pid = 321
+    stat = _linux_stat_fixture(pid)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat],
+        cmdlines=[b"\0python\0\0tail\0\0"] * 2,
+        executables=["/usr/bin/python3"] * 2,
+    )
+
+    record = _linux_record(pid, "boot-fixture")
+
+    assert record is not None
+    assert record.argv == ("", "python", "", "tail", "")
+    assert record.executable_hint == "/usr/bin/python3"
+
+
+def test_linux_empty_argv0_uses_executable_hint_for_launcher_role(monkeypatch) -> None:
+    pid = 331
+    stat = _linux_stat_fixture(pid)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat],
+        cmdlines=[b"\0/opt/pkm/scripts/start_full_system.sh\0"] * 2,
+        executables=["/bin/bash"] * 2,
+    )
+
+    record = _linux_record(pid, "boot-fixture")
+
+    assert record is not None
+    assert writer_inventory._native_role(
+        record.argv,
+        executable_hint=record.executable_hint,
+    ) == "start_full_system"
+
+
+def test_linux_empty_argv0_harmless_executable_has_no_writer_role(monkeypatch) -> None:
+    pid = 332
+    stat = _linux_stat_fixture(pid)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat],
+        cmdlines=[b"\0" + b"30\0"] * 2,
+        executables=["/usr/bin/sleep"] * 2,
+    )
+
+    record = _linux_record(pid, "boot-fixture")
+
+    assert record is not None
+    assert (
+        writer_inventory._native_role(
+            record.argv,
+            executable_hint=record.executable_hint,
+        )
+        is None
+    )
+
+
+def test_linux_same_start_exec_transition_retries_to_stable_writer_pair(
+    monkeypatch,
+) -> None:
+    pid = 336
+    stat = _linux_stat_fixture(pid)
+    harmless = b"\0" + b"30\0"
+    writer = b"\0/opt/pkm/scripts/start_full_system.sh\0"
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat, stat, stat],
+        cmdlines=[harmless, writer, writer, writer],
+        executables=["/usr/bin/sleep", "/bin/bash", "/bin/bash", "/bin/bash"],
+    )
+
+    record = _linux_record(pid, "boot-fixture")
+
+    assert record is not None
+    assert writer_inventory._native_role(
+        record.argv,
+        executable_hint=record.executable_hint,
+    ) == "start_full_system"
+
+
+def test_linux_same_start_exec_pair_churn_fails_closed(monkeypatch) -> None:
+    pid = 337
+    stat = _linux_stat_fixture(pid)
+    harmless = b"\0" + b"30\0"
+    writer = b"\0/opt/pkm/scripts/start_full_system.sh\0"
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat] * 3,
+        cmdlines=[harmless, writer] * 3,
+        executables=["/usr/bin/sleep", "/bin/bash"] * 3,
+    )
+
+    with pytest.raises(InventoryError, match="exec identity changed"):
+        _linux_record(pid, "boot-fixture")
+
+
+@pytest.mark.parametrize(
+    ("state", "flags"),
+    [("Z", 0), ("S", PF_KTHREAD)],
+)
+def test_linux_record_skips_only_stable_inert_empty_processes(
+    monkeypatch, state: str, flags: int
+) -> None:
+    pid = 322
+    stat = _linux_stat_fixture(pid, state=state, flags=flags)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat],
+        cmdlines=[b""],
+    )
+
+    assert _linux_record(pid, "boot-fixture") is None
+
+
+@pytest.mark.parametrize(
+    ("state", "flags"),
+    [("Z", 0), ("S", PF_KTHREAD)],
+)
+def test_linux_controller_lookup_never_skips_inert_processes(
+    monkeypatch, state: str, flags: int
+) -> None:
+    pid = 329
+    stat = _linux_stat_fixture(pid, state=state, flags=flags)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat],
+        cmdlines=[b""],
+    )
+
+    with pytest.raises(InventoryError, match="controller process identity is unavailable"):
+        _linux_record(pid, "boot-fixture", strict_controller=True)
+
+
+def test_linux_record_disappearance_is_skipped_only_after_final_proven_absence(
+    monkeypatch,
+) -> None:
+    pid = 323
+    stat = _linux_stat_fixture(pid)
+    missing = FileNotFoundError()
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat, missing],
+        cmdlines=[missing, missing],
+        gone=True,
+    )
+
+    assert _linux_record(pid, "boot-fixture") is None
+
+
+def test_linux_record_pid_reuse_returns_only_the_new_identity_pair(monkeypatch) -> None:
+    pid = 324
+    old = _linux_stat_fixture(pid, start_ticks=100)
+    new = _linux_stat_fixture(pid, start_ticks=200)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[old, new, new, new],
+        cmdlines=[
+            b"/bin/bash\0start_full_system.sh\0",
+            b"/usr/bin/sleep\0" + b"10\0",
+        ],
+    )
+
+    record = _linux_record(pid, "boot-fixture")
+
+    assert record is not None
+    assert record.argv == ("/usr/bin/sleep", "10")
+    assert record.start_token == writer_inventory._digest_token(
+        "linux", "boot-fixture", pid, "200"
+    )
+
+
+def test_linux_record_stable_live_empty_cmdline_fails_closed(monkeypatch) -> None:
+    pid = 325
+    stat = _linux_stat_fixture(pid)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat] * 3,
+        cmdlines=[b""] * 3,
+    )
+
+    with pytest.raises(InventoryError, match="argv is unavailable"):
+        _linux_record(pid, "boot-fixture")
+
+
+def test_linux_record_stable_missing_terminal_nul_fails_closed(monkeypatch) -> None:
+    pid = 326
+    stat = _linux_stat_fixture(pid)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat] * 3,
+        cmdlines=[b"python"] * 3,
+    )
+
+    with pytest.raises(InventoryError, match="argv is malformed"):
+        _linux_record(pid, "boot-fixture")
+
+
+def test_linux_record_missing_nul_then_final_proven_absence_is_skipped(
+    monkeypatch,
+) -> None:
+    pid = 333
+    stat = _linux_stat_fixture(pid)
+    missing = FileNotFoundError()
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat, stat, stat, missing],
+        cmdlines=[b"python", b"python"],
+        gone=True,
+    )
+
+    assert _linux_record(pid, "boot-fixture") is None
+
+
+def test_linux_record_three_identity_changes_while_present_fail_closed(
+    monkeypatch,
+) -> None:
+    pid = 334
+    stats = [
+        _linux_stat_fixture(pid, start_ticks=start_ticks)
+        for start_ticks in (100, 200, 200, 300, 300, 400)
+    ]
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=stats,
+        cmdlines=[b"/usr/bin/sleep\0"] * 3,
+    )
+
+    with pytest.raises(InventoryError, match="identity changed"):
+        _linux_record(pid, "boot-fixture")
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [PermissionError(), "relative/bash"],
+)
+def test_linux_record_empty_argv0_requires_stable_executable_identity(
+    monkeypatch, executable
+) -> None:
+    pid = 335
+    stat = _linux_stat_fixture(pid)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat] * 3,
+        cmdlines=[b"\0/opt/pkm/scripts/start_full_system.sh\0"] * 3,
+        executables=[executable, executable, executable],
+    )
+
+    with pytest.raises(InventoryError, match="executable identity"):
+        _linux_record(pid, "boot-fixture")
+
+
+def test_linux_record_malformed_then_proven_exit_is_skipped(monkeypatch) -> None:
+    pid = 327
+    missing = FileNotFoundError()
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=["malformed", missing, missing],
+        cmdlines=[],
+        gone=True,
+    )
+
+    assert _linux_record(pid, "boot-fixture") is None
+
+
+def test_linux_record_stable_permission_failure_fails_closed(monkeypatch) -> None:
+    pid = 328
+    stat = _linux_stat_fixture(pid)
+    denied = PermissionError()
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat, stat],
+        cmdlines=[denied, denied, denied],
+    )
+
+    with pytest.raises(InventoryError, match="enumeration failed"):
+        _linux_record(pid, "boot-fixture")
+
+
+def test_linux_snapshot_reads_boot_id_once(monkeypatch) -> None:
+    pid = 330
+    token = writer_inventory._digest_token("linux", "boot-fixture", pid, "456")
+    reads: list[str] = []
+    monkeypatch.setattr(writer_inventory.sys, "platform", "linux")
+    monkeypatch.setattr(
+        writer_inventory,
+        "_read_linux_boot_id",
+        lambda: reads.append("boot") or "boot-fixture",
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_record_for_pid",
+        lambda controller_pid, *, linux_boot_id: writer_inventory.ProcessRecord(
+            pid=controller_pid,
+            ppid=1,
+            pgid=controller_pid,
+            start_token=token,
+            argv=("deploy_channel.sh",),
+        ),
+    )
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+
+    def native_writers(*, controller_pid, controller_start_token, linux_boot_id):
+        assert controller_pid == pid
+        assert controller_start_token == token
+        assert linux_boot_id == "boot-fixture"
+        return []
+
+    monkeypatch.setattr(writer_inventory, "_native_writers", native_writers)
+
+    assert writer_inventory._snapshot(
+        controller_pid=pid,
+        controller_start_token=token,
+    ) == {"dev": [], "native": [], "prod": [], "test": []}
+    assert reads == ["boot"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc contract")
+def test_linux_actual_unreaped_zombie_is_inert(tmp_path) -> None:
+    child = os.fork()
+    if child == 0:
+        os._exit(0)
+    try:
+        for _ in range(1000):
+            raw = (Path("/proc") / str(child) / "stat").read_text(encoding="utf-8")
+            if _parse_linux_stat(child, raw)[0] == "Z":
+                break
+        else:
+            pytest.fail("child did not become a zombie")
+        env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+        controller_pid = os.getpid()
+        result, _ = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=_controller_token(controller_pid, env=env),
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+    finally:
+        os.waitpid(child, 0)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc contract")
+def test_linux_actual_harmless_process_with_empty_argv_is_enumerated(tmp_path) -> None:
+    process = subprocess.Popen(
+        ["", "-c", "import time; time.sleep(30)", "", "tail", ""],
+        executable=sys.executable,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+        controller_pid = os.getpid()
+        result, _ = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=_controller_token(controller_pid, env=env),
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc contract")
+def test_linux_actual_empty_argv0_shell_launcher_blocks(tmp_path) -> None:
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    token = _controller_token(controller_pid, env=env)
+    launcher = _write_blocking_launcher(tmp_path)
+    process = subprocess.Popen(
+        ["", str(launcher)],
+        executable="/bin/bash",
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdout is not None
+    assert process.stdout.read(1) == b"R"
+    try:
+        result, output = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=token,
+            env=env,
+        )
+        assert result.returncode != 0
+        assert result.stderr == "host-wide writer inventory is live or racing\n"
+        assert not output.exists()
+    finally:
+        _stop_blocking_launcher(process)
 
 
 def test_proof_rejects_inventory_controller_identity_not_bound_to_active_lease(tmp_path) -> None:
