@@ -135,9 +135,13 @@ def _merge_canonical_payload(
     merged = {**existing, **updates}
     updated_ref = updates.get("episode_ref")
     existing_ref = existing.get("episode_ref")
-    if updated_ref in EPISODE_REF_SENTINELS and existing_ref not in (
-        None,
-        *EPISODE_REF_SENTINELS,
+    # A real binding is a list of episode ids; only the string sentinels defer
+    # to an established value (same isinstance guard as episode_ref_from_frontmatter).
+    if (
+        isinstance(updated_ref, str)
+        and updated_ref in EPISODE_REF_SENTINELS
+        and existing_ref is not None
+        and not (isinstance(existing_ref, str) and existing_ref in EPISODE_REF_SENTINELS)
     ):
         # ERE-03: episode_ref is vault-canonical, but a watcher pass whose
         # frontmatter carries no binding must not blind-drop an established
@@ -551,16 +555,17 @@ def upsert_object_from_note(
                     """,
                     (uuid_value, "note", payload_json, path_str),
                 )
+        merged_payload = _merge_canonical_payload(
+            conn,
+            object_id=canonical_object_id,
+            updates=canonical_payload,
+        )
         save_object_in_transaction(
             conn,
             DomainObject(
                 uuid=canonical_object_id,
                 kind="note",
-                payload=_merge_canonical_payload(
-                    conn,
-                    object_id=canonical_object_id,
-                    updates=canonical_payload,
-                ),
+                payload=merged_payload,
                 source_ref=path_str,
                 created_at=mtime,
             ),
@@ -593,7 +598,9 @@ def upsert_object_from_note(
                 "content": body,
                 "path": path_str,
                 "frontmatter": normalized_frontmatter,
-                "episode_ref": canonical_payload["episode_ref"],
+                # ERE-03: the event surface must carry the same post-merge
+                # binding as the canonical row, never the raw builder sentinel.
+                "episode_ref": merged_payload["episode_ref"],
             }
             _enqueue(topic, payload, conn=conn, observation=mtime.isoformat())
         conn.commit()
@@ -807,22 +814,26 @@ def sync_markdown(path: str) -> dict[str, Any]:
                     (uuid_value, "note", payload_json, str(note_path)),
                 )
 
+        merged_payload = _merge_canonical_payload(
+            conn,
+            object_id=canonical_object_id,
+            updates=json.loads(payload_json),
+        )
         save_object_in_transaction(
             conn,
             DomainObject(
                 uuid=canonical_object_id,
                 kind="note",
-                payload=_merge_canonical_payload(
-                    conn,
-                    object_id=canonical_object_id,
-                    updates=json.loads(payload_json),
-                ),
+                payload=merged_payload,
                 source_ref=str(note_path),
                 created_at=mtime,
             ),
         )
 
         obj_payload.update(canonical_event_identity(canonical_object_id, uuid_value))
+        # ERE-03: the event surface must carry the same post-merge binding as
+        # the canonical row, never the raw builder sentinel.
+        obj_payload["episode_ref"] = merged_payload["episode_ref"]
         _enqueue(topic, obj_payload, conn=conn, observation=mtime.isoformat())
 
         _upsert_file_state(

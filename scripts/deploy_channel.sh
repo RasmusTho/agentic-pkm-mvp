@@ -155,7 +155,21 @@ FORWARD_ONLY_MIGRATION_APPLIED=0
 MIGRATION_EXECUTION_STARTED=0
 MIGRATION_EXECUTION_APPLIED=0
 migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
-trap 'rm -rf "${migration_materialize_dir}"' EXIT
+deploy_lock_dir=""
+trap 'rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
+
+acquire_channel_mutation_lock() {
+  # Serialize the mutation phase (pending-marker + pin writes + compose) per
+  # channel. Two concurrent deploys would otherwise race the durable
+  # pending-migration marker: the first finisher's cleanup deletes the record
+  # the still-running attempt depends on for crash recovery.
+  deploy_lock_dir="${pin_file}.lock"
+  if ! mkdir "${deploy_lock_dir}" 2>/dev/null; then
+    deploy_lock_dir=""
+    echo "channel mutation blocked: another deploy/rollback appears to hold ${pin_file}.lock; remove that directory only after verifying no deploy_channel.sh process is running" >&2
+    exit 89
+  fi
+}
 
 read_pending_migration_field() {
   local field="$1"
@@ -167,12 +181,19 @@ write_pending_migration() {
   local from_sha="$1" to_sha="$2" tmp_file persisted_from
   persisted_from="${from_sha:-${migration_no_baseline_marker}}"
   tmp_file="$(mktemp "${migration_pending_file}.tmp.XXXXXX")"
+  # A first-ever channel deploy has no prior pin; persist the explicit
+  # sentinel so a same-target retry can distinguish "from nothing" from a
+  # corrupted marker.
   printf 'FROM_SHA=%s\nTARGET_SHA=%s\nACK_FORWARD_ONLY=%s\n' \
     "${persisted_from}" "${to_sha}" "${ack_forward_only}" >"${tmp_file}"
   mv "${tmp_file}" "${migration_pending_file}"
 }
 
 list_changed_migrations() {
+  # Every materialization step is explicitly guarded: this function's output
+  # is consumed as the authoritative migration set, so any git-object or
+  # filesystem failure must surface as a nonzero return, never as a silently
+  # truncated (or empty) list.
   local from_sha="$1" to_sha="$2"
   local path destination git_paths rc
   if [ -z "${from_sha}" ] || ! git -C "${ROOT}" rev-parse --verify "${from_sha}^{commit}" >/dev/null 2>&1; then
@@ -184,11 +205,11 @@ list_changed_migrations() {
     while IFS= read -r path; do
       [ -n "${path}" ] && [[ "${path}" = *.py ]] || continue
       destination="${migration_materialize_dir}/${path}"
-      mkdir -p "$(dirname "${destination}")"
-      git -C "${ROOT}" show "${to_sha}:${path}" >"${destination}"
+      mkdir -p "$(dirname "${destination}")" || return 1
+      git -C "${ROOT}" show "${to_sha}:${path}" >"${destination}" || return $?
       printf '%s\n' "${destination}"
     done <<<"${git_paths}"
-    return
+    return 0
   fi
   set +e
   git_paths="$(git -C "${ROOT}" diff --diff-filter=AMCR --name-only "${from_sha}..${to_sha}" -- app/alembic/versions)"
@@ -198,10 +219,11 @@ list_changed_migrations() {
   while IFS= read -r path; do
     [ -n "${path}" ] || continue
     destination="${migration_materialize_dir}/${path}"
-    mkdir -p "$(dirname "${destination}")"
-    git -C "${ROOT}" show "${to_sha}:${path}" >"${destination}"
+    mkdir -p "$(dirname "${destination}")" || return 1
+    git -C "${ROOT}" show "${to_sha}:${path}" >"${destination}" || return $?
     printf '%s\n' "${destination}"
   done <<<"${git_paths}"
+  return 0
 }
 
 migration_gate() {
@@ -212,7 +234,10 @@ migration_gate() {
   migration_output="$(list_changed_migrations "${from_sha}" "${to_sha}")"
   rc=$?
   set -e
-  [ "${rc}" -eq 0 ] || return "${rc}"
+  if [ "${rc}" -ne 0 ]; then
+    echo "migration gate blocked: failed to materialize the exact ${from_sha:-<initial>}..${to_sha} migration set from git objects; refusing to classify" >&2
+    return "${rc}"
+  fi
   while IFS= read -r path; do
     [ -n "${path}" ] && migration_paths+=("${path}")
   done <<<"${migration_output}"
@@ -373,7 +398,13 @@ rollback_failed_startup() {
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
       return 0
     fi
-    rm -f "${migration_pending_file}"
+    if [ "${action}" = "deploy" ]; then
+      # Only a deploy attempt that never started migration execution may clear
+      # its own marker (and only after the pin restore proved effective). A
+      # failing rollback must not delete the durable record of an unrelated
+      # interrupted deploy's ambiguous migration state.
+      rm -f "${migration_pending_file}"
+    fi
     if ! compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
@@ -662,6 +693,7 @@ if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
     exit 88
   fi
   if [ "${pending_from}" = "${migration_no_baseline_marker}" ]; then
+    # First-ever deploy of this channel: replay the full-tree classification.
     migration_from_sha=""
   else
     migration_from_sha="${pending_from}"
@@ -693,6 +725,7 @@ DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
 mkdir -p "$(dirname "${pin_file}")"
+acquire_channel_mutation_lock
 if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
 fi

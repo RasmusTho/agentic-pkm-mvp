@@ -453,3 +453,97 @@ def test_prod_promotion_receipt_failure_does_not_publish_latest_receipt(
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     assert not (root / "ops/deployments/prod-latest.json").exists()
     assert not (root / f"ops/promotions/prod-deploy-{sha}.json").exists()
+
+
+def _commit_migration(root: Path, name: str) -> str:
+    """Commit a migration file into the harness repo and return the new HEAD."""
+    migration = root / "app/alembic/versions" / name
+    migration.write_text(
+        'revision = "feedc0de0001"\ndown_revision = None\nreversibility = "reversible"\n'
+        "\n\ndef upgrade() -> None:\n    pass\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "app"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add migration"], cwd=root, check=True)
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+
+def test_missing_target_git_object_blocks_migration_gate(tmp_path: Path) -> None:
+    """A partial/corrupt object store must fail the gate loudly, never yield an empty set."""
+    root, env, _sha = _deploy_harness(tmp_path)
+    target = _commit_migration(root, "feedc0de0001_gate_probe.py")
+    blob = subprocess.check_output(
+        ["git", "rev-parse", f"{target}:app/alembic/versions/feedc0de0001_gate_probe.py"],
+        cwd=root,
+        text=True,
+    ).strip()
+    object_path = root / ".git/objects" / blob[:2] / blob[2:]
+    assert object_path.exists()
+    object_path.unlink()
+
+    result = _run_deploy(root, env, target)
+
+    assert result.returncode != 0, result.stdout
+    assert "failed to materialize the exact" in result.stderr
+    assert not (root / "config/deploy/dev.migration-pending.env").exists()
+
+
+def test_first_deploy_marker_retry_replays_full_classification(tmp_path: Path) -> None:
+    """An interrupted first-ever deploy must be retryable from its durable marker."""
+    root, env, _sha = _deploy_harness(tmp_path)
+    target = _commit_migration(root, "feedc0de0002_first_deploy.py")
+    marker = root / "config/deploy/dev.migration-pending.env"
+    env = dict(env)
+    env["FAKE_VERSION_SHA"] = target
+    env["FAKE_HEALTH_VERSION_SHA"] = target
+
+    fail_env = dict(env)
+    fail_env["FAKE_DOCKER_FAIL_MATCH"] = "--exit-code-from migrate"
+    first = _run_deploy(root, fail_env, target)
+    assert first.returncode != 0
+    assert marker.exists(), first.stderr
+    assert "FROM_SHA=__NO_BASELINE__" in marker.read_text(encoding="utf-8")
+
+    retry = _run_deploy(root, env, target)
+    combined = retry.stdout + retry.stderr
+    assert "migration retry blocked" not in combined
+    assert "migration retry: revalidating" in combined
+    assert retry.returncode == 0, retry.stderr
+    assert not marker.exists()
+
+
+def test_rollback_failure_preserves_foreign_pending_marker(tmp_path: Path) -> None:
+    """A failing rollback must not delete another deploy attempt's pending marker."""
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "5" * 40
+    _seed_previous_pin(root, sha)
+    (root / "config/deploy/dev.previous.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    marker = root / "config/deploy/dev.migration-pending.env"
+    marker.write_text(
+        f"FROM_SHA=<none>\nTARGET_SHA={sha}\nACK_FORWARD_ONLY=0\n", encoding="utf-8"
+    )
+
+    fail_env = dict(env)
+    fail_env["FAKE_DOCKER_FAIL_MATCH"] = "pull"
+    result = _run_rollback(root, fail_env, previous_sha)
+
+    assert result.returncode != 0
+    assert marker.exists(), "rollback failure must not clear a deploy's pending marker"
+
+
+def test_channel_mutation_lock_blocks_concurrent_deploy(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    lock_dir = root / "config/deploy/dev.env.lock"
+    lock_dir.mkdir(parents=True)
+
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 89
+    assert "channel mutation blocked" in result.stderr
+
+    lock_dir.rmdir()
+    clean = _run_deploy(root, env, sha)
+    assert clean.returncode == 0, clean.stderr
+    assert not lock_dir.exists(), "lock must be released on exit"

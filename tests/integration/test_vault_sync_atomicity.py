@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -351,6 +352,52 @@ def test_sync_markdown_edit_preserves_richer_canonical_payload(tmp_path, monkeyp
         assert payload["trust"] == "reviewed"
         assert payload["language"] == "sv"
         assert payload["stable_id"] == "stable:1"
+
+        # ERE-03 event surface: the enqueued outbox event must carry the same
+        # post-merge binding as the canonical row, not the builder sentinel.
+        with psycopg.connect(dsn) as conn:
+            row = conn.execute(
+                "select payload from outbox order by created_at desc limit 1"
+            ).fetchone()
+        envelope = row[0] if not isinstance(row, dict) else row["payload"]
+        if isinstance(envelope, str):
+            envelope = json.loads(envelope)
+        assert envelope["payload"]["episode_ref"] == "episode:1"
+    finally:
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_real_episode_binding_list_survives_merge_without_type_error(
+    tmp_path, monkeypatch
+) -> None:
+    """A frontmatter-declared list binding must pass the sentinel guard cleanly."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        note_path = tmp_path / "bound.md"
+        uuid_value = str(uuid4())
+        frontmatter = {
+            "uuid": uuid_value,
+            "title": "Bound Note",
+            "episode_ref": ["episode-1a2b3c4d"],
+        }
+        fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
+        note_path.write_text(f"---\n{fm_dump}\n---\n\nbound body", encoding="utf-8")
+
+        vault_sync.sync_markdown(str(note_path))
+        note_path.write_text(f"---\n{fm_dump}\n---\n\nbound body edited", encoding="utf-8")
+        vault_sync.sync_markdown(str(note_path))
+
+        payload = _canonical_payload(dsn, uuid_value)
+        assert payload["episode_ref"] == ["episode-1a2b3c4d"]
+        assert payload["content"] == "bound body edited"
     finally:
         _drop_schema(base_dsn, schema)
 
