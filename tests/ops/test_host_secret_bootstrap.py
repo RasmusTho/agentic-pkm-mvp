@@ -158,7 +158,7 @@ printf '%s\\n' '{_RAW_KEY}'
 set -eu
 test -n "${{HOST_SECRET_RUNTIME_ENV_FILE:-}}"
 test -f "$HOST_SECRET_RUNTIME_ENV_FILE"
-test "$(stat -f '%Lp' "$HOST_SECRET_RUNTIME_ENV_FILE")" = 600
+python3 -c 'import stat, sys; from pathlib import Path; raise SystemExit(0 if stat.S_IMODE(Path(sys.argv[1]).stat().st_mode) == 0o600 else 1)' "$HOST_SECRET_RUNTIME_ENV_FILE"
 printf '%s' "$HOST_SECRET_RUNTIME_ENV_FILE" > {observed_path_file!s}
 cp "$HOST_SECRET_RUNTIME_ENV_FILE" {observed_content_file!s}
 """,
