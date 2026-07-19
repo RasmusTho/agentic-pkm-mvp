@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -102,6 +103,43 @@ fi
 exec /bin/cp "$@"
 """,
     )
+    real_git = shutil.which("git")
+    assert real_git is not None
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -eu
+if [ -n "${{FAKE_GIT_SLEEP_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_GIT_SLEEP_MATCH}}"* ]]; then
+  touch "${{FAKE_GIT_SLEEP_MARKER:?}}"
+  sleep "${{FAKE_GIT_SLEEP_SECONDS:-2}}"
+fi
+if [ -n "${{FAKE_GIT_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_GIT_FAIL_MATCH}}"* ]]; then
+  echo 'fake git materialization failure' >&2
+  exit "${{FAKE_GIT_FAIL_RC:-87}}"
+fi
+exec {real_git!s} "$@"
+""",
+    )
+    real_mv = shutil.which("mv")
+    assert real_mv is not None
+    _write_executable(
+        bin_dir / "mv",
+        f"""#!/usr/bin/env bash
+set -eu
+if [ -n "${{FAKE_MV_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_MV_FAIL_MATCH}}"* ]]; then
+  counter_file="${{FAKE_MV_COUNTER_FILE:?}}"
+  count=0
+  [ ! -f "${{counter_file}}" ] || count="$(cat "${{counter_file}}")"
+  count=$((count + 1))
+  printf '%s\n' "${{count}}" >"${{counter_file}}"
+  if [ "${{count}}" -eq "${{FAKE_MV_FAIL_ON_COUNT:-1}}" ]; then
+    echo 'fake mv failure' >&2
+    exit "${{FAKE_MV_FAIL_RC:-62}}"
+  fi
+fi
+exec {real_mv!s} "$@"
+""",
+    )
     python_wrapper = bin_dir / "python"
     _write_executable(
         python_wrapper,
@@ -178,6 +216,61 @@ def _run_deploy(
         capture_output=True,
         text=True,
     )
+
+
+def test_channel_lock_covers_pin_snapshot_and_migration_classification(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/overlap_lock.py"
+    migration.write_text(
+        'revision = "overlap_lock"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "reversible"\n'
+        'def downgrade():\n    pass\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add overlap migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    marker = tmp_path / "git-sleep-started"
+    slow_env = dict(env)
+    slow_env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_GIT_SLEEP_MATCH": "diff --diff-filter",
+            "FAKE_GIT_SLEEP_MARKER": str(marker),
+            "FAKE_GIT_SLEEP_SECONDS": "2",
+        }
+    )
+    slow = subprocess.Popen(
+        ["bash", "scripts/deploy_channel.sh", "deploy", "dev", target_sha],
+        cwd=root,
+        env=slow_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert marker.exists(), "slow deploy never entered migration classification"
+
+        overlapping = _run_deploy(root, env, target_sha)
+
+        assert overlapping.returncode == 89
+        assert "channel mutation blocked" in overlapping.stderr
+        stdout, stderr = slow.communicate(timeout=15)
+        assert slow.returncode == 0, stdout + stderr
+        assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    finally:
+        if slow.poll() is None:
+            slow.terminate()
+            slow.communicate(timeout=5)
 
 
 _FAKE_PSYCOPG_MODULE = '''\
@@ -312,9 +405,7 @@ def _configure_prod_retry_preflight(
     )
     if compose_files_present:
         shutil.copy2(REPO_ROOT / "docker-compose.yaml", root / "docker-compose.yaml")
-        shutil.copy2(
-            REPO_ROOT / "docker-compose.prod.yml", root / "docker-compose.prod.yml"
-        )
+        shutil.copy2(REPO_ROOT / "docker-compose.prod.yml", root / "docker-compose.prod.yml")
     if pin_file_dsn_override is not None:
         pin_dir = root / "config" / "deploy"
         pin_dir.mkdir(parents=True, exist_ok=True)
@@ -432,9 +523,7 @@ def test_acknowledged_embedding_cutover_stages_compose_before_transition_smoke(
     runtime_up = next(
         index
         for index, event in enumerate(events)
-        if event.endswith(
-            "up -d --force-recreate api worker watcher heimdal-capture-watch"
-        )
+        if event.endswith("up -d --force-recreate api worker watcher heimdal-capture-watch")
     )
     api_liveness = next(
         index
@@ -478,8 +567,7 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
     previous_sha = "1" * 40
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     env["FAKE_API_LIVENESS"] = "fail"
@@ -491,9 +579,7 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     events = _deploy_events(env)
     assert any(
-        event.endswith(
-            "up -d --force-recreate api worker watcher heimdal-capture-watch"
-        )
+        event.endswith("up -d --force-recreate api worker watcher heimdal-capture-watch")
         for event in events
     )
     assert any(
@@ -511,13 +597,10 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
     previous_sha = "2" * 40
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
-    env["FAKE_DOCKER_FAIL_MATCH"] = (
-        "up -d --force-recreate --no-deps companion-ui"
-    )
+    env["FAKE_DOCKER_FAIL_MATCH"] = "up -d --force-recreate --no-deps companion-ui"
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
@@ -532,6 +615,380 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
         )
         for event in events
     )
+
+
+def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_test.py"
+    migration.write_text(
+        'revision = "forward_only_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_API_LIVENESS"] = "fail"
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 1
+    assert "target pin is retained for a compatible forward fix" in result.stderr
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    strict_recreates = [
+        event
+        for event in _deploy_events(env)
+        if event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+    ]
+    assert len(strict_recreates) == 1
+
+
+def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_test.py"
+    migration.write_text(
+        'revision = "forward_only_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_DOCKER_FAIL_MATCH"] = "pull api worker"
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 24
+    assert "attempting rollback to previous pin" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert not any(" stop api worker watcher" in event for event in events)
+    assert not any("exit-code-from migrate" in event for event in events)
+
+
+def test_target_commit_migration_is_classified_when_target_is_not_checked_out(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    migration = root / "app/alembic/versions/target_only.py"
+    migration.write_text(
+        'revision = "target_only"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add target-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    subprocess.run(["git", "checkout", "-q", previous_sha], cwd=root, check=True)
+
+    result = _run_deploy(root, env, target_sha)
+
+    assert result.returncode == 42
+    assert "forward-only migrations require" in result.stderr
+    assert "migration gate blocked before recreate" in result.stderr
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_migration_materialization_failure_blocks_before_pin_or_compose(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/materialization_failure.py"
+    migration.write_text(
+        'revision = "materialization_failure"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add failing materialization"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    subprocess.run(["git", "checkout", "-q", previous_sha], cwd=root, check=True)
+    env["FAKE_GIT_FAIL_MATCH"] = f"show {target_sha}:app/alembic/versions/"
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 87
+    assert "fake git materialization failure" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_ambiguous_forward_only_migration_exit_retains_target_pin(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_test.py"
+    migration.write_text(
+        'revision = "forward_only_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_DOCKER_FAIL_MATCH"] = "exit-code-from migrate"
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 24
+    assert "commit state is ambiguous" in result.stderr
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert any("exit-code-from migrate" in event for event in events)
+    assert not any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+        for event in events
+    )
+
+
+def test_same_sha_retry_replays_durable_pending_migration_epoch(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_retry.py"
+    migration.write_text(
+        'revision = "forward_only_retry"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add retry migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = "exit-code-from migrate"
+
+    first = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert first.returncode == 24
+    pending = root / "config/deploy/dev.migration-pending.env"
+    assert pending.exists()
+    assert f"FROM_SHA={previous_sha}" in pending.read_text(encoding="utf-8")
+    assert f"TARGET_SHA={target_sha}" in pending.read_text(encoding="utf-8")
+
+    env.pop("FAKE_DOCKER_FAIL_MATCH")
+    second = _run_deploy(root, env, target_sha)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating" in second.stdout
+    assert not pending.exists()
+    migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
+    assert len(migrate_events) == 2
+
+
+def test_first_deploy_retry_replays_full_target_migration_inventory(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    migration = root / "app/alembic/versions/first_deploy_retry.py"
+    migration.write_text(
+        'revision = "first_deploy_retry"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add first-deploy migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = "exit-code-from migrate"
+
+    first = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert first.returncode == 24
+    pending = root / "config/deploy/dev.migration-pending.env"
+    assert "FROM_SHA=__NO_BASELINE__" in pending.read_text(encoding="utf-8")
+    assert f"TARGET_SHA={target_sha}" in pending.read_text(encoding="utf-8")
+
+    env.pop("FAKE_DOCKER_FAIL_MATCH")
+    second = _run_deploy(root, env, target_sha)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating <no-baseline>" in second.stdout
+    assert not pending.exists()
+    migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
+    assert len(migrate_events) == 2
+
+
+def test_first_deploy_pull_failure_preserves_no_baseline_retry_epoch(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    migration = root / "app/alembic/versions/first_deploy_pull_retry.py"
+    migration.write_text(
+        'revision = "first_deploy_pull_retry"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add first-deploy pull retry"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = "pull api worker"
+
+    first = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert first.returncode == 24
+    pending = root / "config/deploy/dev.migration-pending.env"
+    assert "FROM_SHA=__NO_BASELINE__" in pending.read_text(encoding="utf-8")
+    pin_path = root / "config/deploy/dev.env"
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+
+    env.pop("FAKE_DOCKER_FAIL_MATCH")
+    second = _run_deploy(root, env, target_sha)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating <no-baseline>" in second.stdout
+    assert not pending.exists()
+    migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
+    assert len(migrate_events) == 1
+
+
+def test_pin_restore_failure_preserves_pending_migration_retry_epoch(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/pin_restore_retry.py"
+    migration.write_text(
+        'revision = "pin_restore_retry"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add pin-restore retry"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = "pull api worker"
+    env["FAKE_MV_FAIL_MATCH"] = "config/deploy/dev.env"
+    env["FAKE_MV_FAIL_ON_COUNT"] = "2"
+    env["FAKE_MV_COUNTER_FILE"] = str(tmp_path / "mv-counter")
+
+    first = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert first.returncode == 24
+    assert "rollback pin restore failed" in first.stderr
+    pending = root / "config/deploy/dev.migration-pending.env"
+    assert pending.exists()
+    assert f"FROM_SHA={previous_sha}" in pending.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+
+    for key in ("FAKE_DOCKER_FAIL_MATCH", "FAKE_MV_FAIL_MATCH", "FAKE_MV_FAIL_ON_COUNT"):
+        env.pop(key)
+    second = _run_deploy(root, env, target_sha)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating" in second.stdout
+    assert not pending.exists()
+    migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
+    assert len(migrate_events) == 1
+
+
+def test_applied_reversible_migration_retains_target_for_governed_reversal(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/reversible_test.py"
+    migration.write_text(
+        'revision = "reversible_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "reversible"\n'
+        "def downgrade():\n    pass\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add reversible migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
+
+    result = _run_deploy(root, env, target_sha)
+
+    assert result.returncode == 73
+    assert "reversible migration(s) were applied" in result.stderr
+    assert "rollback-promotion" in result.stderr
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={previous_sha}" not in pin_path.read_text(encoding="utf-8")
+    strict_recreates = [
+        event
+        for event in _deploy_events(env)
+        if event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+    ]
+    assert len(strict_recreates) == 1
+
+
+def test_changed_migration_drains_writers_before_cutover_and_runtime_restart(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_test.py"
+    migration.write_text(
+        'revision = "forward_only_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    stop_index = next(i for i, event in enumerate(events) if " stop api worker watcher" in event)
+    migrate_index = next(i for i, event in enumerate(events) if "exit-code-from migrate" in event)
+    runtime_index = next(
+        i
+        for i, event in enumerate(events)
+        if event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+    )
+    assert stop_index < migrate_index < runtime_index
 
 
 def test_prod_deploy_blocks_pending_retry_exhaustion_before_pin_or_compose_mutation(
@@ -645,9 +1102,7 @@ def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
     )
 
     ambient_env_file = tmp_path / "ambient-foreign-runtime.env"
-    ambient_env_file.write_text(
-        f"DATABASE_URL={_ENV_FILE_POISON_DSN}\n", encoding="utf-8"
-    )
+    ambient_env_file.write_text(f"DATABASE_URL={_ENV_FILE_POISON_DSN}\n", encoding="utf-8")
     env["WATCHER_RUNTIME_ENV_FILE"] = str(ambient_env_file)
     env["FAKE_OUTBOX_POISON_DSN"] = _ENV_FILE_POISON_DSN
 
@@ -826,9 +1281,7 @@ def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
     # No compose files at all: resolution is impossible (not merely "a file
     # was empty"), so the preflight must skip visibly rather than block or
     # crash.
-    _configure_prod_retry_preflight(
-        root, env, tmp_path, compose_files_present=False
-    )
+    _configure_prod_retry_preflight(root, env, tmp_path, compose_files_present=False)
 
     result = _run_deploy(root, env, sha, channel="prod")
 

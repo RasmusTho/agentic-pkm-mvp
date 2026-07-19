@@ -19,13 +19,19 @@ The not-pg tests below are the real old-vs-new discriminators without a database
 committed *before* the enqueue runs — so a fault leaves a committed object with
 the event lost.
 """
+
 from __future__ import annotations
+
+from uuid import UUID
 
 import pytest
 
 from app.services import vault_sync
 
 pytestmark = pytest.mark.not_pg
+
+OBJECT_UUID = str(UUID(int=1))
+DELETE_UUID = str(UUID(int=2))
 
 
 # --- Recording fake connection: logs the ORDER of store writes vs commits -----
@@ -36,6 +42,7 @@ class _RecCursor:
         self.conn = conn
         self.rowcount = 0
         self._fetch: object | None = None
+        self._fetchall: list[object] = []
 
     def __enter__(self) -> "_RecCursor":
         return self
@@ -47,8 +54,27 @@ class _RecCursor:
         norm = " ".join(sql.split()).lower()
         self.rowcount = 0
         self._fetch = None
+        self._fetchall = []
+        if norm.startswith("select to_regclass(%s) as oid"):
+            self._fetch = (params[0],)
+            return
+        if "from information_schema.columns" in norm or "from pg_attribute" in norm:
+            self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
+            return
+        if norm.startswith("update store_vector_index"):
+            return
+        if norm.startswith("select payload from store_objects"):
+            return
         if norm.startswith("insert into objects"):
             self.conn.log.append("objects_write")
+            self.rowcount = 1
+            return
+        if norm.startswith("insert into store_objects"):
+            self.conn.log.append("canonical_object_write")
+            self.rowcount = 1
+            return
+        if norm.startswith("update store_objects"):
+            self.conn.log.append("canonical_source_update")
             self.rowcount = 1
             return
         if norm.startswith("insert into file_state"):
@@ -58,6 +84,15 @@ class _RecCursor:
         if norm.startswith("delete from file_state where path"):
             self.conn.log.append("file_state_delete")
             self.rowcount = 1 if self.conn.has_file_state else 0
+            return
+        if norm.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path"
+        ):
+            self._fetch = (
+                {"path": params[0], "uuid": "00000000-0000-0000-0000-000000000002", "mtime": "test"}
+                if self.conn.has_file_state
+                else None
+            )
             return
         if norm.startswith("select count(*) from file_state where uuid"):
             # Zero remaining paths for the uuid → delete_note emits the event.
@@ -74,7 +109,7 @@ class _RecCursor:
         return self._fetch
 
     def fetchall(self):
-        return []
+        return self._fetchall
 
 
 class _RecConn:
@@ -113,7 +148,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, conn: _RecConn, enqueue) -> dict:
 
 
 def _tail_after(log: list[str], marker: str) -> list[str]:
-    return log[log.index(marker):]
+    return log[log.index(marker) :]
 
 
 # --- upsert_object_from_note --------------------------------------------------
@@ -129,7 +164,7 @@ def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch)
 
     vault_sync.upsert_object_from_note(
         str(tmp_path / "new.md"),
-        {"uuid": "u-1", "title": "T"},
+        {"uuid": OBJECT_UUID, "title": "T"},
         "body",
         fm_changed=False,
         body_changed=False,
@@ -141,7 +176,9 @@ def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch)
     assert captured["conn"] is conn
     # The enqueue precedes the post-write commit (single atomic transaction).
     tail = _tail_after(conn.log, "objects_write")
+    assert "canonical_object_write" in tail
     assert "enqueue" in tail
+    assert tail.index("canonical_object_write") < tail.index("enqueue")
     assert tail.index("enqueue") < tail.index("commit")
 
 
@@ -157,7 +194,7 @@ def test_upsert_fault_between_store_and_enqueue_rolls_back(tmp_path, monkeypatch
     with pytest.raises(RuntimeError, match="enqueue crash"):
         vault_sync.upsert_object_from_note(
             str(tmp_path / "new.md"),
-            {"uuid": "u-1", "title": "T"},
+            {"uuid": OBJECT_UUID, "title": "T"},
             "body",
             fm_changed=False,
             body_changed=False,
@@ -167,6 +204,7 @@ def test_upsert_fault_between_store_and_enqueue_rolls_back(tmp_path, monkeypatch
     # back with the lost event. (Pre-fix code commits before the enqueue, so
     # "commit" WOULD appear here.)
     tail = _tail_after(conn.log, "objects_write")
+    assert "canonical_object_write" in tail
     assert "enqueue_attempt" in tail
     assert "commit" not in tail
 
@@ -182,7 +220,7 @@ def test_delete_enqueues_within_transaction_before_commit(monkeypatch) -> None:
 
     captured = _install(monkeypatch, conn, _ok)
 
-    vault_sync.delete_note("/vault/gone.md", uuid_value="u-2")
+    vault_sync.delete_note("/vault/gone.md", uuid_value=DELETE_UUID)
 
     assert captured["topic"] == "ingest.object.deleted"
     assert captured["conn"] is conn
@@ -201,7 +239,7 @@ def test_delete_fault_between_store_and_enqueue_rolls_back(monkeypatch) -> None:
     _install(monkeypatch, conn, _boom)
 
     with pytest.raises(RuntimeError, match="enqueue crash"):
-        vault_sync.delete_note("/vault/gone.md", uuid_value="u-2")
+        vault_sync.delete_note("/vault/gone.md", uuid_value=DELETE_UUID)
 
     tail = _tail_after(conn.log, "file_state_delete")
     assert "enqueue_attempt" in tail

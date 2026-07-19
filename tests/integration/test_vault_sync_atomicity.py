@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -73,6 +74,12 @@ def _configure_isolated_pg_test(monkeypatch) -> tuple[str, str]:
     dsn = _dsn_with_search_path(base_dsn, schema)
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("DB_DSN", dsn)
+    # Use the production store-schema producer instead of copying its DDL into
+    # this test. The monkeypatched process flag is restored after each case.
+    from app.stores import pg as pg_store
+
+    monkeypatch.setattr(pg_store, "_TABLES_READY", False)
+    pg_store._ensure_tables()
     return base_dsn, schema
 
 
@@ -88,6 +95,24 @@ def _objects_row_count(dsn: str) -> int:
             cur.execute("select count(*) from objects")
             row = cur.fetchone()
             return int(row[0] or 0) if row else 0
+
+
+def _canonical_objects_row_count(dsn: str) -> int:
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("select count(*) from store_objects")
+            row = cur.fetchone()
+            return int(row[0] or 0) if row else 0
+
+
+def _canonical_payload(dsn: str, object_id: str) -> dict[str, object]:
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("select payload from store_objects where object_id = %s", (object_id,))
+            row = cur.fetchone()
+            assert row is not None
+            assert isinstance(row[0], dict)
+            return row[0]
 
 
 def _file_state_row_count(dsn: str) -> int:
@@ -152,6 +177,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         _write_note(note_path, uuid_value, "Atomicity Note", "hello world")
 
         objects_before = _objects_row_count(dsn)
+        canonical_before = _canonical_objects_row_count(dsn)
         file_state_before = _file_state_row_count(dsn)
         outbox_before = _outbox_row_count(dsn)
 
@@ -168,6 +194,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         # All-or-nothing: the injected failure must roll back the objects/file_state
         # writes that ran earlier in the same transaction. Zero partial rows.
         assert _objects_row_count(dsn) == objects_before
+        assert _canonical_objects_row_count(dsn) == canonical_before
         assert _file_state_row_count(dsn) == file_state_before
         assert _outbox_row_count(dsn) == outbox_before
 
@@ -178,6 +205,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         result = vault_sync.sync_markdown(str(note_path))
         assert result["status"] == "ok"
         assert _objects_row_count(dsn) == objects_before + 1
+        assert _canonical_objects_row_count(dsn) == canonical_before + 1
         assert _file_state_row_count(dsn) == file_state_before + 1
         assert _outbox_row_count(dsn) == outbox_before + 1
     finally:
@@ -205,6 +233,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
         _write_note(note_path, uuid_value, "Atomicity Note 2", "body text")
 
         objects_before = _objects_row_count(dsn)
+        canonical_before = _canonical_objects_row_count(dsn)
         file_state_before = _file_state_row_count(dsn)
         outbox_before = _outbox_row_count(dsn)
 
@@ -219,6 +248,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
             vault_sync.sync_markdown(str(note_path))
 
         assert _objects_row_count(dsn) == objects_before
+        assert _canonical_objects_row_count(dsn) == canonical_before
         assert _file_state_row_count(dsn) == file_state_before
         assert _outbox_row_count(dsn) == outbox_before
 
@@ -226,6 +256,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
         result = vault_sync.sync_markdown(str(note_path))
         assert result["status"] == "ok"
         assert _objects_row_count(dsn) == objects_before + 1
+        assert _canonical_objects_row_count(dsn) == canonical_before + 1
         assert _file_state_row_count(dsn) == file_state_before + 1
         assert _outbox_row_count(dsn) == outbox_before + 1
     finally:
@@ -280,5 +311,129 @@ def test_rename_atomic(tmp_path, monkeypatch) -> None:
         assert result["updated"] is True
         assert _file_state_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
         assert _objects_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
+    finally:
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_sync_markdown_edit_preserves_richer_canonical_payload(tmp_path, monkeypatch) -> None:
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        note_path = tmp_path / "metadata.md"
+        uuid_value = str(uuid4())
+        _write_note(note_path, uuid_value, "Metadata Note", "first body")
+        vault_sync.sync_markdown(str(note_path))
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                """
+                update store_objects
+                set payload = payload || %s::jsonb
+                where object_id = %s
+                """,
+                (
+                    '{"episode_ref":"episode:1","trust":"reviewed","language":"sv","stable_id":"stable:1"}',
+                    uuid_value,
+                ),
+            )
+
+        _write_note(note_path, uuid_value, "Metadata Note", "edited body")
+        vault_sync.sync_markdown(str(note_path))
+
+        payload = _canonical_payload(dsn, uuid_value)
+        assert payload["content"] == "edited body"
+        assert payload["episode_ref"] == "episode:1"
+        assert payload["trust"] == "reviewed"
+        assert payload["language"] == "sv"
+        assert payload["stable_id"] == "stable:1"
+
+        # ERE-03 event surface: the enqueued outbox event must carry the same
+        # post-merge binding as the canonical row, not the builder sentinel.
+        with psycopg.connect(dsn) as conn:
+            row = conn.execute(
+                "select payload from outbox order by created_at desc limit 1"
+            ).fetchone()
+        envelope = row[0] if not isinstance(row, dict) else row["payload"]
+        if isinstance(envelope, str):
+            envelope = json.loads(envelope)
+        assert envelope["payload"]["episode_ref"] == "episode:1"
+    finally:
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_real_episode_binding_list_survives_merge_without_type_error(
+    tmp_path, monkeypatch
+) -> None:
+    """A frontmatter-declared list binding must pass the sentinel guard cleanly."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        note_path = tmp_path / "bound.md"
+        uuid_value = str(uuid4())
+        frontmatter = {
+            "uuid": uuid_value,
+            "title": "Bound Note",
+            "episode_ref": ["episode-1a2b3c4d"],
+        }
+        fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
+        note_path.write_text(f"---\n{fm_dump}\n---\n\nbound body", encoding="utf-8")
+
+        vault_sync.sync_markdown(str(note_path))
+        note_path.write_text(f"---\n{fm_dump}\n---\n\nbound body edited", encoding="utf-8")
+        vault_sync.sync_markdown(str(note_path))
+
+        payload = _canonical_payload(dsn, uuid_value)
+        assert payload["episode_ref"] == ["episode-1a2b3c4d"]
+        assert payload["content"] == "bound body edited"
+    finally:
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_pure_rename_preserves_richer_canonical_payload(tmp_path, monkeypatch) -> None:
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        old_path = tmp_path / "before.md"
+        new_path = tmp_path / "after.md"
+        uuid_value = str(uuid4())
+        _write_note(old_path, uuid_value, "Rename Metadata", "unchanged body")
+        vault_sync.sync_markdown(str(old_path))
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                """
+                update store_objects
+                set payload = payload || %s::jsonb
+                where object_id = %s
+                """,
+                ('{"episode_ref":"episode:2","ingest_fingerprint":"fingerprint:2"}', uuid_value),
+            )
+
+        old_path.rename(new_path)
+        vault_sync.handle_rename(str(old_path), str(new_path))
+
+        payload = _canonical_payload(dsn, uuid_value)
+        assert payload["episode_ref"] == "episode:2"
+        assert payload["ingest_fingerprint"] == "fingerprint:2"
+        assert payload["content"] == "unchanged body"
     finally:
         _drop_schema(base_dsn, schema)

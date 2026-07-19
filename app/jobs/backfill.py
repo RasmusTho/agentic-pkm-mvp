@@ -57,10 +57,10 @@ class BackfillJob:
 
     def _process_chunks(self) -> None:
         sql = (
-            "SELECT o.id "
-            "FROM objects o "
-            "WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.object_id = o.id) "
-            "ORDER BY o.id LIMIT %s"
+            "SELECT o.object_id "
+            "FROM store_objects o "
+            "WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.object_id = o.object_id) "
+            "ORDER BY o.object_id LIMIT %s"
         )
         object_ids = _fetch_ids(sql, tuple(), self.limit)
         for oid in object_ids:
@@ -72,11 +72,11 @@ class BackfillJob:
 
     def _process_embeddings(self) -> None:
         sql = (
-            "SELECT o.id "
-            "FROM objects o "
-            "WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.object_id = o.id) "
-            "AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.object_id = o.id) "
-            "ORDER BY o.id LIMIT %s"
+            "SELECT o.object_id "
+            "FROM store_objects o "
+            "WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.object_id = o.object_id) "
+            "AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.object_id = o.object_id) "
+            "ORDER BY o.object_id LIMIT %s"
         )
         object_ids = _fetch_ids(sql, tuple(), self.limit)
         for oid in object_ids:
@@ -88,10 +88,10 @@ class BackfillJob:
 
     def _process_reviews(self) -> None:
         sql = (
-            "SELECT o.id "
-            "FROM objects o "
-            "WHERE NOT EXISTS (SELECT 1 FROM decisions d WHERE d.object_id = o.id AND d.key = 'review') "
-            "ORDER BY o.id LIMIT %s"
+            "SELECT o.object_id "
+            "FROM store_objects o "
+            "WHERE NOT EXISTS (SELECT 1 FROM decisions d WHERE d.object_id = o.object_id AND d.key = 'review') "
+            "ORDER BY o.object_id LIMIT %s"
         )
         object_ids = _fetch_ids(sql, tuple(), self.limit)
         for oid in object_ids:
@@ -103,10 +103,10 @@ class BackfillJob:
 
     def _process_evaluations(self) -> None:
         sql = (
-            "SELECT o.id "
-            "FROM objects o "
-            "WHERE NOT EXISTS (SELECT 1 FROM decisions d WHERE d.object_id = o.id AND d.key = 'evaluate') "
-            "ORDER BY o.id LIMIT %s"
+            "SELECT o.object_id "
+            "FROM store_objects o "
+            "WHERE NOT EXISTS (SELECT 1 FROM decisions d WHERE d.object_id = o.object_id AND d.key = 'evaluate') "
+            "ORDER BY o.object_id LIMIT %s"
         )
         object_ids = _fetch_ids(sql, tuple(), self.limit)
         for oid in object_ids:

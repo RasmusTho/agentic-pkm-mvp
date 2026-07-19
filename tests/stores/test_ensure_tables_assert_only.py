@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
@@ -105,6 +106,36 @@ def test_missing_identity_column_raises(scratch_db, monkeypatch: pytest.MonkeyPa
         pg_module.PgObjectStore()
 
 
+def test_transactional_object_write_preflights_partial_schema(
+    scratch_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The filesystem producer must fail before writing against a partial store schema."""
+    from app.objects import DomainObject, save_object_in_transaction
+
+    pg_module = _fresh_pg_module(monkeypatch)
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_db) as conn:
+        conn.execute("ALTER TABLE store_vector_index DROP COLUMN provider")
+        with pytest.raises(StoreSchemaMissingError, match="alembic upgrade head"):
+            save_object_in_transaction(
+                conn,
+                DomainObject(
+                    uuid=object_id,
+                    kind="note",
+                    payload={"content": "must not persist"},
+                    source_ref="vault://partial.md",
+                    created_at=datetime.now(timezone.utc),
+                ),
+            )
+        conn.rollback()
+        row = conn.execute(
+            "SELECT 1 FROM store_objects WHERE object_id = %s", (object_id,)
+        ).fetchone()
+        assert row is None
+    assert pg_module._TABLES_READY is False
+
+
 def test_migrated_schema_passes_assert_only(scratch_db, monkeypatch: pytest.MonkeyPatch) -> None:
     """With the migration applied, assert-only construction succeeds without autocreate."""
     pg_module = _fresh_pg_module(monkeypatch)
@@ -159,6 +190,6 @@ def test_null_dim_row_repaired_and_queryable(scratch_db, monkeypatch: pytest.Mon
         assert row is not None and row[0] == 4, "preflight did not backfill NULL dim"
 
     hits = index.search([1.0, 0.0, 0.0, 0.0], k=5, identity=identity)
-    assert [hit.object_id for hit in hits] == [object_id], (
-        "NULL-dim row not queryable after preflight repair"
-    )
+    assert [hit.object_id for hit in hits] == [
+        object_id
+    ], "NULL-dim row not queryable after preflight repair"

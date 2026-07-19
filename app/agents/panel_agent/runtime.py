@@ -126,6 +126,7 @@ def execute_panel_intent(
     *,
     outbox_path: Path | None = None,
     vault_root: Path | None = None,
+    vault_uuid: str | None = None,
     allow_legacy_promotion_without_trust_verb: bool = False,
 ) -> PanelRuntimeResult:
     # Guard-at-seam (#2808, formal-model.md Divergence F-A): assert WriteGuard
@@ -306,7 +307,7 @@ def execute_panel_intent(
         _persist_log(intent_event.payload.note, state.log_entry)
 
     # --- Panel writeback: remove executed checkboxes and write receipts ---
-    _apply_note_writeback(state, note_text, vault_root)
+    _apply_note_writeback(state, note_text, vault_root, vault_uuid=vault_uuid)
 
     return PanelRuntimeResult(
         intent=intent_event,
@@ -444,6 +445,8 @@ def _apply_note_writeback(
     state: PanelAgentState,
     original_note_text: str,
     vault_root: Path | None,
+    *,
+    vault_uuid: str | None = None,
 ) -> None:
     """Remove executed checkboxes, write proposal suggestions, write receipts, and persist to vault file.
 
@@ -633,7 +636,7 @@ def _apply_note_writeback(
     upsert_executed_ids(note_uuid, [stable_action_id(label) for label in all_done_labels])
 
     # Refresh companion content_hash so it reflects the post-writeback content.
-    _refresh_companion_hash(note_uuid, updated, vault_root, note_file)
+    _refresh_companion_hash(vault_uuid or note_uuid, updated, vault_root, note_file)
 
     logger.info(
         "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d fallbacks=%d no_match=%s",
@@ -659,10 +662,27 @@ def _refresh_companion_hash(
         from app.services.companion_note import read_companion, write_companion
         from scripts.yaml_roundtrip import load_frontmatter
 
-        companion = read_companion(vault_root, note_uuid)
+        frontmatter, body = load_frontmatter(updated_text)
+        # Companions are keyed by the vault-native frontmatter uuid. After the
+        # #3510 cutover the panel chain carries the canonical store id, which for
+        # retained legacy rows differs from the vault uuid, so resolve the
+        # companion from the note's own frontmatter first and only fall back to
+        # the caller-supplied id.
+        vault_uuid = ""
+        if isinstance(frontmatter, dict):
+            raw = frontmatter.get("uuid") or frontmatter.get("id") or ""
+            vault_uuid = str(raw).strip()
+            if vault_uuid.startswith("[[") and vault_uuid.endswith("]]"):
+                vault_uuid = vault_uuid[2:-2].strip()
+        companion = None
+        for candidate in dict.fromkeys([vault_uuid, note_uuid]):
+            if not candidate:
+                continue
+            companion = read_companion(vault_root, candidate)
+            if companion is not None:
+                break
         if companion is None:
             return
-        _, body = load_frontmatter(updated_text)
         # Canonicalize the same way ingest does (KERNEL-06, #2768 fix): strip both
         # the `%% AI:Start/End %%` fence and the `> [!info]- AI status` receipt
         # callout before hashing, so this post-writeback refresh converges on the

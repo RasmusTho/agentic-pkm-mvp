@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.objects import DomainObject, ObjectStore
+from app.objects import (
+    DomainObject,
+    ObjectStore,
+    save_object_in_transaction,
+    update_object_source_ref_in_transaction,
+)
 
 
 class FakeCanonicalStore:
@@ -36,7 +41,7 @@ class FakeCanonicalStore:
         return sum(1 for row in self.rows if row.get("kind") == kind)
 
 
-def test_get_object_uses_memory_cache():
+def test_get_object_uses_explicit_memory_backend(monkeypatch):
     obj = DomainObject(
         uuid="mem-1",
         kind="capture_note",
@@ -48,6 +53,10 @@ def test_get_object_uses_memory_cache():
 
     legacy._MEMORY_STORE.clear()
     legacy._MEMORY_STORE[obj.uuid] = obj
+    monkeypatch.setattr(
+        "app.objects.resolve_object_store_port",
+        lambda: _fake_binding("memory", FakeCanonicalStore()),
+    )
 
     got = ObjectStore().get_object("mem-1")
     assert got is not None
@@ -77,6 +86,63 @@ def test_save_object_raises_when_port_resolution_fails(monkeypatch):
         ObjectStore().save_object(obj, emit_outbox=False, trace_id="test")
 
     assert "fallback-1" not in legacy._MEMORY_STORE
+
+
+def test_transactional_writes_evict_explicit_memory_entries(monkeypatch):
+    from app import objects as legacy
+
+    object_id = str(uuid4())
+    cached = DomainObject(
+        uuid=object_id,
+        kind="note",
+        payload={"version": "stale"},
+        source_ref="old.md",
+        created_at=datetime.now(timezone.utc),
+    )
+    legacy._MEMORY_STORE[object_id] = cached
+    monkeypatch.setattr("app.stores.pg.assert_store_schema_with_connection", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.stores.pg.put_object_with_connection", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "app.stores.pg.update_object_source_ref_with_connection", lambda *_a, **_k: None
+    )
+
+    save_object_in_transaction(object(), cached)
+    assert object_id not in legacy._MEMORY_STORE
+
+    legacy._MEMORY_STORE[object_id] = cached
+    update_object_source_ref_in_transaction(object(), object_id=object_id, source_ref="new.md")
+    assert object_id not in legacy._MEMORY_STORE
+
+
+def test_postgres_reads_ignore_stale_process_memory(monkeypatch):
+    from app import objects as legacy
+
+    oid = uuid4()
+    legacy._MEMORY_STORE[str(oid)] = DomainObject(
+        uuid=str(oid),
+        kind="note",
+        payload={"version": "stale"},
+        source_ref="old.md",
+        created_at=datetime.now(timezone.utc),
+    )
+    durable = {
+        "object_id": oid,
+        "kind": "note",
+        "payload": {"version": "committed"},
+        "source_ref": "new.md",
+        "created_at": datetime.now(timezone.utc),
+    }
+    monkeypatch.setattr(
+        "app.objects.resolve_object_store_port",
+        lambda: _fake_binding("pg", FakeCanonicalStore(record=durable)),
+    )
+
+    got = ObjectStore().get_object(str(oid))
+
+    assert got is not None
+    assert got.payload == {"version": "committed"}
+    assert got.source_ref == "new.md"
+    assert legacy._MEMORY_STORE[str(oid)].payload == {"version": "stale"}
 
 
 def _fake_binding(backend: str, store: FakeCanonicalStore):

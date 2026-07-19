@@ -25,8 +25,21 @@ import yaml
 from app.db.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
+from app.events.types import (
+    INGEST_OBJECT_CREATED,
+    INGEST_OBJECT_DELETED,
+    INGEST_OBJECT_METADATA,
+    INGEST_OBJECT_UPDATED,
+)
+from app.ingest.episode_ref import EPISODE_REF_SENTINELS, episode_ref_from_frontmatter
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
+from app.objects import (
+    canonical_event_identity,
+    DomainObject,
+    resolve_canonical_object_id_in_transaction,
+    save_object_in_transaction,
+    update_object_source_ref_in_transaction,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
 from app.domain.state_axes import normalize_artifact_state_axes
@@ -39,7 +52,9 @@ def _conn():
 
 
 def _hash_dict(data: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _hash_text(text: str) -> str:
@@ -71,7 +86,9 @@ def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
 
 def _get_state_by_path(conn: psycopg.Connection, path: str) -> Optional[dict[str, Any]]:
     with conn.cursor() as cur:
-        cur.execute("select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s", (path,))
+        cur.execute(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s", (path,)
+        )
         row = cur.fetchone()
         return row if isinstance(row, dict) else (dict(row) if row else None)
 
@@ -86,8 +103,144 @@ def _get_state_by_uuid(conn: psycopg.Connection, uuid_value: str) -> Optional[di
         return row if isinstance(row, dict) else (dict(row) if row else None)
 
 
+def _canonical_object_id(conn: psycopg.Connection, uuid_value: str) -> str:
+    """Resolve a watcher UUID to its retained legacy row's canonical id.
+
+    Watcher state and frontmatter keep the historical ``objects.uuid`` value,
+    while #3510 moves durable child FKs to ``store_objects.object_id``.  A
+    retained row may have a distinct ``objects.id``; using the UUID as the
+    canonical key in that case would split one note across two parents.
+    """
+    return resolve_canonical_object_id_in_transaction(conn, uuid_value)
+
+
+def _merge_canonical_payload(
+    conn: psycopg.Connection,
+    *,
+    object_id: str,
+    updates: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge watcher-owned fields without erasing richer canonical metadata."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT payload FROM store_objects WHERE object_id = %s FOR UPDATE",
+            (object_id,),
+        )
+        row = cur.fetchone()
+    existing: Any = row.get("payload") if isinstance(row, dict) else (row[0] if row else {})
+    if isinstance(existing, str):
+        existing = json.loads(existing)
+    if not isinstance(existing, dict):
+        existing = {}
+    merged = {**existing, **updates}
+    updated_ref = updates.get("episode_ref")
+    existing_ref = existing.get("episode_ref")
+    # A real binding is a list of episode ids; only the string sentinels defer
+    # to an established value (same isinstance guard as episode_ref_from_frontmatter).
+    if (
+        isinstance(updated_ref, str)
+        and updated_ref in EPISODE_REF_SENTINELS
+        and existing_ref is not None
+        and not (isinstance(existing_ref, str) and existing_ref in EPISODE_REF_SENTINELS)
+    ):
+        # ERE-03: episode_ref is vault-canonical, but a watcher pass whose
+        # frontmatter carries no binding must not blind-drop an established
+        # one; only an explicit non-sentinel value may replace it.
+        merged["episode_ref"] = existing_ref
+    return merged
+
+
+def _canonical_note_payload(
+    *,
+    frontmatter: dict[str, Any],
+    title: str,
+    review_state: str,
+    maturity: Any,
+    content: str,
+) -> dict[str, Any]:
+    """Build the canonical payload shared by every filesystem vault-sync writer."""
+    return {
+        "title": title,
+        "review_state": review_state,
+        "maturity": maturity,
+        "content": content,
+        "frontmatter": frontmatter,
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
+    }
+
+
+def _object_materialization_state(
+    conn: psycopg.Connection,
+    *,
+    uuid_value: str,
+    canonical_object_id: str,
+    expected_source_ref: str,
+) -> tuple[bool, bool, bool]:
+    """Return parent/mirror presence plus canonical locator completeness."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              EXISTS(SELECT 1 FROM store_objects WHERE object_id = %s) AS canonical_exists,
+              EXISTS(SELECT 1 FROM objects WHERE id = %s OR uuid = %s) AS mirror_exists,
+              COALESCE((
+                SELECT source_ref IS NOT DISTINCT FROM %s
+                FROM store_objects
+                WHERE object_id = %s
+              ), FALSE) AS locator_complete
+            """,
+            (
+                canonical_object_id,
+                uuid_value,
+                uuid_value,
+                expected_source_ref,
+                canonical_object_id,
+            ),
+        )
+        row = cur.fetchone()
+    if isinstance(row, dict):
+        return (
+            bool(row["canonical_exists"]),
+            bool(row["mirror_exists"]),
+            bool(row["locator_complete"]),
+        )
+    return (bool(row[0]), bool(row[1]), bool(row[2])) if row else (False, False, False)
+
+
+def _update_materialized_source_ref(
+    conn: psycopg.Connection,
+    *,
+    canonical_object_id: str,
+    uuid_value: str,
+    source_ref: str | None,
+    allow_missing_parent: bool = False,
+) -> None:
+    """Update a fully materialized parent; tolerate only deferred no-parent state."""
+    canonical_exists, mirror_exists, _ = _object_materialization_state(
+        conn,
+        uuid_value=uuid_value,
+        canonical_object_id=canonical_object_id,
+        expected_source_ref=source_ref or "",
+    )
+    if not canonical_exists and not mirror_exists and allow_missing_parent:
+        return  # active-edit baseline: file_state exists but no producer has materialized yet
+    if not canonical_exists and not mirror_exists:
+        raise RuntimeError("missing vault object materialization; reconcile before retrying")
+    if not canonical_exists or not mirror_exists:
+        raise RuntimeError("inconsistent vault object materialization; reconcile before retrying")
+    update_object_source_ref_in_transaction(
+        conn, object_id=canonical_object_id, source_ref=source_ref
+    )
+
+
 def _upsert_file_state(
-    conn: psycopg.Connection, *, path: str, uuid_value: str, fm_hash: str, body_hash: str, mtime: datetime
+    conn: psycopg.Connection,
+    *,
+    path: str,
+    uuid_value: str,
+    fm_hash: str,
+    body_hash: str,
+    mtime: datetime,
 ) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -106,8 +259,18 @@ def _upsert_file_state(
 
 
 def _update_path_only(
-    conn: psycopg.Connection, *, old_path: str, new_path: str, uuid_value: str, fm_hash: str, body_hash: str, mtime: datetime
+    conn: psycopg.Connection,
+    *,
+    old_path: str,
+    new_path: str,
+    uuid_value: str,
+    payload: dict[str, Any],
+    fm_hash: str,
+    body_hash: str,
+    mtime: datetime,
+    canonical_object_id: str | None = None,
 ) -> None:
+    canonical_object_id = canonical_object_id or _canonical_object_id(conn, uuid_value)
     # Step 1: ensure an objects-row exists and has the new path. Do this first, with rollbacks between fallbacks.
     updated = 0
 
@@ -135,7 +298,7 @@ def _update_path_only(
             try:
                 cur.execute(
                     "insert into objects(id, uuid, kind, payload, path) values(%s, %s, %s, '{}'::jsonb, %s)",
-                    (uuid_value, uuid_value, "note", new_path),
+                    (canonical_object_id, uuid_value, "note", new_path),
                 )
                 inserted = True
             except Exception:
@@ -146,7 +309,7 @@ def _update_path_only(
                 try:
                     cur.execute(
                         "insert into objects(id, kind, payload, path) values(%s, %s, '{}'::jsonb, %s)",
-                        (uuid_value, "note", new_path),
+                        (canonical_object_id, "note", new_path),
                     )
                     inserted = True
                 except Exception:
@@ -158,6 +321,21 @@ def _update_path_only(
                     "insert into objects(uuid, kind, payload, path) values(%s, %s, '{}'::jsonb, %s)",
                     (uuid_value, "note", new_path),
                 )
+
+    save_object_in_transaction(
+        conn,
+        DomainObject(
+            uuid=canonical_object_id,
+            kind="note",
+            payload=_merge_canonical_payload(
+                conn,
+                object_id=canonical_object_id,
+                updates=payload,
+            ),
+            source_ref=new_path,
+            created_at=mtime,
+        ),
+    )
 
     # Step 2: write/normalize file_state last (so it isn’t poisoned by a prior error)
     with conn.cursor() as cur:
@@ -201,6 +379,7 @@ def update_path(uuid_value: str, new_path: str) -> None:
         ensure_schema(conn)
         conn.commit()
         state = _get_state_by_uuid(conn, uuid_value)
+        canonical_object_id = _canonical_object_id(conn, uuid_value)
         fm_hash = state["fm_hash"] if state else None
         body_hash = state["body_hash"] if state else None
         mtime = state["mtime"] if state else None
@@ -209,6 +388,13 @@ def update_path(uuid_value: str, new_path: str) -> None:
                 cur.execute("update objects set path=%s where uuid=%s", (resolved_path, uuid_value))
             except Exception:
                 cur.execute("update objects set path=%s where id=%s", (resolved_path, uuid_value))
+            _update_materialized_source_ref(
+                conn,
+                canonical_object_id=canonical_object_id,
+                uuid_value=uuid_value,
+                source_ref=resolved_path,
+                allow_missing_parent=state is not None,
+            )
             cur.execute(
                 """
                 insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)
@@ -260,10 +446,22 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                 else:
                     remaining_for_uuid = row[0] if row else 0
                 if remaining_for_uuid == 0:
+                    canonical_object_id = _canonical_object_id(conn, effective_uuid)
                     try:
-                        cur.execute("update objects set path = null where uuid = %s", (effective_uuid,))
+                        cur.execute(
+                            "update objects set path = null where uuid = %s", (effective_uuid,)
+                        )
                     except Exception:
-                        cur.execute("update objects set path = null where id = %s", (effective_uuid,))
+                        cur.execute(
+                            "update objects set path = null where id = %s", (effective_uuid,)
+                        )
+                    _update_materialized_source_ref(
+                        conn,
+                        canonical_object_id=canonical_object_id,
+                        uuid_value=effective_uuid,
+                        source_ref=None,
+                        allow_missing_parent=deleted and state is not None,
+                    )
             if deleted and effective_uuid and remaining_for_uuid == 0:
                 delete_payload = {
                     "path": resolved_path,
@@ -271,7 +469,12 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                     "reason": "vault_note_deleted",
                     "source": "vault_sync.delete_note",
                 }
-                delete_payload["uuid"] = effective_uuid
+                # Outbox consumers use ``uuid`` as the lifecycle key.  It must
+                # therefore be the canonical FK parent, not frontmatter's
+                # retained continuity uuid (which may differ from objects.id).
+                delete_payload.update(
+                    canonical_event_identity(canonical_object_id, effective_uuid)
+                )
         if deleted and delete_payload is not None:
             # KERNEL-01 atomicity (#2864): enqueue on the SAME connection,
             # before the commit, so the file_state delete + objects path-null +
@@ -287,37 +490,47 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                 INGEST_OBJECT_DELETED,
                 delete_payload,
                 conn=conn,
-                observation=str(deleted_version_mtime) if deleted_version_mtime is not None else None,
+                observation=str(deleted_version_mtime)
+                if deleted_version_mtime is not None
+                else None,
             )
         conn.commit()
     return deleted and delete_payload is not None
 
 
-def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool) -> None:
+def upsert_object_from_note(
+    path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool
+) -> None:
     note_path = Path(path).resolve()
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
     title = frontmatter.get("title") or note_path.stem
-    normalized_frontmatter = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
     review_state = normalized_frontmatter["review_state"]
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
-    mtime = datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc) if note_path.exists() else datetime.now(timezone.utc)
+    mtime = (
+        datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc)
+        if note_path.exists()
+        else datetime.now(timezone.utc)
+    )
 
     with _conn() as conn:
         ensure_schema(conn)
         conn.commit()
         state = _get_state_by_uuid(conn, uuid_value)
+        canonical_object_id = _canonical_object_id(conn, uuid_value)
         with conn.cursor() as cur:
-            payload_json = json.dumps(
-                {
-                    "title": title,
-                    "review_state": review_state,
-                    "maturity": normalized_frontmatter.get("maturity"),
-                    "content": body,
-                    "frontmatter": normalized_frontmatter,
-                }
+            canonical_payload = _canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=title,
+                review_state=review_state,
+                maturity=normalized_frontmatter.get("maturity"),
+                content=body,
             )
+            payload_json = json.dumps(canonical_payload)
             try:
                 cur.execute(
                     """
@@ -328,7 +541,7 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, "note", payload_json, path_str),
+                    (canonical_object_id, "note", payload_json, path_str),
                 )
             except Exception:
                 cur.execute(
@@ -342,6 +555,21 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
                     """,
                     (uuid_value, "note", payload_json, path_str),
                 )
+        merged_payload = _merge_canonical_payload(
+            conn,
+            object_id=canonical_object_id,
+            updates=canonical_payload,
+        )
+        save_object_in_transaction(
+            conn,
+            DomainObject(
+                uuid=canonical_object_id,
+                kind="note",
+                payload=merged_payload,
+                source_ref=path_str,
+                created_at=mtime,
+            ),
+        )
         _upsert_file_state(
             conn,
             path=path_str,
@@ -364,11 +592,15 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
             topic = INGEST_OBJECT_METADATA
         if topic:
             payload = {
-                "uuid": uuid_value,
+                **canonical_event_identity(canonical_object_id, uuid_value),
                 "title": title,
                 "review_state": review_state,
                 "content": body,
                 "path": path_str,
+                "frontmatter": normalized_frontmatter,
+                # ERE-03: the event surface must carry the same post-merge
+                # binding as the canonical row, never the raw builder sentinel.
+                "episode_ref": merged_payload["episode_ref"],
             }
             _enqueue(topic, payload, conn=conn, observation=mtime.isoformat())
         conn.commit()
@@ -393,7 +625,9 @@ def sync_markdown(path: str) -> dict[str, Any]:
         is_active = False
 
     uuid_value = frontmatter["uuid"]
-    normalized_frontmatter = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
     mtime = datetime.fromtimestamp(note_path.stat().st_mtime, tz=timezone.utc)
@@ -412,6 +646,8 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
         # Previous state
         state = _get_state_by_path(conn, str(note_path))
+        canonical_object_id = _canonical_object_id(conn, uuid_value)
+        result["id"] = canonical_object_id
         rename_state: Optional[dict[str, Any]] = None
         if state is None:
             rename_state = _get_state_by_uuid(conn, uuid_value)
@@ -432,24 +668,44 @@ def sync_markdown(path: str) -> dict[str, Any]:
             )
             append_change(f"Skipped sync for active edit: {note_path}", vault_path=note_path)
             conn.commit()
+            # This is the only early return allowed before object materialization:
+            # its explicit `deferred` status is not a completed sync. The next
+            # non-active pass checks both producer rows below even when hashes
+            # are unchanged, so this baseline cannot become a permanent bypass.
             result["status"] = "deferred"
             return result
 
         # Pure rename: state known on another path → update only path (no re-embed).
         if state is None and rename_state and rename_state["path"] != str(note_path):
+            rename_payload = _canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=frontmatter.get("title") or note_path.stem,
+                review_state=normalized_frontmatter["review_state"],
+                maturity=normalized_frontmatter.get("maturity"),
+                content=body,
+            )
             _update_path_only(
                 conn,
                 old_path=rename_state["path"],
                 new_path=str(note_path),
                 uuid_value=uuid_value,
+                payload=rename_payload,
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
+                canonical_object_id=canonical_object_id,
             )
             conn.commit()
             return result
 
-        changed = state is None
+        canonical_exists, mirror_exists, locator_complete = _object_materialization_state(
+            conn,
+            uuid_value=uuid_value,
+            canonical_object_id=canonical_object_id,
+            expected_source_ref=str(note_path),
+        )
+        materialization_missing = not (canonical_exists and mirror_exists and locator_complete)
+        changed = state is None or materialization_missing
         if state:
             if state["uuid"] and state["uuid"] != uuid_value:
                 append_conflict(f"UUID mismatch for {note_path}", vault_path=note_path)
@@ -457,6 +713,8 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 changed = True
 
         if not changed:
+            # Reaching this return proves both the canonical parent and retained
+            # watcher mirror exist; missing producer rows force `changed=True`.
             _upsert_file_state(
                 conn,
                 path=str(note_path),
@@ -475,10 +733,16 @@ def sync_markdown(path: str) -> dict[str, Any]:
             "maturity": normalized_frontmatter.get("maturity"),
             "content": body,
             "path": str(note_path),
+            "frontmatter": normalized_frontmatter,
+            "episode_ref": episode_ref_from_frontmatter(normalized_frontmatter),
         }
 
-        topic = INGEST_OBJECT_CREATED if state is None else INGEST_OBJECT_UPDATED
-        if state is not None and state.get("body_hash") == body_hash:
+        topic = (
+            INGEST_OBJECT_CREATED
+            if state is None or not canonical_exists
+            else INGEST_OBJECT_UPDATED
+        )
+        if canonical_exists and state is not None and state.get("body_hash") == body_hash:
             topic = INGEST_OBJECT_METADATA
 
         # Mark for re-embed if body changed
@@ -487,12 +751,13 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
         # Write a minimal row to objects (idempotent) with rollbacks between fallbacks.
         payload_json = json.dumps(
-            {
-                "title": obj_payload["title"],
-                "review_state": obj_payload["review_state"],
-                "content": obj_payload["content"],
-                "frontmatter": normalized_frontmatter,
-            }
+            _canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=obj_payload["title"],
+                review_state=obj_payload["review_state"],
+                maturity=obj_payload["maturity"],
+                content=obj_payload["content"],
+            )
         )
         wrote = False
 
@@ -509,7 +774,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, uuid_value, "note", payload_json, str(note_path)),
+                    (canonical_object_id, uuid_value, "note", payload_json, str(note_path)),
                 )
                 wrote = True
             except Exception:
@@ -528,7 +793,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                           payload = excluded.payload,
                           path = excluded.path
                         """,
-                        (uuid_value, "note", payload_json, str(note_path)),
+                        (canonical_object_id, "note", payload_json, str(note_path)),
                     )
                     wrote = True
                 except Exception:
@@ -549,6 +814,26 @@ def sync_markdown(path: str) -> dict[str, Any]:
                     (uuid_value, "note", payload_json, str(note_path)),
                 )
 
+        merged_payload = _merge_canonical_payload(
+            conn,
+            object_id=canonical_object_id,
+            updates=json.loads(payload_json),
+        )
+        save_object_in_transaction(
+            conn,
+            DomainObject(
+                uuid=canonical_object_id,
+                kind="note",
+                payload=merged_payload,
+                source_ref=str(note_path),
+                created_at=mtime,
+            ),
+        )
+
+        obj_payload.update(canonical_event_identity(canonical_object_id, uuid_value))
+        # ERE-03: the event surface must carry the same post-merge binding as
+        # the canonical row, never the raw builder sentinel.
+        obj_payload["episode_ref"] = merged_payload["episode_ref"]
         _enqueue(topic, obj_payload, conn=conn, observation=mtime.isoformat())
 
         _upsert_file_state(
@@ -572,6 +857,9 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
         raise ValueError("Rename requires uuid in frontmatter")
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
     mtime = datetime.fromtimestamp(new.stat().st_mtime, tz=timezone.utc)
     result = {"uuid": frontmatter["uuid"], "updated": False}
     with _conn() as conn:
@@ -589,6 +877,13 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
             old_path=state["path"],
             new_path=str(new),
             uuid_value=frontmatter["uuid"],
+            payload=_canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=frontmatter.get("title") or new.stem,
+                review_state=normalized_frontmatter["review_state"],
+                maturity=normalized_frontmatter.get("maturity"),
+                content=body,
+            ),
             fm_hash=fm_hash,
             body_hash=body_hash,
             mtime=mtime,
@@ -598,4 +893,11 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     return result
 
 
-__all__ = ["sync_markdown", "handle_rename", "update_path", "delete_note", "upsert_object_from_note", "active_edit"]
+__all__ = [
+    "sync_markdown",
+    "handle_rename",
+    "update_path",
+    "delete_note",
+    "upsert_object_from_note",
+    "active_edit",
+]

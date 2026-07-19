@@ -1,4 +1,4 @@
-"""Decisions history must survive deletion of its source object (#3488)."""
+"""Decisions history must survive deletion of its canonical source object (#3488)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def test_decisions_fk_set_null(monkeypatch: pytest.MonkeyPatch) -> None:
     with migrated_decisions_db(monkeypatch) as dsn:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute(
-                "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, %s::jsonb)",
+                "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, %s, %s::jsonb)",
                 (object_id, "note", "{}"),
             )
             conn.execute(
@@ -30,7 +30,7 @@ def test_decisions_fk_set_null(monkeypatch: pytest.MonkeyPatch) -> None:
                 """,
                 (decision_id, object_id, "test", "classification", "type", "{}"),
             )
-            conn.execute("DELETE FROM objects WHERE id = %s", (object_id,))
+            conn.execute("DELETE FROM store_objects WHERE object_id = %s", (object_id,))
             row = conn.execute(
                 "SELECT object_id FROM decisions WHERE id = %s", (decision_id,)
             ).fetchone()

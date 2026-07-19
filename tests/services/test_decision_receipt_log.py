@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 from typing import Any
 
 import pytest
 
 import app.receipts.decision_receipt_log as receipt_log
 import app.services.decisions as decisions_module
+from app.objects.identity import retained_vault_uuid_with_connection
 from app.receipts.decision_receipt_log import (
     RECEIPT_WRITE_ACTION,
     SCHEMA_VERSION,
@@ -84,6 +86,7 @@ class _RecordingConn:
 def durable_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force the durable (non-memory) branch of ``insert_decision``."""
     monkeypatch.setattr(decisions_module, "_use_memory_backend", lambda: False)
+    monkeypatch.setattr(decisions_module, "_assert_decisions_fk_cutover", lambda: None)
     # vault_uuid resolution touches the DB; keep it deterministic/offline here.
     monkeypatch.setattr(receipt_log, "resolve_vault_uuid", lambda object_id: None)
 
@@ -150,6 +153,26 @@ def test_write_appends_receipt_then_db(
     assert rec["value"]["trace_id"] == "trace-ac1"
     assert rec["value"]["allow"] is True
     assert rec["created_at"]
+
+
+def test_resolve_vault_uuid_never_invents_canonical_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A canonical-only row has no proven frontmatter continuity identity."""
+    conn = MagicMock()
+    cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value = (None, 0, False, False)
+    monkeypatch.setattr(receipt_log, "conn_rw", lambda: conn)
+
+    assert receipt_log.resolve_vault_uuid("canonical-id") is None
+
+
+def test_reverse_identity_query_checks_alias_without_retained_row() -> None:
+    """The canonical-key direction checks whether another row retains that key."""
+    conn = MagicMock()
+    cur = conn.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value = (None, 0, False, False)
+
+    assert retained_vault_uuid_with_connection(conn, "canonical-id") is None
+    assert "requested_alias_exists" in cur.execute.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -307,3 +330,42 @@ def test_receipts_are_dated_shards_and_append_only(
     ]
     assert all_records[0]["vault_uuid"] == "uuid-1"
     assert all_records[2]["vault_uuid"] == "uuid-2"
+
+
+def test_resolve_vault_uuid_transport_error_returns_none(monkeypatch) -> None:
+    """Transport-level psycopg errors stay best-effort (honest null lineage)."""
+    import psycopg as _psycopg
+
+    from app.receipts import decision_receipt_log as receipt_log
+
+    class _BrokenConn:
+        def __enter__(self):
+            raise _psycopg.OperationalError("db unavailable")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(receipt_log, "conn_rw", lambda: _BrokenConn())
+    assert receipt_log.resolve_vault_uuid("00000000-0000-0000-0000-000000000000") is None
+
+
+def test_resolve_vault_uuid_ambiguous_identity_fails_loud(monkeypatch) -> None:
+    """Ambiguous retained identity must abort the write, never record wrong lineage."""
+    import pytest as _pytest
+
+    from app.receipts import decision_receipt_log as receipt_log
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _ambiguous(conn, object_id):
+        raise RuntimeError("ambiguous retained identity mapping for test")
+
+    monkeypatch.setattr(receipt_log, "conn_rw", lambda: _Conn())
+    monkeypatch.setattr(receipt_log, "retained_vault_uuid_with_connection", _ambiguous)
+    with _pytest.raises(RuntimeError, match="ambiguous retained identity"):
+        receipt_log.resolve_vault_uuid("00000000-0000-0000-0000-000000000000")

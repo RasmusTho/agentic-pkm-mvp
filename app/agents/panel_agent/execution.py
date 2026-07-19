@@ -68,6 +68,7 @@ def run_panel_note_execution(
     trace_id: str | None = None,
     outbox_path: Path | None = None,
     vault_root: Path | None = None,
+    vault_uuid: str | None = None,
     persist_created_to_db: bool = False,
     trigger: str = "cli",
 ) -> PanelNoteExecutionResult:
@@ -104,7 +105,12 @@ def run_panel_note_execution(
     # resolves it through its own canonical resolver) into the runtime so writeback
     # targets the bound vault without the panel runtime re-reading the env (#2476).
     runtime_results = [
-        execute_panel_intent(event, outbox_path=outbox_path, vault_root=vault_root)
+        execute_panel_intent(
+            event,
+            outbox_path=outbox_path,
+            vault_root=vault_root,
+            vault_uuid=vault_uuid,
+        )
         for event in intent_events
     ]
     return PanelNoteExecutionResult(intent_events=intent_events, runtime_results=runtime_results)

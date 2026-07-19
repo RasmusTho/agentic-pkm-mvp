@@ -71,6 +71,7 @@ class _FakeCursor:
         self.conn = conn
         self.rowcount = 0
         self._fetchone: Any = None
+        self._fetchall: list[Any] = []
 
     def __enter__(self) -> "_FakeCursor":
         return self
@@ -82,6 +83,23 @@ class _FakeCursor:
         normalized = " ".join(sql.split()).lower()
         self.rowcount = 0
         self._fetchone = None
+        self._fetchall = []
+
+        if normalized.startswith("select to_regclass(%s) as oid"):
+            self._fetchone = (params[0],)
+            return
+        if "from pg_attribute" in normalized:
+            self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
+            return
+        if normalized.startswith("update store_vector_index"):
+            return
+        if normalized.startswith(
+            "select payload from store_objects where object_id = %s for update"
+        ):
+            (object_id,) = params
+            row = self.conn.store_objects.get(str(object_id))
+            self._fetchone = (row["payload"],) if row else None
+            return
 
         if normalized.startswith("insert into objects(id, kind, payload, path)"):
             object_id, kind, payload_json, path = params
@@ -103,7 +121,55 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
-        if normalized.startswith("insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"):
+        if normalized.startswith("insert into store_objects"):
+            object_id, kind, source_ref, payload_json = params
+            self.conn.store_objects[str(object_id)] = {
+                "object_id": str(object_id),
+                "kind": kind,
+                "source_ref": source_ref,
+                "payload": payload_json,
+            }
+            self.rowcount = 1
+            return
+        if normalized.startswith("select id::text, count(*) over ()"):
+            canonical_alias, uuid_value = params
+            row = next(
+                (
+                    candidate
+                    for candidate in self.conn.objects.values()
+                    if str(candidate.get("uuid") or candidate["id"]) == uuid_value
+                ),
+                None,
+            )
+            self._fetchone = (
+                (row["id"], 1, str(canonical_alias) in self.conn.store_objects)
+                if row
+                else None
+            )
+            return
+        if normalized.startswith("select exists(select 1 from store_objects"):
+            canonical_id, _id, uuid_value, expected, _again = params
+            canonical = str(canonical_id) in self.conn.store_objects
+            mirror = any(
+                str(row.get("uuid") or row["id"]) == uuid_value
+                for row in self.conn.objects.values()
+            )
+            self._fetchone = (
+                canonical,
+                mirror,
+                canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected,
+            )
+            return
+        if normalized.startswith("update store_objects"):
+            source_ref, object_id = params
+            row = self.conn.store_objects.get(str(object_id))
+            if row is not None:
+                row["source_ref"] = source_ref
+                self.rowcount = 1
+            return
+        if normalized.startswith(
+            "insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"
+        ):
             path, uuid_value, fm_hash, body_hash, mtime = params
             self.conn.file_state[path] = {
                 "path": path,
@@ -124,11 +190,15 @@ class _FakeCursor:
             }
             self.rowcount = before - len(self.conn.file_state)
             return
-        if normalized.startswith("select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"):
+        if normalized.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+        ):
             (path,) = params
             self._fetchone = self.conn.file_state.get(path)
             return
-        if normalized.startswith("select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"):
+        if normalized.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"
+        ):
             (uuid_value,) = params
             match = next(
                 (row for row in self.conn.file_state.values() if row.get("uuid") == uuid_value),
@@ -162,12 +232,16 @@ class _FakeCursor:
     def fetchone(self):  # type: ignore[no-untyped-def]
         return self._fetchone
 
+    def fetchall(self):  # type: ignore[no-untyped-def]
+        return self._fetchall
+
 
 class _FakeConn:
     def __init__(self) -> None:
         self.file_state: dict[str, dict[str, object]] = {}
         # Keyed by object id/uuid -- models the `objects` table row set.
         self.objects: dict[str, dict[str, object]] = {}
+        self.store_objects: dict[str, dict[str, object]] = {}
 
     def __enter__(self) -> "_FakeConn":
         return self
@@ -209,6 +283,12 @@ def _seed_note(
         "payload": '{"title": "Property Note"}',
         "path": path,
     }
+    conn.store_objects[object_id] = {
+        "object_id": object_id,
+        "kind": "note",
+        "payload": '{"title": "Property Note"}',
+        "source_ref": path,
+    }
     conn.file_state[path] = {
         "path": path,
         "uuid": object_id,
@@ -218,7 +298,9 @@ def _seed_note(
     }
 
 
-def _delete_note(monkeypatch: pytest.MonkeyPatch, conn: _FakeConn, path: str, object_id: str) -> list[tuple]:
+def _delete_note(
+    monkeypatch: pytest.MonkeyPatch, conn: _FakeConn, path: str, object_id: str
+) -> list[tuple]:
     """Drive the REAL ``vault_sync.delete_note`` (watcher delete propagation)
     against the fake connection, recording the outbox emission it makes."""
     emitted: list[tuple] = []
@@ -361,9 +443,9 @@ def test_delete_leaves_anchored_tombstone(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     assert vector_index.count_vectors() == 0
-    assert vector_index.purge_vectors(UUID(object_id), view="default") == 0, (
-        "vector row must already be purged by the real consumer dispatch -- redelivery is a no-op"
-    )
+    assert (
+        vector_index.purge_vectors(UUID(object_id), view="default") == 0
+    ), "vector row must already be purged by the real consumer dispatch -- redelivery is a no-op"
 
 
 # ---------------------------------------------------------------------------
@@ -409,8 +491,14 @@ def test_reingest_mints_new_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vault_sync, "ensure_schema", lambda *_a, **_kw: None)
     monkeypatch.setattr(vault_sync, "insert_object_and_outbox", lambda *a, **kw: None)
 
-    frontmatter = {"uuid": new_object_id, "title": "Property Note (recreated)", "review_state": "provisional"}
-    vault_sync.upsert_object_from_note(path, frontmatter, "New body", fm_changed=True, body_changed=True)
+    frontmatter = {
+        "uuid": new_object_id,
+        "title": "Property Note (recreated)",
+        "review_state": "provisional",
+    }
+    vault_sync.upsert_object_from_note(
+        path, frontmatter, "New body", fm_changed=True, body_changed=True
+    )
 
     # --- Assert: two distinct object rows exist -- the old tombstone
     # (path=NULL, decisions/audit lineage intact) and the new row (path
@@ -428,4 +516,6 @@ def test_reingest_mints_new_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     assert old_decision["object_id"] == old_object_id
 
     new_decision = latest_decision(new_object_id, "promotion_gate")
-    assert new_decision is None, "the re-ingested object must not inherit the old object's decision history"
+    assert (
+        new_decision is None
+    ), "the re-ingested object must not inherit the old object's decision history"

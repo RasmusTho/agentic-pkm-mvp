@@ -1,7 +1,10 @@
 import json
+import importlib
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 from app.watcher.vault_watcher import VaultWatcher, compute_changes, load_snapshot, run_watcher_tick, save_snapshot
 
@@ -130,3 +133,73 @@ def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path:
 
     assert summary["panel_candidates"] == 1
     assert summary["panel_skipped_auto_exec"] == 1
+
+
+def test_watcher_panel_writeback_uses_canonical_identity_for_retained_uuid(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A retained frontmatter UUID must never mint a second canonical parent."""
+    vault = tmp_path / "vault"
+    inbox = vault / "Inbox"
+    inbox.mkdir(parents=True)
+    vault_uuid = str(uuid4())
+    canonical_id = str(uuid4())
+    note = inbox / "retained.md"
+    note.write_text(
+        "---\n"
+        f"uuid: {vault_uuid}\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+
+    canonical = SimpleNamespace(
+        uuid=canonical_id,
+        kind="note",
+        payload={},
+        source_ref=str(note),
+        created_at=datetime.now(timezone.utc),
+    )
+    rows = {canonical_id: canonical}
+
+    class FakeObjectStore:
+        def get_object(self, object_id: str, **_kwargs):
+            return rows.get(object_id)
+
+        def save_object(self, obj, **_kwargs) -> None:
+            rows[obj.uuid] = obj
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "events.jsonl"))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.resolve_canonical_object_id",
+        lambda value: canonical_id if value == vault_uuid else value,
+    )
+    monkeypatch.setattr("app.watcher.vault_watcher.ObjectStore", FakeObjectStore)
+    panel_agent_module = importlib.import_module("app.agents.panel.agent")
+    panel_writeback_module = importlib.import_module("app.agents.panel.writeback")
+    monkeypatch.setattr(panel_agent_module, "ObjectStore", FakeObjectStore)
+    monkeypatch.setattr(panel_writeback_module, "ObjectStore", FakeObjectStore)
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=None,
+    )
+
+    assert summary["applied_actions"] == 1
+    assert set(rows) == {canonical_id}
+    assert rows[canonical_id].payload["executed_action_ids"]
