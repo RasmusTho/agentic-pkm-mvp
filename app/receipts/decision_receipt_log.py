@@ -42,7 +42,7 @@ import psycopg
 
 from app.config.paths import resolve_optional_vault_root
 from app.db.db import conn_rw
-from app.stores.pg import retained_vault_uuid_with_connection
+from app.objects.identity import retained_vault_uuid_with_connection
 from app.vault.paths import (
     NoVaultSelectedError,
     resolve_vault_system_dir_rel_or_default,

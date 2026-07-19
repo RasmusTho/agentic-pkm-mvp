@@ -30,7 +30,7 @@ from typing import Any
 from app.db.db import conn_rw
 from app.db.decisions_schema import assert_decisions_schema
 from app.receipts.decision_receipt_log import iter_decision_receipts
-from app.stores.pg import vault_uuid_to_canonical_id_map_with_connection
+from app.objects.identity import vault_uuid_to_canonical_id_map_with_connection
 
 
 @dataclass
