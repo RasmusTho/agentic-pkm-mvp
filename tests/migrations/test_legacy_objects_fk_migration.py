@@ -612,15 +612,20 @@ def test_runtime_identity_resolver_rejects_post_cutover_cross_key_collision(
             (canonical_id, vault_uuid),
         )
     _upgrade("head")
+
+    monkeypatch.setenv("DATABASE_URL", scratch_dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    from app.objects import resolve_canonical_object_id
+
+    assert resolve_canonical_object_id(str(vault_uuid)) == str(canonical_id)
+
+    # Identity is mutable across processes. A resolver must re-check the live
+    # cross-key collision invariant after an earlier successful lookup.
     with psycopg.connect(scratch_dsn) as conn:
         conn.execute(
             "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
             (vault_uuid,),
         )
-
-    monkeypatch.setenv("DATABASE_URL", scratch_dsn)
-    monkeypatch.setenv("STORE_BACKEND", "pg")
-    from app.objects import resolve_canonical_object_id
 
     with pytest.raises(RuntimeError, match="cross-key identity collision"):
         resolve_canonical_object_id(str(vault_uuid))

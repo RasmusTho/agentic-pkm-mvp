@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, asdict
-from functools import lru_cache
 from typing import Iterable, List, Tuple
 from uuid import UUID
 
@@ -435,15 +434,10 @@ def resolve_vault_uuid_with_connection(conn, vault_uuid: str) -> str:
     return str(object_id or vault_uuid)
 
 
-@lru_cache(maxsize=4096)
-def _resolve_vault_uuid_cached(vault_uuid: str, dsn: str) -> str:
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        return resolve_vault_uuid_with_connection(conn, vault_uuid)
-
-
 def resolve_vault_uuid(vault_uuid: str) -> str:
-    """Resolve retained identity once per process and configured database."""
-    return _resolve_vault_uuid_cached(vault_uuid, _dsn())
+    """Resolve retained identity through a fresh collision-checked snapshot."""
+    with _connect() as conn:
+        return resolve_vault_uuid_with_connection(conn, vault_uuid)
 
 
 def vault_uuid_to_canonical_id_map_with_connection(conn) -> dict[str, str]:
