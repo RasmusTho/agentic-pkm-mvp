@@ -66,7 +66,8 @@ decision, and issue contract; this directory does not promise that it will be bu
 ## Known substrate defects
 
 These are verified defects in the evidence substrate that Phase 1 must be *honest about* but must not
-*fix* (fixing them belongs to the separately authorized linker-precision successor, not Phase 1).
+*fix* (if approved, fixing them would belong to a linker-precision successor that is not yet
+specified or authorized, not Phase 1).
 
 - **Seed-path fan-out duplication (~79% of the edge graph).** `_seed_path()`
   (`app/builderops/ckm/linkers.py:56-58` on `origin/main`) strips the `::` anchor from a capability's
@@ -77,7 +78,7 @@ These are verified defects in the evidence substrate that Phase 1 must be *hones
   Consequence: any counts view built on **raw edge counts** would show inflated, near-identical numbers
   for those 22 capabilities — a fourth false picture. CKM-EP-03 therefore counts **distinct artifacts**
   and surfaces a **shared-evidence indicator**; it does not touch the linker. The linker fix is a
-  separately specified linker-precision successor.
+  potential linker-precision successor, which is not yet specified or authorized.
 
 ## Execution order
 
