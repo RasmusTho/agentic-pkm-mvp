@@ -88,19 +88,16 @@ only on that fixed root behind mutation-denying ingress; a native or channel run
 fenced remains stopped. Missing inventory, a racing writer, ambiguous ownership, or duplicate roots
 blocks every MVR-01 claim rather than letting an upgraded channel race an old image.
 
-Before the first recreate that introduces this volume, the deploy/startup migration gate resolves
-the legacy path and records a preliminary fingerprint inside the still-running old API container.
-It then acquires the channel deployment fence, rejects and drains every registry mutation producer,
-stops the old API, exports the **final post-stop** file with mode `0600` to channel-scoped host
-staging, and validates its fingerprint/schema again. The fence prevents any old writer from
-restarting through import; a changed final fingerprint or unfenced writer aborts rather than using
-a pre-quiescence snapshot. If no old container exists, the gate may proceed only when it proves the
-legacy source itself is durable and unchanged under the fence or no legacy registry ever existed.
-The new-image one-shot migrator mounts `instance-state`, atomically imports the staged payload and
-records source fingerprint/provenance. It never deletes an independently durable legacy source; the
-staged copy remains through cross-process verification and is removed only after that verification
-succeeds. A missing export, conflicting populated destination, or unreadable/ambiguous source
-blocks recreate/import rather than booting an empty registry.
+Before recreate, both canonical wrappers invoke one new-image deployment producer. It resolves the
+legacy path on the shared runtime volume, records a diagnostic fingerprint, installs the durable
+channel restart fence, and stops API, worker, watcher, and Heimdal. The stopped finalizer then
+exports the **final post-stop** file, validates its fingerprint again, and imports it on a first
+volume or preserves it beside an established dormant registry. It requires a private operator
+inventory whose receipt declares every legacy dev/test/prod/native owner and all legacy writers
+drained; it seeds that complete inventory before any upgraded consumer can claim a root. The fence
+prevents upgraded consumers from restarting through a failed import; a changed final fingerprint,
+missing inventory, missing established ledger/key, or unfenced finalizer aborts rather than using a
+pre-quiescence snapshot. The independently durable legacy source is never deleted.
 
 All registry-backed mutation uses one store transaction contract: an exclusive OS file lock on a
 sidecar in the shared volume, reload plus monotonic schema revision/CAS validation, write to a
@@ -117,8 +114,9 @@ authority. Compose provides one project-scoped `instance-state` volume to API, w
 and Heimdal capture watcher, while `/app/instance-ownership` is a private host-global ledger/key
 surface shared across channels. Each consumer fail-exits through the same startup preflight and
 resolves `/app/instance-state/agentic-pkm/vault-registry.md`; the root-ownership bootstrap producer,
-final post-quiescence legacy export/import, checksum-verified registry/ledger/key backup and
-restore, root-overlap fence, and recoverable transfer/removal lineage are present. The prepared
+final post-quiescence legacy export/import, optional stopped restore, checksum-verified
+registry/ledger/key backup, root-overlap fence, and recoverable transfer/removal lineage are
+present through both production wrappers. The prepared
 registry remains `authority: dormant`: production reads still use the legacy scalar app-local
 store, every second-registration producer and lifecycle mutation stays capability-gated, and only
 MVR-01C may install the rollback gateway and perform authority cutover.

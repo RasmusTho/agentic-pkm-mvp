@@ -36,6 +36,13 @@ class InstanceStateLayout:
     def ensure(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
+        self.require_existing()
+
+    def require_existing(self) -> None:
+        """Verify the mounted channel state root without creating or repairing it."""
+
+        if not self.root.is_dir():
+            raise InstanceStatePreflightError("instance-state mount/root is missing")
         metadata = self.root.lstat()
         if (
             not stat.S_ISDIR(metadata.st_mode)
@@ -83,8 +90,23 @@ class LegacyRegistryFinalExport:
             current = VaultRegistryStore(self.layout.registry_path).load()
             if current.revision > 0:
                 raise InstanceStatePreflightError("registry import target is already populated")
+        self.preserve_final_export(export)
         _atomic_private_write(self.layout.registry_path, export.payload)
         return VaultRegistryStore(self.layout.registry_path).load_or_migrate()
+
+    def preserve_final_export(self, export: LegacyExport) -> Path:
+        """Persist the post-stop legacy authority without changing registry authority."""
+
+        if self._capture(export.source_path).fingerprint != export.fingerprint:
+            raise InstanceStatePreflightError("legacy registry changed after final export")
+        self.layout.ensure()
+        target = self.layout.root / "legacy-final-export.md"
+        _atomic_private_write(target, export.payload)
+        _atomic_private_write(
+            self.layout.root / "legacy-final-export.md.sha256",
+            (export.fingerprint + "\n").encode("ascii"),
+        )
+        return target
 
     def _capture(self, legacy_path: Path) -> LegacyExport:
         path = Path(legacy_path).expanduser().resolve(strict=False)
@@ -109,13 +131,18 @@ def preflight_instance_state(
 ) -> InstanceStatePreflightReceipt:
     if set(consumer_paths) != _REQUIRED_CONSUMERS:
         raise InstanceStatePreflightError("instance-state preflight must cover all consumers")
-    layout.ensure()
+    layout.require_existing()
     expected = layout.registry_path.resolve(strict=False)
     resolved = {name: Path(path).expanduser().resolve(strict=False) for name, path in consumer_paths.items()}
     if set(resolved.values()) != {expected}:
         raise InstanceStatePreflightError("all instance-state consumers must resolve identically")
+    store = VaultRegistryStore(layout.registry_path)
+    if not layout.registry_path.is_file() and not (
+        store.snapshot_path.is_file() and store.snapshot_checksum_path.is_file()
+    ):
+        raise InstanceStatePreflightError("instance-state registry producer has not initialized")
     try:
-        VaultRegistryStore(layout.registry_path).load()
+        store.load()
     except Exception as exc:
         raise InstanceStatePreflightError("registry is not durably readable and writable") from exc
     return InstanceStatePreflightReceipt(
@@ -174,6 +201,13 @@ class InstanceStateBackup:
             "ownership-ledger.json": self.ledger.path,
             "ownership-key.json": self.ledger.key_path,
         }
+        final_export = self.layout.root / "legacy-final-export.md"
+        final_checksum = self.layout.root / "legacy-final-export.md.sha256"
+        if final_export.exists() != final_checksum.exists():
+            raise InstanceStatePreflightError("final legacy export backup source is incomplete")
+        if final_export.is_file():
+            artifacts["legacy-final-export.md"] = final_export
+            artifacts["legacy-final-export.md.sha256"] = final_checksum
         checksums: dict[str, str] = {}
         for name, source in artifacts.items():
             if not source.is_file():
@@ -212,8 +246,6 @@ class InstanceStateBackup:
             "ownership-ledger.json",
             "ownership-key.json",
         }
-        if not all((source / name).is_file() for name in required):
-            raise InstanceStatePreflightError("restore requires a complete ledger/key backup")
         try:
             manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
             if manifest.get("schema") != _BACKUP_SCHEMA:
@@ -224,8 +256,20 @@ class InstanceStateBackup:
             raise InstanceStatePreflightError(
                 "backup channel_id does not match restore target"
             )
+        checksums = manifest.get("checksums")
+        if not isinstance(checksums, dict):
+            raise InstanceStatePreflightError("backup verification failed")
+        optional_final = {
+            "legacy-final-export.md",
+            "legacy-final-export.md.sha256",
+        }
+        selected_optional = optional_final.intersection(checksums)
+        if selected_optional and selected_optional != optional_final:
+            raise InstanceStatePreflightError("backup final legacy export is incomplete")
+        required |= selected_optional
+        if not all((source / name).is_file() for name in required):
+            raise InstanceStatePreflightError("restore requires a complete ledger/key backup")
         try:
-            checksums = manifest["checksums"]
             for name in required - {"manifest.json"}:
                 actual = hashlib.sha256((source / name).read_bytes()).hexdigest()
                 if checksums.get(name) != actual:
@@ -257,6 +301,11 @@ class InstanceStateBackup:
         _atomic_private_write(
             self.layout.registry_path, (source / "vault-registry.md").read_bytes()
         )
+        for name in sorted(selected_optional):
+            _atomic_private_write(self.layout.root / name, (source / name).read_bytes())
+        if not selected_optional:
+            (self.layout.root / "legacy-final-export.md").unlink(missing_ok=True)
+            (self.layout.root / "legacy-final-export.md.sha256").unlink(missing_ok=True)
         registry_store.load()
         self.ledger.load()
         return InstanceStateRestoreReceipt(str(manifest["registry_checksum"]))

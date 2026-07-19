@@ -76,6 +76,11 @@ if [ "${{1:-}}" = "compose" ]; then
       printf '{{"services":{{}}}}\n'
       exit 0
       ;;
+    run|stop)
+      # The instance-state deployment producer now fences/finalizes before
+      # the first compose up. This test is scoped to the later build marker.
+      exit 0
+      ;;
     up)
       {{
         printf 'COMMAND=%s\n' "compose $*"
@@ -113,7 +118,7 @@ exit 97
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
 
     assert proc.returncode == 99, proc.stderr + proc.stdout

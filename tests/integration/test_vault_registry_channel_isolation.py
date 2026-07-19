@@ -184,11 +184,69 @@ def test_removed_binding_reregistration_preserves_tombstone_lineage(tmp_path) ->
     proof = LifecycleActivationProof.for_test_activation()
     runtime.remove(registration.vault_binding_id, proof=proof)
 
-    reactivated = runtime.reactivate_removed(root, proof=proof)
+    reactivated = runtime.bootstrap_env_binding(
+        vault_root=root,
+        watcher_vault_path=root,
+    )
     assert reactivated.vault_binding_id == registration.vault_binding_id
     assert reactivated.local_instance_id == registration.local_instance_id
     assert reactivated.extensions["contentEpoch"] == 2
     assert runtime.registry.load().removal_tombstones[registration.vault_binding_id].content_epoch == 1
+
+
+def test_populated_registry_with_lost_ledger_and_key_fails_without_mutation(tmp_path) -> None:
+    host_global = tmp_path / "host-global"
+    runtime = _runtime(tmp_path, "prod", host_global)
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+
+    runtime.ledger.path.unlink()
+    runtime.ledger.key_path.unlink()
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for state_root in (runtime.layout.root, host_global)
+        for path in state_root.iterdir()
+        if path.is_file()
+    }
+
+    with pytest.raises(LedgerKeyError, match="requires protected ownership"):
+        runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for state_root in (runtime.layout.root, host_global)
+        for path in state_root.iterdir()
+        if path.is_file()
+    }
+    assert after == before
+    assert not runtime.ledger.path.exists()
+    assert not runtime.ledger.key_path.exists()
+
+
+def test_retry_recovers_pending_owner_after_registry_commit(tmp_path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    original_activate = runtime.ledger.activate
+    failures = 0
+
+    def fail_once(vault_binding_id: str):
+        nonlocal failures
+        failures += 1
+        if failures == 1:
+            raise RuntimeError("injected activate failure")
+        return original_activate(vault_binding_id)
+
+    monkeypatch.setattr(runtime.ledger, "activate", fail_once)
+    with pytest.raises(RuntimeError, match="injected activate failure"):
+        runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+
+    committed = next(iter(runtime.registry.load().registrations.values()))
+    assert runtime.ledger.active_owner(committed.vault_binding_id) is None
+    recovered = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    assert recovered.vault_binding_id == committed.vault_binding_id
+    assert runtime.ledger.active_owner(committed.vault_binding_id) is not None
 
 
 def test_first_upgrade_seeds_all_legacy_channel_owners_before_claim(tmp_path) -> None:

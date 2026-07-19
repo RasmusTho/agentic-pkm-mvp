@@ -63,6 +63,7 @@ unset _pkm_caller_vault_root_set _pkm_channel_vault_root_set
 
 source "scripts/lib/runtime_endpoint_probe.sh"
 source "scripts/lib/start_full_system_env.sh"
+source "scripts/lib/instance_state_deployment.sh"
 apply_start_full_system_defaults
 
 # Signboard is a dispatcher projection. Resolve this on the host before the
@@ -1171,6 +1172,12 @@ PY
 
 run_preflight
 ensure_prod_instance_state_volume
+if prepare_instance_state_deployment run_docker_compose "${PKM_ENVIRONMENT:-dev}"; then
+  :
+else
+  instance_state_rc=$?
+  exit "${instance_state_rc}"
+fi
 start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
 
 llm_provider="${LLM_PROVIDER:-}"

@@ -171,3 +171,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: the BuilderOps CLI cannot import `app` in this environment (`app.config.llm` import chain fails). Convert this entry to a `LearningSignal` when the store is reachable.
 
 --- retro 2026-06-07: applied 5/5 proposals ---
+
+## 2026-07-19 — #3854 (Deployment ACs lacked production call-site evidence)
+**Source:** verification-and-closure clean review round 1
+**Diverged:** The Issue named deploy/start wrapper behavior, but all 19 `Verify:` targets passed while final export/import, backup/restore, and host-global legacy-owner bootstrap remained helper-only with no production call sites.
+**Upstream artifact:** `.codex/skills/_shared/ISSUE_CONTRACT.md` — require a production producer/call-site test when an acceptance criterion names deployment, startup, migration, or another concrete producer boundary.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused and neither `BUILDEROPS_DB_PATH` nor `BUILDEROPS_STATE_DIR` is configured; convert this entry when the acknowledged host store is reachable.

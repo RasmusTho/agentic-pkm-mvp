@@ -60,11 +60,21 @@ cross-process lock, CAS, physical-root identity, crash-recoverable transaction j
 and corruption-recovery contracts. MVR-01B now provides the protected channel-scoped
 `/app/instance-state` named volume, the shared private `/app/instance-ownership` host ledger/key,
 and identical fail-loud preflight for API, worker, watcher, and Heimdal capture watcher. The
-`instance-state-init` producer establishes owner-only state before those consumers start; their
-resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`.
+`instance-state-init` producer verifies owner-only state before those consumers start; their
+resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. It does not invent a
+missing registry or ledger during consumer preflight.
 
-The 01B recovery boundary also includes post-quiescence legacy export/import, verified
-registry/ledger/key backup and restore, canonical-root overlap rejection, and dormant recoverable
+Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
+`scripts/lib/instance_state_deployment.sh`. The shared producer installs a durable channel restart
+fence, stops API/worker/watcher/Heimdal, and only then runs the finalizer. The finalizer rejects an
+incomplete or non-private `/app/instance-ownership/legacy-owner-inventory.json`, captures the final
+legacy fingerprint, imports it on first volume or preserves it beside an established dormant
+registry, calls the host-global legacy-owner bootstrap, creates a verified registry/ledger/key
+backup, and clears the fence. `INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored
+inside that stopped interval before finalization and consumer startup. Failure leaves the fence in
+place, so upgraded consumer preflight refuses restart.
+
+This 01B recovery boundary also includes canonical-root overlap rejection and dormant recoverable
 lifecycle lineage. It deliberately leaves `authority: dormant`: the production picker continues to
 read and write the legacy scalar app-local payload, second-registration and lifecycle producers
 remain sealed, and the independently durable legacy source must not be retired. MVR-01C alone owns

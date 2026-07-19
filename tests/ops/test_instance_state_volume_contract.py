@@ -16,12 +16,19 @@ from app.instance.instance_state import (
     preflight_instance_state,
     validate_registry_disjoint_from_content,
 )
-from app.instance.runtime import InstanceRegistryRuntime
+from app.instance.runtime import (
+    InstanceRegistryRuntime,
+    _begin_instance_state_deployment,
+    _deployment_fence_path,
+    _finish_instance_state_deployment,
+    _preflight_runtime,
+)
 from app.instance.vault_registry import (
     AppLocalSettingsStore,
     CapabilityNotReadyError,
     KnownVaultRef,
     RegistryActivationProof,
+    RegistryError,
     VaultRegistration,
     VaultRegistryStore,
 )
@@ -84,10 +91,160 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
     with pytest.raises(InstanceStatePreflightError, match="changed after final export"):
         exporter.import_final_export(final)
 
+    repo_root = Path(__file__).resolve().parents[2]
+    deploy = (repo_root / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
+    start = (repo_root / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+    producer = (repo_root / "scripts/lib/instance_state_deployment.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "prepare_instance_state_deployment compose" in deploy
+    assert "prepare_instance_state_deployment run_docker_compose" in start
+    assert producer.index("deployment-begin") < producer.index(" stop api worker watcher")
+    assert producer.index(" stop api worker watcher") < producer.index("deployment-finish")
+    assert "--writers-drained" in producer
+    assert "--old-api-stopped" in producer
+
+
+def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
+    tmp_path,
+) -> None:
+    instance_state_root = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    instance_state_root.mkdir()
+    host_global_root.mkdir()
+    legacy_store = AppLocalSettingsStore(tmp_path / "legacy" / "app-local.md")
+    manager = VaultManager(app_local_store=legacy_store)
+    first = tmp_path / "vault-one"
+    second = tmp_path / "vault-two"
+    manager.initialize_vault(first, remember=True)
+
+    diagnostic = _begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_store.path,
+    )
+    fence = _deployment_fence_path(host_global_root, "test")
+    assert fence.is_file()
+    with pytest.raises(RegistryError, match="restart is fenced"):
+        _preflight_runtime(
+            channel="test",
+            instance_state_root=instance_state_root,
+            host_global_root=host_global_root,
+            consumer="api",
+        )
+
+    # This post-diagnostic write represents the last old-image update. Only
+    # the export captured after the wrapper stops writers may be imported.
+    manager.initialize_vault(second, remember=True)
+    inventory_path = host_global_root / "legacy-owner-inventory.json"
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.legacy-owner-inventory.v1",
+                "inventory_complete": True,
+                "writers_drained": True,
+                "owners": [
+                    {"channel_id": "test", "root": str(first)},
+                    {"channel_id": "test", "root": str(second)},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(inventory_path, 0o600)
+    receipt = _finish_instance_state_deployment(
+        channel="test",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_store.path,
+        inventory_path=inventory_path,
+        backup_root=host_global_root / "backups" / "test" / "latest",
+        restore_root=None,
+        writers_drained=True,
+        old_api_stopped=True,
+    )
+
+    assert receipt["final_fingerprint"] != diagnostic["diagnostic_fingerprint"]
+    assert receipt["restart_fence_cleared"] is True
+    assert not fence.exists()
+    layout = InstanceStateLayout.for_channel(instance_state_root, "test")
+    registry = VaultRegistryStore(layout.registry_path).load()
+    assert {Path(item.path) for item in registry.registrations.values()} == {
+        first.resolve(),
+        second.resolve(),
+    }
+    ledger = InstanceRegistryRuntime.for_paths(
+        layout,
+        host_global_root,
+        initialize_layout=False,
+    ).ledger.load()
+    assert ledger.legacy_bootstrap_complete is True
+    assert set(ledger.leases) == set(registry.registrations)
+    backup_manifest = Path(str(receipt["backup_manifest"]))
+    assert backup_manifest.is_file()
+    assert {
+        "legacy-final-export.md",
+        "legacy-final-export.md.sha256",
+    } <= json.loads(backup_manifest.read_text(encoding="utf-8"))["checksums"].keys()
+    assert _preflight_runtime(
+        channel="test",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        consumer="api",
+    ) == 0
+
+
+def test_deployment_producer_keeps_restart_fenced_on_incomplete_inventory(
+    tmp_path,
+) -> None:
+    instance_state_root = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    instance_state_root.mkdir()
+    host_global_root.mkdir()
+    legacy_path = tmp_path / "missing-legacy.md"
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+    )
+    inventory_path = host_global_root / "legacy-owner-inventory.json"
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.legacy-owner-inventory.v1",
+                "inventory_complete": False,
+                "writers_drained": True,
+                "owners": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(inventory_path, 0o600)
+
+    with pytest.raises(InstanceStatePreflightError, match="complete drained"):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=instance_state_root,
+            host_global_root=host_global_root,
+            legacy_path=legacy_path,
+            inventory_path=inventory_path,
+            backup_root=host_global_root / "backups" / "prod" / "latest",
+            restore_root=None,
+            writers_drained=True,
+            old_api_stopped=True,
+        )
+
+    assert _deployment_fence_path(host_global_root, "prod").is_file()
+    assert not (host_global_root / "ownership-ledger.json").exists()
+    assert not (host_global_root / "ownership-key.json").exists()
+
 
 def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
     layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "dev")
     layout.ensure()
+    VaultRegistryStore(layout.registry_path).load()
     receipt = preflight_instance_state(
         layout,
         consumer_paths={
@@ -118,6 +275,22 @@ def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
         assert "app.instance.runtime preflight" in service["command"][2]
         assert f"--consumer {consumer}" in service["command"][2]
         assert service["depends_on"]["instance-state-init"]["condition"] == "service_completed_successfully"
+
+
+def test_runtime_preflight_rejects_missing_mounts_before_mutation(tmp_path) -> None:
+    instance_state_root = tmp_path / "missing-instance-state"
+    host_global_root = tmp_path / "missing-host-global"
+
+    with pytest.raises(RegistryError, match="must already exist"):
+        _preflight_runtime(
+            channel="prod",
+            instance_state_root=instance_state_root,
+            host_global_root=host_global_root,
+            consumer="api",
+        )
+
+    assert not instance_state_root.exists()
+    assert not host_global_root.exists()
 
 
 def test_registry_override_cannot_become_content_owned(tmp_path) -> None:
@@ -196,6 +369,12 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     for path in runtime.ledger.root.iterdir():
         if path.is_file():
             path.unlink()
+    stale_final = layout.root / "legacy-final-export.md"
+    stale_checksum = layout.root / "legacy-final-export.md.sha256"
+    stale_final.write_text("stale", encoding="utf-8")
+    stale_checksum.write_text("stale", encoding="ascii")
+    os.chmod(stale_final, 0o600)
+    os.chmod(stale_checksum, 0o600)
     restored = InstanceStateBackup(layout, runtime.ledger).restore(
         tmp_path / "backup",
         live_channels=(),
@@ -203,6 +382,8 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     assert restored.registry_checksum == expected["registry_checksum"]
     assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
     assert runtime.ledger.load().leases
+    assert not stale_final.exists()
+    assert not stale_checksum.exists()
 
     layout.registry_path.unlink()
     assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
+source "${ROOT}/scripts/lib/instance_state_deployment.sh"
 PYTHON="${PYTHON:-}"
 if [ -z "${PYTHON}" ]; then
   if [ -x "${ROOT}/.venv/bin/python" ]; then
@@ -602,6 +603,12 @@ postdeploy_smoke_gate() {
 
 run_postmutation_gate "image pull failed" \
   compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+if prepare_instance_state_deployment compose "${channel}"; then
+  :
+else
+  instance_state_rc=$?
+  exit "${instance_state_rc}"
+fi
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?
 rollback_target_recreated=1

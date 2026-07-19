@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
+import stat
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -17,11 +19,15 @@ from app.instance.filesystem_identity import (
     same_filesystem_root,
 )
 from app.instance.instance_state import (
+    InstanceStateBackup,
     InstanceStateLayout,
+    InstanceStatePreflightError,
+    LegacyRegistryFinalExport,
     preflight_instance_state,
     validate_registry_disjoint_from_content,
 )
 from app.instance.ownership_ledger import (
+    LegacyOwner,
     LedgerCollisionError,
     LedgerError,
     LedgerSnapshot,
@@ -32,6 +38,7 @@ from app.instance.vault_registry import (
     AppLocalSettingsStore,
     CapabilityNotReadyError,
     RegistryError,
+    RegistrySnapshot,
     RemovalTombstone,
     TransferLineage,
     VaultRegistration,
@@ -66,9 +73,13 @@ class InstanceRegistryRuntime:
         ledger: OwnershipLedger,
         *,
         legacy_path: Path | None = None,
+        initialize_layout: bool = True,
     ) -> None:
         self.layout = layout
-        self.layout.ensure()
+        if initialize_layout:
+            self.layout.ensure()
+        else:
+            self.layout.require_existing()
         self.registry = VaultRegistryStore(layout.registry_path)
         self.ledger = ledger
         self._legacy_path = legacy_path or (layout.root / "legacy-app-local.md")
@@ -78,8 +89,14 @@ class InstanceRegistryRuntime:
         cls,
         layout: InstanceStateLayout,
         host_global_root: Path,
+        *,
+        initialize_layout: bool = True,
     ) -> InstanceRegistryRuntime:
-        return cls(layout, OwnershipLedger(Path(host_global_root).resolve(strict=False)))
+        return cls(
+            layout,
+            OwnershipLedger(Path(host_global_root).resolve(strict=False)),
+            initialize_layout=initialize_layout,
+        )
 
     def bootstrap_env_binding(
         self,
@@ -87,6 +104,7 @@ class InstanceRegistryRuntime:
         vault_root: Path,
         watcher_vault_path: Path,
     ) -> VaultRegistration:
+        self._require_established_ownership(self.registry.load())
         with self._bootstrap_locked():
             return self._bootstrap_env_binding_locked(
                 vault_root=vault_root,
@@ -104,6 +122,7 @@ class InstanceRegistryRuntime:
         if not same_filesystem_root(root_identity, watcher_identity):
             raise RegistryError("conflicting bootstrap roots")
         current = self.registry.load()
+        self._require_established_ownership(current)
         validate_registry_disjoint_from_content(
             self.layout.registry_path,
             [Path(root_identity.canonical_path)]
@@ -113,7 +132,21 @@ class InstanceRegistryRuntime:
             if same_filesystem_root(
                 resolve_filesystem_root_identity(registration.path), root_identity
             ):
+                self.ledger.recover_or_require_active(
+                    registration.vault_binding_id,
+                    channel_id=self.layout.channel_id,
+                    root=Path(root_identity.canonical_path),
+                )
                 return registration
+        for tombstone in current.removal_tombstones.values():
+            if same_filesystem_root(
+                resolve_filesystem_root_identity(tombstone.path), root_identity
+            ):
+                return self._reactivate_tombstone_locked(
+                    current,
+                    tombstone,
+                    Path(root_identity.canonical_path),
+                )
         if current.registrations:
             raise CapabilityNotReadyError("MVR-01C authority cutover seals second registration")
         registration = self._new_registration(Path(root_identity.canonical_path))
@@ -131,6 +164,10 @@ class InstanceRegistryRuntime:
             raise
         self.ledger.activate(registration.vault_binding_id)
         return registration
+
+    def _require_established_ownership(self, current: RegistrySnapshot) -> None:
+        if current.revision > 0:
+            self.ledger.require_existing()
 
     @contextmanager
     def _bootstrap_locked(self) -> Iterator[None]:
@@ -337,18 +374,27 @@ class InstanceRegistryRuntime:
         current = self.registry.load()
         matched: RemovalTombstone | None = None
         for tombstone in current.removal_tombstones.values():
-            try:
-                self.ledger.reactivate(
-                    tombstone.vault_binding_id,
-                    channel_id=self.layout.channel_id,
-                    root=root,
-                )
+            if same_filesystem_root(
+                resolve_filesystem_root_identity(tombstone.path),
+                resolve_filesystem_root_identity(root),
+            ):
                 matched = tombstone
                 break
-            except LedgerCollisionError:
-                continue
         if matched is None:
             raise LedgerCollisionError("root does not match immutable predecessor lineage")
+        return self._reactivate_tombstone_locked(current, matched, root)
+
+    def _reactivate_tombstone_locked(
+        self,
+        current: RegistrySnapshot,
+        matched: RemovalTombstone,
+        root: Path,
+    ) -> VaultRegistration:
+        self.ledger.reactivate(
+            matched.vault_binding_id,
+            channel_id=self.layout.channel_id,
+            root=root,
+        )
         registration = VaultRegistration(
             vault_binding_id=matched.vault_binding_id,
             ref=matched.ref,
@@ -482,12 +528,22 @@ def _preflight_runtime(
         layout.registry_path,
         [Path(value) for value in configured_roots],
     )
+    if not instance_state_root.is_dir() or not host_global_root.is_dir():
+        raise RegistryError("instance-state and host-global mounts must already exist")
+    if _deployment_fence_path(host_global_root, channel).exists():
+        raise RegistryError("channel restart is fenced pending instance-state finalization")
     preflight_instance_state(
         layout,
         consumer_paths={name: layout.registry_path for name in consumers},
     )
-    runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
-    runtime.ledger.load()
+    runtime = InstanceRegistryRuntime.for_paths(
+        layout,
+        host_global_root,
+        initialize_layout=False,
+    )
+    ledger = runtime.ledger.require_existing()
+    if not ledger.legacy_bootstrap_complete:
+        raise RegistryError("host-global legacy owner inventory bootstrap is incomplete")
     known_roots = [Path(item.path) for item in runtime.registry.load().registrations.values()]
     validate_registry_disjoint_from_content(
         layout.registry_path,
@@ -516,6 +572,261 @@ def _preflight_runtime(
     return 0
 
 
+_DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
+_LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
+
+
+def _deployment_fence_path(host_global_root: Path, channel: str) -> Path:
+    return Path(host_global_root) / f"deployment-{channel}-restart-fence.json"
+
+
+def _assert_mount_root(path: Path, label: str) -> Path:
+    root = Path(path).expanduser().resolve(strict=False)
+    if not root.is_dir():
+        raise InstanceStatePreflightError(f"{label} mount is missing")
+    metadata = root.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        raise InstanceStatePreflightError(f"{label} mount ownership is unsafe")
+    return root
+
+
+def _write_private_json(path: Path, payload: dict[str, object]) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=True) as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _read_deployment_fence(host_global_root: Path, channel: str) -> dict[str, object]:
+    path = _deployment_fence_path(host_global_root, channel)
+    try:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o777 != 0o600
+        ):
+            raise ValueError
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != _DEPLOYMENT_FENCE_SCHEMA
+            or payload.get("channel_id") != channel
+        ):
+            raise ValueError
+        return payload
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise InstanceStatePreflightError("valid channel restart fence is required") from exc
+
+
+def _begin_instance_state_deployment(
+    *,
+    channel: str,
+    instance_state_root: Path,
+    host_global_root: Path,
+    legacy_path: Path,
+) -> dict[str, object]:
+    """Install the restart fence before any legacy writer is stopped."""
+
+    state_mount = _assert_mount_root(instance_state_root, "instance-state")
+    ownership_root = _assert_mount_root(host_global_root, "host-global")
+    os.chmod(ownership_root, 0o700)
+    layout = InstanceStateLayout.for_channel(state_mount, channel)
+    layout.ensure()
+    source = Path(legacy_path).expanduser().resolve(strict=False)
+    diagnostic_fingerprint: str | None = None
+    if source.is_file():
+        diagnostic_fingerprint = LegacyRegistryFinalExport(
+            layout
+        ).capture_diagnostic_snapshot(source).fingerprint
+    payload: dict[str, object] = {
+        "schema": _DEPLOYMENT_FENCE_SCHEMA,
+        "channel_id": channel,
+        "legacy_path": str(source),
+        "diagnostic_fingerprint": diagnostic_fingerprint,
+    }
+    fence_path = _deployment_fence_path(ownership_root, channel)
+    if fence_path.exists():
+        existing = _read_deployment_fence(ownership_root, channel)
+        if existing.get("legacy_path") != str(source):
+            raise InstanceStatePreflightError("existing restart fence targets another legacy store")
+        return existing
+    _write_private_json(fence_path, payload)
+    return payload
+
+
+def _load_legacy_owner_inventory(
+    inventory_path: Path,
+    *,
+    registry: RegistrySnapshot,
+    channel: str,
+) -> list[LegacyOwner]:
+    try:
+        inventory = Path(inventory_path)
+        metadata = inventory.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o777 != 0o600
+        ):
+            raise ValueError
+        payload = json.loads(inventory.read_text(encoding="utf-8"))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != _LEGACY_INVENTORY_SCHEMA
+            or payload.get("inventory_complete") is not True
+            or payload.get("writers_drained") is not True
+            or not isinstance(payload.get("owners"), list)
+        ):
+            raise ValueError
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise InstanceStatePreflightError(
+            "complete drained legacy-owner inventory is required"
+        ) from exc
+
+    owners: list[LegacyOwner] = []
+    for item in payload["owners"]:
+        if not isinstance(item, dict):
+            raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
+        owner_channel = str(item.get("channel_id") or "").strip()
+        root = Path(str(item.get("root") or "")).expanduser().resolve(strict=False)
+        if not owner_channel or not root.is_dir():
+            raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
+        binding_id = str(item.get("vault_binding_id") or "").strip()
+        if owner_channel == channel:
+            for registration in registry.registrations.values():
+                if same_filesystem_root(
+                    resolve_filesystem_root_identity(root),
+                    resolve_filesystem_root_identity(registration.path),
+                ):
+                    binding_id = registration.vault_binding_id
+                    break
+        if not binding_id:
+            digest = hashlib.sha256(f"{owner_channel}\0{root}".encode()).hexdigest()[:20]
+            binding_id = f"legacy-{owner_channel}-{digest}"
+        owners.append(LegacyOwner(owner_channel, binding_id, root))
+    if len({owner.vault_binding_id for owner in owners}) != len(owners):
+        raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
+    represented = {owner.vault_binding_id for owner in owners if owner.channel_id == channel}
+    missing_bindings = set(registry.registrations) - represented
+    if missing_bindings:
+        raise InstanceStatePreflightError(
+            "legacy-owner inventory omits a current-channel registration"
+        )
+    return owners
+
+
+def _finish_instance_state_deployment(
+    *,
+    channel: str,
+    instance_state_root: Path,
+    host_global_root: Path,
+    legacy_path: Path,
+    inventory_path: Path,
+    backup_root: Path,
+    restore_root: Path | None,
+    writers_drained: bool,
+    old_api_stopped: bool,
+) -> dict[str, object]:
+    """Finalize legacy state while stopped, then clear the restart fence."""
+
+    if not writers_drained or not old_api_stopped:
+        raise InstanceStatePreflightError("deployment finalization requires stopped legacy writers")
+    state_mount = _assert_mount_root(instance_state_root, "instance-state")
+    ownership_root = _assert_mount_root(host_global_root, "host-global")
+    _read_deployment_fence(ownership_root, channel)
+    layout = InstanceStateLayout.for_channel(state_mount, channel)
+    layout.ensure()
+    ledger = OwnershipLedger(ownership_root)
+    backup = InstanceStateBackup(layout, ledger)
+
+    if restore_root is not None:
+        backup.restore(restore_root, live_channels=())
+
+    store = VaultRegistryStore(layout.registry_path)
+    has_registry_state = layout.registry_path.is_file() or (
+        store.snapshot_path.is_file() and store.snapshot_checksum_path.is_file()
+    )
+    had_populated_registry = has_registry_state and store.load().revision > 0
+    if had_populated_registry and restore_root is None:
+        ledger.require_existing()
+
+    source = Path(legacy_path).expanduser().resolve(strict=False)
+    final_fingerprint: str | None = None
+    if source.is_file():
+        exporter = LegacyRegistryFinalExport(layout)
+        final = exporter.export_final_after_stop(
+            source,
+            writers_drained=True,
+            old_api_stopped=True,
+            restart_fence_active=True,
+        )
+        final_fingerprint = final.fingerprint
+        if not layout.registry_path.is_file() or store.load().revision == 0:
+            exporter.import_final_export(final)
+        else:
+            exporter.preserve_final_export(final)
+    elif not layout.registry_path.is_file():
+        store.load()
+
+    registry = store.load()
+    try:
+        ledger_snapshot = ledger.require_existing()
+    except LedgerError:
+        ledger_snapshot = None
+    if ledger_snapshot is None or not ledger_snapshot.legacy_bootstrap_complete:
+        owners = _load_legacy_owner_inventory(
+            inventory_path,
+            registry=registry,
+            channel=channel,
+        )
+        ledger_snapshot = ledger.bootstrap_legacy_owners(
+            owners,
+            inventory_complete=True,
+            writers_drained=True,
+        )
+    for registration in registry.registrations.values():
+        ledger.recover_or_require_active(
+            registration.vault_binding_id,
+            channel_id=channel,
+            root=Path(registration.path),
+        )
+    if not ledger_snapshot.legacy_bootstrap_complete:
+        raise InstanceStatePreflightError("legacy owner bootstrap did not complete")
+
+    backup_receipt = backup.create(backup_root)
+    fence_path = _deployment_fence_path(ownership_root, channel)
+    fence_path.unlink()
+    directory = os.open(ownership_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return {
+        "channel": channel,
+        "registry_revision": registry.revision,
+        "final_fingerprint": final_fingerprint,
+        "backup_manifest": str(backup_receipt.manifest_path),
+        "restart_fence_cleared": True,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -527,6 +838,21 @@ def main(argv: list[str] | None = None) -> int:
     preflight.add_argument("--instance-state-root", type=Path, required=True)
     preflight.add_argument("--host-global-root", type=Path, required=True)
     preflight.add_argument("--consumer", required=True)
+    begin = subparsers.add_parser("deployment-begin")
+    begin.add_argument("--channel", required=True)
+    begin.add_argument("--instance-state-root", type=Path, required=True)
+    begin.add_argument("--host-global-root", type=Path, required=True)
+    begin.add_argument("--legacy-path", type=Path, required=True)
+    finish = subparsers.add_parser("deployment-finish")
+    finish.add_argument("--channel", required=True)
+    finish.add_argument("--instance-state-root", type=Path, required=True)
+    finish.add_argument("--host-global-root", type=Path, required=True)
+    finish.add_argument("--legacy-path", type=Path, required=True)
+    finish.add_argument("--inventory-path", type=Path, required=True)
+    finish.add_argument("--backup-root", type=Path, required=True)
+    finish.add_argument("--restore-root", type=Path)
+    finish.add_argument("--writers-drained", action="store_true")
+    finish.add_argument("--old-api-stopped", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)
@@ -537,6 +863,37 @@ def main(argv: list[str] | None = None) -> int:
             host_global_root=args.host_global_root,
             consumer=args.consumer,
         )
+    if args.command == "deployment-begin":
+        print(
+            json.dumps(
+                _begin_instance_state_deployment(
+                    channel=args.channel,
+                    instance_state_root=args.instance_state_root,
+                    host_global_root=args.host_global_root,
+                    legacy_path=args.legacy_path,
+                ),
+                sort_keys=True,
+            )
+        )
+        return 0
+    if args.command == "deployment-finish":
+        print(
+            json.dumps(
+                _finish_instance_state_deployment(
+                    channel=args.channel,
+                    instance_state_root=args.instance_state_root,
+                    host_global_root=args.host_global_root,
+                    legacy_path=args.legacy_path,
+                    inventory_path=args.inventory_path,
+                    backup_root=args.backup_root,
+                    restore_root=args.restore_root,
+                    writers_drained=args.writers_drained,
+                    old_api_stopped=args.old_api_stopped,
+                ),
+                sort_keys=True,
+            )
+        )
+        return 0
     raise AssertionError("unreachable")
 
 

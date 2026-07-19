@@ -115,6 +115,46 @@ class OwnershipLedger:
             key = self._load_or_create_key_locked()
             return self._load_or_create_ledger_locked(key)
 
+    def require_existing(self) -> LedgerSnapshot:
+        """Load an established ledger without creating any missing authority state."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            return self._load_or_create_ledger_locked(key, allow_create=False)
+
+    def recover_or_require_active(
+        self,
+        vault_binding_id: str,
+        *,
+        channel_id: str,
+        root: Path,
+    ) -> OwnershipLease:
+        """Authenticate an active owner or finish a committed pending reservation."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(vault_binding_id)
+            if (
+                lease is None
+                or lease.channel_id != channel_id
+                or not self._matches_root(lease, root, key)
+            ):
+                raise LedgerError(
+                    "registered binding has no authenticated ownership reservation"
+                )
+            if lease.state == "active":
+                return lease
+            if lease.state != "pending":
+                raise LedgerError("registered binding ownership is not recoverable")
+            active = OwnershipLease(**(asdict(lease) | {"state": "active"}))
+            leases = dict(current.leases)
+            leases[vault_binding_id] = active
+            self._write_ledger_locked(self._replace(current, leases=leases), key)
+            return active
+
     def reserve(
         self,
         *,
@@ -422,7 +462,7 @@ class OwnershipLedger:
         *,
         allow_same_channel_nested: bool,
     ) -> None:
-        leases = list(current.leases.values())
+        leases = list(current.leases.values()) + list(current.tombstones.values())
         if current.transfer is not None:
             transfer = current.transfer
             leases.append(
@@ -522,9 +562,24 @@ class OwnershipLedger:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-    def _load_or_create_key_locked(self) -> _KeyMaterial:
+    def _assert_existing_artifacts(self) -> None:
+        if not self.root.is_dir():
+            raise LedgerKeyError("ownership state directory is missing")
+        metadata = self.root.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o777 != 0o700
+        ):
+            raise LedgerKeyError("ownership state directory is unsafe")
+        if not self.path.is_file() or not self.key_path.is_file():
+            raise LedgerKeyError(
+                "established registry requires protected ownership ledger and key recovery"
+            )
+
+    def _load_or_create_key_locked(self, *, allow_create: bool = True) -> _KeyMaterial:
         if not self.key_path.exists():
-            if self.path.exists():
+            if self.path.exists() or not allow_create:
                 raise LedgerKeyError("ownership ledger exists without its protected key")
             key = _KeyMaterial(f"key-{uuid4()}", 1, secrets.token_bytes(32))
             self._write_key_locked(key)
@@ -553,8 +608,17 @@ class OwnershipLedger:
             "secret": base64.b64encode(key.secret).decode("ascii"),
         }
 
-    def _load_or_create_ledger_locked(self, key: _KeyMaterial) -> LedgerSnapshot:
+    def _load_or_create_ledger_locked(
+        self,
+        key: _KeyMaterial,
+        *,
+        allow_create: bool = True,
+    ) -> LedgerSnapshot:
         if not self.path.exists():
+            if not allow_create:
+                raise LedgerKeyError(
+                    "protected ownership key exists without its ownership ledger"
+                )
             current = LedgerSnapshot(LEDGER_SCHEMA, key.generation, key.key_id)
             self._write_ledger_locked(current, key)
             return current

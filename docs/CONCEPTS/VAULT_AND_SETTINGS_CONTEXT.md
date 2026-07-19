@@ -89,11 +89,14 @@ multi-file main/snapshot/checksum update carries a private prepared/committed jo
 prepared state back and committed state forward before any lock-respecting read.
 
 This is an enabling boundary, not a multi-vault authority cutover. MVR-01B has installed the
-protected channel-scoped instance-state volume, host-global ownership ledger/key, quiesced final
-legacy export/import, and checksum-verified backup/restore substrate. The scalar legacy app-local
-store remains the production picker authority until MVR-01C installs and verifies the rollback
-gateway and cutover guards. The dormant registry cannot grant content access, activate a second
-production binding, relocate, transfer, or remove an active binding by itself.
+protected channel-scoped instance-state volume and host-global ownership ledger/key. The canonical
+deploy and start wrappers now fence restart, stop the four container writers, capture/import or
+preserve the final legacy scalar payload, seed the complete operator-attested legacy-owner
+inventory, create a checksum-verified backup, and clear the fence only after all steps succeed. An
+optional verified restore runs in that same stopped interval before consumers start. The scalar
+legacy app-local store remains the production picker authority until MVR-01C installs and verifies
+the rollback gateway and cutover guards. The dormant registry cannot grant content access, activate
+a second production binding, relocate, transfer, or remove an active binding by itself.
 
 ## Settings Scopes
 
@@ -245,7 +248,9 @@ Obsidian remains a valid settings editor. The settings service should reload on 
 The current runtime keeps one active vault. MVR-01B now durably records one prepared binding at
 `/app/instance-state/agentic-pkm/vault-registry.md` for container deployments, with API, worker,
 watcher, and Heimdal using one resolved cross-process store and a shared host-global root-ownership
-fence. An env-selected uninitialized folder is recorded as a provisional read-only binding without
+fence. A populated registry cannot recover by silently replacing a lost ledger/key, and startup
+requires the complete legacy-owner bootstrap receipt. An env-selected uninitialized folder is
+recorded as a provisional read-only binding without
 writing into that content root. These records remain mechanical and `authority: dormant`; legacy
 scalar settings continue to select the active vault and every second-registration producer stays
 sealed until MVR-01C. Future multi-active-vault work must preserve:

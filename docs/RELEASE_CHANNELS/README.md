@@ -106,13 +106,19 @@ consumers fail-exit through one resolved-path/permissions preflight before start
 `/app/instance-ownership` carries the HMAC-keyed canonical-root ledger shared across dev/test/prod,
 preventing equal or overlapping content roots from becoming active in different channels.
 
-MVR-01B also provides the channel-fenced final post-stop legacy export/import, latest-revision
-scalar transformer boundary, and verified backup/restore of registry plus the actual ownership
-ledger/key generation. Those recovery facilities do not authorize cutover. The registry remains
-`authority: dormant`, the legacy scalar app-local store remains authoritative in every channel,
-and second-registration, transfer, relocation, and removal producers remain sealed. No release
-procedure may retire the durable legacy source or treat prepared registry state as authoritative
-until MVR-01C passes the previous-image guard and atomically installs the new authority floor.
+MVR-01B also wires the canonical deploy and start wrappers to one channel-fenced producer. Before
+recreate it installs the restart fence and stops API, worker, watcher, and Heimdal; while stopped it
+captures the final legacy scalar payload, imports or preserves it on the durable volume, verifies
+the private complete host-wide legacy-owner inventory, seeds the shared ledger, optionally restores
+a verified backup, and creates the next registry/ledger/key backup. The fence is removed only after
+that sequence succeeds; consumer preflight rejects a missing mount, missing established state,
+incomplete owner bootstrap, or surviving fence without creating replacement state.
+
+Those recovery facilities do not authorize cutover. The registry remains `authority: dormant`, the
+legacy scalar app-local store remains authoritative in every channel, and second-registration,
+transfer, relocation, and removal producers remain sealed. No release procedure may retire the
+durable legacy source or treat prepared registry state as authoritative until MVR-01C passes the
+previous-image guard and atomically installs the new authority floor.
 
 ## Invariants (MUST hold)
 

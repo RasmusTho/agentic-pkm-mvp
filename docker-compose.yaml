@@ -83,17 +83,21 @@ services:
     volumes:
       - "instance-state:/app/instance-state"
       - "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-./runtime/instance-ownership}:/app/instance-ownership"
+      - "runtime-tmp:/app/tmp"
+      - "/Users:/Users"
+      - "/Volumes:/Volumes"
     command:
       - /bin/bash
       - -c
       - >-
-        python -c "from pathlib import Path; from app.instance.ownership_ledger import OwnershipLedger; OwnershipLedger(Path('/app/instance-ownership')).load()" &&
+        test -d /app/instance-state -a -d /app/instance-ownership &&
         chown -R "$${LOCAL_UID}:$${LOCAL_GID}" /app/instance-state /app/instance-ownership &&
         chmod 0700 /app/instance-state /app/instance-ownership
     environment:
       LOCAL_UID: ${LOCAL_UID:-0}
       LOCAL_GID: ${LOCAL_GID:-0}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
     restart: "no"
 
   api:
@@ -153,6 +157,7 @@ services:
       - "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-./runtime/instance-ownership}:/app/instance-ownership"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.instance.runtime preflight --channel \"$${PKM_ENVIRONMENT:-dev}\" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer api && exec bash /app/scripts/start_api.sh"]
     environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
@@ -230,6 +235,7 @@ services:
       - "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-./runtime/instance-ownership}:/app/instance-ownership"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.instance.runtime preflight --channel \"$${PKM_ENVIRONMENT:-dev}\" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer worker && exec python -m app.workers.outbox_worker"]
     environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
@@ -290,6 +296,7 @@ services:
       - "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-./runtime/instance-ownership}:/app/instance-ownership"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.instance.runtime preflight --channel \"$${PKM_ENVIRONMENT:-dev}\" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer watcher && exec python -m app.cli watcher run"]
     environment:
+      - DESIGN_HANDOFF_APP_LOCAL_SETTINGS=${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
       - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
       - VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-}
@@ -348,6 +355,7 @@ services:
       - "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-./runtime/instance-ownership}:/app/instance-ownership"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.instance.runtime preflight --channel \"$${PKM_ENVIRONMENT:-dev}\" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer heimdal-capture-watch && exec python -m app.cli heimdal capture-watch"]
     environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       # No `:?required` guard here (unlike docker-compose.watcher.yml's
       # standalone VAULT_ROOT) -- this is the shared base file every service
       # loads, so a hard-required var here would break `docker compose up`
