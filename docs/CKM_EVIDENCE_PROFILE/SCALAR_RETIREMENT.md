@@ -33,7 +33,7 @@ view or the tri-state work — is the mechanism that removes the false picture.
   convenience score **{value}**" line in the single-capability projection.
 - **Keep `compute_aggregate` computing and writing** the NOT-NULL `aggregate` and
   `aggregate_formula_id` columns in `assess.py` / `store.append_assessment`. The column becomes dead
-  data (dropped by a future Phase-2 epoch); leaving the write in place is what keeps this task
+  data (no removal is authorized by this directory); leaving the write in place is what keeps this task
   zero-DDL. Nothing renders it.
 - Bundle the presentation-contract writeback: update the acceptance rows in
   `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` that require the subordinate `min`
@@ -102,8 +102,10 @@ schema epoch, which Phase 1 explicitly forbids (INV-EP-1).
 
 - The per-dimension `unassessed` tri-state and the documentation-scorer fix (CKM-EP-02).
 - The per-subsystem counts view (CKM-EP-03).
-- Dropping the `aggregate` column or any schema-version change — that is a Phase-2 epoch.
-- Any dimension merge/rename or the maturity→evidence-profile reframe (Phase 2).
+- Dropping the `aggregate` column or any schema-version change; the superseded Phase-2 package no
+  longer authorizes that work.
+- Any dimension merge/rename or the maturity→evidence-profile reframe; each requires a separate
+  future specification, authority decision, and issue contract.
 
 ## Restart / Durability Posture
 

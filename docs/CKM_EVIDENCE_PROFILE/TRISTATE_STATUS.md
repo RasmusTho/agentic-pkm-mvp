@@ -111,8 +111,9 @@ version-mismatch refusal, so the column must be additive.
 
 - Removing the aggregate/band render (CKM-EP-01, prerequisite).
 - The per-subsystem counts view (CKM-EP-03).
-- Any dimension merge/rename, stub scorers, or the `intent_realization` / `tested_surface` reshape
-  (Phase 2). Only `documentation_quality`'s empty-set semantics change here.
+- Any dimension merge/rename, stub scorers, or the `intent_realization` / `tested_surface` reshape;
+  the superseded Phase-2 package does not authorize them. Only `documentation_quality`'s empty-set
+  semantics change here.
 - Dropping the `aggregate` column or any `CKM_SCHEMA_VERSION` change.
 
 ## Restart / Durability Posture

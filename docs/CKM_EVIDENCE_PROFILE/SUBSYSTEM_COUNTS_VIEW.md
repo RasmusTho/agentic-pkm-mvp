@@ -60,8 +60,8 @@ The redesign's entire premise is an honest picture. A raw-edge counts view would
 red-band picture (CKM-EP-01) with a different false picture: 22 capabilities showing near-identical
 evidence counts driven by one github-ref linker rule fanning an identical artifact bundle across all
 of them (1,074 of 2,086 edges = 51.5% from that single basis). Distinct-artifact counting plus the
-shared-evidence indicator is what keeps the view honest **without** touching the linker (a Phase-2
-workstream, out of scope here).
+shared-evidence indicator is what keeps the view honest **without** touching the linker (the
+separately specified linker-precision successor, out of scope here).
 
 ## Acceptance Criteria
 
@@ -101,10 +101,11 @@ workstream, out of scope here).
 
 ## Out of Scope
 
-- Fixing the `_seed_path()` anchor-stripping linker defect or any linker/ingestion change — that is a
-  Phase-2 linkage workstream (this task only makes the counts honest about the existing duplication).
+- Fixing the `_seed_path()` anchor-stripping linker defect or any linker/ingestion change — that
+  belongs to a separately specified and authorized linker-precision successor (this task only makes
+  the counts honest about the existing duplication).
 - The aggregate/band retirement (CKM-EP-01) and the tri-state / documentation fix (CKM-EP-02).
-- Any schema change or dimension merge/rename (Phase 2).
+- Any schema change or dimension merge/rename; the superseded Phase-2 package does not authorize it.
 
 ## Restart / Durability Posture
 

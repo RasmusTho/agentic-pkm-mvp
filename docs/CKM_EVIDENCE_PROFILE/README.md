@@ -59,14 +59,14 @@ The escrow/quota scorers are **cut** from ratification. They would render "escro
 capabilities (one `app/` path in the whole traceability matrix; 4/357 spec docs resolve), so building
 ~6 days of scorers that display almost nothing is backwards. The real follow-up is the **linkage
 workstream** (traceability-matrix rows citing real `app/` paths, spec `parent_capability:`
-resolution), scoped as its own effort *after* Phase 1 ships because the linkage — not the scorers —
-is the value item. When linkage exists, the scorers get built under the formula-id-bump rule (the
-stub→real flip has no rebuild safety net) and a 5-capability owner-validation gate.
+resolution), scoped as its own successor effort *after* Phase 1 ships because the linkage — not the
+scorers — is the value item. Any later scorer proposal requires a new specification, authority
+decision, and issue contract; this directory does not promise that it will be built.
 
 ## Known substrate defects
 
 These are verified defects in the evidence substrate that Phase 1 must be *honest about* but must not
-*fix* (fixing them is Phase-2 linkage work, out of docs-authoring and Phase-1 scope).
+*fix* (fixing them belongs to the separately authorized linker-precision successor, not Phase 1).
 
 - **Seed-path fan-out duplication (~79% of the edge graph).** `_seed_path()`
   (`app/builderops/ckm/linkers.py:56-58` on `origin/main`) strips the `::` anchor from a capability's
@@ -77,7 +77,7 @@ These are verified defects in the evidence substrate that Phase 1 must be *hones
   Consequence: any counts view built on **raw edge counts** would show inflated, near-identical numbers
   for those 22 capabilities — a fourth false picture. CKM-EP-03 therefore counts **distinct artifacts**
   and surfaces a **shared-evidence indicator**; it does not touch the linker. The linker fix is a
-  Phase-2 workstream.
+  separately specified linker-precision successor.
 
 ## Execution order
 
@@ -113,8 +113,8 @@ These invariants hold *across* the three tasks. Each task names the ones it must
   `_migrate_assessment_explainability`). A version bump is what would trip #3775/#3777's
   version-mismatch refusal; Phase 1 must not.
 - **INV-EP-2 (scalar written, never rendered).** `compute_aggregate` keeps computing and writing the
-  NOT-NULL `aggregate` / `aggregate_formula_id` columns on every assessment (the column is dead data
-  that a future Phase-2 epoch drops). No Phase-1 task may read that column into any render surface —
+  NOT-NULL `aggregate` / `aggregate_formula_id` columns on every assessment (the column becomes dead
+  data; no removal is authorized here). No Phase-1 task may read that column into any render surface —
   HTML band, `min` chip, `data-aggregate-band`, or Markdown "aggregate convenience score". Killing the
   false picture is a **render** change, not a data change.
 - **INV-EP-3 (formula-id-bump rule).** Any change to a dimension's scoring *semantics* must bump that
@@ -227,7 +227,8 @@ INV-EP-6 receipt that combines the CKM-EP-01 Retrieval result, the CKM-EP-02 nam
 and the CKM-EP-03 five-capability count comparison plus all-22 shared-evidence-indicator result on
 the operator's real 31-capability store.
 No owner-doc promotion beyond the bundled Direction A row updates (INV-EP-5) is implied by Phase 1;
-the maturity→evidence-profile rename and any broader owner-doc claim belong to Phase 2.
+the maturity→evidence-profile rename and any broader owner-doc claim require a separate future
+specification, authority decision, and issue contract.
 
 ## Source docs
 
