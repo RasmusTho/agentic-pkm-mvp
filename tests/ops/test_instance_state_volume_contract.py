@@ -36,6 +36,109 @@ from app.instance.vault_registry import (
 )
 from app.release_channels.channel_isolation_preflight import _load_compose
 from app.vault.manager import VaultManager
+from scripts.instance_state_writer_inventory import (
+    _parse_linux_stat,
+    _parse_macos_ps_row,
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+WRITER_INVENTORY_HELPER = REPO_ROOT / "scripts/instance_state_writer_inventory.py"
+
+
+def _empty_docker_path(tmp_path: Path) -> str:
+    fake_bin = tmp_path / "docker-bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"${1:-}\" in\n"
+        "  ps) exit 0 ;;\n"
+        "  inspect) printf '[]\\n'; exit 0 ;;\n"
+        "  *) exit 64 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    return f"{fake_bin}:{os.environ['PATH']}"
+
+
+def _controller_token(pid: int, *, env: dict[str, str] | None = None) -> str:
+    return subprocess.check_output(
+        [
+            sys.executable,
+            str(WRITER_INVENTORY_HELPER),
+            "controller-token",
+            "--pid",
+            str(pid),
+        ],
+        env=env,
+        text=True,
+    ).strip()
+
+
+def _write_blocking_launcher(tmp_path: Path, name: str = "start_full_system.sh") -> Path:
+    script = tmp_path / name
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'R'\n"
+        "IFS= read -r _\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def _start_blocking_launcher(
+    script: Path, *, separate_session: bool
+) -> subprocess.Popen[bytes]:
+    process = subprocess.Popen(
+        [str(script)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=separate_session,
+    )
+    assert process.stdout is not None
+    assert process.stdout.read(1) == b"R"
+    return process
+
+
+def _stop_blocking_launcher(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    assert process.stdin is not None
+    process.stdin.write(b"\n")
+    process.stdin.flush()
+    process.wait(timeout=5)
+
+
+def _run_quiescence_helper(
+    tmp_path: Path,
+    *,
+    controller_pid: int,
+    controller_token: str,
+    env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    output = tmp_path / "inventory.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WRITER_INVENTORY_HELPER),
+            "prove-quiescent",
+            "--controller-pid",
+            str(controller_pid),
+            "--controller-start-token",
+            controller_token,
+            "--output",
+            str(output),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, output
 
 
 def test_mvr01a_schema_activation_requires_rollback_capability(tmp_path) -> None:
@@ -100,7 +203,7 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
     assert producer.index("deployment-begin") < producer.index(" stop api worker watcher")
     assert producer.index(" stop api worker watcher") < producer.index("deployment-finish")
     assert "deployment-prove" in producer
-    assert "probe_count" in producer
+    assert "probe_count" in WRITER_INVENTORY_HELPER.read_text(encoding="utf-8")
 
 
 def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
@@ -121,6 +224,8 @@ def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
         instance_state_root=instance_state_root,
         host_global_root=host_global_root,
         legacy_path=legacy_store.path,
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
     )
     fence = _deployment_fence_path(host_global_root, "test")
     assert fence.is_file()
@@ -205,6 +310,8 @@ def test_deployment_producer_keeps_restart_fenced_on_incomplete_inventory(
         instance_state_root=instance_state_root,
         host_global_root=host_global_root,
         legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
     )
     inventory_path = host_global_root / "legacy-owner-inventory.json"
     inventory_path.write_text(
@@ -249,6 +356,8 @@ def test_finalizer_rejects_caller_booleans_without_a_durable_quiescence_proof(tm
         instance_state_root=state,
         host_global_root=ownership,
         legacy_path=tmp_path / "legacy.md",
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
     )
     inventory = ownership / "legacy-owner-inventory.json"
     inventory.write_text(
@@ -304,6 +413,8 @@ def test_host_wide_proof_rejects_live_or_racing_domains(tmp_path) -> None:
         instance_state_root=state,
         host_global_root=ownership,
         legacy_path=tmp_path / "legacy.md",
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
     )
     inventory = ownership / "legacy-owner-inventory.json"
     inventory.write_text(
@@ -329,138 +440,298 @@ def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None
     producer = (Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh").read_text(
         encoding="utf-8"
     )
-    assert producer.count("docker ps --format") >= 2
-    assert "pgrep -af" in producer
-    assert "native_pattern=" in producer
-    assert "controller_pid" in producer
-    assert '"dev", "test", "prod", "native"' in producer
+    assert "instance_state_writer_inventory.py" in producer
+    assert "prove-quiescent" in producer
+    assert "pgrep" not in producer
     assert producer.index(" stop api worker watcher") < producer.index("deployment-prove")
     assert producer.index("deployment-prove") < producer.index("deployment-finish")
 
 
-def _run_native_writer_probe(tmp_path: Path, *, independent: bool) -> subprocess.CompletedProcess[str]:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_pgrep = fake_bin / "pgrep"
-    independent_row = "printf '424242 /opt/pkm/scripts/start_full_system.sh\\n'" if independent else ":"
-    fake_pgrep.write_text(
+def test_foreground_controller_inventory_helper_passes_without_self_observation(tmp_path) -> None:
+    path = _empty_docker_path(tmp_path)
+    controller = tmp_path / "deploy_channel.sh"
+    output = tmp_path / "inventory.json"
+    controller.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"${FAKE_CONTROLLER_PID:?}\"\n"
-        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"$PPID\"\n"
-        f"{independent_row}\n",
+        "set -eu\n"
+        'token="$(\"$PYTHON\" \"$HELPER\" controller-token --pid \"$$\")"\n'
+        '"$PYTHON" "$HELPER" prove-quiescent --controller-pid "$$" '
+        '--controller-start-token "$token" --output "$OUTPUT"\n',
         encoding="utf-8",
     )
-    fake_pgrep.chmod(0o755)
-    fake_docker = fake_bin / "docker"
-    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_docker.chmod(0o755)
-    script = Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh"
-    return subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$1"; export FAKE_CONTROLLER_PID="$$"; _instance_state_native_writers "$$"',
-            "tests/deploy/test_deploy_channel.py::test_ci_shaped_explicit_path",
-            str(script),
-        ],
-        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def test_native_probe_excludes_controller_and_command_substitution_pid(tmp_path) -> None:
-    result = _run_native_writer_probe(tmp_path, independent=False)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == ""
-
-
-def test_native_probe_preserves_truly_independent_launcher(tmp_path) -> None:
-    result = _run_native_writer_probe(tmp_path, independent=True)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "424242 /opt/pkm/scripts/start_full_system.sh\n"
-
-
-def test_independent_launcher_blocks_the_real_two_pass_inventory_path(tmp_path) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    for name, body in {
-        "docker": "#!/usr/bin/env bash\nexit 0\n",
-        "pgrep": (
-            "#!/usr/bin/env bash\n"
-            "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"${FAKE_CONTROLLER_PID:?}\"\n"
-            "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"$PPID\"\n"
-            "printf '424242 /opt/pkm/scripts/start_full_system.sh\\n'\n"
-        ),
-    }.items():
-        executable = fake_bin / name
-        executable.write_text(body, encoding="utf-8")
-        executable.chmod(0o755)
-    script = Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh"
+    controller.chmod(0o755)
     result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            (
-                'source "$1"; export FAKE_CONTROLLER_PID="$$"; '
-                'compose_stub() { return 0; }; '
-                'prepare_instance_state_deployment compose_stub dev'
-            ),
-            "tests/deploy/test_deploy_channel.py::test_ci_shaped_explicit_path",
-            str(script),
-        ],
-        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert result.stderr == "host-wide writer inventory is live or racing\n"
-
-
-def test_racing_launcher_blocks_the_real_two_pass_inventory_path(tmp_path) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    counter = tmp_path / "pgrep-count"
-    fake_docker = fake_bin / "docker"
-    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_docker.chmod(0o755)
-    fake_pgrep = fake_bin / "pgrep"
-    fake_pgrep.write_text(
-        "#!/usr/bin/env bash\n"
-        "count=0; [ ! -f \"${FAKE_PGREP_COUNTER:?}\" ] || count=$(cat \"$FAKE_PGREP_COUNTER\")\n"
-        "count=$((count + 1)); printf '%s' \"$count\" > \"$FAKE_PGREP_COUNTER\"\n"
-        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"${FAKE_CONTROLLER_PID:?}\"\n"
-        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"$PPID\"\n"
-        "[ \"$count\" -lt 2 ] || printf '424242 /opt/pkm/scripts/start_full_system.sh\\n'\n",
-        encoding="utf-8",
-    )
-    fake_pgrep.chmod(0o755)
-    script = Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh"
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            (
-                'source "$1"; export FAKE_CONTROLLER_PID="$$"; '
-                'compose_stub() { return 0; }; '
-                'prepare_instance_state_deployment compose_stub dev'
-            ),
-            "tests/deploy/test_deploy_channel.py::test_ci_shaped_explicit_path",
-            str(script),
-        ],
+        [str(controller)],
         env={
             **os.environ,
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "FAKE_PGREP_COUNTER": str(counter),
+            "PATH": path,
+            "PYTHON": sys.executable,
+            "HELPER": str(WRITER_INVENTORY_HELPER),
+            "OUTPUT": str(output),
         },
         capture_output=True,
         text=True,
         check=False,
     )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema"] == "agentic-pkm.host-deployment-quiescence.v2"
+    assert payload["probe_count"] == 2
+    assert payload["domains"] == {"dev": [], "native": [], "prod": [], "test": []}
+    assert len(payload["snapshot_digests"]) == 2
+    assert payload["snapshot_digests"][0] == payload["snapshot_digests"][1]
+
+
+@pytest.mark.parametrize("separate_session", [True, False])
+def test_actual_native_launcher_blocks_regardless_of_session_or_ancestry(
+    tmp_path, separate_session
+) -> None:
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    token = _controller_token(controller_pid, env=env)
+    launcher = _start_blocking_launcher(
+        _write_blocking_launcher(tmp_path), separate_session=separate_session
+    )
+    try:
+        result, output = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=token,
+            env=env,
+        )
+    finally:
+        _stop_blocking_launcher(launcher)
     assert result.returncode != 0
     assert result.stderr == "host-wide writer inventory is live or racing\n"
+    assert not output.exists()
+
+
+def test_actual_launcher_appearing_between_real_probes_blocks_without_sleep(tmp_path) -> None:
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    token = _controller_token(controller_pid, env=env)
+    output = tmp_path / "inventory.json"
+    ready_r, ready_w = os.pipe()
+    continue_r, continue_w = os.pipe()
+    helper_env = {
+        **env,
+        "INSTANCE_STATE_INVENTORY_TEST_BETWEEN_READY_FD": str(ready_w),
+        "INSTANCE_STATE_INVENTORY_TEST_BETWEEN_CONTINUE_FD": str(continue_r),
+    }
+    helper = subprocess.Popen(
+        [
+            sys.executable,
+            str(WRITER_INVENTORY_HELPER),
+            "prove-quiescent",
+            "--controller-pid",
+            str(controller_pid),
+            "--controller-start-token",
+            token,
+            "--output",
+            str(output),
+        ],
+        env=helper_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        pass_fds=(ready_w, continue_r),
+        text=True,
+    )
+    os.close(ready_w)
+    os.close(continue_r)
+    launcher: subprocess.Popen[bytes] | None = None
+    try:
+        assert os.read(ready_r, 1) == b"R"
+        launcher = _start_blocking_launcher(
+            _write_blocking_launcher(tmp_path), separate_session=True
+        )
+        os.write(continue_w, b"C")
+        _, stderr = helper.communicate(timeout=10)
+    finally:
+        os.close(ready_r)
+        os.close(continue_w)
+        if launcher is not None:
+            _stop_blocking_launcher(launcher)
+        if helper.poll() is None:
+            helper.kill()
+            helper.wait(timeout=5)
+    assert helper.returncode != 0
+    assert stderr == "host-wide writer inventory is live or racing\n"
+    assert not output.exists()
+
+
+def test_docker_enumeration_error_fails_closed_without_proof(tmp_path) -> None:
+    fake_bin = tmp_path / "docker-bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text("#!/usr/bin/env bash\nexit 71\n", encoding="utf-8")
+    docker.chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    controller_pid = os.getpid()
+    result, output = _run_quiescence_helper(
+        tmp_path,
+        controller_pid=controller_pid,
+        controller_token=_controller_token(controller_pid, env=env),
+        env=env,
+    )
+    assert result.returncode != 0
+    assert "docker process enumeration failed" in result.stderr
+    assert not output.exists()
+
+
+def test_native_process_enumeration_error_fails_closed_without_proof(tmp_path) -> None:
+    controller_pid = os.getpid()
+    controller_token = _controller_token(controller_pid)
+    output = tmp_path / "inventory.json"
+    if sys.platform.startswith("linux"):
+        env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+        ready_r, ready_w = os.pipe()
+        continue_r, continue_w = os.pipe()
+        env |= {
+            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_READY_FD": str(ready_w),
+            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_CONTINUE_FD": str(continue_r),
+        }
+        launcher = _start_blocking_launcher(
+            _write_blocking_launcher(tmp_path), separate_session=True
+        )
+        helper = subprocess.Popen(
+            [
+                sys.executable,
+                str(WRITER_INVENTORY_HELPER),
+                "prove-quiescent",
+                "--controller-pid",
+                str(controller_pid),
+                "--controller-start-token",
+                controller_token,
+                "--output",
+                str(output),
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            pass_fds=(ready_w, continue_r),
+            text=True,
+        )
+        os.close(ready_w)
+        os.close(continue_r)
+        try:
+            assert os.read(ready_r, 1) == b"R"
+            _stop_blocking_launcher(launcher)
+            os.write(continue_w, b"C")
+            _, stderr = helper.communicate(timeout=10)
+        finally:
+            os.close(ready_r)
+            os.close(continue_w)
+            _stop_blocking_launcher(launcher)
+            if helper.poll() is None:
+                helper.kill()
+                helper.wait(timeout=5)
+    else:
+        fake_bin = tmp_path / "native-bin"
+        fake_bin.mkdir()
+        docker = fake_bin / "docker"
+        docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        docker.chmod(0o755)
+        ps = fake_bin / "ps"
+        ps.write_text(
+            "#!/usr/bin/env bash\n"
+            "case \" $* \" in\n"
+            "  *\" -p \"*) exec /bin/ps \"$@\" ;;\n"
+            "  *) exit 72 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        ps.chmod(0o755)
+        result, _ = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=controller_token,
+            env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        )
+        helper = None
+        stderr = result.stderr
+    assert (helper.returncode if helper is not None else result.returncode) != 0
+    assert "native process enumeration failed" in stderr
+    assert not output.exists()
+
+
+def test_linux_and_macos_process_identity_parsers_are_strict() -> None:
+    fields = ["S", "1", "123", "123", *("0" for _ in range(15)), "456"]
+    assert _parse_linux_stat(123, f"123 (bash worker) {' '.join(fields)}") == (
+        1,
+        123,
+        "456",
+    )
+    mac = _parse_macos_ps_row(
+        "  123     1   123 Sun Jul 19 05:36:50 2026     "
+        "/bin/bash /opt/pkm/scripts/start_full_system.sh"
+    )
+    assert mac.pid == 123
+    assert mac.ppid == 1
+    assert mac.pgid == 123
+    assert mac.argv == ("/bin/bash", "/opt/pkm/scripts/start_full_system.sh")
+    with pytest.raises(RuntimeError, match="malformed"):
+        _parse_macos_ps_row("123 malformed")
+
+
+def test_proof_rejects_inventory_controller_identity_not_bound_to_active_lease(tmp_path) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    controller_token = _controller_token(controller_pid, env=env)
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+        controller_pid=controller_pid,
+        controller_start_token=controller_token,
+    )
+    result, inventory = _run_quiescence_helper(
+        tmp_path,
+        controller_pid=controller_pid,
+        controller_token=controller_token,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(inventory.read_text(encoding="utf-8"))
+    payload["controller"]["start_token"] = "linux:" + "0" * 64
+    inventory.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(InstanceStatePreflightError, match="two-pass host-wide"):
+        _prove_instance_state_quiescence(
+            channel="prod", host_global_root=ownership, inventory_path=inventory
+        )
+
+
+def test_v2_inventory_proof_is_accepted_by_the_production_proof_consumer(tmp_path) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    controller_token = _controller_token(controller_pid, env=env)
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+        controller_pid=controller_pid,
+        controller_start_token=controller_token,
+    )
+    result, inventory = _run_quiescence_helper(
+        tmp_path,
+        controller_pid=controller_pid,
+        controller_token=controller_token,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    proof = _prove_instance_state_quiescence(
+        channel="prod", host_global_root=ownership, inventory_path=inventory
+    )
+    proof.require_valid(channel_id="prod")
 
 
 def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:

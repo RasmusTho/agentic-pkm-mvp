@@ -183,3 +183,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** Repair attempt 1 assumed `$$` identified the command-substitution probe, but Bash preserves the parent `$$` while `BASHPID` identifies the probe shell, so CI counted the probe as an independent deployment launcher.
 **Upstream artifact:** `tests/ops/test_instance_state_volume_contract.py` — production deployment-wrapper probe tests must exercise controller, command-substitution, independent-live, and racing process rows behaviorally under CI-shaped argv.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because no valid host-store cutover acknowledgement or explicit BuilderOps state path is configured; convert this entry when the acknowledged host store is reachable.
+
+## 2026-07-19 — #3854 (Synthetic process rows hid a self-observing inventory)
+**Source:** gh-fix-ci strongest repair escalation
+**Diverged:** Two standard repairs refined PID filtering and passed synthetic `pgrep` rows locally, but the same 24 CI wrappers still failed because the shell inventory observed its own non-portable process mechanism.
+**Upstream artifact:** `tests/ops/test_instance_state_volume_contract.py` — deployment quiescence must use actual long-lived processes, synchronized real-probe races, and enumeration-failure tests rather than fake process rows.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused without a valid host-store cutover acknowledgement or explicit BuilderOps state path; convert this entry when the acknowledged host store is reachable.

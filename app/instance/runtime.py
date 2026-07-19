@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import stat
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -575,8 +576,9 @@ def _preflight_runtime(
 
 _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
-_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v1"
-_QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v1"
+_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v2"
+_QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
+_CONTROLLER_START_TOKEN_RE = re.compile(r"^(?:linux|darwin):[0-9a-f]{64}$")
 
 
 def _deployment_fence_path(host_global_root: Path, channel: str) -> Path:
@@ -648,11 +650,15 @@ def _begin_instance_state_deployment(
     instance_state_root: Path,
     host_global_root: Path,
     legacy_path: Path,
+    controller_pid: int,
+    controller_start_token: str,
 ) -> dict[str, object]:
     """Install the restart fence before any legacy writer is stopped."""
 
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
+    if controller_pid <= 0 or _CONTROLLER_START_TOKEN_RE.fullmatch(controller_start_token) is None:
+        raise InstanceStatePreflightError("valid deployment controller identity is required")
     os.chmod(ownership_root, 0o700)
     layout = InstanceStateLayout.for_channel(state_mount, channel)
     layout.ensure()
@@ -669,6 +675,10 @@ def _begin_instance_state_deployment(
         "channel_id": channel,
         "nonce": nonce,
         "phase": "claimed",
+        "controller": {
+            "pid": controller_pid,
+            "start_token": controller_start_token,
+        },
     }
     if lease_path.exists():
         raise InstanceStatePreflightError("another host-global deployment lease is active")
@@ -677,6 +687,10 @@ def _begin_instance_state_deployment(
         "schema": _DEPLOYMENT_FENCE_SCHEMA,
         "channel_id": channel,
         "deployment_nonce": nonce,
+        "controller": {
+            "pid": controller_pid,
+            "start_token": controller_start_token,
+        },
         "legacy_path": str(source),
         "diagnostic_fingerprint": diagnostic_fingerprint,
     }
@@ -699,20 +713,43 @@ def _prove_instance_state_quiescence(
     lease_path = _deployment_lease_path(root)
     try:
         lease = json.loads(lease_path.read_text(encoding="utf-8"))
-        inventory_bytes = Path(inventory_path).read_bytes()
+        inventory_file = Path(inventory_path)
+        inventory_metadata = inventory_file.lstat()
+        if (
+            not stat.S_ISREG(inventory_metadata.st_mode)
+            or inventory_metadata.st_uid != os.geteuid()
+            or inventory_metadata.st_mode & 0o777 != 0o600
+        ):
+            raise ValueError
+        inventory_bytes = inventory_file.read_bytes()
         inventory = json.loads(inventory_bytes)
+        domains = inventory.get("domains")
+        controller = lease.get("controller")
+        inventory_controller = inventory.get("controller")
+        empty_domains: dict[str, list[object]] = {
+            domain: [] for domain in ("dev", "native", "prod", "test")
+        }
+        empty_digest = hashlib.sha256(
+            json.dumps(empty_domains, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         if (
             lease.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
             or lease.get("channel_id") != channel
             or lease.get("phase") != "claimed"
             or not isinstance(lease.get("nonce"), str)
+            or not isinstance(controller, dict)
+            or not isinstance(controller.get("pid"), int)
+            or _CONTROLLER_START_TOKEN_RE.fullmatch(
+                str(controller.get("start_token") or "")
+            )
+            is None
             or inventory.get("schema") != _QUIESCENCE_INVENTORY_SCHEMA
             or inventory.get("inventory_complete") is not True
             or inventory.get("all_consumers_stopped") is not True
             or inventory.get("probe_count") != 2
-            or not isinstance(inventory.get("domains"), dict)
-            or set(inventory["domains"]) != {"dev", "test", "prod", "native"}
-            or any(inventory["domains"][domain] for domain in inventory["domains"])
+            or inventory_controller != controller
+            or domains != empty_domains
+            or inventory.get("snapshot_digests") != [empty_digest, empty_digest]
         ):
             raise ValueError
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -905,6 +942,8 @@ def main(argv: list[str] | None = None) -> int:
     begin.add_argument("--instance-state-root", type=Path, required=True)
     begin.add_argument("--host-global-root", type=Path, required=True)
     begin.add_argument("--legacy-path", type=Path, required=True)
+    begin.add_argument("--controller-pid", type=int, required=True)
+    begin.add_argument("--controller-start-token", required=True)
     finish = subparsers.add_parser("deployment-finish")
     finish.add_argument("--channel", required=True)
     finish.add_argument("--instance-state-root", type=Path, required=True)
@@ -936,6 +975,8 @@ def main(argv: list[str] | None = None) -> int:
                     instance_state_root=args.instance_state_root,
                     host_global_root=args.host_global_root,
                     legacy_path=args.legacy_path,
+                    controller_pid=args.controller_pid,
+                    controller_start_token=args.controller_start_token,
                 ),
                 sort_keys=True,
             )

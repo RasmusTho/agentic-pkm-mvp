@@ -35,6 +35,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_state_deployment.sh",
+        "scripts/instance_state_writer_inventory.py",
     ):
         destination = root / relative
         shutil.copy2(REPO_ROOT / relative, destination)

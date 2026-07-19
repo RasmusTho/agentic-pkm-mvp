@@ -49,7 +49,7 @@ class DeploymentQuiescenceProof:
         try:
             payload = json.loads(self.lease_path.read_text(encoding="utf-8"))
             if (
-                payload.get("schema") != "agentic-pkm.host-deployment-lease.v1"
+                payload.get("schema") != "agentic-pkm.host-deployment-lease.v2"
                 or payload.get("channel_id") != self.channel_id
                 or payload.get("nonce") != self.nonce
                 or payload.get("inventory_digest") != self.inventory_digest
