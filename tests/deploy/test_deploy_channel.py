@@ -113,6 +113,26 @@ fi
 exec {real_git!s} "$@"
 """,
     )
+    real_mv = shutil.which("mv")
+    assert real_mv is not None
+    _write_executable(
+        bin_dir / "mv",
+        f"""#!/usr/bin/env bash
+set -eu
+if [ -n "${{FAKE_MV_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_MV_FAIL_MATCH}}"* ]]; then
+  counter_file="${{FAKE_MV_COUNTER_FILE:?}}"
+  count=0
+  [ ! -f "${{counter_file}}" ] || count="$(cat "${{counter_file}}")"
+  count=$((count + 1))
+  printf '%s\n' "${{count}}" >"${{counter_file}}"
+  if [ "${{count}}" -eq "${{FAKE_MV_FAIL_ON_COUNT:-1}}" ]; then
+    echo 'fake mv failure' >&2
+    exit "${{FAKE_MV_FAIL_RC:-62}}"
+  fi
+fi
+exec {real_mv!s} "$@"
+""",
+    )
     python_wrapper = bin_dir / "python"
     _write_executable(
         python_wrapper,
@@ -784,6 +804,49 @@ def test_first_deploy_pull_failure_preserves_no_baseline_retry_epoch(tmp_path: P
 
     assert second.returncode == 0, second.stdout + second.stderr
     assert "migration retry: revalidating <no-baseline>" in second.stdout
+    assert not pending.exists()
+    migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
+    assert len(migrate_events) == 1
+
+
+def test_pin_restore_failure_preserves_pending_migration_retry_epoch(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/pin_restore_retry.py"
+    migration.write_text(
+        'revision = "pin_restore_retry"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add pin-restore retry"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = "pull api worker"
+    env["FAKE_MV_FAIL_MATCH"] = "config/deploy/dev.env"
+    env["FAKE_MV_FAIL_ON_COUNT"] = "2"
+    env["FAKE_MV_COUNTER_FILE"] = str(tmp_path / "mv-counter")
+
+    first = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert first.returncode == 24
+    assert "rollback pin restore failed" in first.stderr
+    pending = root / "config/deploy/dev.migration-pending.env"
+    assert pending.exists()
+    assert f"FROM_SHA={previous_sha}" in pending.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+
+    for key in ("FAKE_DOCKER_FAIL_MATCH", "FAKE_MV_FAIL_MATCH", "FAKE_MV_FAIL_ON_COUNT"):
+        env.pop(key)
+    second = _run_deploy(root, env, target_sha)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating" in second.stdout
     assert not pending.exists()
     migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
     assert len(migrate_events) == 1

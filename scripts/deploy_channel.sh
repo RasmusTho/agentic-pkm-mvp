@@ -368,12 +368,12 @@ rollback_failed_startup() {
     return 0
   fi
   if [ -n "${current_sha}" ]; then
-    rm -f "${migration_pending_file}"
     echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
     if ! write_pin "${pin_file}" "${current_sha}"; then
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
       return 0
     fi
+    rm -f "${migration_pending_file}"
     if ! compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
