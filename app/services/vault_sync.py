@@ -34,6 +34,7 @@ from app.events.types import (
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.objects import (
+    canonical_event_identity,
     DomainObject,
     resolve_canonical_object_id_in_transaction,
     save_object_in_transaction,
@@ -252,8 +253,9 @@ def _update_path_only(
     fm_hash: str,
     body_hash: str,
     mtime: datetime,
+    canonical_object_id: str | None = None,
 ) -> None:
-    canonical_object_id = _canonical_object_id(conn, uuid_value)
+    canonical_object_id = canonical_object_id or _canonical_object_id(conn, uuid_value)
     # Step 1: ensure an objects-row exists and has the new path. Do this first, with rollbacks between fallbacks.
     updated = 0
 
@@ -455,9 +457,9 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                 # Outbox consumers use ``uuid`` as the lifecycle key.  It must
                 # therefore be the canonical FK parent, not frontmatter's
                 # retained continuity uuid (which may differ from objects.id).
-                delete_payload["uuid"] = canonical_object_id
-                delete_payload["object_id"] = canonical_object_id
-                delete_payload["vault_uuid"] = effective_uuid
+                delete_payload.update(
+                    canonical_event_identity(canonical_object_id, effective_uuid)
+                )
         if deleted and delete_payload is not None:
             # KERNEL-01 atomicity (#2864): enqueue on the SAME connection,
             # before the commit, so the file_state delete + objects path-null +
@@ -574,9 +576,7 @@ def upsert_object_from_note(
             topic = INGEST_OBJECT_METADATA
         if topic:
             payload = {
-                "uuid": canonical_object_id,
-                "object_id": canonical_object_id,
-                "vault_uuid": uuid_value,
+                **canonical_event_identity(canonical_object_id, uuid_value),
                 "title": title,
                 "review_state": review_state,
                 "content": body,
@@ -647,6 +647,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
+                canonical_object_id=canonical_object_id,
             )
             append_change(f"Skipped sync for active edit: {note_path}", vault_path=note_path)
             conn.commit()
@@ -810,9 +811,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
             ),
         )
 
-        obj_payload["uuid"] = canonical_object_id
-        obj_payload["object_id"] = canonical_object_id
-        obj_payload["vault_uuid"] = uuid_value
+        obj_payload.update(canonical_event_identity(canonical_object_id, uuid_value))
         _enqueue(topic, obj_payload, conn=conn, observation=mtime.isoformat())
 
         _upsert_file_state(

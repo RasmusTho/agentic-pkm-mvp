@@ -30,6 +30,7 @@ from typing import Any
 from app.db.db import conn_rw
 from app.db.decisions_schema import assert_decisions_schema
 from app.receipts.decision_receipt_log import iter_decision_receipts
+from app.stores.pg import vault_uuid_to_canonical_id_map_with_connection
 
 
 @dataclass
@@ -67,23 +68,6 @@ def _existing_object_ids(cur) -> set[str]:
     return {str(r["object_id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
 
 
-def _uuid_to_id_map(cur) -> dict[str, str]:
-    cur.execute(
-        """
-        SELECT canonical.object_id,
-               COALESCE(legacy.uuid, canonical.object_id) AS vault_uuid
-        FROM store_objects canonical
-        LEFT JOIN objects legacy ON legacy.id = canonical.object_id
-        """
-    )
-    out: dict[str, str] = {}
-    for r in cur.fetchall():
-        rid = str(r["object_id"] if isinstance(r, dict) else r[0])
-        ruuid = r["vault_uuid"] if isinstance(r, dict) else r[1]
-        out[str(ruuid)] = rid
-    return out
-
-
 def _resolve_target_object_id(
     receipt: dict[str, Any],
     existing_ids: set[str],
@@ -118,7 +102,7 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
         with conn.cursor() as cur:
             assert_decisions_schema(conn)
             existing_ids = _existing_object_ids(cur)
-            uuid_to_id = _uuid_to_id_map(cur)
+            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(conn)
 
             cur.execute("TRUNCATE TABLE decisions")
 
@@ -167,7 +151,7 @@ def _log_projection_rows(vault_root: Path | None = None) -> list[tuple[str, str,
     with conn_rw() as conn:
         with conn.cursor() as cur:
             existing_ids = _existing_object_ids(cur)
-            uuid_to_id = _uuid_to_id_map(cur)
+            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(conn)
     for receipt in receipts:
         key = receipt.get("key")
         if not key:

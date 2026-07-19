@@ -37,6 +37,14 @@ LEGACY_OBJECTS_FK_CONSUMERS = frozenset(
 )
 
 
+def _legacy_consumer_sql_rows() -> str:
+    """Render the reviewed allowlist used by the fail-loud SQL preflight."""
+    return ",\n                       ".join(
+        f"('{table}', '{column}')"
+        for table, column in sorted(LEGACY_OBJECTS_FK_CONSUMERS)
+    )
+
+
 def upgrade() -> None:
     op.execute(
         """
@@ -223,14 +231,7 @@ def upgrade() -> None:
             LOOP
                 IF fk.table_schema <> 'public'
                    OR (fk.table_name, fk.column_name) NOT IN (
-                       ('chunks', 'object_id'),
-                       ('embeddings', 'object_id'),
-                       ('relations', 'src_id'),
-                       ('relations', 'dst_id'),
-                       ('membership', 'object_id'),
-                       ('membership', 'set_id'),
-                       ('decisions', 'object_id'),
-                       ('audit', 'object_id')
+                       __LEGACY_OBJECTS_FK_CONSUMERS__
                    ) THEN
                     RAISE EXCEPTION USING
                         MESSAGE = format(
@@ -280,7 +281,10 @@ def upgrade() -> None:
                 );
             END LOOP;
         END$$;
-        """
+        """.replace(
+            "__LEGACY_OBJECTS_FK_CONSUMERS__",
+            _legacy_consumer_sql_rows(),
+        )
     )
 
 

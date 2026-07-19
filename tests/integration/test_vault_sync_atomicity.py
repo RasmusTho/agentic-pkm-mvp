@@ -71,21 +71,14 @@ def _configure_isolated_pg_test(monkeypatch) -> tuple[str, str]:
     schema = f"pgtest_{uuid4().hex}"
     _create_schema(base_dsn, schema)
     dsn = _dsn_with_search_path(base_dsn, schema)
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute(
-            """
-            CREATE TABLE store_objects (
-                object_id UUID PRIMARY KEY,
-                kind TEXT NOT NULL,
-                source_ref TEXT,
-                payload JSONB NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-            """
-        )
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("DB_DSN", dsn)
+    # Use the production store-schema producer instead of copying its DDL into
+    # this test. The monkeypatched process flag is restored after each case.
+    from app.stores import pg as pg_store
+
+    monkeypatch.setattr(pg_store, "_TABLES_READY", False)
+    pg_store._ensure_tables()
     return base_dsn, schema
 
 

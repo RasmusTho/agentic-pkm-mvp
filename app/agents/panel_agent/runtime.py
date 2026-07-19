@@ -126,6 +126,7 @@ def execute_panel_intent(
     *,
     outbox_path: Path | None = None,
     vault_root: Path | None = None,
+    vault_uuid: str | None = None,
     allow_legacy_promotion_without_trust_verb: bool = False,
 ) -> PanelRuntimeResult:
     # Guard-at-seam (#2808, formal-model.md Divergence F-A): assert WriteGuard
@@ -306,7 +307,7 @@ def execute_panel_intent(
         _persist_log(intent_event.payload.note, state.log_entry)
 
     # --- Panel writeback: remove executed checkboxes and write receipts ---
-    _apply_note_writeback(state, note_text, vault_root)
+    _apply_note_writeback(state, note_text, vault_root, vault_uuid=vault_uuid)
 
     return PanelRuntimeResult(
         intent=intent_event,
@@ -444,6 +445,8 @@ def _apply_note_writeback(
     state: PanelAgentState,
     original_note_text: str,
     vault_root: Path | None,
+    *,
+    vault_uuid: str | None = None,
 ) -> None:
     """Remove executed checkboxes, write proposal suggestions, write receipts, and persist to vault file.
 
@@ -633,7 +636,7 @@ def _apply_note_writeback(
     upsert_executed_ids(note_uuid, [stable_action_id(label) for label in all_done_labels])
 
     # Refresh companion content_hash so it reflects the post-writeback content.
-    _refresh_companion_hash(note_uuid, updated, vault_root, note_file)
+    _refresh_companion_hash(vault_uuid or note_uuid, updated, vault_root, note_file)
 
     logger.info(
         "panel writeback applied note_path=%s removed=%d receipts=%d proposals=%d fallbacks=%d no_match=%s",

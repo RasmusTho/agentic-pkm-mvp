@@ -42,6 +42,7 @@ import psycopg
 
 from app.config.paths import resolve_optional_vault_root
 from app.db.db import conn_rw
+from app.stores.pg import retained_vault_uuid_with_connection
 from app.vault.paths import (
     NoVaultSelectedError,
     resolve_vault_system_dir_rel_or_default,
@@ -111,23 +112,9 @@ def resolve_vault_uuid(object_id: str) -> str | None:
     """
     try:
         with conn_rw() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT legacy.uuid AS vault_uuid
-                    FROM store_objects canonical
-                    LEFT JOIN objects legacy ON legacy.id = canonical.object_id
-                    WHERE canonical.object_id = %s
-                    """,
-                    (object_id,),
-                )
-                row = cur.fetchone()
+            return retained_vault_uuid_with_connection(conn, object_id)
     except psycopg.Error:
         return None
-    if not row:
-        return None
-    value = row["vault_uuid"] if isinstance(row, dict) else row[0]
-    return str(value) if value is not None else None
 
 
 def build_receipt(

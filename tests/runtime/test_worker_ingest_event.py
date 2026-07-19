@@ -310,6 +310,7 @@ def test_handle_panel_scan_requested_uses_canonical_store_identity(
 
     def fake_run_panel_note_execution(note_uuid, **_kwargs):
         seen["execution_id"] = note_uuid
+        seen["execution_vault_uuid"] = _kwargs.get("vault_uuid")
         return _Execution()
 
     monkeypatch.setattr(outbox_worker, "refresh_panel_note_object", fake_refresh_panel_note_object)
@@ -325,6 +326,7 @@ def test_handle_panel_scan_requested_uses_canonical_store_identity(
         "vault_uuid": vault_uuid,
         "refresh_id": canonical_id,
         "execution_id": canonical_id,
+        "execution_vault_uuid": vault_uuid,
     }
 
 

@@ -26,7 +26,7 @@ from app.services.outbox import insert_object_and_outbox
 from app.services.vault_sync import delete_note
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
-from app.objects import ObjectStore, resolve_canonical_object_id
+from app.objects import ObjectStore, canonical_event_identity, resolve_canonical_object_id
 from app.watcher.events import emit_watcher_run_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.vault.manager import iter_vault_markdown_files
@@ -382,9 +382,7 @@ def _emit_watcher_delete_event(
         "deleted": True,
         "reason": "vault_note_deleted",
         "source": "vault_watcher.run_watcher_tick",
-        "uuid": canonical_object_id,
-        "object_id": canonical_object_id,
-        "vault_uuid": note_uuid,
+        **canonical_event_identity(canonical_object_id, note_uuid),
     }
     insert_object_and_outbox(
         payload,

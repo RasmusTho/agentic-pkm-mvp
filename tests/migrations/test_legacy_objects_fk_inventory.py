@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import importlib.util
 from pathlib import Path
 
 
@@ -17,6 +18,15 @@ ACCOUNTED_CONSUMERS = {
     ("decisions", "object_id"),
     ("audit", "object_id"),
 }
+
+
+def _migration_module():
+    path = REPO_ROOT / "app/alembic/versions/7e4f2a1c9d30_migrate_legacy_objects_fk_consumers.py"
+    spec = importlib.util.spec_from_file_location("legacy_objects_fk_cutover", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_all_legacy_objects_fk_consumers_are_accounted_for() -> None:
@@ -41,12 +51,13 @@ def test_all_legacy_objects_fk_consumers_are_accounted_for() -> None:
             for column_match in pattern.finditer(body):
                 discovered.add((table_match.group("table").lower(), column_match.group("column").lower()))
 
-    migration_text = (
-        REPO_ROOT
-        / "app/alembic/versions/7e4f2a1c9d30_migrate_legacy_objects_fk_consumers.py"
-    ).read_text(encoding="utf-8")
-    for table, column in ACCOUNTED_CONSUMERS:
-        assert f"('{table}', '{column}')" in migration_text or f'("{table}", "{column}")' in migration_text
+    migration = _migration_module()
+    rendered = {
+        tuple(value.strip("()'").split("', '"))
+        for value in migration._legacy_consumer_sql_rows().split(",\n                       ")
+    }
+    assert migration.LEGACY_OBJECTS_FK_CONSUMERS == ACCOUNTED_CONSUMERS
+    assert rendered == ACCOUNTED_CONSUMERS
 
     assert discovered <= ACCOUNTED_CONSUMERS
     assert {

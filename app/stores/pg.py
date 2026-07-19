@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, asdict
+from functools import lru_cache
 from typing import Iterable, List, Tuple
 from uuid import UUID
 
@@ -32,6 +33,11 @@ _STORE_TABLES = (
 
 # store_vector_index identity columns the migration guarantees.
 _IDENTITY_COLUMNS = ("dim", "model", "provider", "normalize")
+
+_CANONICAL_RETAINED_IDENTITY_FROM_SQL = """
+FROM store_objects canonical
+LEFT JOIN objects legacy ON legacy.id = canonical.object_id
+"""
 
 _MIGRATION_HINT = (
     "Store schema is migration-owned (KERNEL-04, #2766): run 'alembic upgrade head' "
@@ -340,13 +346,23 @@ def truncate_pg_tables() -> None:
     _ensure_tables()
     with _connect() as conn:
         with conn.cursor() as cur:
-            # Do not CASCADE a truncate through durable consumers (decisions,
-            # audit, etc.).  Ordered DELETE keeps their declared FK semantics
-            # (for example SET NULL) and leaves the reset atomic/fail-loud.
+            # Do not hide reset scope behind an implicit CASCADE. Delete every
+            # canonical-FK CASCADE consumer explicitly, then let the remaining
+            # SET NULL consumers (decisions/audit) keep their declared rows.
             cur.execute("DELETE FROM store_vector_index")
             cur.execute("DELETE FROM store_relation_memberships")
             cur.execute("DELETE FROM store_relations")
             cur.execute("DELETE FROM vector_index_meta")
+            cur.execute(
+                """
+                DO $$ BEGIN
+                    IF to_regclass('public.chunks') IS NOT NULL THEN DELETE FROM public.chunks; END IF;
+                    IF to_regclass('public.embeddings') IS NOT NULL THEN DELETE FROM public.embeddings; END IF;
+                    IF to_regclass('public.relations') IS NOT NULL THEN DELETE FROM public.relations; END IF;
+                    IF to_regclass('public.membership') IS NOT NULL THEN DELETE FROM public.membership; END IF;
+                END $$
+                """
+            )
             cur.execute("DELETE FROM store_objects")
 
 
@@ -419,10 +435,47 @@ def resolve_vault_uuid_with_connection(conn, vault_uuid: str) -> str:
     return str(object_id or vault_uuid)
 
 
-def resolve_vault_uuid(vault_uuid: str) -> str:
-    """Resolve retained identity through the canonical Postgres store boundary."""
-    with _connect() as conn:
+@lru_cache(maxsize=4096)
+def _resolve_vault_uuid_cached(vault_uuid: str, dsn: str) -> str:
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
         return resolve_vault_uuid_with_connection(conn, vault_uuid)
+
+
+def resolve_vault_uuid(vault_uuid: str) -> str:
+    """Resolve retained identity once per process and configured database."""
+    return _resolve_vault_uuid_cached(vault_uuid, _dsn())
+
+
+def vault_uuid_to_canonical_id_map_with_connection(conn) -> dict[str, str]:
+    """Return retained vault UUID -> canonical id from the shared identity join."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT canonical.object_id, "
+            "COALESCE(legacy.uuid, canonical.object_id) AS vault_uuid "
+            + _CANONICAL_RETAINED_IDENTITY_FROM_SQL
+        )
+        rows = cur.fetchall()
+    return {
+        str(row["vault_uuid"] if isinstance(row, dict) else row[1]):
+        str(row["object_id"] if isinstance(row, dict) else row[0])
+        for row in rows
+    }
+
+
+def retained_vault_uuid_with_connection(conn, object_id: str) -> str | None:
+    """Resolve canonical id -> retained vault UUID without inventing an alias."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT legacy.uuid AS vault_uuid "
+            + _CANONICAL_RETAINED_IDENTITY_FROM_SQL
+            + " WHERE canonical.object_id = %s",
+            (object_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    value = row["vault_uuid"] if isinstance(row, dict) else row[0]
+    return str(value) if value is not None else None
 
 
 def update_object_source_ref_with_connection(

@@ -214,6 +214,15 @@ def resolve_canonical_object_id(vault_uuid: str) -> str:
     return resolve_vault_uuid(str(vault_uuid))
 
 
+def canonical_event_identity(canonical_object_id: str, vault_uuid: str) -> dict[str, str]:
+    """Return the single reviewed lifecycle-event identity shape for #3510."""
+    return {
+        "uuid": str(canonical_object_id),
+        "object_id": str(canonical_object_id),
+        "vault_uuid": str(vault_uuid),
+    }
+
+
 def update_object_source_ref_in_transaction(
     conn: Any,
     *,
@@ -242,5 +251,6 @@ __all__ = [
     "save_object_in_transaction",
     "resolve_canonical_object_id",
     "resolve_canonical_object_id_in_transaction",
+    "canonical_event_identity",
     "update_object_source_ref_in_transaction",
 ]
