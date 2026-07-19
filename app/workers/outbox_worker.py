@@ -35,6 +35,7 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.indexer.consumer import process_event as process_indexer_event
+from app.objects import resolve_canonical_object_id
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.logging_setup import configure_json_logging
 from app.observability.tracer import start_span
@@ -1501,15 +1502,20 @@ def handle_panel_scan_requested(
     except (AttributeError, TypeError, ValueError) as exc:
         raise InvalidPanelNoteUUIDDispatchError(note_uuid) from exc
 
+    # The scan event carries the retained vault UUID. Historical rows may map
+    # it to a different canonical objects.id; all ObjectStore-facing refresh,
+    # intent, and writeback work must use that canonical key.
+    canonical_note_id = resolve_canonical_object_id(note_uuid)
+
     refresh_panel_note_object(
-        note_uuid=note_uuid,
+        note_uuid=canonical_note_id,
         note_path=note_path,
         raw_text=raw_text,
         trace_id=trace_id or "",
     )
 
     execution = run_panel_note_execution(
-        note_uuid,
+        canonical_note_id,
         trace_id=trace_id,
         outbox_path=_outbox_audit_path(),
         vault_root=resolved_root,

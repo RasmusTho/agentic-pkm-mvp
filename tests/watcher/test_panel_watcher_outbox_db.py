@@ -4,12 +4,45 @@ import json
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.events.schema import OutboxEvent
 from app.settings.panel_actions import PanelActionMapping
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.registry import _emit_panel_events, _process_panel_note, RegistryConfig, WatcherSpec, _run_spec_tick
 from app.watcher.state import WatcherState
+
+
+def test_process_panel_note_uses_canonical_store_identity(tmp_path, monkeypatch):
+    vault_uuid = "11111111-1111-4111-8111-111111111111"
+    canonical_id = "22222222-2222-4222-8222-222222222222"
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note_path = vault / "panel.md"
+    markdown = f"---\nuuid: {vault_uuid}\n---\n\n# Panel\n"
+    note_path.write_text(markdown, encoding="utf-8")
+    seen: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        "app.watcher.registry.resolve_canonical_object_id",
+        lambda value: seen.setdefault("vault_uuid", value) and canonical_id,
+    )
+
+    def fake_handle_note_update(*, note_id, **_kwargs):
+        seen["note_id"] = note_id
+        return SimpleNamespace(updated_markdown=markdown, events=[])
+
+    monkeypatch.setattr("app.watcher.registry.handle_note_update", fake_handle_note_update)
+
+    _process_panel_note(
+        vault_root=vault,
+        rel_path=note_path.relative_to(vault),
+        outbox_path=tmp_path / "outbox.jsonl",
+        state=WatcherState(),
+        action_mappings={},
+    )
+
+    assert seen == {"vault_uuid": vault_uuid, "note_id": canonical_id}
 
 
 def test_process_panel_note_enqueues_db_and_jsonl(tmp_path, monkeypatch):
