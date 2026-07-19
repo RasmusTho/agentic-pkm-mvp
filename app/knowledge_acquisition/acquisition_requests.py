@@ -1251,6 +1251,15 @@ def drain_one(
       failures still surface their durable stage dead-letter in lineage and
       converge to ``dead_lettered`` through attempts exhaustion).
 
+    A queue row carries the effective acquisition policy at enqueue time, so
+    the drain is its enforcement boundary.  The current ``acquire_youtube``
+    entrypoint is a full transcript/caption pipeline: it cannot truthfully
+    service ``candidate_metadata_only``, ``captions: false``, or enabled media
+    archival. Those modes therefore produce an explicit terminal policy
+    disposition before any external acquisition occurs; a future metadata-only
+    or media pipeline must replace the corresponding guarded branch rather
+    than bypass it.
+
     The scheduler slice (YSS-06) owns *when* this runs; unexpected exceptions
     (config errors such as ``DatabaseNotConfiguredError`` included) propagate
     loud rather than being folded into queue state.
@@ -1271,6 +1280,42 @@ def drain_one(
         )
 
     policy = request.policy_snapshot or {}
+    mode = policy.get("mode")
+    captions = policy.get("captions")
+    media = policy.get("media")
+    unsupported_policy: str | None = None
+    if media is not None and not isinstance(media, dict):
+        unsupported_policy = "policy media must be an object when present"
+    elif media is not None and media.get("enabled") is True:
+        return queue.dead_letter(
+            request.request_id,
+            reason_code="media_policy_disabled",
+            error="media acquisition is disabled because the archival engine is not delivered",
+            now=now,
+            conn=conn,
+        )
+    elif mode == "candidate_metadata_only":
+        unsupported_policy = (
+            "policy mode 'candidate_metadata_only' requires a metadata-only candidate "
+            "pipeline, which is not available at this drain boundary"
+        )
+    elif captions is False:
+        unsupported_policy = (
+            "policy captions=false cannot be honored by the current full transcript "
+            "acquisition pipeline"
+        )
+    elif mode not in (None, "acquire_transcript"):
+        unsupported_policy = f"policy mode {mode!r} has no acquisition drain implementation"
+
+    if unsupported_policy is not None:
+        return queue.dead_letter(
+            request.request_id,
+            reason_code="policy_unsupported",
+            error=unsupported_policy,
+            now=now,
+            conn=conn,
+        )
+
     raw_extractor_ids = policy.get("extractor_ids") or ()
     if isinstance(raw_extractor_ids, str):
         raise AcquisitionRequestValidationError(
