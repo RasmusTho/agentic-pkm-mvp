@@ -9,7 +9,7 @@ import re
 import stat
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterator, Mapping
 from uuid import uuid4
@@ -31,7 +31,6 @@ from app.instance.instance_state import (
 )
 from app.instance.ownership_ledger import (
     LegacyOwner,
-    LedgerCollisionError,
     LedgerError,
     LedgerSnapshot,
     OwnershipLedger,
@@ -43,28 +42,9 @@ from app.instance.vault_registry import (
     RegistryError,
     RegistrySnapshot,
     RemovalTombstone,
-    TransferLineage,
     VaultRegistration,
     VaultRegistryStore,
 )
-
-
-@dataclass(frozen=True)
-class LifecycleActivationProof:
-    consumer_floor: bool = False
-
-    @classmethod
-    def for_test_activation(cls) -> LifecycleActivationProof:
-        return cls(consumer_floor=True)
-
-
-@dataclass(frozen=True)
-class TransferActivationProof:
-    foreground_ownership_floor: bool = False
-
-    @classmethod
-    def for_test_activation(cls) -> TransferActivationProof:
-        return cls(foreground_ownership_floor=True)
 
 
 class InstanceRegistryRuntime:
@@ -145,10 +125,8 @@ class InstanceRegistryRuntime:
             if same_filesystem_root(
                 resolve_filesystem_root_identity(tombstone.path), root_identity
             ):
-                return self._reactivate_tombstone_locked(
-                    current,
-                    tombstone,
-                    Path(root_identity.canonical_path),
+                raise CapabilityNotReadyError(
+                    "MVR-06B consumer drain floor seals tombstone reactivation"
                 )
         if current.registrations:
             raise CapabilityNotReadyError("MVR-01C authority cutover seals second registration")
@@ -189,27 +167,8 @@ class InstanceRegistryRuntime:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def prepare_nested_registration(self, child_root: Path) -> VaultRegistration:
-        child = Path(child_root).expanduser()
-        identity = resolve_filesystem_root_identity(child)
-        current = self.registry.load()
-        validate_registry_disjoint_from_content(
-            self.layout.registry_path,
-            [Path(identity.canonical_path)]
-            + [Path(item.path) for item in current.registrations.values()],
-        )
-        for item in current.registrations.values():
-            if same_filesystem_root(resolve_filesystem_root_identity(item.path), identity):
-                raise RegistryError("registry path identity collision")
-        registration = self._new_registration(Path(identity.canonical_path))
-        self.ledger.reserve(
-            channel_id=self.layout.channel_id,
-            vault_binding_id=registration.vault_binding_id,
-            root=Path(registration.path),
-            allow_same_channel_nested=True,
-        )
-        self.registry.register(registration, expected_revision=current.revision)
-        self.ledger.activate(registration.vault_binding_id)
-        return registration
+        del child_root
+        raise CapabilityNotReadyError("MVR-01C authority cutover seals second registration")
 
     def production_register(self, path: Path, *, producer: str) -> VaultRegistration:
         del path, producer
@@ -227,192 +186,35 @@ class InstanceRegistryRuntime:
         self,
         destination: InstanceRegistryRuntime,
         vault_binding_id: str,
-        *,
-        proof: TransferActivationProof | None = None,
-        crash_after: str | None = None,
     ) -> str:
-        if proof is None or not proof.foreground_ownership_floor:
-            raise CapabilityNotReadyError("MVR-05C foreground ownership floor is required")
-        source_snapshot = self.registry.load()
-        source = source_snapshot.registrations.get(vault_binding_id)
-        if source is None:
-            raise RegistryError(f"unknown vault_binding_id: {vault_binding_id}")
-        destination_binding_id = f"binding-{uuid4()}"
-        reservation = self.ledger.begin_transfer(
-            source_binding_id=vault_binding_id,
-            destination_channel_id=destination.layout.channel_id,
-            destination_binding_id=destination_binding_id,
-        )
-        destination_snapshot = destination.registry.load()
-        destination_registration = replace(
-            source,
-            vault_binding_id=reservation.destination_binding_id,
-            ref=f"transfer:{reservation.destination_binding_id}",
-        )
-        lineage = destination_snapshot.transfer_lineage + (
-            TransferLineage(
-                source_binding_id=source.vault_binding_id,
-                destination_binding_id=destination_registration.vault_binding_id,
-                local_instance_id=source.local_instance_id,
-                vault_id=source.vault_id,
-                source_channel_id=self.layout.channel_id,
-                destination_channel_id=destination.layout.channel_id,
-                source_registry_revision=source_snapshot.revision + 1,
-                destination_registry_revision=destination_snapshot.revision + 1,
-                ownership_transfer_id=reservation.transfer_id,
-            ),
-        )
-        registrations = dict(destination_snapshot.registrations)
-        registrations[destination_registration.vault_binding_id] = destination_registration
-        destination.registry.commit_state(
-            registrations=registrations,
-            transfer_lineage=lineage,
-            expected_revision=destination_snapshot.revision,
-        )
-        if crash_after == "destination_commit":
-            raise RuntimeError("injected crash after destination_commit")
-        return self.recover_transfer(destination)
+        del destination, vault_binding_id
+        raise CapabilityNotReadyError("MVR-05C foreground ownership floor is required")
 
     def recover_transfer(self, destination: InstanceRegistryRuntime) -> str:
-        transfer = self.ledger.load().transfer
-        if transfer is None:
-            lineage = destination.registry.load().transfer_lineage
-            if not lineage:
-                raise LedgerError("no transfer reservation is recoverable")
-            return lineage[-1].destination_binding_id
-        if transfer.destination_channel_id != destination.layout.channel_id:
-            raise LedgerError("transfer destination channel does not match")
-        source_snapshot = self.registry.load()
-        destination_snapshot = destination.registry.load()
-        destination_registration = destination_snapshot.registrations.get(
-            transfer.destination_binding_id
-        )
-        source_registration = source_snapshot.registrations.get(transfer.source_binding_id)
-        if destination_registration is None:
-            if source_registration is None:
-                raise LedgerError("transfer state has no recoverable registration")
-            destination_registration = replace(
-                source_registration,
-                vault_binding_id=transfer.destination_binding_id,
-                ref=f"transfer:{transfer.destination_binding_id}",
-            )
-            registrations = dict(destination_snapshot.registrations)
-            registrations[destination_registration.vault_binding_id] = destination_registration
-            lineage = destination_snapshot.transfer_lineage + (
-                TransferLineage(
-                    source_binding_id=transfer.source_binding_id,
-                    destination_binding_id=transfer.destination_binding_id,
-                    local_instance_id=source_registration.local_instance_id,
-                    vault_id=source_registration.vault_id,
-                    source_channel_id=transfer.source_channel_id,
-                    destination_channel_id=transfer.destination_channel_id,
-                    source_registry_revision=source_snapshot.revision + 1,
-                    destination_registry_revision=destination_snapshot.revision + 1,
-                    ownership_transfer_id=transfer.transfer_id,
-                ),
-            )
-            destination.registry.commit_state(
-                registrations=registrations,
-                transfer_lineage=lineage,
-                expected_revision=destination_snapshot.revision,
-            )
-        if source_registration is not None:
-            registrations = dict(source_snapshot.registrations)
-            del registrations[transfer.source_binding_id]
-            tombstones = dict(source_snapshot.removal_tombstones)
-            tombstones[transfer.source_binding_id] = _tombstone(source_registration)
-            self.registry.commit_state(
-                registrations=registrations,
-                removal_tombstones=tombstones,
-                expected_revision=source_snapshot.revision,
-            )
-        self.ledger.activate_transfer()
-        return transfer.destination_binding_id
+        del destination
+        raise CapabilityNotReadyError("MVR-05C foreground ownership floor is required")
 
     def relocate(
         self,
         vault_binding_id: str,
         destination: Path,
-        *,
-        proof: LifecycleActivationProof | None = None,
     ) -> VaultRegistration:
         del vault_binding_id, destination
-        if proof is None or not proof.consumer_floor:
-            raise CapabilityNotReadyError("MVR-06C consumer effect-lease floor is required")
-        raise CapabilityNotReadyError("MVR-06C relocation remains dormant")
+        raise CapabilityNotReadyError("MVR-06C consumer effect-lease floor is required")
 
     def remove(
         self,
         vault_binding_id: str,
-        *,
-        proof: LifecycleActivationProof | None = None,
     ) -> RemovalTombstone:
-        if proof is None or not proof.consumer_floor:
-            raise CapabilityNotReadyError("MVR-06B consumer drain floor is required")
-        current = self.registry.load()
-        registration = current.registrations.get(vault_binding_id)
-        if registration is None:
-            raise RegistryError(f"unknown vault_binding_id: {vault_binding_id}")
-        registrations = dict(current.registrations)
-        del registrations[vault_binding_id]
-        tombstones = dict(current.removal_tombstones)
-        retired = _tombstone(registration)
-        tombstones[vault_binding_id] = retired
-        self.registry.commit_state(
-            registrations=registrations,
-            removal_tombstones=tombstones,
-            expected_revision=current.revision,
-        )
-        self.ledger.release_to_tombstone(vault_binding_id)
-        return retired
+        del vault_binding_id
+        raise CapabilityNotReadyError("MVR-06B consumer drain floor is required")
 
     def reactivate_removed(
         self,
         root: Path,
-        *,
-        proof: LifecycleActivationProof | None = None,
     ) -> VaultRegistration:
-        if proof is None or not proof.consumer_floor:
-            raise CapabilityNotReadyError("MVR-06B consumer drain floor is required")
-        current = self.registry.load()
-        matched: RemovalTombstone | None = None
-        for tombstone in current.removal_tombstones.values():
-            if same_filesystem_root(
-                resolve_filesystem_root_identity(tombstone.path),
-                resolve_filesystem_root_identity(root),
-            ):
-                matched = tombstone
-                break
-        if matched is None:
-            raise LedgerCollisionError("root does not match immutable predecessor lineage")
-        return self._reactivate_tombstone_locked(current, matched, root)
-
-    def _reactivate_tombstone_locked(
-        self,
-        current: RegistrySnapshot,
-        matched: RemovalTombstone,
-        root: Path,
-    ) -> VaultRegistration:
-        self.ledger.reactivate(
-            matched.vault_binding_id,
-            channel_id=self.layout.channel_id,
-            root=root,
-        )
-        registration = VaultRegistration(
-            vault_binding_id=matched.vault_binding_id,
-            ref=matched.ref,
-            path=str(Path(root).expanduser().resolve(strict=False)),
-            vault_id=matched.vault_id,
-            local_instance_id=matched.local_instance_id,
-            extensions={"contentEpoch": matched.content_epoch + 1},
-        )
-        registrations = dict(current.registrations)
-        registrations[registration.vault_binding_id] = registration
-        self.registry.commit_state(
-            registrations=registrations,
-            expected_revision=current.revision,
-        )
-        return registration
+        del root
+        raise CapabilityNotReadyError("MVR-06B consumer drain floor is required")
 
     def rotate_ledger_key(
         self,
@@ -574,18 +376,6 @@ def _read_vault_identity(root: Path) -> tuple[str | None, str | None]:
     vault_id = str(shared.get("vaultId") or "").strip() or None
     local_instance_id = str(local.get("localInstanceId") or "").strip() or None
     return vault_id, local_instance_id
-
-
-def _tombstone(registration: VaultRegistration) -> RemovalTombstone:
-    epoch = registration.extensions.get("contentEpoch", 1)
-    return RemovalTombstone(
-        vault_binding_id=registration.vault_binding_id,
-        ref=registration.ref,
-        path=registration.path,
-        vault_id=registration.vault_id,
-        local_instance_id=registration.local_instance_id,
-        content_epoch=epoch if isinstance(epoch, int) and epoch >= 1 else 1,
-    )
 
 
 def _read_revision(registry_path: Path, consumer: str) -> int:
@@ -1375,6 +1165,4 @@ if __name__ == "__main__":
 
 __all__ = [
     "InstanceRegistryRuntime",
-    "LifecycleActivationProof",
-    "TransferActivationProof",
 ]

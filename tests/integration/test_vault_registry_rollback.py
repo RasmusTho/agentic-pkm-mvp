@@ -22,12 +22,41 @@ def test_second_registration_is_sealed_across_all_producers_until_01c(tmp_path) 
     second.mkdir()
     runtime.bootstrap_env_binding(vault_root=first, watcher_vault_path=first)
 
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for root in (runtime.layout.root, runtime.ledger.root)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
     for producer in ("picker", "api", "cli", "import", "bootstrap", "direct-service"):
         with pytest.raises(CapabilityNotReadyError, match="MVR-01C authority cutover"):
             runtime.production_register(second, producer=producer)
+        assert {
+            path.relative_to(tmp_path): path.read_bytes()
+            for root in (runtime.layout.root, runtime.ledger.root)
+            for path in root.rglob("*")
+            if path.is_file()
+        } == before
+
+    with pytest.raises(CapabilityNotReadyError, match="MVR-01C authority cutover"):
+        runtime.bootstrap_env_binding(vault_root=second, watcher_vault_path=second)
+    with pytest.raises(CapabilityNotReadyError, match="MVR-01C authority cutover"):
+        runtime._bootstrap_env_binding_locked(
+            vault_root=second,
+            watcher_vault_path=second,
+        )
+    with pytest.raises(CapabilityNotReadyError, match="MVR-01C authority cutover"):
+        runtime.prepare_nested_registration(second)
 
     assert len(runtime.registry.load().registrations) == 1
     assert len(runtime.ledger.load().leases) == 1
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for root in (runtime.layout.root, runtime.ledger.root)
+        for path in root.rglob("*")
+        if path.is_file()
+    } == before
 
 
 def test_01b_keeps_registry_cutover_dormant_until_01c(tmp_path) -> None:

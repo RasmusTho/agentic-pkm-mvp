@@ -1,34 +1,48 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
+import app.instance.runtime as runtime_module
+
+from app.instance.filesystem_identity import (
+    resolve_filesystem_root_identity,
+    same_filesystem_root,
+)
 from app.instance.instance_state import (
     DeploymentQuiescenceProof,
     InstanceStateLayout,
     InstanceStatePreflightError,
+    validate_registry_disjoint_from_content,
 )
 from app.instance.ownership_ledger import (
     LedgerCollisionError,
+    LedgerError,
     LedgerKeyError,
     LegacyOwner,
     OwnershipLedger,
 )
 from app.instance.runtime import (
     InstanceRegistryRuntime,
-    LifecycleActivationProof,
-    TransferActivationProof,
     _begin_instance_state_deployment,
     _bind_legacy_owner_inventory_to_proof,
     _deployment_fence_path,
     _prove_instance_state_quiescence,
 )
-from app.instance.vault_registry import CapabilityNotReadyError, RegistryError
+from app.instance.vault_registry import (
+    CapabilityNotReadyError,
+    RegistryError,
+    RemovalTombstone,
+    TransferLineage,
+    VaultRegistration,
+)
 from app.vault.manager import iter_vault_markdown_files
 
 
@@ -37,6 +51,228 @@ def _runtime(tmp_path: Path, channel: str, host_global: Path) -> InstanceRegistr
         InstanceStateLayout.for_channel(tmp_path / channel, channel),
         host_global,
     )
+
+
+def _runtime_state_bytes(
+    tmp_path: Path, *runtimes: InstanceRegistryRuntime
+) -> dict[Path, bytes]:
+    roots = {
+        root.resolve(strict=False)
+        for runtime in runtimes
+        for root in (runtime.layout.root, runtime.ledger.root)
+    }
+    return {
+        path.relative_to(tmp_path): path.read_bytes()
+        for root in roots
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def _mechanically_register_nested_binding(
+    runtime: InstanceRegistryRuntime, child_root: Path
+) -> VaultRegistration:
+    """Exercise the dormant schema through its existing store/ledger primitives."""
+
+    identity = resolve_filesystem_root_identity(child_root)
+    current = runtime.registry.load()
+    validate_registry_disjoint_from_content(
+        runtime.layout.registry_path,
+        [Path(identity.canonical_path)]
+        + [Path(item.path) for item in current.registrations.values()],
+    )
+    for item in current.registrations.values():
+        if same_filesystem_root(resolve_filesystem_root_identity(item.path), identity):
+            raise RegistryError("registry path identity collision")
+    registration = VaultRegistration(
+        vault_binding_id=f"binding-test-{uuid4()}",
+        ref=f"path:{identity.canonical_path}",
+        path=identity.canonical_path,
+        vault_id="child",
+        local_instance_id=f"local-test-{uuid4()}",
+        extensions={"status": "initialized", "contentEpoch": 1},
+    )
+    runtime.ledger.reserve(
+        channel_id=runtime.layout.channel_id,
+        vault_binding_id=registration.vault_binding_id,
+        root=Path(registration.path),
+        allow_same_channel_nested=True,
+    )
+    runtime.registry.register(registration, expected_revision=current.revision)
+    runtime.ledger.activate(registration.vault_binding_id)
+    return registration
+
+
+def _mechanically_prepare_transfer(
+    source_runtime: InstanceRegistryRuntime,
+    destination_runtime: InstanceRegistryRuntime,
+    vault_binding_id: str,
+) -> str:
+    """Prepare dormant transfer state without calling a runtime authority façade."""
+
+    source_snapshot = source_runtime.registry.load()
+    source = source_snapshot.registrations[vault_binding_id]
+    destination_binding_id = f"binding-test-{uuid4()}"
+    reservation = source_runtime.ledger.begin_transfer(
+        source_binding_id=vault_binding_id,
+        destination_channel_id=destination_runtime.layout.channel_id,
+        destination_binding_id=destination_binding_id,
+    )
+    destination_snapshot = destination_runtime.registry.load()
+    destination_registration = replace(
+        source,
+        vault_binding_id=reservation.destination_binding_id,
+        ref=f"transfer:{reservation.destination_binding_id}",
+    )
+    lineage = destination_snapshot.transfer_lineage + (
+        TransferLineage(
+            source_binding_id=source.vault_binding_id,
+            destination_binding_id=destination_registration.vault_binding_id,
+            local_instance_id=source.local_instance_id,
+            vault_id=source.vault_id,
+            source_channel_id=source_runtime.layout.channel_id,
+            destination_channel_id=destination_runtime.layout.channel_id,
+            source_registry_revision=source_snapshot.revision + 1,
+            destination_registry_revision=destination_snapshot.revision + 1,
+            ownership_transfer_id=reservation.transfer_id,
+        ),
+    )
+    registrations = dict(destination_snapshot.registrations)
+    registrations[destination_registration.vault_binding_id] = destination_registration
+    destination_runtime.registry.commit_state(
+        registrations=registrations,
+        transfer_lineage=lineage,
+        expected_revision=destination_snapshot.revision,
+    )
+    return destination_registration.vault_binding_id
+
+
+def _mechanically_recover_transfer(
+    source_runtime: InstanceRegistryRuntime,
+    destination_runtime: InstanceRegistryRuntime,
+) -> str:
+    """Finish dormant transfer state through existing store/ledger primitives."""
+
+    transfer = source_runtime.ledger.load().transfer
+    if transfer is None:
+        lineage = destination_runtime.registry.load().transfer_lineage
+        if not lineage:
+            raise LedgerError("no transfer reservation is recoverable")
+        return lineage[-1].destination_binding_id
+    source_snapshot = source_runtime.registry.load()
+    destination_snapshot = destination_runtime.registry.load()
+    source_registration = source_snapshot.registrations.get(transfer.source_binding_id)
+    if source_registration is not None:
+        registrations = dict(source_snapshot.registrations)
+        del registrations[transfer.source_binding_id]
+        tombstones = dict(source_snapshot.removal_tombstones)
+        tombstones[transfer.source_binding_id] = _removal_tombstone(source_registration)
+        source_runtime.registry.commit_state(
+            registrations=registrations,
+            removal_tombstones=tombstones,
+            expected_revision=source_snapshot.revision,
+        )
+    if transfer.destination_binding_id not in destination_snapshot.registrations:
+        raise LedgerError("prepared transfer is missing its destination registration")
+    source_runtime.ledger.activate_transfer()
+    return transfer.destination_binding_id
+
+
+def _removal_tombstone(registration: VaultRegistration) -> RemovalTombstone:
+    epoch = registration.extensions.get("contentEpoch", 1)
+    return RemovalTombstone(
+        vault_binding_id=registration.vault_binding_id,
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        local_instance_id=registration.local_instance_id,
+        content_epoch=epoch if isinstance(epoch, int) and epoch >= 1 else 1,
+    )
+
+
+def _mechanically_remove_binding(
+    runtime: InstanceRegistryRuntime, vault_binding_id: str
+) -> RemovalTombstone:
+    current = runtime.registry.load()
+    registration = current.registrations[vault_binding_id]
+    registrations = dict(current.registrations)
+    del registrations[vault_binding_id]
+    tombstones = dict(current.removal_tombstones)
+    retired = _removal_tombstone(registration)
+    tombstones[vault_binding_id] = retired
+    runtime.registry.commit_state(
+        registrations=registrations,
+        removal_tombstones=tombstones,
+        expected_revision=current.revision,
+    )
+    runtime.ledger.release_to_tombstone(vault_binding_id)
+    return retired
+
+
+def _mechanically_reactivate_binding(
+    runtime: InstanceRegistryRuntime, root: Path
+) -> VaultRegistration:
+    current = runtime.registry.load()
+    identity = resolve_filesystem_root_identity(root)
+    matched = next(
+        tombstone
+        for tombstone in current.removal_tombstones.values()
+        if same_filesystem_root(
+            resolve_filesystem_root_identity(tombstone.path),
+            identity,
+        )
+    )
+    runtime.ledger.reactivate(
+        matched.vault_binding_id,
+        channel_id=runtime.layout.channel_id,
+        root=root,
+    )
+    registration = VaultRegistration(
+        vault_binding_id=matched.vault_binding_id,
+        ref=matched.ref,
+        path=identity.canonical_path,
+        vault_id=matched.vault_id,
+        local_instance_id=matched.local_instance_id,
+        extensions={"contentEpoch": matched.content_epoch + 1},
+    )
+    registrations = dict(current.registrations)
+    registrations[registration.vault_binding_id] = registration
+    runtime.registry.commit_state(
+        registrations=registrations,
+        expected_revision=current.revision,
+    )
+    return registration
+
+
+def test_dormant_runtime_api_exports_no_caller_constructible_activation_seam() -> None:
+    assert runtime_module.__all__ == ["InstanceRegistryRuntime"]
+    assert not hasattr(runtime_module, "LifecycleActivationProof")
+    assert not hasattr(runtime_module, "TransferActivationProof")
+    runtime_source = inspect.getsource(InstanceRegistryRuntime)
+    for forbidden_primitive in (
+        ".begin_transfer(",
+        ".activate_transfer(",
+        ".release_to_tombstone(",
+        ".reactivate(",
+    ):
+        assert forbidden_primitive not in runtime_source
+    for method_name in (
+        "prepare_nested_registration",
+        "transfer_to",
+        "recover_transfer",
+        "relocate",
+        "remove",
+        "reactivate_removed",
+    ):
+        parameters = inspect.signature(
+            getattr(InstanceRegistryRuntime, method_name)
+        ).parameters
+        assert "proof" not in parameters
+        assert "crash_after" not in parameters
+        method_source = inspect.getsource(getattr(InstanceRegistryRuntime, method_name))
+        assert "CapabilityNotReadyError" in method_source
+        assert "self.registry" not in method_source
+        assert "self.ledger" not in method_source
 
 
 def _rotation_authority(
@@ -166,13 +402,13 @@ def test_same_channel_nested_vaults_preserve_child_boundary(tmp_path) -> None:
     (child / "secret.md").write_text("secret", encoding="utf-8")
     runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
     runtime.bootstrap_env_binding(vault_root=parent, watcher_vault_path=parent)
-    runtime.prepare_nested_registration(child)
+    _mechanically_register_nested_binding(runtime, child)
 
     assert [path.name for path in iter_vault_markdown_files(parent)] == ["parent.md"]
     assert [path.name for path in iter_vault_markdown_files(child)] == ["secret.md"]
     assert len(runtime.registry.load().registrations) == 2
     with pytest.raises(RegistryError):
-        runtime.prepare_nested_registration(child.resolve())
+        _mechanically_register_nested_binding(runtime, child.resolve())
 
 
 def test_transfer_is_dormant_until_foreground_ownership_floor(tmp_path) -> None:
@@ -191,6 +427,49 @@ def test_transfer_is_dormant_until_foreground_ownership_floor(tmp_path) -> None:
     assert source.ledger.active_owner(registration.vault_binding_id).channel_id == "dev"
 
 
+def test_direct_or_forged_transfer_call_cannot_mutate_dormant_protocol(tmp_path) -> None:
+    host_global = tmp_path / "host-global"
+    source = _runtime(tmp_path, "dev", host_global)
+    destination = _runtime(tmp_path, "test", host_global)
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = source.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    destination.registry.load()
+    before = _runtime_state_bytes(tmp_path, source, destination)
+    ledger_before = source.ledger.load()
+
+    with pytest.raises(CapabilityNotReadyError, match="MVR-05C foreground ownership floor"):
+        source.transfer_to(destination, registration.vault_binding_id)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'proof'"):
+        source.transfer_to(destination, registration.vault_binding_id, proof=True)  # type: ignore[call-arg]
+
+    assert _runtime_state_bytes(tmp_path, source, destination) == before
+    assert source.ledger.load() == ledger_before
+
+
+def test_direct_transfer_recovery_cannot_retire_source_or_activate_destination(tmp_path) -> None:
+    host_global = tmp_path / "host-global"
+    source = _runtime(tmp_path, "dev", host_global)
+    destination = _runtime(tmp_path, "test", host_global)
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = source.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    _mechanically_prepare_transfer(
+        source,
+        destination,
+        registration.vault_binding_id,
+    )
+    before = _runtime_state_bytes(tmp_path, source, destination)
+    ledger_before = source.ledger.load()
+
+    with pytest.raises(CapabilityNotReadyError, match="MVR-05C foreground ownership floor"):
+        source.recover_transfer(destination)
+
+    assert _runtime_state_bytes(tmp_path, source, destination) == before
+    assert source.ledger.load() == ledger_before
+
+
 def test_transfer_mints_destination_binding_and_preserves_lineage_atomically(tmp_path) -> None:
     host_global = tmp_path / "host-global"
     source = _runtime(tmp_path, "dev", host_global)
@@ -201,14 +480,15 @@ def test_transfer_mints_destination_binding_and_preserves_lineage_atomically(tmp
         "---\nvaultId: vault-transfer\n---\n", encoding="utf-8"
     )
     registration = source.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
-    proof = TransferActivationProof.for_test_activation()
-
-    with pytest.raises(RuntimeError, match="injected crash"):
-        source.transfer_to(destination, registration.vault_binding_id, proof=proof, crash_after="destination_commit")
+    _mechanically_prepare_transfer(
+        source,
+        destination,
+        registration.vault_binding_id,
+    )
     third_channel = _runtime(tmp_path, "prod", host_global)
     with pytest.raises(LedgerCollisionError):
         third_channel.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
-    destination_binding = source.recover_transfer(destination)
+    destination_binding = _mechanically_recover_transfer(source, destination)
 
     assert destination_binding != registration.vault_binding_id
     assert registration.vault_binding_id not in source.registry.load().registrations
@@ -246,11 +526,12 @@ def test_transfer_preserves_local_clone_identity_across_channel_binding_change(t
     root = tmp_path / "vault"
     root.mkdir()
     original = source.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
-    result = source.transfer_to(
+    _mechanically_prepare_transfer(
+        source,
         destination,
         original.vault_binding_id,
-        proof=TransferActivationProof.for_test_activation(),
     )
+    result = _mechanically_recover_transfer(source, destination)
     tombstone = source.registry.load().removal_tombstones[original.vault_binding_id]
     destination_registration = destination.registry.load().registrations[result]
     lineage = destination.registry.load().transfer_lineage[-1]
@@ -291,18 +572,56 @@ def test_registration_removal_is_dormant_until_all_consumer_floors(tmp_path) -> 
     assert runtime.ledger.active_owner(registration.vault_binding_id) is not None
 
 
+def test_direct_or_forged_removal_call_cannot_mutate_dormant_protocol(tmp_path) -> None:
+    runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    before = _runtime_state_bytes(tmp_path, runtime)
+    ledger_before = runtime.ledger.load()
+
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06B consumer drain floor"):
+        runtime.remove(registration.vault_binding_id)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'proof'"):
+        runtime.remove(registration.vault_binding_id, proof=True)  # type: ignore[call-arg]
+
+    assert _runtime_state_bytes(tmp_path, runtime) == before
+    assert runtime.ledger.load() == ledger_before
+
+
+def test_forged_reactivation_and_bootstrap_cannot_mutate_removed_lineage(tmp_path) -> None:
+    runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    _mechanically_remove_binding(runtime, registration.vault_binding_id)
+    before = _runtime_state_bytes(tmp_path, runtime)
+    ledger_before = runtime.ledger.load()
+
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06B consumer drain floor"):
+        runtime.reactivate_removed(root)
+    with pytest.raises(TypeError, match="unexpected keyword argument 'proof'"):
+        runtime.reactivate_removed(root, proof=True)  # type: ignore[call-arg]
+    assert _runtime_state_bytes(tmp_path, runtime) == before
+    assert runtime.ledger.load() == ledger_before
+
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06B consumer drain floor"):
+        runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    assert _runtime_state_bytes(tmp_path, runtime) == before
+    assert runtime.ledger.load() == ledger_before
+
+
 def test_removed_binding_reregistration_preserves_tombstone_lineage(tmp_path) -> None:
     runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
     root = tmp_path / "vault"
     root.mkdir()
     registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
-    proof = LifecycleActivationProof.for_test_activation()
-    runtime.remove(registration.vault_binding_id, proof=proof)
+    _mechanically_remove_binding(runtime, registration.vault_binding_id)
 
-    reactivated = runtime.bootstrap_env_binding(
-        vault_root=root,
-        watcher_vault_path=root,
-    )
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06B consumer drain floor"):
+        runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    reactivated = _mechanically_reactivate_binding(runtime, root)
     assert reactivated.vault_binding_id == registration.vault_binding_id
     assert reactivated.local_instance_id == registration.local_instance_id
     assert reactivated.extensions["contentEpoch"] == 2
@@ -444,15 +763,14 @@ def test_key_rotation_preserves_removed_root_tombstone_match_on_reregistration(t
     root = tmp_path / "uninitialized"
     root.mkdir()
     registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
-    proof = LifecycleActivationProof.for_test_activation()
-    runtime.remove(registration.vault_binding_id, proof=proof)
+    _mechanically_remove_binding(runtime, registration.vault_binding_id)
     rotation_proof, owner_inventory = _rotation_authority(runtime, [])
     runtime.rotate_ledger_key(
         quiescence_proof=rotation_proof,
         legacy_owner_inventory_path=owner_inventory,
     )
 
-    reactivated = runtime.reactivate_removed(root, proof=proof)
+    reactivated = _mechanically_reactivate_binding(runtime, root)
     assert reactivated.vault_binding_id == registration.vault_binding_id
 
 
