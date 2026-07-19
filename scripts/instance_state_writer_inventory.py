@@ -1103,6 +1103,8 @@ def _native_role(
     if executable == "celery":
         return "celery"
     if PYTHON_RE.fullmatch(executable) and len(argv) >= 3 and argv[1] == "-m":
+        if argv[2] == "app.workers.outbox_worker":
+            return "outbox-worker"
         if argv[2] == "uvicorn":
             return "uvicorn"
         if argv[2] == "celery":

@@ -1287,6 +1287,58 @@ def test_linux_empty_argv0_harmless_executable_has_no_writer_role(monkeypatch) -
     )
 
 
+@pytest.mark.parametrize(
+    "python_executable",
+    ("python", "python3", "python3.12", "/usr/bin/python3"),
+)
+def test_native_outbox_worker_blocks_quiescence_for_supported_python_aliases(
+    monkeypatch, python_executable: str
+) -> None:
+    controller_pid = 338
+    controller_start_token = "linux:" + "a" * 64
+    writer_start_token = "linux:" + "b" * 64
+    processes = [
+        writer_inventory.ProcessRecord(
+            pid=controller_pid,
+            ppid=1,
+            pgid=controller_pid,
+            start_token=writer_start_token,
+            argv=(python_executable, "-m", "app.workers.outbox_worker"),
+        )
+    ]
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_processes",
+        lambda *, linux_boot_id: processes,
+    )
+
+    assert writer_inventory._native_writers(
+        controller_pid=controller_pid,
+        controller_start_token=controller_start_token,
+        linux_boot_id="boot-fixture",
+    ) == [
+        {
+            "domain": "native",
+            "role": "outbox-worker",
+            "pid": controller_pid,
+            "start_token": writer_start_token,
+        }
+    ]
+
+    processes[0] = writer_inventory.ProcessRecord(
+        pid=controller_pid,
+        ppid=1,
+        pgid=controller_pid,
+        start_token=controller_start_token,
+        argv=(python_executable, "-m", "app.workers.outbox_worker"),
+    )
+    assert writer_inventory._native_writers(
+        controller_pid=controller_pid,
+        controller_start_token=controller_start_token,
+        linux_boot_id="boot-fixture",
+    ) == []
+
+
 def test_linux_same_start_exec_transition_retries_to_stable_writer_pair(
     monkeypatch,
 ) -> None:
