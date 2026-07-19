@@ -40,6 +40,18 @@ raise SystemExit(
 PY
 }
 
+_deploy_channel_needs_dev_capture_secret() {
+  local channel="${1:?channel required}"
+  shift
+  [ "${channel}" = "dev" ] || return 1
+  [ "${1:-}" = "up" ] || return 1
+  local arg
+  for arg in "$@"; do
+    [ "${arg}" = "heimdal-capture-watch" ] && return 0
+  done
+  return 1
+}
+
 deploy_channel_compose() {
   local root="${1:?repo root required}"
   local channel="${2:?channel required}"
@@ -108,10 +120,22 @@ deploy_channel_compose() {
       unset DEPLOY_VAULT_CONTAINER_ROOT
     fi
 
-    docker compose \
-      --env-file "${channel_env_file}" \
-      "${compose_args[@]}" \
-      -p "${compose_project}" \
+    local -a compose_command
+    compose_command=(
+      docker compose
+      --env-file "${channel_env_file}"
+      "${compose_args[@]}"
+      -p "${compose_project}"
       "$@"
+    )
+
+    if _deploy_channel_needs_dev_capture_secret "${channel}" "$@"; then
+      "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap \
+        --channel "${channel}" \
+        --consumer heimdal-capture-watch \
+        -- "${compose_command[@]}"
+    else
+      "${compose_command[@]}"
+    fi
   )
 }

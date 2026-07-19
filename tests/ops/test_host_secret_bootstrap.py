@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+
+import pytest
+
+from app.ops.host_secret_bootstrap import (
+    HostSecretBootstrapError,
+    KeychainLookup,
+    materialize_consumer_environment,
+    run_with_host_secrets,
+)
+
+
+_RAW_KEY = "a" * 64
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _lookup(value: str = _RAW_KEY) -> KeychainLookup:
+    return lambda _service, _account: value
+
+
+def test_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
+    requested: list[tuple[str, str]] = []
+
+    def lookup(service: str, account: str) -> str:
+        requested.append((service, account))
+        return _RAW_KEY
+
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-capture-watch",
+        keychain_lookup=lookup,
+        directory=tmp_path,
+    ) as env_file:
+        assert env_file.read_text(encoding="utf-8") == f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+
+    assert requested == [
+        (
+            "yggdrasil.host-secrets",
+            "dev:heimdal-capture-watch:heimdal.raw-store-key",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("lookup", "secret_fragment"),
+    [
+        (
+            lambda _service, _account: (_ for _ in ()).throw(
+                OSError("denied leaked-value")
+            ),
+            "leaked-value",
+        ),
+        (lambda _service, _account: "malformed-secret-value", "malformed-secret-value"),
+        (lambda _service, _account: "", ""),
+    ],
+)
+def test_missing_or_malformed_secret_fails_closed(
+    tmp_path: Path,
+    lookup: KeychainLookup,
+    secret_fragment: str,
+) -> None:
+    launched = False
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        run_with_host_secrets(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            command=["never-start"],
+            keychain_lookup=lookup,
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    assert not launched
+    assert str(error.value) == "host secret bootstrap failed for declared consumer"
+    if secret_fragment:
+        assert secret_fragment not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("return_code", [0, 23])
+def test_runtime_secret_file_is_mode_0600_and_cleaned_up(
+    tmp_path: Path,
+    return_code: int,
+) -> None:
+    observed_path: Path | None = None
+
+    def runner(_command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        observed_path = Path(env["HOST_SECRET_RUNTIME_ENV_FILE"])
+        assert observed_path.is_file()
+        assert stat.S_IMODE(observed_path.stat().st_mode) == 0o600
+        assert env.get("HEIMDAL_RAW_STORE_KEY") is None
+        assert observed_path.read_text(encoding="utf-8") == (
+            f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+        )
+        return return_code
+
+    result = run_with_host_secrets(
+        channel="dev",
+        consumer="heimdal-capture-watch",
+        command=["consumer"],
+        keychain_lookup=_lookup(),
+        runner=runner,
+        directory=tmp_path,
+    )
+
+    assert result == return_code
+    assert observed_path is not None
+    assert not observed_path.exists()
+
+
+def _write_executable(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_capture_watch_uses_bootstrap_not_tracked_env(tmp_path: Path) -> None:
+    dev_overlay = (_REPO_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
+    assert "${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}" in dev_overlay
+    assert "HEIMDAL_RAW_STORE_KEY: !reset null" in dev_overlay
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text(
+        "HEIMDAL_RAW_STORE_KEY=tracked-runtime-value-must-not-win\n",
+        encoding="utf-8",
+    )
+    channel_env = tmp_path / "dev.env"
+    channel_env.write_text(
+        f"WATCHER_RUNTIME_ENV_FILE={runtime_env}\n",
+        encoding="utf-8",
+    )
+    observed_path_file = tmp_path / "observed-path"
+    observed_content_file = tmp_path / "observed-content"
+    _write_executable(
+        bin_dir / "security",
+        f"""#!/usr/bin/env bash
+set -eu
+printf '%s\\n' '{_RAW_KEY}'
+""",
+    )
+    _write_executable(
+        bin_dir / "docker",
+        f"""#!/usr/bin/env bash
+set -eu
+test -n "${{HOST_SECRET_RUNTIME_ENV_FILE:-}}"
+test -f "$HOST_SECRET_RUNTIME_ENV_FILE"
+test "$(stat -f '%Lp' "$HOST_SECRET_RUNTIME_ENV_FILE")" = 600
+printf '%s' "$HOST_SECRET_RUNTIME_ENV_FILE" > {observed_path_file!s}
+cp "$HOST_SECRET_RUNTIME_ENV_FILE" {observed_content_file!s}
+""",
+    )
+
+    command = f"""
+set -euo pipefail
+source {_REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'}
+PYTHON={sys.executable!s}
+deploy_channel_compose \\
+  {_REPO_ROOT!s} dev docker-compose.dev.yml pkm-dev-bootstrap-test \\
+  {channel_env!s} up -d heimdal-capture-watch
+"""
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["HEIMDAL_RAW_STORE_KEY"] = "ambient-value-must-not-win"
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    secret_file = Path(observed_path_file.read_text(encoding="utf-8"))
+    assert observed_content_file.read_text(encoding="utf-8") == (
+        f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+    )
+    assert not secret_file.exists()
