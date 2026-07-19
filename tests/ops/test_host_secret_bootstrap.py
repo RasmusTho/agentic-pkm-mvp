@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import signal
@@ -10,8 +12,10 @@ import time
 
 import pytest
 
+import app.ops.host_secret_bootstrap as host_secret_bootstrap
 from app.ops.host_secret_bootstrap import (
     HostSecretBootstrapError,
+    HostSecretBootstrapTerminated,
     KeychainLookup,
     materialize_consumer_environment,
     run_with_host_secrets,
@@ -179,6 +183,156 @@ printf '%s\\n' '{_RAW_KEY}'
     assert process.returncode == 128 + signal.SIGTERM
     assert not secret_file.exists()
     assert _RAW_KEY not in stderr
+
+
+def test_runtime_secret_is_removed_before_signal_handlers_are_restored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_path: Path | None = None
+    events: list[str] = []
+
+    @contextmanager
+    def tracing_handlers(
+        handler: host_secret_bootstrap.SignalHandler,
+    ) -> Iterator[None]:
+        events.append("install-cleanup")
+        try:
+            yield
+        finally:
+            events.append("restore-original")
+            assert observed_path is not None
+            assert not observed_path.exists()
+            handler(signal.SIGTERM, None)
+
+    monkeypatch.setattr(
+        host_secret_bootstrap,
+        "_temporary_signal_handlers",
+        tracing_handlers,
+    )
+
+    with pytest.raises(HostSecretBootstrapTerminated) as error:
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            keychain_lookup=_lookup(),
+            directory=tmp_path,
+        ) as env_file:
+            observed_path = env_file
+            assert observed_path.is_file()
+
+    assert error.value.signum == signal.SIGTERM
+    assert events == ["install-cleanup", "restore-original"]
+
+
+def test_signal_during_child_spawn_is_forwarded_after_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SpawnInterruptedProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.forwarded: list[int] = []
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def send_signal(self, signum: int) -> None:
+            self.forwarded.append(signum)
+            self.returncode = -signum
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            assert self.returncode is not None
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -signal.SIGKILL
+
+    process = SpawnInterruptedProcess()
+
+    def interrupted_popen(
+        _command: list[str],
+        *,
+        env: dict[str, str],
+    ) -> SpawnInterruptedProcess:
+        del env
+        signal.raise_signal(signal.SIGTERM)
+        return process
+
+    monkeypatch.setattr(host_secret_bootstrap.subprocess, "Popen", interrupted_popen)
+
+    with pytest.raises(HostSecretBootstrapTerminated) as error:
+        host_secret_bootstrap._subprocess_runner(["consumer"], {})
+
+    assert error.value.signum == signal.SIGTERM
+    assert process.forwarded == [signal.SIGTERM]
+    assert process.poll() == -signal.SIGTERM
+
+
+def test_repeated_sigterm_kills_and_reaps_ignoring_consumer(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "security",
+        f"""#!/usr/bin/env bash
+set -eu
+printf '%s\\n' '{_RAW_KEY}'
+""",
+    )
+    ready = tmp_path / "ignoring-consumer-ready"
+    child_pid_path = tmp_path / "child-pid"
+    observed_path = tmp_path / "ignoring-observed-path"
+    consumer = (
+        "import os, pathlib, signal, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"pathlib.Path({str(child_pid_path)!r}).write_text(str(os.getpid()), encoding='utf-8'); "
+        f"pathlib.Path({str(observed_path)!r}).write_text("
+        "os.environ['HOST_SECRET_RUNTIME_ENV_FILE'], encoding='utf-8'); "
+        f"pathlib.Path({str(ready)!r}).touch(); "
+        "time.sleep(60)"
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "app.ops.host_secret_bootstrap",
+            "--channel",
+            "dev",
+            "--consumer",
+            "heimdal-capture-watch",
+            "--",
+            sys.executable,
+            "-c",
+            consumer,
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ready.exists(), process.communicate(timeout=5)
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    secret_file = Path(observed_path.read_text(encoding="utf-8"))
+    assert secret_file.is_file()
+
+    process.terminate()
+    time.sleep(0.1)
+    process.terminate()
+    _stdout, stderr = process.communicate(timeout=10)
+
+    assert process.returncode == 128 + signal.SIGTERM
+    assert not secret_file.exists()
+    assert _RAW_KEY not in stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
 
 
 def _write_executable(path: Path, text: str) -> None:

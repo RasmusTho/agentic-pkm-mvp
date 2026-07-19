@@ -41,6 +41,9 @@ may become a second source of truth.
       catchable process termination.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_runtime_secret_file_is_mode_0600_and_cleaned_up`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_sigterm_forwards_to_consumer_and_cleans_runtime_secret_file`
+      Verify: `tests/ops/test_host_secret_bootstrap.py::test_runtime_secret_is_removed_before_signal_handlers_are_restored`
+      Verify: `tests/ops/test_host_secret_bootstrap.py::test_signal_during_child_spawn_is_forwarded_after_assignment`
+      Verify: `tests/ops/test_host_secret_bootstrap.py::test_repeated_sigterm_kills_and_reaps_ignoring_consumer`
 - [ ] `heimdal-capture-watch` receives `HEIMDAL_RAW_STORE_KEY` through this path without a repository
       secret or changed product code.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_capture_watch_uses_bootstrap_not_tracked_env`

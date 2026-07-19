@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from types import FrameType
 
 from app.ops.host_secret_contract import HostSecretContract, load_host_secret_contract
@@ -23,6 +24,8 @@ _SECRET_ENV_NAMES = {
     "heimdal.raw-store-key": "HEIMDAL_RAW_STORE_KEY",
 }
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+_CHILD_WAIT_POLL_SECONDS = 0.1
+_CHILD_TERMINATION_GRACE_SECONDS = 5.0
 
 KeychainLookup = Callable[[str, str], str]
 CommandRunner = Callable[[list[str], dict[str, str]], int]
@@ -184,70 +187,111 @@ def materialize_consumer_environment(
 
     file_path: Path | None = None
     fd: int | None = None
+    termination_signal: int | None = None
+    cleanup_in_progress = False
 
     def cleanup_then_terminate(signum: int, _frame: FrameType | None) -> None:
-        if file_path is not None:
+        nonlocal termination_signal
+        if termination_signal is None:
+            termination_signal = signum
+        if cleanup_in_progress:
+            return
+        raise HostSecretBootstrapTerminated(termination_signal)
+
+    def cleanup_materialized_file() -> None:
+        nonlocal cleanup_in_progress, fd
+        cleanup_in_progress = True
+        try:
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            if file_path is None:
+                return
             try:
                 file_path.unlink(missing_ok=True)
             except OSError as exc:
                 raise HostSecretBootstrapError(
                     "host secret bootstrap failed for declared consumer"
                 ) from exc
-        raise HostSecretBootstrapTerminated(signum)
+        finally:
+            cleanup_in_progress = False
 
     try:
         with _temporary_signal_handlers(cleanup_then_terminate):
-            fd, raw_path = tempfile.mkstemp(
-                prefix="yggdrasil-host-secret-",
-                suffix=".env",
-                dir=directory,
-            )
-            file_path = Path(raw_path)
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8", closefd=True) as handle:
-                fd = None
-                for name in sorted(values):
-                    handle.write(f"{name}={values[name]}\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            yield file_path
+            try:
+                fd, raw_path = tempfile.mkstemp(
+                    prefix="yggdrasil-host-secret-",
+                    suffix=".env",
+                    dir=directory,
+                )
+                file_path = Path(raw_path)
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8", closefd=True) as handle:
+                    fd = None
+                    for name in sorted(values):
+                        handle.write(f"{name}={values[name]}\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                yield file_path
+            finally:
+                cleanup_materialized_file()
+                if termination_signal is not None:
+                    raise HostSecretBootstrapTerminated(termination_signal)
     except HostSecretBootstrapError:
         raise
     except Exception as exc:
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         ) from exc
-    finally:
-        if fd is not None:
-            os.close(fd)
-        if file_path is not None:
-            try:
-                file_path.unlink(missing_ok=True)
-            except OSError as exc:
-                raise HostSecretBootstrapError(
-                    "host secret bootstrap failed for declared consumer"
-                ) from exc
 
 
 def _subprocess_runner(command: list[str], env: dict[str, str]) -> int:
     process: subprocess.Popen[bytes] | None = None
+    termination_signal: int | None = None
 
     def forward_then_terminate(signum: int, _frame: FrameType | None) -> None:
-        if process is not None and process.poll() is None:
-            process.send_signal(signum)
-        raise HostSecretBootstrapTerminated(signum)
+        nonlocal termination_signal
+        if termination_signal is None:
+            termination_signal = signum
+        active_process = process
+        if active_process is not None and active_process.poll() is None:
+            try:
+                active_process.send_signal(signum)
+            except ProcessLookupError:
+                pass
+
+    def terminate_and_reap(active_process: subprocess.Popen[bytes], signum: int) -> None:
+        if active_process.poll() is None:
+            try:
+                active_process.send_signal(signum)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + _CHILD_TERMINATION_GRACE_SECONDS
+        while active_process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                active_process.kill()
+                break
+            try:
+                active_process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                active_process.kill()
+                break
+        active_process.wait()
 
     with _temporary_signal_handlers(forward_then_terminate):
         process = subprocess.Popen(command, env=env)
-        try:
-            return process.wait()
-        except HostSecretBootstrapTerminated:
+        while True:
+            if termination_signal is not None:
+                terminate_and_reap(process, termination_signal)
+                raise HostSecretBootstrapTerminated(termination_signal)
             try:
-                process.wait(timeout=5)
+                returncode = process.wait(timeout=_CHILD_WAIT_POLL_SECONDS)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            raise
+                continue
+            if termination_signal is not None:
+                raise HostSecretBootstrapTerminated(termination_signal)
+            return returncode
 
 
 def run_with_host_secrets(
