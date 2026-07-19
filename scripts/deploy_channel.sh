@@ -146,8 +146,6 @@ resolve_target_sha() {
   exit 2
 }
 
-current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
-target_sha="$(resolve_target_sha "${target_sha}")"
 MIGRATIONS_CHECKED=0
 FORWARD_ONLY_COUNT=0
 FORWARD_ONLY_MIGRATION_STARTED=0
@@ -170,6 +168,14 @@ acquire_channel_mutation_lock() {
     exit 89
   fi
 }
+
+# The lock must cover the mutable-state snapshot as well as writes. Acquiring
+# it later would let a slow classifier retain a stale current_sha while another
+# invocation completes a deployment, then roll back that newer deployment.
+mkdir -p "$(dirname "${pin_file}")"
+acquire_channel_mutation_lock
+current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
+target_sha="$(resolve_target_sha "${target_sha}")"
 
 read_pending_migration_field() {
   local field="$1"
@@ -724,8 +730,6 @@ fi
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
-mkdir -p "$(dirname "${pin_file}")"
-acquire_channel_mutation_lock
 if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
 fi

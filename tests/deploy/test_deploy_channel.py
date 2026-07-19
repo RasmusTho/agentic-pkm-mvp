@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -106,6 +107,10 @@ exec /bin/cp "$@"
         bin_dir / "git",
         f"""#!/usr/bin/env bash
 set -eu
+if [ -n "${{FAKE_GIT_SLEEP_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_GIT_SLEEP_MATCH}}"* ]]; then
+  touch "${{FAKE_GIT_SLEEP_MARKER:?}}"
+  sleep "${{FAKE_GIT_SLEEP_SECONDS:-2}}"
+fi
 if [ -n "${{FAKE_GIT_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_GIT_FAIL_MATCH}}"* ]]; then
   echo 'fake git materialization failure' >&2
   exit "${{FAKE_GIT_FAIL_RC:-87}}"
@@ -209,6 +214,61 @@ def _run_deploy(
         capture_output=True,
         text=True,
     )
+
+
+def test_channel_lock_covers_pin_snapshot_and_migration_classification(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/overlap_lock.py"
+    migration.write_text(
+        'revision = "overlap_lock"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "reversible"\n'
+        'def downgrade():\n    pass\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add overlap migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    marker = tmp_path / "git-sleep-started"
+    slow_env = dict(env)
+    slow_env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_GIT_SLEEP_MATCH": "diff --diff-filter",
+            "FAKE_GIT_SLEEP_MARKER": str(marker),
+            "FAKE_GIT_SLEEP_SECONDS": "2",
+        }
+    )
+    slow = subprocess.Popen(
+        ["bash", "scripts/deploy_channel.sh", "deploy", "dev", target_sha],
+        cwd=root,
+        env=slow_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert marker.exists(), "slow deploy never entered migration classification"
+
+        overlapping = _run_deploy(root, env, target_sha)
+
+        assert overlapping.returncode == 89
+        assert "channel mutation blocked" in overlapping.stderr
+        stdout, stderr = slow.communicate(timeout=15)
+        assert slow.returncode == 0, stdout + stderr
+        assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    finally:
+        if slow.poll() is None:
+            slow.terminate()
+            slow.communicate(timeout=5)
 
 
 _FAKE_PSYCOPG_MODULE = '''\

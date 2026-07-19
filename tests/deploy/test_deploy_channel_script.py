@@ -547,3 +547,11 @@ def test_channel_mutation_lock_blocks_concurrent_deploy(tmp_path: Path) -> None:
     clean = _run_deploy(root, env, sha)
     assert clean.returncode == 0, clean.stderr
     assert not lock_dir.exists(), "lock must be released on exit"
+
+
+def test_channel_lock_is_acquired_before_mutable_state_snapshot() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    lock_call = text.index("\nacquire_channel_mutation_lock\n")
+    snapshot = text.index('current_sha="$(read_pin')
+
+    assert lock_call < snapshot
