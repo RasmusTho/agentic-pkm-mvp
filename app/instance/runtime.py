@@ -19,6 +19,7 @@ from app.instance.filesystem_identity import (
     same_filesystem_root,
 )
 from app.instance.instance_state import (
+    DeploymentQuiescenceProof,
     InstanceStateBackup,
     InstanceStateLayout,
     InstanceStatePreflightError,
@@ -574,10 +575,16 @@ def _preflight_runtime(
 
 _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
+_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v1"
+_QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v1"
 
 
 def _deployment_fence_path(host_global_root: Path, channel: str) -> Path:
     return Path(host_global_root) / f"deployment-{channel}-restart-fence.json"
+
+
+def _deployment_lease_path(host_global_root: Path) -> Path:
+    return Path(host_global_root) / "deployment-host-global-lease.json"
 
 
 def _assert_mount_root(path: Path, label: str) -> Path:
@@ -655,20 +662,75 @@ def _begin_instance_state_deployment(
         diagnostic_fingerprint = LegacyRegistryFinalExport(
             layout
         ).capture_diagnostic_snapshot(source).fingerprint
+    lease_path = _deployment_lease_path(ownership_root)
+    nonce = uuid4().hex
+    lease: dict[str, object] = {
+        "schema": _DEPLOYMENT_LEASE_SCHEMA,
+        "channel_id": channel,
+        "nonce": nonce,
+        "phase": "claimed",
+    }
+    if lease_path.exists():
+        raise InstanceStatePreflightError("another host-global deployment lease is active")
+    _write_private_json(lease_path, lease)
     payload: dict[str, object] = {
         "schema": _DEPLOYMENT_FENCE_SCHEMA,
         "channel_id": channel,
+        "deployment_nonce": nonce,
         "legacy_path": str(source),
         "diagnostic_fingerprint": diagnostic_fingerprint,
     }
     fence_path = _deployment_fence_path(ownership_root, channel)
     if fence_path.exists():
+        lease_path.unlink(missing_ok=True)
         existing = _read_deployment_fence(ownership_root, channel)
         if existing.get("legacy_path") != str(source):
             raise InstanceStatePreflightError("existing restart fence targets another legacy store")
         return existing
     _write_private_json(fence_path, payload)
     return payload
+
+
+def _prove_instance_state_quiescence(
+    *, channel: str, host_global_root: Path, inventory_path: Path
+) -> DeploymentQuiescenceProof:
+    """Bind two-pass all-domain stopped inventory evidence to the host lease."""
+    root = _assert_mount_root(host_global_root, "host-global")
+    lease_path = _deployment_lease_path(root)
+    try:
+        lease = json.loads(lease_path.read_text(encoding="utf-8"))
+        inventory_bytes = Path(inventory_path).read_bytes()
+        inventory = json.loads(inventory_bytes)
+        if (
+            lease.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
+            or lease.get("channel_id") != channel
+            or lease.get("phase") != "claimed"
+            or not isinstance(lease.get("nonce"), str)
+            or inventory.get("schema") != _QUIESCENCE_INVENTORY_SCHEMA
+            or inventory.get("inventory_complete") is not True
+            or inventory.get("all_consumers_stopped") is not True
+            or inventory.get("probe_count") != 2
+            or not isinstance(inventory.get("domains"), dict)
+            or set(inventory["domains"]) != {"dev", "test", "prod", "native"}
+            or any(inventory["domains"][domain] for domain in inventory["domains"])
+        ):
+            raise ValueError
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise InstanceStatePreflightError("complete two-pass host-wide quiescence inventory is required") from exc
+    digest = hashlib.sha256(inventory_bytes).hexdigest()
+    lease |= {"phase": "proved", "inventory_digest": digest, "all_consumers_stopped": True}
+    lease_path.unlink()
+    _write_private_json(lease_path, lease)
+    proof_path = root / "deployment-quiescence-proof.json"
+    proof_payload: dict[str, object] = {
+        "channel_id": channel,
+        "nonce": str(lease["nonce"]),
+        "inventory_digest": digest,
+        "lease_path": str(lease_path),
+    }
+    proof_path.unlink(missing_ok=True)
+    _write_private_json(proof_path, proof_payload)
+    return DeploymentQuiescenceProof(channel, str(lease["nonce"]), digest, lease_path)
 
 
 def _load_legacy_owner_inventory(
@@ -741,15 +803,15 @@ def _finish_instance_state_deployment(
     inventory_path: Path,
     backup_root: Path,
     restore_root: Path | None,
-    writers_drained: bool,
-    old_api_stopped: bool,
+    quiescence_proof: DeploymentQuiescenceProof | None,
 ) -> dict[str, object]:
     """Finalize legacy state while stopped, then clear the restart fence."""
 
-    if not writers_drained or not old_api_stopped:
-        raise InstanceStatePreflightError("deployment finalization requires stopped legacy writers")
+    if quiescence_proof is None:
+        raise InstanceStatePreflightError("durable quiescence proof is required")
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
+    quiescence_proof.require_valid(channel_id=channel)
     _read_deployment_fence(ownership_root, channel)
     layout = InstanceStateLayout.for_channel(state_mount, channel)
     layout.ensure()
@@ -757,7 +819,7 @@ def _finish_instance_state_deployment(
     backup = InstanceStateBackup(layout, ledger)
 
     if restore_root is not None:
-        backup.restore(restore_root, live_channels=())
+        backup.restore(restore_root, quiescence_proof=quiescence_proof)
 
     store = VaultRegistryStore(layout.registry_path)
     has_registry_state = layout.registry_path.is_file() or (
@@ -773,9 +835,7 @@ def _finish_instance_state_deployment(
         exporter = LegacyRegistryFinalExport(layout)
         final = exporter.export_final_after_stop(
             source,
-            writers_drained=True,
-            old_api_stopped=True,
-            restart_fence_active=True,
+            quiescence_proof=quiescence_proof,
         )
         final_fingerprint = final.fingerprint
         if not layout.registry_path.is_file() or store.load().revision == 0:
@@ -813,6 +873,8 @@ def _finish_instance_state_deployment(
     backup_receipt = backup.create(backup_root)
     fence_path = _deployment_fence_path(ownership_root, channel)
     fence_path.unlink()
+    _deployment_lease_path(ownership_root).unlink()
+    (ownership_root / "deployment-quiescence-proof.json").unlink(missing_ok=True)
     directory = os.open(ownership_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(directory)
@@ -851,8 +913,11 @@ def main(argv: list[str] | None = None) -> int:
     finish.add_argument("--inventory-path", type=Path, required=True)
     finish.add_argument("--backup-root", type=Path, required=True)
     finish.add_argument("--restore-root", type=Path)
-    finish.add_argument("--writers-drained", action="store_true")
-    finish.add_argument("--old-api-stopped", action="store_true")
+    finish.add_argument("--quiescence-proof-path", type=Path, required=True)
+    prove = subparsers.add_parser("deployment-prove")
+    prove.add_argument("--channel", required=True)
+    prove.add_argument("--host-global-root", type=Path, required=True)
+    prove.add_argument("--inventory-path", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)
@@ -877,6 +942,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "deployment-finish":
+        proof_payload = json.loads(args.quiescence_proof_path.read_text(encoding="utf-8"))
+        proof = DeploymentQuiescenceProof(
+            channel_id=str(proof_payload["channel_id"]),
+            nonce=str(proof_payload["nonce"]),
+            inventory_digest=str(proof_payload["inventory_digest"]),
+            lease_path=Path(str(proof_payload["lease_path"])),
+        )
         print(
             json.dumps(
                 _finish_instance_state_deployment(
@@ -887,12 +959,17 @@ def main(argv: list[str] | None = None) -> int:
                     inventory_path=args.inventory_path,
                     backup_root=args.backup_root,
                     restore_root=args.restore_root,
-                    writers_drained=args.writers_drained,
-                    old_api_stopped=args.old_api_stopped,
+                    quiescence_proof=proof,
                 ),
                 sort_keys=True,
             )
         )
+        return 0
+    if args.command == "deployment-prove":
+        proof = _prove_instance_state_quiescence(
+            channel=args.channel, host_global_root=args.host_global_root, inventory_path=args.inventory_path
+        )
+        print(json.dumps({"channel_id": proof.channel_id, "nonce": proof.nonce, "inventory_digest": proof.inventory_digest, "lease_path": str(proof.lease_path)}, sort_keys=True))
         return 0
     raise AssertionError("unreachable")
 

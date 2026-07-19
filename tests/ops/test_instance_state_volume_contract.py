@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.instance.instance_state import (
+    DeploymentQuiescenceProof,
     InstanceStateBackup,
     InstanceStateLayout,
     InstanceStatePreflightError,
@@ -22,6 +23,7 @@ from app.instance.runtime import (
     _deployment_fence_path,
     _finish_instance_state_deployment,
     _preflight_runtime,
+    _prove_instance_state_quiescence,
 )
 from app.instance.vault_registry import (
     AppLocalSettingsStore,
@@ -72,18 +74,14 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
     diagnostic = exporter.capture_diagnostic_snapshot(legacy.path)
     manager.initialize_vault(tmp_path / "vault-two", remember=True)
 
-    with pytest.raises(InstanceStatePreflightError, match="drained and stopped"):
+    with pytest.raises(InstanceStatePreflightError, match="quiescence proof"):
         exporter.export_final_after_stop(
             legacy.path,
-            writers_drained=False,
-            old_api_stopped=True,
-            restart_fence_active=True,
+            quiescence_proof=None,
         )
     final = exporter.export_final_after_stop(
         legacy.path,
-        writers_drained=True,
-        old_api_stopped=True,
-        restart_fence_active=True,
+        quiescence_proof=DeploymentQuiescenceProof.for_test(),
     )
     assert final.fingerprint != diagnostic.fingerprint
 
@@ -101,8 +99,8 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
     assert "prepare_instance_state_deployment run_docker_compose" in start
     assert producer.index("deployment-begin") < producer.index(" stop api worker watcher")
     assert producer.index(" stop api worker watcher") < producer.index("deployment-finish")
-    assert "--writers-drained" in producer
-    assert "--old-api-stopped" in producer
+    assert "deployment-prove" in producer
+    assert "probe_count" in producer
 
 
 def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
@@ -161,8 +159,7 @@ def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
         inventory_path=inventory_path,
         backup_root=host_global_root / "backups" / "test" / "latest",
         restore_root=None,
-        writers_drained=True,
-        old_api_stopped=True,
+        quiescence_proof=DeploymentQuiescenceProof.for_test("test"),
     )
 
     assert receipt["final_fingerprint"] != diagnostic["diagnostic_fingerprint"]
@@ -232,13 +229,111 @@ def test_deployment_producer_keeps_restart_fenced_on_incomplete_inventory(
             inventory_path=inventory_path,
             backup_root=host_global_root / "backups" / "prod" / "latest",
             restore_root=None,
-            writers_drained=True,
-            old_api_stopped=True,
+            quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
         )
 
     assert _deployment_fence_path(host_global_root, "prod").is_file()
     assert not (host_global_root / "ownership-ledger.json").exists()
     assert not (host_global_root / "ownership-key.json").exists()
+
+
+def test_finalizer_rejects_caller_booleans_without_a_durable_quiescence_proof(tmp_path) -> None:
+    """AC5/AC14: a caller assertion is never a production stop proof."""
+
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    _begin_instance_state_deployment(
+        channel="dev",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+    )
+    inventory = ownership / "legacy-owner-inventory.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v1",
+                "inventory_complete": True,
+                "writers_drained": True,
+                "owners": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(inventory, 0o600)
+
+    with pytest.raises(InstanceStatePreflightError, match="quiescence proof"):
+        _finish_instance_state_deployment(
+            channel="dev",
+            instance_state_root=state,
+            host_global_root=ownership,
+            legacy_path=tmp_path / "legacy.md",
+            inventory_path=inventory,
+            backup_root=ownership / "backup",
+            restore_root=None,
+            quiescence_proof=None,
+        )
+
+
+def test_restore_rejects_missing_durable_quiescence_proof_before_writes(tmp_path) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "ownership")
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    InstanceStateBackup(layout, runtime.ledger).create(tmp_path / "backup")
+    before = {path.name: path.read_bytes() for path in layout.root.iterdir() if path.is_file()}
+
+    with pytest.raises(InstanceStatePreflightError, match="quiescence proof"):
+        InstanceStateBackup(layout, runtime.ledger).restore(
+            tmp_path / "backup", quiescence_proof=None
+        )
+
+    assert {path.name: path.read_bytes() for path in layout.root.iterdir() if path.is_file()} == before
+
+
+def test_host_wide_proof_rejects_live_or_racing_domains(tmp_path) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+    )
+    inventory = ownership / "legacy-owner-inventory.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v1",
+                "inventory_complete": True,
+                "probe_count": 2,
+                "all_consumers_stopped": True,
+                "domains": {"dev": [], "test": ["pkm-test-api"], "prod": [], "native": []},
+                "owners": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(InstanceStatePreflightError, match="two-pass host-wide"):
+        _prove_instance_state_quiescence(
+            channel="prod", host_global_root=ownership, inventory_path=inventory
+        )
+
+
+def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None:
+    producer = (Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh").read_text(
+        encoding="utf-8"
+    )
+    assert producer.count("docker ps --format") >= 2
+    assert "pgrep -af" in producer
+    assert '"dev", "test", "prod", "native"' in producer
+    assert producer.index(" stop api worker watcher") < producer.index("deployment-prove")
+    assert producer.index("deployment-prove") < producer.index("deployment-finish")
 
 
 def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
@@ -377,7 +472,7 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     os.chmod(stale_checksum, 0o600)
     restored = InstanceStateBackup(layout, runtime.ledger).restore(
         tmp_path / "backup",
-        live_channels=(),
+        quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
     )
     assert restored.registry_checksum == expected["registry_checksum"]
     assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
@@ -393,7 +488,7 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
 
     (tmp_path / "backup" / "ownership-key.json").unlink()
     with pytest.raises(InstanceStatePreflightError, match="complete ledger/key"):
-        InstanceStateBackup(layout, runtime.ledger).restore(tmp_path / "backup", live_channels=())
+        InstanceStateBackup(layout, runtime.ledger).restore(tmp_path / "backup", quiescence_proof=DeploymentQuiescenceProof.for_test("prod"))
 
 
 def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_path) -> None:
@@ -442,7 +537,7 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
     with pytest.raises(InstanceStatePreflightError, match="channel_id"):
         InstanceStateBackup(target_layout, target_runtime.ledger).restore(
             tmp_path / "dev-backup",
-            live_channels=(),
+            quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
         )
 
     after = {

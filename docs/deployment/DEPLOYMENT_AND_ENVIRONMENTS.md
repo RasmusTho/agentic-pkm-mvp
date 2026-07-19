@@ -65,8 +65,11 @@ resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. I
 missing registry or ledger during consumer preflight.
 
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
-`scripts/lib/instance_state_deployment.sh`. The shared producer installs a durable channel restart
-fence, stops API/worker/watcher/Heimdal, and only then runs the finalizer. The finalizer rejects an
+`scripts/lib/instance_state_deployment.sh`. The shared producer installs a durable host-global
+deployment lease before its channel restart fence, stops API/worker/watcher/Heimdal, probes dev,
+test, prod, and native consumers twice, and only then runs the finalizer. A live or racing domain
+leaves the fence in place; the nonce-plus-inventory-digest proof is required for restore, final
+export/preservation, and legacy bootstrap. The finalizer rejects an
 incomplete or non-private `/app/instance-ownership/legacy-owner-inventory.json`, captures the final
 legacy fingerprint, imports it on first volume or preserves it beside an established dormant
 registry, calls the host-global legacy-owner bootstrap, creates a verified registry/ledger/key

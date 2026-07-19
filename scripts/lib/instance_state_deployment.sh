@@ -8,6 +8,7 @@ prepare_instance_state_deployment() {
   local channel="$2"
   local legacy_path="${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}"
   local inventory_path="${INSTANCE_LEGACY_OWNER_INVENTORY_PATH:-/app/instance-ownership/legacy-owner-inventory.json}"
+  local quiescence_inventory_path="/app/instance-ownership/deployment-quiescence-inventory.json"
   local backup_root="${INSTANCE_STATE_BACKUP_PATH:-/app/instance-ownership/backups/${channel}/latest}"
   local restore_root="${INSTANCE_STATE_RESTORE_PATH:-}"
   local runtime_uid="${LOCAL_UID:-$(id -u)}"
@@ -24,7 +25,7 @@ prepare_instance_state_deployment() {
   if [ -n "${restore_root}" ]; then
     finish_args+=(--restore-root "${restore_root}")
   fi
-  finish_args+=(--writers-drained --old-api-stopped)
+  finish_args+=(--quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json)
 
   # The one-shot remains the sole mount-permission producer. It creates no
   # registry or ledger authority; it only makes both mounted roots private for
@@ -42,6 +43,51 @@ prepare_instance_state_deployment() {
       --legacy-path "${legacy_path}" || return $?
 
   "${compose_function}" stop api worker watcher heimdal-capture-watch || return $?
+
+  # Probe every Compose domain and native launchers twice after the local
+  # project stops.  A changed snapshot or any surviving writer is unsafe: the
+  # finalizer must never infer host-wide quiescence from this caller's channel.
+  local first_probe second_probe inventory_json
+  first_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af 'start_full_system|deploy_channel|uvicorn|celery|watch' || true)"
+  second_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af 'start_full_system|deploy_channel|uvicorn|celery|watch' || true)"
+  inventory_json="$(python3 - "${first_probe}" "${second_probe}" <<'PY'
+import json
+import sys
+
+def domains(snapshot):
+    result = {name: [] for name in ("dev", "test", "prod", "native")}
+    for line in snapshot.splitlines():
+        lower = line.lower()
+        if "pkm-dev" in lower:
+            result["dev"].append(line)
+        elif "pkm-test" in lower:
+            result["test"].append(line)
+        elif "pkm-prod" in lower:
+            result["prod"].append(line)
+        elif line.strip():
+            result["native"].append(line)
+    return result
+
+first, second = domains(sys.argv[1]), domains(sys.argv[2])
+if first != second or any(first.values()):
+    raise SystemExit("host-wide writer inventory is live or racing")
+print(json.dumps({
+    "schema": "agentic-pkm.host-deployment-quiescence.v1",
+    "inventory_complete": True,
+    "probe_count": 2,
+    "all_consumers_stopped": True,
+    "domains": first,
+}, sort_keys=True))
+PY
+)" || return $?
+  printf '%s\n' "${inventory_json}" | "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    sh -c "umask 077; cat > '${quiescence_inventory_path}'" || return $?
+
+  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    python -m app.instance.runtime deployment-prove \
+      --channel "${channel}" \
+      --host-global-root /app/instance-ownership \
+      --inventory-path "${quiescence_inventory_path}" || return $?
 
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime deployment-finish \

@@ -5,7 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from app.instance.instance_state import InstanceStateLayout, LegacyRegistryFinalExport
+from app.instance.instance_state import (
+    DeploymentQuiescenceProof,
+    InstanceStateLayout,
+    LegacyRegistryFinalExport,
+)
 from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
 
 
@@ -38,9 +42,7 @@ def test_registry_survives_recreate_and_is_shared_cross_process(tmp_path) -> Non
     legacy.upsert_known_vault(KnownVaultRef("path:two", str(tmp_path / "two")))
     final_export = exporter.export_final_after_stop(
         legacy.path,
-        writers_drained=True,
-        old_api_stopped=True,
-        restart_fence_active=True,
+        quiescence_proof=DeploymentQuiescenceProof.for_test("test"),
     )
     imported = exporter.import_final_export(final_export)
 

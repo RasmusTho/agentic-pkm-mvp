@@ -106,8 +106,10 @@ consumers fail-exit through one resolved-path/permissions preflight before start
 `/app/instance-ownership` carries the HMAC-keyed canonical-root ledger shared across dev/test/prod,
 preventing equal or overlapping content roots from becoming active in different channels.
 
-MVR-01B also wires the canonical deploy and start wrappers to one channel-fenced producer. Before
-recreate it installs the restart fence and stops API, worker, watcher, and Heimdal; while stopped it
+MVR-01B also wires the canonical deploy and start wrappers to one host-global-leased and
+channel-fenced producer. Before recreate it installs the host lease and restart fence, stops API,
+worker, watcher, and Heimdal, and probes dev/test/prod/native consumers twice; any live or racing
+domain fails closed. While stopped it
 captures the final legacy scalar payload, imports or preserves it on the durable volume, verifies
 the private complete host-wide legacy-owner inventory, seeds the shared ledger, optionally restores
 a verified backup, and creates the next registry/ledger/key backup. The fence is removed only after

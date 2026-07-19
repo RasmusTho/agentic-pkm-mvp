@@ -22,6 +22,45 @@ class InstanceStatePreflightError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class DeploymentQuiescenceProof:
+    """Validated, durable evidence that the host-wide writer inventory is stopped.
+
+    This deliberately replaces boolean caller assertions and channel-only lists.
+    Production proofs are bound to the private host-global deployment lease.
+    """
+
+    channel_id: str
+    nonce: str
+    inventory_digest: str
+    lease_path: Path | None = None
+    _test_only: bool = False
+
+    @classmethod
+    def for_test(cls, channel_id: str = "test") -> "DeploymentQuiescenceProof":
+        return cls(channel_id, "test-nonce", "test-digest", _test_only=True)
+
+    def require_valid(self, *, channel_id: str | None = None) -> None:
+        if channel_id is not None and self.channel_id != channel_id:
+            raise InstanceStatePreflightError("quiescence proof targets another channel")
+        if self._test_only:
+            return
+        if self.lease_path is None:
+            raise InstanceStatePreflightError("durable quiescence proof is required")
+        try:
+            payload = json.loads(self.lease_path.read_text(encoding="utf-8"))
+            if (
+                payload.get("schema") != "agentic-pkm.host-deployment-lease.v1"
+                or payload.get("channel_id") != self.channel_id
+                or payload.get("nonce") != self.nonce
+                or payload.get("inventory_digest") != self.inventory_digest
+                or payload.get("all_consumers_stopped") is not True
+            ):
+                raise ValueError
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise InstanceStatePreflightError("durable quiescence proof is required") from exc
+
+
+@dataclass(frozen=True)
 class InstanceStateLayout:
     root: Path
     channel_id: str
@@ -72,14 +111,11 @@ class LegacyRegistryFinalExport:
         self,
         legacy_path: Path,
         *,
-        writers_drained: bool,
-        old_api_stopped: bool,
-        restart_fence_active: bool,
+        quiescence_proof: DeploymentQuiescenceProof | None,
     ) -> LegacyExport:
-        if not (writers_drained and old_api_stopped and restart_fence_active):
-            raise InstanceStatePreflightError(
-                "legacy writers must be drained and stopped behind a restart fence"
-            )
+        if quiescence_proof is None:
+            raise InstanceStatePreflightError("durable quiescence proof is required")
+        quiescence_proof.require_valid(channel_id=self.layout.channel_id)
         return self._capture(legacy_path)
 
     def import_final_export(self, export: LegacyExport) -> RegistrySnapshot:
@@ -232,10 +268,11 @@ class InstanceStateBackup:
         self,
         backup_root: Path,
         *,
-        live_channels: Sequence[str],
+        quiescence_proof: DeploymentQuiescenceProof | None,
     ) -> InstanceStateRestoreReceipt:
-        if live_channels:
-            raise InstanceStatePreflightError("restore requires all live channels to be stopped")
+        if quiescence_proof is None:
+            raise InstanceStatePreflightError("durable quiescence proof is required")
+        quiescence_proof.require_valid(channel_id=self.layout.channel_id)
         source = Path(backup_root).expanduser().resolve(strict=False)
         required = {
             "manifest.json",
@@ -337,6 +374,7 @@ def _atomic_private_write(path: Path, payload: bytes) -> None:
 __all__ = [
     "InstanceStateBackup",
     "InstanceStateBackupReceipt",
+    "DeploymentQuiescenceProof",
     "InstanceStateLayout",
     "InstanceStatePreflightError",
     "InstanceStatePreflightReceipt",
