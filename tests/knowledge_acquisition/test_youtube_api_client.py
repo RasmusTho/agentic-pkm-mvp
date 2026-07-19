@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import traceback
 from typing import Any
 
 import httpx
@@ -362,6 +363,134 @@ def test_malformed_content_encoding_is_normalized_without_raw_cause() -> None:
     assert captured.value.status == 200
     assert sentinel.decode() not in captured.value.detail
     assert captured.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    ("status", "reason_code"),
+    ((401, "auth_expired"), (404, "source_gone"), (429, "quota_exhausted")),
+)
+@pytest.mark.parametrize("failure_stage", ("iterate", "close"))
+def test_actual_stream_error_uses_known_status_and_keeps_exception_chain_secret(
+    status: int,
+    reason_code: str,
+    failure_stage: str,
+) -> None:
+    from app.knowledge_acquisition.youtube_api_client import (
+        YouTubeApiError,
+        YouTubeQuotaStore,
+    )
+
+    sentinel = "SENTINEL-stream-error-must-never-leak"
+    now = {"value": datetime(2026, 7, 19, 23, 59, tzinfo=timezone.utc)}
+    quota = YouTubeQuotaStore.for_runtime(clock=lambda: now["value"])
+
+    class _ActualStreamError(httpx.SyncByteStream):
+        def __iter__(self):
+            if failure_stage == "iterate":
+                raise httpx.StreamError(sentinel)
+            yield b"not-json"
+
+        def close(self) -> None:
+            if failure_stage == "close":
+                raise httpx.StreamError(sentinel)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        now["value"] = datetime(2026, 7, 20, 0, 0, tzinfo=timezone.utc)
+        return httpx.Response(status, request=request, stream=_ActualStreamError())
+
+    with pytest.raises(YouTubeApiError) as captured:
+        _client(_Api(handler), quota=quota).get_my_channel()
+
+    error = captured.value
+    assert error.reason_code == reason_code
+    assert error.status == status
+    assert error.__cause__ is None
+    assert sentinel not in error.detail
+    assert sentinel not in "".join(traceback.format_exception(error))
+
+    if status == 429:
+        now["value"] = datetime(2026, 7, 19, 23, 59, tzinfo=timezone.utc)
+        assert quota.status(100) == {
+            "spent_today": 1,
+            "budget": 100,
+            "exhausted": True,
+        }
+        now["value"] = datetime(2026, 7, 20, 0, 0, tzinfo=timezone.utc)
+        assert quota.status(100) == {
+            "spent_today": 0,
+            "budget": 100,
+            "exhausted": False,
+        }
+
+
+@pytest.mark.parametrize("failure_stage", ("iterate", "close"))
+def test_actual_stream_error_on_success_status_is_safely_normalized(
+    failure_stage: str,
+) -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    sentinel = "SENTINEL-stream-error-must-never-leak"
+
+    class _ActualStreamError(httpx.SyncByteStream):
+        def __iter__(self):
+            if failure_stage == "iterate":
+                raise httpx.StreamError(sentinel)
+            yield b'{"items": []}'
+
+        def close(self) -> None:
+            if failure_stage == "close":
+                raise httpx.StreamError(sentinel)
+
+    api = _Api(lambda request: httpx.Response(200, request=request, stream=_ActualStreamError()))
+    with pytest.raises(YouTubeApiError) as captured:
+        _client(api).get_my_channel()
+
+    error = captured.value
+    assert error.reason_code == "api_unavailable"
+    assert error.status == 200
+    assert error.__cause__ is None
+    assert sentinel not in error.detail
+    assert sentinel not in "".join(traceback.format_exception(error))
+
+
+@pytest.mark.parametrize("resource", ("playlists", "playlist_items"))
+def test_provider_controlled_shape_value_is_absent_from_exception_chain(
+    resource: str,
+) -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    sentinel = "SENTINEL-provider-field-must-never-leak"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if resource == "playlists":
+            return _response(
+                request,
+                {
+                    "items": [
+                        {
+                            "id": "PL__test__owned",
+                            "snippet": {"title": "Owned"},
+                            "contentDetails": {"itemCount": sentinel},
+                        }
+                    ]
+                },
+            )
+        item = _playlist_item(1)
+        item["snippet"]["position"] = sentinel
+        return _response(request, {"items": [item]})
+
+    with pytest.raises(YouTubeApiError) as captured:
+        client = _client(_Api(handler))
+        if resource == "playlists":
+            client.list_my_playlists()
+        else:
+            client.list_playlist_items("PL__test__playlist")
+
+    error = captured.value
+    assert error.reason_code == "api_unavailable"
+    assert error.__cause__ is None
+    assert sentinel not in error.detail
+    assert sentinel not in "".join(traceback.format_exception(error))
 
 
 def test_quota_accounting_durable_and_exhaustion() -> None:

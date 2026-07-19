@@ -523,8 +523,8 @@ class YouTubeApiClient:
         title = _required_str(snippet.get("title"))
         try:
             validate_channel_id(channel_id)
-        except InvalidYouTubeRefError as exc:
-            raise _shape_error() from exc
+        except InvalidYouTubeRefError:
+            raise _shape_error() from None
         return Channel(channel_id, title)
 
     def quota_status(self) -> dict[str, int | bool]:
@@ -561,58 +561,96 @@ class YouTubeApiClient:
             raise YouTubeApiError("api_unavailable", None, "Data API request timed out") from None
         except httpx.TransportError:
             raise YouTubeApiError("network_error", None, "Data API transport failed") from None
+        except httpx.StreamError:
+            raise YouTubeApiError("api_unavailable", None, "Data API stream failed") from None
 
-        try:
-            response_etag = response.headers.get("etag")
-            if response.status_code == 304 and allow_not_modified:
-                return NotModified(response_etag or etag), response_etag
-            if response.is_redirect:
-                location = response.headers.get("location")
-                if location:
-                    _validate_absolute_data_url(
-                        urljoin(str(request.url), location), require_path=True
-                    )
-                raise YouTubeApiError(
-                    "api_unavailable", response.status_code, "Data API redirect was refused"
-                )
-            try:
-                raw = _read_bounded(response, self._max_response_bytes)
-            except httpx.DecodingError:
-                if response.status_code >= 400:
-                    error = _mapped_http_error(response.status_code, {})
-                    if error.reason_code == "quota_exhausted":
-                        self._quota.mark_exhausted(quota_date)
-                    raise error from None
-                raise YouTubeApiError(
-                    "api_unavailable",
-                    response.status_code,
-                    "Data API response decoding failed",
-                ) from None
-            except YouTubeApiError:
-                if response.status_code >= 400:
-                    error = _mapped_http_error(response.status_code, {})
-                    if error.reason_code == "quota_exhausted":
-                        self._quota.mark_exhausted(quota_date)
-                    raise error from None
-                raise
-            except httpx.TimeoutException:
-                raise YouTubeApiError(
-                    "api_unavailable", response.status_code, "Data API response timed out"
-                ) from None
-            except httpx.TransportError:
-                raise YouTubeApiError(
-                    "network_error", response.status_code, "Data API response transport failed"
-                ) from None
-        finally:
-            response.close()
+        status = response.status_code
+        response_etag = response.headers.get("etag")
+        raw = b""
+        pending_error: Exception | None = None
+        not_modified: NotModified | None = None
 
-        if response.status_code >= 400:
-            payload = _decode_error_object(raw)
-            error = _mapped_http_error(response.status_code, payload)
+        def status_error(payload: Mapping[str, Any]) -> YouTubeApiError:
+            error = _mapped_http_error(status, payload)
             if error.reason_code == "quota_exhausted":
                 self._quota.mark_exhausted(quota_date)
-            raise error
-        payload = _decode_object(raw, status=response.status_code)
+            return error
+
+        try:
+            if status == 304 and allow_not_modified:
+                not_modified = NotModified(response_etag or etag)
+            elif response.is_redirect:
+                location = response.headers.get("location")
+                if location:
+                    try:
+                        _validate_absolute_data_url(
+                            urljoin(str(request.url), location), require_path=True
+                        )
+                    except DisallowedYouTubeHostError as error:
+                        pending_error = error
+                if pending_error is None:
+                    pending_error = YouTubeApiError(
+                        "api_unavailable", status, "Data API redirect was refused"
+                    )
+            elif not_modified is None:
+                try:
+                    raw = _read_bounded(response, self._max_response_bytes)
+                except httpx.DecodingError:
+                    pending_error = (
+                        status_error({})
+                        if status >= 400
+                        else YouTubeApiError(
+                            "api_unavailable",
+                            status,
+                            "Data API response decoding failed",
+                        )
+                    )
+                except YouTubeApiError as error:
+                    pending_error = status_error({}) if status >= 400 else error
+                except httpx.TimeoutException:
+                    pending_error = (
+                        status_error({})
+                        if status >= 400
+                        else YouTubeApiError(
+                            "api_unavailable", status, "Data API response timed out"
+                        )
+                    )
+                except httpx.TransportError:
+                    pending_error = (
+                        status_error({})
+                        if status >= 400
+                        else YouTubeApiError(
+                            "network_error", status, "Data API response transport failed"
+                        )
+                    )
+                except httpx.StreamError:
+                    pending_error = (
+                        status_error({})
+                        if status >= 400
+                        else YouTubeApiError(
+                            "api_unavailable", status, "Data API response stream failed"
+                        )
+                    )
+        finally:
+            try:
+                response.close()
+            except httpx.StreamError:
+                if pending_error is None:
+                    pending_error = (
+                        status_error(_decode_error_object(raw))
+                        if status >= 400
+                        else YouTubeApiError(
+                            "api_unavailable", status, "Data API response stream failed"
+                        )
+                    )
+
+        if pending_error is not None:
+            raise pending_error from None
+        if not_modified is not None:
+            return not_modified, response_etag
+        if status >= 400:
+            raise status_error(_decode_error_object(raw)) from None
+        payload = _decode_object(raw, status=status)
         return payload, response_etag
 
 
@@ -737,8 +775,8 @@ def _payload_page_token(payload: Mapping[str, Any]) -> str | None:
         raise _shape_error()
     try:
         return _validate_page_token(value)
-    except InvalidYouTubeRefError as exc:
-        raise _shape_error() from exc
+    except InvalidYouTubeRefError:
+        raise _shape_error() from None
 
 
 def _reject_token_cycle(previous: str | None, next_token: str) -> None:
@@ -760,8 +798,8 @@ def _parse_playlists(payload: Mapping[str, Any]) -> tuple[Playlist, ...]:
         try:
             validate_playlist_id(playlist_id)
             count = int(count_value)
-        except (InvalidYouTubeRefError, TypeError, ValueError) as exc:
-            raise _shape_error() from exc
+        except (InvalidYouTubeRefError, TypeError, ValueError):
+            raise _shape_error() from None
         if count < 0:
             raise _shape_error()
         parsed.append(Playlist(playlist_id, _required_str(snippet.get("title")), count))
@@ -784,8 +822,8 @@ def _parse_playlist_items(payload: Mapping[str, Any]) -> tuple[PlaylistItem, ...
         try:
             validate_video_id(video_id)
             position = int(position_value)
-        except (InvalidYouTubeRefError, TypeError, ValueError) as exc:
-            raise _shape_error() from exc
+        except (InvalidYouTubeRefError, TypeError, ValueError):
+            raise _shape_error() from None
         if position < 0:
             raise _shape_error()
         parsed.append(
