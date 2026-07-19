@@ -144,6 +144,12 @@ ALLOW_FILES = (
     # (youtube_account_binding) with a self-contained dual memory/pg backend,
     # direct DSN connection, no ORM layer to route through.
     'app/knowledge_acquisition/youtube_account_binding.py',
+    # YouTube Source Sync bounded Data API client + daily quota counter (YSS-03,
+    # #3918). The HTTP boundary owns one dedicated migration-backed quota table
+    # with the same explicit memory/pg backend and fail-loud schema preflight as
+    # the adjacent YSS stores; no other Data API caller or persistence path is
+    # introduced.
+    'app/knowledge_acquisition/youtube_api_client.py',
     # YouTube Source Sync durable acquisition request queue (YSS-04, #3919).
     # Same bounded pattern: a dedicated table (acquisition_requests) with a
     # self-contained dual memory/pg backend, direct DSN connection, no ORM
