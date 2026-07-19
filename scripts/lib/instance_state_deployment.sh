@@ -15,7 +15,7 @@ prepare_instance_state_deployment() {
   local runtime_gid="${LOCAL_GID:-$(id -g)}"
   local runtime_user="${runtime_uid}:${runtime_gid}"
   local repo_root inventory_helper controller_pid controller_start_token
-  local inventory_host_path inventory_rc
+  local inventory_host_path owner_inventory_host_path inventory_rc
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   inventory_helper="${repo_root}/scripts/instance_state_writer_inventory.py"
   controller_pid="$$"
@@ -32,6 +32,26 @@ prepare_instance_state_deployment() {
   fi
   finish_args+=(--quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json)
 
+  # Derive and twice-stabilize every canonical dev/test/prod/native owner and
+  # stopped-service config source before the init producer, host lease, channel
+  # fence, writer stop, or any other deployment mutation. The stopped-window
+  # validation below must reproduce this exact private baseline.
+  owner_inventory_host_path="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-owners.XXXXXX")"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    return "${inventory_rc}"
+  fi
+  python3 "${inventory_helper}" produce-legacy-owners \
+    --repo-root "${repo_root}" \
+    --active-channel "${channel}" \
+    --output "${owner_inventory_host_path}"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ] || [ ! -s "${owner_inventory_host_path}" ]; then
+    rm -f -- "${owner_inventory_host_path}"
+    [ "${inventory_rc}" -ne 0 ] && return "${inventory_rc}"
+    return 1
+  fi
+
   # The one-shot remains the sole mount-permission producer. It creates no
   # registry or ledger authority; it only makes both mounted roots private for
   # the same uid/gid used by every runtime consumer and the commands below.
@@ -39,6 +59,7 @@ prepare_instance_state_deployment() {
     "${compose_function}" run --rm --no-deps -T instance-state-init
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${owner_inventory_host_path}"
     return "${inventory_rc}"
   fi
 
@@ -46,11 +67,13 @@ prepare_instance_state_deployment() {
   controller_start_token="$(python3 "${inventory_helper}" controller-token --pid "${controller_pid}")"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${owner_inventory_host_path}"
     return "${inventory_rc}"
   fi
   inventory_host_path="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-quiescence.XXXXXX")"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${owner_inventory_host_path}"
     return "${inventory_rc}"
   fi
 
@@ -67,6 +90,7 @@ prepare_instance_state_deployment() {
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${inventory_host_path}"
+    rm -f -- "${owner_inventory_host_path}"
     return "${inventory_rc}"
   fi
 
@@ -74,6 +98,7 @@ prepare_instance_state_deployment() {
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${inventory_host_path}"
+    rm -f -- "${owner_inventory_host_path}"
     return "${inventory_rc}"
   fi
 
@@ -87,6 +112,7 @@ prepare_instance_state_deployment() {
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${inventory_host_path}"
+    rm -f -- "${owner_inventory_host_path}"
     return "${inventory_rc}"
   fi
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
@@ -94,6 +120,7 @@ prepare_instance_state_deployment() {
   inventory_rc=$?
   rm -f -- "${inventory_host_path}"
   if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${owner_inventory_host_path}"
     return "${inventory_rc}"
   fi
 
@@ -103,6 +130,29 @@ prepare_instance_state_deployment() {
       --host-global-root /app/instance-ownership \
       --inventory-path "${quiescence_inventory_path}"
   inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${owner_inventory_host_path}"
+    return "${inventory_rc}"
+  fi
+
+  # Re-read every owner/config producer after all writers are stopped and the
+  # lease-bound quiescence proof is durable. Any missing or changed source
+  # aborts while the durable fence remains installed; only an exact match may
+  # become the drained inventory consumed by finish.
+  python3 "${inventory_helper}" validate-legacy-owners \
+    --repo-root "${repo_root}" \
+    --active-channel "${channel}" \
+    --inventory "${owner_inventory_host_path}" \
+    --output "${owner_inventory_host_path}"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${owner_inventory_host_path}"
+    return "${inventory_rc}"
+  fi
+  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    sh -c "umask 077; cat > '${inventory_path}'" < "${owner_inventory_host_path}"
+  inventory_rc=$?
+  rm -f -- "${owner_inventory_host_path}"
   if [ "${inventory_rc}" -ne 0 ]; then
     return "${inventory_rc}"
   fi

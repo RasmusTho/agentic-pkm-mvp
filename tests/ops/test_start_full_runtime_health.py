@@ -4,11 +4,16 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# This full-start fixture exercises later health/deferred-index behavior. The
+# real inventory producer/finalizer is separately covered fail-loud, and traced
+# fixture startup completes successfully in roughly 28-34 seconds on this host.
+STARTUP_FIXTURE_TIMEOUT_SECONDS = 45
 
 
 def _deferred_index_health() -> dict[str, object]:
@@ -190,11 +195,72 @@ def _fake_curl_bin(bin_dir: Path, health: dict[str, object]) -> None:
     )
 
 
+def _fake_inventory_python_bin(bin_dir: Path) -> None:
+    _write_executable(
+        bin_dir / "python3",
+        f"""
+        #!/usr/bin/env bash
+        set -eu
+        case "${{1:-}}" in
+          */scripts/instance_state_writer_inventory.py)
+            command="${{2:-}}"
+            if [ "$command" = controller-token ]; then
+              printf 'darwin:%064d\n' 0
+              exit 0
+            fi
+            case "$command" in
+              produce-legacy-owners|prove-quiescent|validate-legacy-owners)
+                while [ "$#" -gt 0 ]; do
+                  if [ "$1" = --output ]; then
+                    printf '{{}}\n' >"$2"
+                    exit 0
+                  fi
+                  shift
+                done
+                exit 2
+                ;;
+            esac
+            ;;
+        esac
+        exec {sys.executable!s} "$@"
+        """,
+    )
+    # These tests assert deferred-index startup behavior, not the independent
+    # Obsidian-required policy or startup-status receipt serialization. Avoid
+    # only those exact repeated inline programs; every other stdin program
+    # still runs on the real interpreter, and both skipped helpers have direct
+    # coverage elsewhere (as does the real inventory helper).
+    _write_executable(
+        bin_dir / "python",
+        f"""
+        #!/usr/bin/env bash
+        set -eu
+        if [ "${{1:-}}" = - ]; then
+          program="$(cat)"
+          case "$program" in
+            *"from app.cli.health import _obsidian_required"*"_obsidian_required()"*)
+              printf '0\n'
+              exit 0
+              ;;
+            *"STARTUP_STATUS_PATH"*"tmp_path.write_text(json.dumps(payload, ensure_ascii=False))"*)
+              printf '{{}}\n' > "${{STARTUP_STATUS_PATH:?}}"
+              exit 0
+              ;;
+          esac
+          printf '%s\n' "$program" | {sys.executable!s} "$@"
+          exit $?
+        fi
+        exec {sys.executable!s} "$@"
+        """,
+    )
+
+
 def _runtime_env(tmp_path: Path, health: dict[str, object]) -> dict[str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _fake_docker_bin(bin_dir, health)
     _fake_curl_bin(bin_dir, health)
+    _fake_inventory_python_bin(bin_dir)
 
     vault = tmp_path / "vault"
     (vault / "System").mkdir(parents=True)
@@ -205,10 +271,22 @@ def _runtime_env(tmp_path: Path, health: dict[str, object]) -> dict[str, str]:
     (REPO_ROOT / "tmp" / "worker_heartbeat.json").write_text("{}", encoding="utf-8")
 
     env = os.environ.copy()
+    for name in (
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS",
+        "INSTANCE_LEGACY_OWNER_CONFIG_PATHS",
+        "VAULT_HOST_ROOT",
+        "VAULT_ROOT_DEV",
+        "VAULT_ROOT_PROD",
+        "VAULT_ROOT_TEST",
+        "WATCHER_RUNTIME_ENV_FILE",
+        "WATCHER_VAULT_PATH",
+    ):
+        env.pop(name, None)
     env.update(
         {
             "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
             "VAULT_ROOT": str(vault),
+            "XDG_DATA_HOME": str(tmp_path / "xdg"),
             "DATABASE_URL": "postgresql://app:app@db:5432/app",
             "DB_DSN": "postgresql://app:app@db:5432/app",
             "LLM_PROVIDER": "mock",
@@ -257,7 +335,7 @@ def test_dev_start_full_returns_zero_with_deferred_index_rebuild(tmp_path: Path)
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
@@ -276,7 +354,7 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
@@ -297,7 +375,7 @@ def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 1

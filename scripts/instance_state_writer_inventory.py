@@ -11,12 +11,16 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import io
 import json
 import os
+import posixpath
 import re
 import shlex
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +28,7 @@ from typing import Sequence
 
 
 INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
+LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 DOMAINS = ("dev", "native", "prod", "test")
 COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "test"}
 COMPOSE_WRITER_SERVICES = {"api", "heimdal-capture-watch", "watcher", "worker"}
@@ -48,6 +53,12 @@ class ProcessRecord:
     start_token: str
     argv: tuple[str, ...]
     executable_hint: str | None = None
+
+
+@dataclass(frozen=True)
+class LegacyOwnerRecord:
+    channel_id: str
+    root: str
 
 
 def _digest_token(kind: str, *parts: object) -> str:
@@ -349,6 +360,641 @@ def _run_checked(command: Sequence[str], *, label: str, env: dict[str, str] | No
     return result.stdout
 
 
+def _read_env_bytes(raw: bytes) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise InventoryError("legacy owner config source is invalid") from exc
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def _yaml_mapping_entry(raw: str) -> tuple[str, str]:
+    quote = ""
+    escaped = False
+    for index, character in enumerate(raw):
+        if escaped:
+            escaped = False
+            continue
+        if quote == '"' and character == "\\":
+            escaped = True
+            continue
+        if character in {"'", '"'}:
+            if not quote:
+                quote = character
+            elif quote == character:
+                if quote == "'" and index + 1 < len(raw) and raw[index + 1] == "'":
+                    escaped = True
+                else:
+                    quote = ""
+            continue
+        if character == ":" and not quote and (index + 1 == len(raw) or raw[index + 1].isspace()):
+            return raw[:index].strip(), raw[index + 1 :].strip()
+    raise InventoryError("legacy app-local owner source is invalid")
+
+
+def _yaml_scalar(raw: str) -> str:
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise InventoryError("legacy app-local owner source is invalid") from exc
+        if isinstance(decoded, str):
+            return decoded
+    if not value or value[0] in {"'", '"', "[", "{", "&", "*", "!", "|", ">"}:
+        raise InventoryError("legacy app-local owner source is invalid")
+    return value
+
+
+def _parse_app_local_roots(raw: bytes) -> list[str]:
+    try:
+        text = raw.decode("utf-8")
+        if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+            raise ValueError
+        frontmatter_text = text[4:].split("\n---\n", 1)[0]
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise InventoryError("legacy app-local owner source is invalid") from exc
+    roots: list[str] = []
+    known_seen = False
+    in_known = False
+    entry_open = False
+    entry_path: str | None = None
+
+    def finish_entry() -> None:
+        nonlocal entry_open, entry_path
+        if entry_open:
+            if not entry_path:
+                raise InventoryError("legacy app-local owner source is invalid")
+            roots.append(entry_path)
+        entry_open = False
+        entry_path = None
+
+    for raw_line in frontmatter_text.splitlines():
+        if "\t" in raw_line:
+            raise InventoryError("legacy app-local owner source is invalid")
+        content = raw_line.lstrip(" ")
+        if not content or content.startswith("#"):
+            continue
+        indent = len(raw_line) - len(content)
+        if indent == 0:
+            finish_entry()
+            in_known = False
+            key_raw, value = _yaml_mapping_entry(content)
+            if _yaml_scalar(key_raw) != "knownVaults":
+                continue
+            if known_seen:
+                raise InventoryError("legacy app-local owner source is invalid")
+            known_seen = True
+            if value in {"{}", "{ }"}:
+                continue
+            if value:
+                raise InventoryError("legacy app-local owner source is invalid")
+            in_known = True
+            continue
+        if not in_known:
+            continue
+        if indent == 2:
+            finish_entry()
+            key_raw, value = _yaml_mapping_entry(content)
+            _yaml_scalar(key_raw)
+            if value:
+                raise InventoryError("legacy app-local owner source is invalid")
+            entry_open = True
+            continue
+        if indent == 4 and entry_open:
+            key_raw, value = _yaml_mapping_entry(content)
+            if _yaml_scalar(key_raw) == "path":
+                if entry_path is not None:
+                    raise InventoryError("legacy app-local owner source is invalid")
+                entry_path = _yaml_scalar(value)
+            continue
+        if indent < 4 or not entry_open:
+            raise InventoryError("legacy app-local owner source is invalid")
+    finish_entry()
+    return roots
+
+
+def _docker_copy_file(container_id: str, path: str) -> bytes | None:
+    try:
+        result = subprocess.run(
+            ["docker", "cp", f"{container_id}:{path}", "-"],
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise InventoryError("docker legacy owner source enumeration failed") from exc
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").lower()
+        if "no such file" in stderr or "could not find" in stderr:
+            return None
+        raise InventoryError("docker legacy owner source enumeration failed")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|*") as archive:
+            members = [member for member in archive if member.isfile()]
+            if len(members) != 1 or members[0].size > 4 * 1024 * 1024:
+                raise InventoryError("docker legacy owner source is invalid")
+            extracted = archive.extractfile(members[0])
+            if extracted is None:
+                raise InventoryError("docker legacy owner source is invalid")
+            return extracted.read()
+    except (tarfile.TarError, OSError) as exc:
+        raise InventoryError("docker legacy owner source is invalid") from exc
+
+
+def _env_list(values: object) -> dict[str, str]:
+    if values is None:
+        return {}
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise InventoryError("docker legacy owner source inventory is malformed")
+    return _read_env_bytes(("\n".join(values) + "\n").encode("utf-8"))
+
+
+def _translate_container_root(value: str, mounts: object) -> Path | None:
+    normalized = posixpath.normpath(value)
+    if not normalized.startswith("/") or normalized == "/":
+        raise InventoryError("legacy owner root is invalid")
+    if not isinstance(mounts, list):
+        raise InventoryError("docker legacy owner source inventory is malformed")
+    candidates: list[tuple[int, str, str]] = []
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            raise InventoryError("docker legacy owner source inventory is malformed")
+        destination = posixpath.normpath(str(mount.get("Destination") or ""))
+        source = str(mount.get("Source") or "")
+        if not destination.startswith("/") or not source.startswith("/"):
+            continue
+        if normalized == destination or normalized.startswith(f"{destination}/"):
+            candidates.append((len(destination), destination, source))
+    if not candidates:
+        if normalized == "/app/vault":
+            return None
+        raise InventoryError("configured container owner root has no host mount")
+    _, destination, source = max(candidates)
+    relative = normalized[len(destination) :].lstrip("/")
+    return Path(source, relative).expanduser().resolve(strict=False)
+
+
+def _roots_from_values(
+    values: dict[str, str],
+    *,
+    channel: str,
+    mounts: object | None = None,
+) -> list[Path]:
+    host_root = values.get("VAULT_HOST_ROOT", "").strip()
+    candidates = [
+        values.get("VAULT_ROOT", ""),
+        values.get(f"VAULT_ROOT_{channel.upper()}", ""),
+        values.get("WATCHER_VAULT_PATH", ""),
+    ]
+    roots: list[Path] = []
+    if host_root:
+        if "$" in host_root:
+            raise InventoryError("legacy owner config contains an unresolved root")
+        host_path = Path(host_root).expanduser()
+        if not host_path.is_absolute():
+            raise InventoryError("legacy owner root is not absolute")
+        roots.append(host_path.resolve(strict=False))
+    for raw in candidates:
+        value = raw.strip()
+        if not value or (value == "/app/vault" and mounts is None):
+            continue
+        if "$" in value:
+            raise InventoryError("legacy owner config contains an unresolved root")
+        if mounts is None:
+            candidate = Path(value).expanduser()
+            if not candidate.is_absolute():
+                raise InventoryError("legacy owner root is not absolute")
+            roots.append(candidate.resolve(strict=False))
+        else:
+            translated = _translate_container_root(value, mounts)
+            if translated is not None:
+                roots.append(translated)
+    return list(dict.fromkeys(roots))
+
+
+def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
+    ids_output = _run_checked(
+        ["docker", "ps", "-a", "--no-trunc", "--format", "{{.ID}}"],
+        label="docker legacy owner source enumeration",
+    )
+    ids = [line.strip() for line in ids_output.splitlines() if line.strip()]
+    if any(re.fullmatch(r"[0-9a-f]{12,64}", item) is None for item in ids) or len(ids) != len(
+        set(ids)
+    ):
+        raise InventoryError("docker legacy owner source inventory is malformed")
+    if not ids:
+        return [], ["docker:empty"]
+    output = _run_checked(
+        ["docker", "inspect", *ids], label="docker legacy owner source enumeration"
+    )
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise InventoryError("docker legacy owner source inventory is malformed") from exc
+    if not isinstance(payload, list) or len(payload) != len(ids):
+        raise InventoryError("docker legacy owner source inventory is malformed")
+    owners: list[LegacyOwnerRecord] = []
+    fingerprints: list[str] = []
+    stores: dict[tuple[str, str, str], bytes | None] = {}
+    inspected_ids: set[str] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            raise InventoryError("docker legacy owner source inventory is malformed")
+        container_id = str(item.get("Id") or "")
+        config = item.get("Config")
+        mounts = item.get("Mounts")
+        if container_id not in ids or not isinstance(config, dict):
+            raise InventoryError("docker legacy owner source inventory is malformed")
+        if container_id in inspected_ids:
+            raise InventoryError("docker legacy owner source inventory is malformed")
+        inspected_ids.add(container_id)
+        labels = config.get("Labels") or {}
+        if not isinstance(labels, dict):
+            raise InventoryError("docker legacy owner source inventory is malformed")
+        project = labels.get("com.docker.compose.project")
+        service = labels.get("com.docker.compose.service")
+        if project not in COMPOSE_PROJECT_DOMAINS or service not in COMPOSE_WRITER_SERVICES:
+            continue
+        channel = COMPOSE_PROJECT_DOMAINS[str(project)]
+        values = _env_list(config.get("Env"))
+        for root in _roots_from_values(values, channel=channel, mounts=mounts):
+            owners.append(LegacyOwnerRecord(channel, str(root)))
+        store_path = values.get("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "").strip()
+        if not store_path:
+            store_path = (
+                "/app/tmp-test/agentic-pkm/app-local.md"
+                if channel == "test"
+                else "/app/tmp/agentic-pkm/app-local.md"
+            )
+        store_key = (channel, store_path, json.dumps(mounts, sort_keys=True))
+        if store_key not in stores:
+            stores[store_key] = _docker_copy_file(container_id, store_path)
+        raw_store = stores[store_key]
+        if raw_store is not None:
+            for root in _parse_app_local_roots(raw_store):
+                translated = _translate_container_root(root, mounts)
+                if translated is None:
+                    raise InventoryError("legacy app-local owner root has no host mount")
+                owners.append(LegacyOwnerRecord(channel, str(translated)))
+        fingerprints.append(
+            hashlib.sha256(
+                json.dumps(
+                    {
+                        "channel": channel,
+                        "service": service,
+                        "env": values,
+                        "mounts": mounts,
+                        "store": None
+                        if raw_store is None
+                        else hashlib.sha256(raw_store).hexdigest(),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+    if inspected_ids != set(ids):
+        raise InventoryError("docker legacy owner source inventory is malformed")
+    return owners, sorted(fingerprints)
+
+
+def _read_source(path: Path, *, required: bool) -> bytes | None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        if required:
+            raise InventoryError("required legacy owner config source is missing")
+        return None
+    except OSError as exc:
+        raise InventoryError("legacy owner config source is unreadable") from exc
+    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+        raise InventoryError("legacy owner config source is unsafe")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise InventoryError("legacy owner config source is unreadable") from exc
+
+
+def _can_host_app_local(directory: Path) -> bool:
+    probe = directory
+    while True:
+        if probe.exists():
+            return probe.is_dir() and os.access(probe, os.W_OK)
+        parent = probe.parent
+        if parent == probe:
+            return False
+        probe = parent
+
+
+def _native_app_local_settings_path() -> tuple[Path, bool]:
+    override = os.getenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "").strip()
+    if override:
+        if "$" in override:
+            raise InventoryError("legacy owner config contains an unresolved source")
+        return Path(override).expanduser().resolve(strict=False), True
+    xdg_data = os.getenv("XDG_DATA_HOME", "").strip()
+    if xdg_data:
+        xdg_base = Path(xdg_data).expanduser() / "Agentic PKM"
+        if _can_host_app_local(xdg_base):
+            return (xdg_base / "app-local.md").resolve(strict=False), False
+    home_env = os.getenv("HOME", "").strip()
+    try:
+        home = Path(home_env) if home_env else Path.home()
+    except (RuntimeError, OSError):
+        home = None
+    if home is not None and str(home) != home.anchor:
+        home_base = home / "Library" / "Application Support" / "Agentic PKM"
+        if _can_host_app_local(home_base):
+            return (home_base / "app-local.md").resolve(strict=False), False
+    container_base = Path("/app/tmp/agentic-pkm")
+    if _can_host_app_local(container_base):
+        return (container_base / "app-local.md").resolve(strict=False), False
+    return (Path(tempfile.gettempdir()) / "agentic-pkm" / "app-local.md").resolve(
+        strict=False
+    ), False
+
+
+def _config_legacy_owner_sources(
+    repo_root: Path, *, active_channel: str
+) -> tuple[list[LegacyOwnerRecord], list[str]]:
+    root = repo_root.expanduser().resolve(strict=True)
+    known: list[tuple[str, Path, bool]] = []
+    for channel in ("dev", "test", "prod"):
+        known.extend(
+            [
+                (channel, root / f".env.{channel}.local", False),
+                (channel, root / "config" / "deploy" / f"{channel}.env", False),
+            ]
+        )
+    known.extend([("native", root / ".env", False), ("native", root / ".env.native.local", False)])
+    current_runtime_ref = os.getenv("WATCHER_RUNTIME_ENV_FILE", "").strip()
+    if current_runtime_ref:
+        if "$" in current_runtime_ref:
+            raise InventoryError("legacy owner config contains an unresolved source")
+        current_runtime_path = Path(current_runtime_ref).expanduser()
+        if not current_runtime_path.is_absolute():
+            current_runtime_path = root / current_runtime_path
+        known.append((active_channel, current_runtime_path.resolve(strict=False), True))
+    extra = os.getenv("INSTANCE_LEGACY_OWNER_CONFIG_PATHS", "").strip()
+    if extra:
+        for item in extra.split(os.pathsep):
+            if not item:
+                raise InventoryError("legacy owner config source list is invalid")
+            known.append((active_channel, Path(item).expanduser().resolve(strict=False), True))
+    owners: list[LegacyOwnerRecord] = []
+    fingerprints: list[str] = []
+    seen_sources: set[tuple[str, str]] = set()
+    runtime_ref_channels = {active_channel} if current_runtime_ref else set()
+    default_runtime_checked = False
+    pending = list(known)
+    while pending or not default_runtime_checked:
+        if not pending:
+            default_runtime_checked = True
+            if active_channel not in runtime_ref_channels:
+                pending.append((active_channel, root / "tmp" / "runtime.env", False))
+            continue
+        channel, path, required = pending.pop(0)
+        key = (channel, str(path))
+        if key in seen_sources:
+            continue
+        seen_sources.add(key)
+        raw = _read_source(path, required=required)
+        fingerprints.append(
+            hashlib.sha256(f"{channel}\0{path}\0".encode() + (raw or b"<absent>")).hexdigest()
+        )
+        if raw is None:
+            continue
+        values = _read_env_bytes(raw)
+        for owner_root in _roots_from_values(values, channel=channel):
+            owners.append(LegacyOwnerRecord(channel, str(owner_root)))
+        runtime_ref = values.get("WATCHER_RUNTIME_ENV_FILE", "").strip()
+        if runtime_ref:
+            if "$" in runtime_ref:
+                raise InventoryError("legacy owner config contains an unresolved source")
+            runtime_path = Path(runtime_ref).expanduser()
+            if not runtime_path.is_absolute():
+                runtime_path = root / runtime_path
+            runtime_ref_channels.add(channel)
+            pending.append((channel, runtime_path.resolve(strict=False), True))
+        app_local = values.get("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "").strip()
+        if app_local and not app_local.startswith("/app/"):
+            if "$" in app_local:
+                raise InventoryError("legacy owner config contains an unresolved source")
+            app_local_path = Path(app_local).expanduser().resolve(strict=False)
+            app_local_raw = _read_source(app_local_path, required=True)
+            assert app_local_raw is not None
+            fingerprints.append(
+                hashlib.sha256(
+                    f"{channel}\0{app_local_path}\0".encode() + app_local_raw
+                ).hexdigest()
+            )
+            owners.extend(
+                LegacyOwnerRecord(channel, root_path)
+                for root_path in _parse_app_local_roots(app_local_raw)
+            )
+    current_bindings: dict[str, dict[str, str]] = {
+        active_channel: {
+            name: os.environ[name]
+            for name in ("VAULT_HOST_ROOT", "VAULT_ROOT", "WATCHER_VAULT_PATH")
+            if name in os.environ
+        }
+    }
+    for channel in ("dev", "test", "prod"):
+        name = f"VAULT_ROOT_{channel.upper()}"
+        if name in os.environ:
+            current_bindings.setdefault(channel, {})[name] = os.environ[name]
+    fingerprints.append(
+        hashlib.sha256(json.dumps(current_bindings, sort_keys=True).encode()).hexdigest()
+    )
+    for channel, values in current_bindings.items():
+        owners.extend(
+            LegacyOwnerRecord(channel, str(path))
+            for path in _roots_from_values(values, channel=channel)
+        )
+    native_app_local, native_required = _native_app_local_settings_path()
+    native_raw = _read_source(native_app_local, required=native_required)
+    fingerprints.append(
+        hashlib.sha256(
+            f"native\0{native_app_local}\0".encode() + (native_raw or b"<absent>")
+        ).hexdigest()
+    )
+    if native_raw is not None:
+        owners.extend(
+            LegacyOwnerRecord("native", root_path)
+            for root_path in _parse_app_local_roots(native_raw)
+        )
+    return owners, sorted(fingerprints)
+
+
+def _owner_identity_material(root: Path) -> tuple[str, frozenset[str]]:
+    resolved = root.expanduser().resolve(strict=False)
+    try:
+        metadata = os.stat(resolved)
+    except OSError as exc:
+        raise InventoryError("legacy owner root is missing or invalid") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise InventoryError("legacy owner root is missing or invalid")
+    primary = f"inode:{metadata.st_dev}:{metadata.st_ino}"
+    ancestors: set[str] = set()
+    for ancestor in resolved.parents:
+        try:
+            ancestor_metadata = os.stat(ancestor)
+        except OSError as exc:
+            raise InventoryError("legacy owner ancestor identity is unavailable") from exc
+        ancestors.add(f"inode:{ancestor_metadata.st_dev}:{ancestor_metadata.st_ino}")
+    return primary, frozenset(ancestors)
+
+
+def _normalize_legacy_owners(
+    records: list[LegacyOwnerRecord],
+) -> tuple[list[LegacyOwnerRecord], list[dict[str, str]]]:
+    normalized: dict[tuple[str, str], tuple[LegacyOwnerRecord, frozenset[str]]] = {}
+    for record in records:
+        if record.channel_id not in DOMAINS:
+            raise InventoryError("legacy owner domain is invalid")
+        root = Path(record.root).expanduser().resolve(strict=False)
+        primary, ancestors = _owner_identity_material(root)
+        normalized.setdefault(
+            (record.channel_id, primary),
+            (LegacyOwnerRecord(record.channel_id, str(root)), ancestors),
+        )
+    values = [
+        (record, primary, ancestors)
+        for (_, primary), (record, ancestors) in normalized.items()
+    ]
+    for index, (left, left_primary, left_ancestors) in enumerate(values):
+        for right, right_primary, right_ancestors in values[index + 1 :]:
+            if left.channel_id == right.channel_id:
+                continue
+            if (
+                left_primary == right_primary
+                or left_primary in right_ancestors
+                or right_primary in left_ancestors
+            ):
+                raise InventoryError("legacy owner roots collide across domains")
+    ordered = sorted(values, key=lambda item: (item[0].channel_id, item[0].root))
+    return (
+        [item[0] for item in ordered],
+        [
+            {
+                "channel_id": record.channel_id,
+                "root": record.root,
+                "identity": primary,
+            }
+            for record, primary, _ in ordered
+        ],
+    )
+
+
+def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str, object]:
+    if active_channel not in {"dev", "test", "prod"}:
+        raise InventoryError("legacy owner active channel is invalid")
+    docker_owners, docker_fingerprints = _docker_legacy_owner_sources()
+    config_owners, config_fingerprints = _config_legacy_owner_sources(
+        repo_root, active_channel=active_channel
+    )
+    owners, owner_identities = _normalize_legacy_owners(docker_owners + config_owners)
+    source_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "docker": docker_fingerprints,
+                "config": config_fingerprints,
+                "owners": [record.__dict__ for record in owners],
+                "owner_identities": owner_identities,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "source_digest": source_digest,
+        "owners": [record.__dict__ for record in owners],
+    }
+
+
+def produce_legacy_owners(*, repo_root: Path, active_channel: str, output: Path) -> None:
+    first = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    _test_sync(
+        "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_READY_FD",
+        "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_CONTINUE_FD",
+    )
+    second = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    if first != second:
+        raise InventoryError("legacy owner sources are incomplete or racing")
+    _write_inventory(
+        output,
+        {
+            "schema": LEGACY_OWNER_INVENTORY_SCHEMA,
+            "inventory_complete": True,
+            "writers_drained": False,
+            "source_probe_count": 2,
+            "validated_after_quiescence": False,
+            **first,
+        },
+    )
+
+
+def validate_legacy_owners(
+    *, repo_root: Path, active_channel: str, inventory: Path, output: Path
+) -> None:
+    try:
+        metadata = inventory.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o777 != 0o600
+        ):
+            raise ValueError
+        baseline = json.loads(inventory.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise InventoryError("legacy owner baseline inventory is invalid") from exc
+    if (
+        not isinstance(baseline, dict)
+        or baseline.get("schema") != LEGACY_OWNER_INVENTORY_SCHEMA
+        or baseline.get("inventory_complete") is not True
+        or baseline.get("writers_drained") is not False
+        or baseline.get("source_probe_count") != 2
+        or baseline.get("validated_after_quiescence") is not False
+        or not isinstance(baseline.get("source_digest"), str)
+        or not isinstance(baseline.get("owners"), list)
+    ):
+        raise InventoryError("legacy owner baseline inventory is invalid")
+    first = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    second = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    if (
+        first != second
+        or baseline.get("source_digest") != first["source_digest"]
+        or baseline.get("owners") != first["owners"]
+    ):
+        raise InventoryError("legacy owner sources are incomplete or racing")
+    _write_inventory(
+        output,
+        {
+            "schema": LEGACY_OWNER_INVENTORY_SCHEMA,
+            "inventory_complete": True,
+            "writers_drained": True,
+            "source_probe_count": 2,
+            "validated_after_quiescence": True,
+            **first,
+        },
+    )
+
+
 def _test_sync(ready_name: str, continue_name: str) -> None:
     ready_raw = os.getenv(ready_name)
     continue_raw = os.getenv(continue_name)
@@ -648,6 +1294,15 @@ def main(argv: list[str] | None = None) -> int:
     prove.add_argument("--controller-pid", type=int, required=True)
     prove.add_argument("--controller-start-token", required=True)
     prove.add_argument("--output", type=Path, required=True)
+    produce = subparsers.add_parser("produce-legacy-owners")
+    produce.add_argument("--repo-root", type=Path, required=True)
+    produce.add_argument("--active-channel", required=True)
+    produce.add_argument("--output", type=Path, required=True)
+    validate = subparsers.add_parser("validate-legacy-owners")
+    validate.add_argument("--repo-root", type=Path, required=True)
+    validate.add_argument("--active-channel", required=True)
+    validate.add_argument("--inventory", type=Path, required=True)
+    validate.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "controller-token":
@@ -657,6 +1312,21 @@ def main(argv: list[str] | None = None) -> int:
             prove_quiescent(
                 controller_pid=args.controller_pid,
                 controller_start_token=args.controller_start_token,
+                output=args.output,
+            )
+            return 0
+        if args.command == "produce-legacy-owners":
+            produce_legacy_owners(
+                repo_root=args.repo_root,
+                active_channel=args.active_channel,
+                output=args.output,
+            )
+            return 0
+        if args.command == "validate-legacy-owners":
+            validate_legacy_owners(
+                repo_root=args.repo_root,
+                active_channel=args.active_channel,
+                inventory=args.inventory,
                 output=args.output,
             )
             return 0

@@ -576,6 +576,7 @@ def _preflight_runtime(
 
 _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
+_LEGACY_INVENTORY_SOURCE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v2"
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _CONTROLLER_START_TOKEN_RE = re.compile(r"^(?:linux|darwin):[0-9a-f]{64}$")
@@ -791,6 +792,10 @@ def _load_legacy_owner_inventory(
             or payload.get("schema") != _LEGACY_INVENTORY_SCHEMA
             or payload.get("inventory_complete") is not True
             or payload.get("writers_drained") is not True
+            or payload.get("source_probe_count") != 2
+            or payload.get("validated_after_quiescence") is not True
+            or _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(str(payload.get("source_digest") or ""))
+            is None
             or not isinstance(payload.get("owners"), list)
         ):
             raise ValueError
