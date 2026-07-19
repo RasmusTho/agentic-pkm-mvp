@@ -411,8 +411,8 @@ def _source(
             source_run = {
                 "id": authenticated_source_run_id,
                 "run_attempt": 1,
-                "name": "CI",
-                "path": ".github/workflows/ci.yml",
+                "name": "CI Smoke",
+                "path": ".github/workflows/ci-smoke.yaml",
                 "event": "pull_request",
                 "status": "completed",
                 "conclusion": "success",

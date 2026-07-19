@@ -563,8 +563,8 @@ def _artifact_source_with_authenticated_runs(
             return {
                 "id": 99,
                 "run_attempt": 1,
-                "name": "CI",
-                "path": ".github/workflows/ci.yml",
+                "name": "CI Smoke",
+                "path": ".github/workflows/ci-smoke.yaml",
                 "event": "pull_request",
                 "status": "completed",
                 "conclusion": "success",
@@ -641,8 +641,8 @@ def _mixed_artifact_source(
             return {
                 "id": 99,
                 "run_attempt": 1,
-                "name": "CI",
-                "path": ".github/workflows/ci.yml",
+                "name": "CI Smoke",
+                "path": ".github/workflows/ci-smoke.yaml",
                 "event": "pull_request",
                 "status": "completed",
                 "conclusion": "success",
@@ -856,7 +856,7 @@ def _check(
     conclusion: str,
     app_slug: str | None = "github-actions",
     suite_id: int | None = 100,
-    workflow_path: str | None = ".github/workflows/ci.yml",
+    workflow_path: str | None = ".github/workflows/ci-smoke.yaml",
     workflow_suite_id: int | None = None,
     workflow_event: str = "pull_request",
     workflow_head_sha: str = HEAD,
@@ -1122,7 +1122,7 @@ def test_required_check_rejects_same_app_success_from_foreign_workflow_suite() -
             check_id=21,
             conclusion="success",
             suite_id=999,
-            workflow_path=".github/workflows/ci-smoke.yaml",
+            workflow_path=".github/workflows/foreign.yml",
         ),
     ]
 
@@ -1142,7 +1142,7 @@ def test_required_check_accepts_latest_authoritative_workflow_rerun() -> None:
     "updates",
     [
         {"workflow_path": None},
-        {"workflow_path": ".github/workflows/ci-smoke.yaml"},
+        {"workflow_path": ".github/workflows/foreign.yml"},
         {"workflow_event": "workflow_dispatch"},
         {"workflow_head_sha": "f" * 40},
         {"workflow_suite_id": 999},
