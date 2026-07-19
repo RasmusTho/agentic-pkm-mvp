@@ -74,6 +74,28 @@ def test_subscription_default_policy_matches_registry_contract() -> None:
     assert frozenset(definition.allowed_values) == VALID_ACQUISITION_MODES
 
 
+def test_runtime_gating_accessor_rejects_unaccepted_disk_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raw owner-file input is not runtime-trusted until the governed seam accepts it."""
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(status="selected", active_vault_path=str(vault_root), settings_path=str(settings_dir))
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+
+    _write(settings_dir / "youtube.md", "---\nscope: vault-shared\nyoutubeSync.enabled: true\n---\n")
+    service = SettingsService()
+
+    # ``resolve`` remains the operator/provenance view; runtime callers use
+    # the accepted accessor and must not trust a first-seen disk value.
+    assert service.resolve(context).settings["youtubeSync.enabled"].value is True
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is False
+
+    service.update_setting(context, "youtubeSync.enabled", True, surface="api", actor="human")
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is True
+
+
 def test_defaults_scopes_provenance_and_gated_writes(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     settings_dir = _init_minimal_vault(vault_root)

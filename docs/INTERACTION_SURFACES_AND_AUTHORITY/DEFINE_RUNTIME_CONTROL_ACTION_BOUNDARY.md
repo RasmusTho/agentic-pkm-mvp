@@ -42,7 +42,9 @@ settings write).
 
 ### Tier 2 — Runtime gating (post-init, authority-bearing)
 
-`enableVaultWatcher` and `enableAutoIndexing` gate whether the watcher/indexing runtime runs:
+`enableVaultWatcher`, `enableAutoIndexing`, `youtubeSync.enabled`, and
+`youtubeSync.runnerEnabled` are runtime-gating settings. The first two gate whether the
+watcher/indexing runtime runs:
 - `app/watcher/registry.py:734` — watcher registry refuses to start when `enable_vault_watcher`
   is false.
 - `app/watcher/config.py:92` — watcher config refuses to start when `enable_vault_watcher` is
@@ -63,7 +65,7 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 1. `RUNTIME_GATING_SETTINGS: frozenset` classifies the key.
 2. `DEFAULT_WRITE_GUARD.assert_writes_allowed()` is called; blocks if `state in
    WRITE_BLOCKED_STATES` (i.e. `safe_mode` or `unhealthy`).
-3. The markdown write is applied to `settings/local.md`.
+3. The markdown write is applied to its registered owner file.
 4. `SettingsWriteReceipt(key, value, surface, actor, timestamp, is_runtime_gating=True)` is
    emitted and logged at INFO.
 5. The same receipt is durably persisted as a `settings.write.receipt` outbox event
@@ -75,8 +77,11 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 **Valid origins of the same seam (no new surfaces here):**
 - UI → `POST /api/companion/vault/settings` (surface=`'api'`) — **wired** (sole caller: `app/api/routes/companion.py:826`)
 - CLI → existing `app.cli vault` commands (surface=`'cli'`) — **NOT yet wired** (the `app.cli vault` group does init/preflight only; no command toggles runtime-gating settings through the seam; addable when a consumer exists)
-- File edit → watcher-detected `settings/local.md` delta (surface=`'file'`) — **wired** for
-  runtime-gating key deltas by #2512
+- File edit → watcher-detected registered-owner-file delta (surface=`'file'`) — **wired** for
+  runtime-gating key deltas; whole-file deletion is a receipted accepted reset rather than a raw
+  fallback.
+- Git-synced file arrival → the same local gate (surface=`'sync'`, actor=`'sync'`) — it is never
+  attributed as a local human write and never bypasses accepted-state enforcement.
 - Future MCP/API → addable when there is a consumer (out of scope here)
 
 ### Tier 3 — External-boundary enable
@@ -86,11 +91,12 @@ TTS provider enable crosses an external boundary. EBF applies. Not re-decided he
 
 ## Audit blind-spot — closed for runtime-gating settings
 
-A direct hand-edit of `settings/local.md` previously produced no receipt — only the watcher
-picking it up at next start. The API door is wired, and #2512 wires the file-originated door for
-runtime-gating deltas (`enableVaultWatcher` / `enableAutoIndexing`) through
-`SettingsService.update_setting(..., surface='file', actor='human')`. The CLI `app.cli vault`
-group is init/preflight only and still has no runtime-gating toggle command to wire.
+A direct hand-edit of a registered owner file previously produced no receipt — only the watcher
+picking it up at next start. The API door is wired, and the file-originated door routes
+runtime-gating deltas through `SettingsService.update_setting`. Runtime consumers use
+`SettingsService.resolve_accepted_runtime_gating`, not the raw Markdown resolver, so a denied,
+first-seen, cross-file, or unreceipted on-disk value cannot become trusted runtime state. The CLI
+`app.cli vault` group is init/preflight only and still has no runtime-gating toggle command to wire.
 
 ## Server-authoritative classification rule
 

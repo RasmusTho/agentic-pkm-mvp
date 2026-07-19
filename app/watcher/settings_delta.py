@@ -92,6 +92,11 @@ def is_settings_source_path(rel_path: Path) -> bool:
     )
 
 
+def is_runtime_gating_owner_path(rel_path: Path) -> bool:
+    """Whether a removed path owns one or more runtime-gating settings."""
+    return rel_path in _RUNTIME_GATING_KEYS_BY_FILE
+
+
 def is_settings_control_path(
     rel_path: Path, *, configured_system_dir: Path | str | None = None
 ) -> bool:
@@ -153,6 +158,8 @@ def handle_settings_local_delta(
     previous_values: Mapping[str, Any] | None,
     settings_service: SettingsService | None = None,
     markdown_store: MarkdownSettingsStore | None = None,
+    surface: str = "file",
+    actor: str = "human",
 ) -> SettingsDeltaResult:
     """Route watcher-detected runtime-gating file deltas through the governed seam.
 
@@ -180,13 +187,19 @@ def handle_settings_local_delta(
     path = vault_root / rel_path
     try:
         document = store.read(path)
-    except (FileNotFoundError, OSError, MarkdownSettingsError) as exc:
+    except FileNotFoundError:
+        # A registered owner-file deletion is an authority-bearing reset, not
+        # an absent signal that may silently fall back through raw resolution.
+        # Continue below with no current values so every formerly accepted
+        # gating key is routed through ``update_setting(..., persist=False)``.
+        document = None
+    except (OSError, MarkdownSettingsError) as exc:
         return SettingsDeltaResult(values=None, errors=(str(exc),))
 
     current_values = {
         key: document.frontmatter[key]
         for key in sorted(gating_keys)
-        if key in document.frontmatter
+        if document is not None and key in document.frontmatter
     }
     service = settings_service or SettingsService(markdown_store=store)
     if previous_values is None:
@@ -257,8 +270,8 @@ def handle_settings_local_delta(
                     context,
                     key,
                     value,
-                    surface="file",
-                    actor="human",
+                    surface=surface,
+                    actor=actor,
                     persist=persist,
                 )
         except SettingsWriteError as exc:
@@ -269,11 +282,43 @@ def handle_settings_local_delta(
                 accepted_values.pop(key, None)
             continue
         receipts.append(receipt)
+        if not persist and document is None:
+            # The entire registered owner file disappeared. Retain the
+            # explicitly accepted default in watcher state so a later
+            # reappearance compares against the governed reset rather than
+            # treating the old on-disk value as trusted history.
+            accepted_values[key] = value
 
     return SettingsDeltaResult(
         values=accepted_values,
         receipts=tuple(receipts),
         errors=tuple(errors),
+    )
+
+
+def handle_settings_sync_arrival(
+    *,
+    vault_root: Path,
+    rel_path: Path,
+    previous_values: Mapping[str, Any] | None,
+    settings_service: SettingsService | None = None,
+    markdown_store: MarkdownSettingsStore | None = None,
+) -> SettingsDeltaResult:
+    """Replay a git-synced settings arrival without misattributing its actor.
+
+    Sync arrival is still locally WriteGuard-gated and receipted, but it is
+    evidence of synchronization rather than a local human edit.  This keeps
+    the same accepted-state enforcement without inventing another approval or
+    persistence path.
+    """
+    return handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=rel_path,
+        previous_values=previous_values,
+        settings_service=settings_service,
+        markdown_store=markdown_store,
+        surface="sync",
+        actor="sync",
     )
 
 
@@ -284,7 +329,9 @@ __all__ = [
     "SettingsDeltaResult",
     "SettingsSourceDeltaResult",
     "handle_settings_local_delta",
+    "handle_settings_sync_arrival",
     "handle_settings_source_delta",
+    "is_runtime_gating_owner_path",
     "is_settings_source_path",
     "is_settings_control_path",
 ]

@@ -426,6 +426,75 @@ class SettingsService:
     def reload(self, context: VaultContext) -> SettingsResolution:
         return self.resolve(context)
 
+    def resolve_accepted_runtime_gating(
+        self, context: VaultContext
+    ) -> dict[str, EffectiveSetting]:
+        """Return only runtime-gating values accepted by the governed seam.
+
+        The ordinary resolver intentionally remains an operator-facing view of
+        the Markdown inputs and their provenance.  Runtime consumers must use
+        this accessor instead: first-seen, denied, cross-file, or otherwise
+        unreceipted disk input therefore fails closed to the registered safe
+        default.  The existing durable settings-write receipt is the accepted
+        authority record; this adds no parallel store.
+        """
+        accepted: dict[str, EffectiveSetting] = {}
+        expected_files: dict[str, str] = {}
+        if context.status == "selected" and context.settings_path:
+            settings_path = Path(context.settings_path)
+            expected_files = {
+                definition.key: str(settings_path / definition.file)
+                for definition in self.registry.definitions
+                if definition.key in RUNTIME_GATING_SETTINGS and definition.file
+            }
+
+        for definition in self.registry.definitions:
+            if definition.key not in RUNTIME_GATING_SETTINGS:
+                continue
+            accepted[definition.key] = EffectiveSetting(
+                key=definition.key,
+                value=definition.default_value,
+                scope="built-in",
+                source="accepted-runtime-gating-default",
+            )
+
+        if not expected_files:
+            return accepted
+
+        # Deferred import avoids folding the read-only receipt projection into
+        # the settings compiler import graph.
+        from app.receipts.settings_receipts import (  # noqa: PLC0415
+            SettingsReceiptQuery,
+            query_settings_receipts,
+        )
+
+        receipt_result = query_settings_receipts(
+            SettingsReceiptQuery(is_runtime_gating=True)
+        )
+        if not receipt_result.source_available:
+            return accepted
+
+        for receipt in receipt_result.rows:
+            definition = self.registry.get(receipt.key)
+            if (
+                definition is None
+                or definition.key not in RUNTIME_GATING_SETTINGS
+                or expected_files.get(definition.key) != receipt.file
+            ):
+                continue
+            value = definition.default_value if receipt.new_value is None else receipt.new_value
+            valid, _message = _validate_value(definition, value)
+            if not valid:
+                continue
+            accepted[definition.key] = EffectiveSetting(
+                key=definition.key,
+                value=value,
+                scope=definition.scope,
+                source="accepted-runtime-gating-receipt",
+                source_file=receipt.file,
+            )
+        return accepted
+
     def update_setting(
         self,
         context: VaultContext,
@@ -487,24 +556,32 @@ class SettingsService:
                 ) from exc
 
         path = Path(context.settings_path) / definition.file
+        document: MarkdownSettingsDocument | None
         try:
             document = self.markdown_store.read(path)
         except FileNotFoundError as exc:
-            document = self._scaffold_missing_settings_file(path, definition.file, key=key, cause=exc)
+            # A watcher-observed owner-file deletion must still emit its
+            # governed accepted reset.  ``persist=False`` deliberately does
+            # not recreate a deleted file; it records the reset against the
+            # registered owner definition instead.
+            document = None if not persist else self._scaffold_missing_settings_file(
+                path, definition.file, key=key, cause=exc
+            )
         except (OSError, MarkdownSettingsError) as exc:
             raise SettingsWriteError(str(exc)) from exc
 
-        raw_scope = str(document.frontmatter.get("scope") or definition.scope).strip()
+        raw_scope = str(document.frontmatter.get("scope") or definition.scope).strip() if document else definition.scope
         if raw_scope not in VALID_SOURCE_SCOPES:
             raise SettingsWriteError(f"settings file declares unsupported scope: {raw_scope}")
         source_scope = cast(SettingScope, raw_scope)
         if not _source_can_set_definition(source_scope, definition):
             raise SettingsWriteError(f"{path.name} cannot set {key}")
 
-        frontmatter = dict(document.frontmatter)
+        frontmatter = dict(document.frontmatter) if document else {}
         old_value = resolve_settings_receipt_old_value(frontmatter.get(key))
         frontmatter[key] = value
         if persist:
+            assert document is not None
             self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
 
         effective = EffectiveSetting(

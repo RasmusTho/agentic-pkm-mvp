@@ -18,6 +18,7 @@ from app.watcher.settings_delta import (
     handle_settings_local_delta,
     handle_settings_source_delta,
     is_settings_control_path,
+    is_runtime_gating_owner_path,
     is_settings_source_path,
 )
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
@@ -306,6 +307,33 @@ def run_tick(
         changed_entries.append((rel, mtime, digest))
 
     settings_source_processed = False
+    removed_runtime_gating_owner_files = sorted(
+        Path(path)
+        for path in state.files.keys() - set(scanned_paths)
+        if is_runtime_gating_owner_path(Path(path))
+    )
+    for rel_path in removed_runtime_gating_owner_files:
+        rel_str = str(rel_path)
+        settings_delta = handle_settings_local_delta(
+            vault_root=cfg.vault_path,
+            rel_path=rel_path,
+            previous_values=state.last_settings_runtime_values(rel_str),
+        )
+        if settings_delta.errors:
+            state.errors += len(settings_delta.errors)
+            summary["settings_write_errors_in_tick"] = int(summary.get("settings_write_errors_in_tick", 0)) + len(
+                settings_delta.errors
+            )
+        if settings_delta.receipts:
+            summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
+                settings_delta.receipts
+            )
+        # Remove the vanished path after its one governed reset so repeated
+        # watcher ticks cannot emit duplicate deletion receipts.
+        state.files.pop(rel_str, None)
+    if removed_runtime_gating_owner_files:
+        summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
+
     removed_settings_sources = sorted(
         Path(path)
         for path in state.files.keys() - set(scanned_paths)

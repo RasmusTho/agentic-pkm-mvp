@@ -17,6 +17,7 @@ from app.watcher.settings_delta import (
     SETTINGS_LOCAL_REL,
     SETTINGS_YOUTUBE_REL,
     handle_settings_local_delta,
+    handle_settings_sync_arrival,
 )
 from tests.helpers.vault_settings import initialize_test_vault
 
@@ -449,3 +450,79 @@ def test_runtime_gating_key_removal_routes_settings_receipt(
     assert row.value is None
     assert row.old_value is True
     assert row.new_value is None
+
+
+def test_owner_file_deletion_routes_runtime_gating_reset_through_governed_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    youtube_md.unlink()
+
+    result = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": True},
+    )
+
+    assert result.errors == ()
+    assert result.values == {"youtubeSync.enabled": False}
+    assert [(receipt.key, receipt.old_value, receipt.new_value) for receipt in result.receipts] == [
+        ("youtubeSync.enabled", True, None)
+    ]
+    assert SettingsService().resolve_accepted_runtime_gating(
+        VaultManager().validate_vault(vault_root)
+    )["youtubeSync.enabled"].value is False
+
+
+def test_sync_arrival_replay_does_not_emit_human_actor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+
+    result = handle_settings_sync_arrival(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": False},
+    )
+
+    assert result.errors == ()
+    assert [receipt.actor for receipt in result.receipts] == ["sync"]
+    assert [receipt.surface for receipt in result.receipts] == ["sync"]
+    rows = query_settings_receipts(outbox_path=outbox_path).rows
+    assert [row.actor for row in rows if row.key == "youtubeSync.enabled"] == ["sync"]
+
+
+def test_cross_file_runtime_gating_residue_is_reported_and_unaccepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_local_settings(vault_root, {"youtubeSync.enabled": True})
+
+    result = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_LOCAL_REL,
+        previous_values=None,
+    )
+
+    assert result.values == {"enableAutoIndexing": True, "enableVaultWatcher": True, "youtubeSync.runnerEnabled": False}
+    assert result.receipts == ()
+    assert any("owned by youtube.md" in error for error in result.errors)
+    assert SettingsService().resolve_accepted_runtime_gating(
+        VaultManager().validate_vault(vault_root)
+    )["youtubeSync.enabled"].value is False
+    assert not [row for row in query_settings_receipts(outbox_path=outbox_path).rows if row.key == "youtubeSync.enabled"]

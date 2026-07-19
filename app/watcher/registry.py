@@ -47,6 +47,7 @@ from app.watcher.settings_delta import (
     handle_settings_local_delta,
     handle_settings_source_delta,
     is_settings_control_path,
+    is_runtime_gating_owner_path,
     is_settings_source_path,
 )
 from app.watcher.state import WatcherState
@@ -1349,6 +1350,34 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
     )
+    removed_runtime_gating_owner_files = sorted(
+        Path(path)
+        for path in state.files.keys() - set(scanned_paths)
+        if is_runtime_gating_owner_path(Path(path))
+    )
+    if removed_runtime_gating_owner_files:
+        summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
+        if not handled_settings_sources:
+            for rel_path in removed_runtime_gating_owner_files:
+                rel_str = str(rel_path)
+                settings_delta = handle_settings_local_delta(
+                    vault_root=cfg.vault_path,
+                    rel_path=rel_path,
+                    previous_values=state.last_settings_runtime_values(rel_str),
+                )
+                if settings_delta.errors:
+                    state.errors += len(settings_delta.errors)
+                    summary["settings_write_errors_in_tick"] = int(
+                        summary.get("settings_write_errors_in_tick", 0)
+                    ) + len(settings_delta.errors)
+                if settings_delta.receipts:
+                    summary["settings_receipts_in_tick"] = int(
+                        summary.get("settings_receipts_in_tick", 0)
+                    ) + len(settings_delta.receipts)
+        for rel_path in removed_runtime_gating_owner_files:
+            for active_state in active_states.values():
+                active_state.files.pop(str(rel_path), None)
+
     removed_settings_sources = sorted(
         Path(path)
         for path in state.files.keys() - set(scanned_paths)
