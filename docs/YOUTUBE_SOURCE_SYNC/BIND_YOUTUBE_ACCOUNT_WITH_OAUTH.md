@@ -40,10 +40,13 @@ touch the repo, vault, settings values, logs, events, or receipts.
    from `YOUTUBE_OAUTH_CLIENT_ID`/`YOUTUBE_OAUTH_CLIENT_SECRET` env (host secret-provisioning
    boundary); their *values* are never persisted or printed.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
-   reason codes on the binding and dependent sources (INV-YSS-4). `disconnect()` revokes at
-   `oauth2.googleapis.com/revoke`, deletes the token record, disables dependent sources with
-   `auth_disconnected` — and deletes no acquired artifacts. `reconnect()` re-runs consent onto the
-   same binding when the provider channel id matches.
+   reason codes on the binding and dependent sources (INV-YSS-4). Connect persists the encrypted
+   token before claiming a binding is connected. `disconnect()` revokes at
+   `oauth2.googleapis.com/revoke` before local teardown; provider revoke failure returns a
+   retryable failure and preserves the encrypted token plus dependent-source state. Successful
+   revoke deletes the token record, disables dependent sources with `auth_disconnected`, and
+   deletes no acquired artifacts. `reconnect()` re-runs consent onto the same binding when the
+   provider channel id matches.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + error
    class only); no token, code, or client secret in any emitted string.
 

@@ -65,6 +65,7 @@ class _Provider:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self.token_responses: list[httpx.Response] = []
+        self.revoke_responses: list[httpx.Response] = []
         self.revoked: list[dict[str, str]] = []
         self.device_granted = True
 
@@ -104,6 +105,8 @@ class _Provider:
             )
         if path.endswith("/revoke"):
             self.revoked.append(self._body(request))
+            if self.revoke_responses:
+                return self.revoke_responses.pop(0)
             return httpx.Response(200, request=request, json={})
         return httpx.Response(404, request=request, json={"error": "not_found"})  # pragma: no cover
 
@@ -284,6 +287,43 @@ def test_missing_store_key_fails_closed(store, bindings, registry, monkeypatch):
         store.get(binding_id)
 
 
+@pytest.mark.parametrize("configured_key", [None, "not-valid-hex"])
+def test_connect_token_store_failure_does_not_create_connected_binding(
+    store, bindings, registry, monkeypatch, configured_key
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    if configured_key is None:
+        monkeypatch.delenv(tokstore.KEY_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(tokstore.KEY_ENV_VAR, configured_key)
+
+    with pytest.raises(tokstore.TokenStoreKeyMissingError):
+        _connect_device(binder)
+
+    assert bindings.list_all() == ()
+    assert store.binding_ids() == ()
+
+
+def test_failed_first_connect_status_is_not_connected_without_token_record(
+    store, bindings, registry
+):
+    # Models the partial row left by the pre-fix connect ordering. Status must
+    # fail closed even when it encounters that durable state after restart.
+    binding = bindings.create(
+        provider_channel_id=SYNTH_CHANNEL_ID,
+        display_label=SYNTH_CHANNEL_TITLE,
+        scopes=[oauth.SCOPE],
+        account_binding_id="binding-without-token",
+    )
+    assert store.has_record(binding.account_binding_id) is False
+
+    status = _binder(_Provider(), store, bindings, registry).status(binding.account_binding_id)
+
+    assert status["status"] == "degraded"
+    assert status["reason_code"] == "auth_missing"
+
+
 # --- AC4 --------------------------------------------------------------------
 
 
@@ -428,6 +468,44 @@ def test_disconnect_revokes_without_deleting_artifacts(store, bindings, registry
     # Acquired artifacts are never deleted by a disconnect.
     assert raw_store.get_raw_record_by_content_identity("cid-artifact-1") is not None
     assert raw_store.all_raw_records()[0].id == raw_row.id
+
+
+def test_disconnect_preserves_token_when_provider_revoke_fails(store, bindings, registry):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    result = _connect_device(binder)
+    binding_id = result["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    provider.revoke_responses.append(
+        httpx.Response(503, json={"error": "temporarily_unavailable"})
+    )
+
+    disc = binder.disconnect(binding_id)
+
+    assert disc == {
+        "status": "disconnect_failed",
+        "revoked": False,
+        "retryable": True,
+        "sources_disabled": 0,
+    }
+    assert store.has_record(binding_id) is True
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
+    assert bindings.get(binding_id).state == "connected"
+    assert bindings.get(binding_id).reason_code is None
+    unchanged_source = registry.get(source.binding_id)
+    assert unchanged_source.enabled is True
+    assert unchanged_source.last_error is None
+
+    retried = binder.disconnect(binding_id)
+    assert retried["status"] == "disconnected"
+    assert retried["revoked"] is True
+    assert store.has_record(binding_id) is False
+    assert registry.get(source.binding_id).enabled is False
 
 
 # --- AC7 --------------------------------------------------------------------

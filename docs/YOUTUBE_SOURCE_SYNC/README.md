@@ -1,4 +1,4 @@
-State: Specification directory (feature-breakdown lane; target-state framing). Instantiates Knowledge Acquisition Platform Phase 4 (continuous discovery) for YouTube. **YSS-01 is delivered repository-verifiably** (#3916 / PR #3931, 2026-07-17: source registry + `youtubeSync.*` settings model); YSS-02..YSS-11 and the parent #3915 operator/live-capability acceptance remain pending. The issue set was filed 2026-07-17.
+State: Specification directory (feature-breakdown lane; target-state framing). Instantiates Knowledge Acquisition Platform Phase 4 (continuous discovery) for YouTube. **YSS-01 and YSS-02 are delivered repository-verifiably** (#3916 / PR #3931 and #3917 / PR #3969; YSS-02 transactional lifecycle hardening in #3990); YSS-03..YSS-11 and the parent #3915 operator/live-capability acceptance remain pending. The issue set was filed 2026-07-17.
 Doc role: Capability specification directory
 Authority: Owns the YouTube source-sync capability design — account binding, source registry, continuous discovery, durable acquisition requests, scheduling, and the setup/status surfaces. Subordinate to `docs/KNOWLEDGE_ACQUISITION/README.md` (platform boundary), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` (stages), `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` (triage), `docs/EVENTS.md` (event envelope/outbox), and `docs/SECURITY.md` (secret baseline). It revises `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md` §Discovery by owner directive (see §Decision record).
 Owner: Architecture / knowledge acquisition
@@ -113,7 +113,7 @@ it. The operator path (GCP/OAuth setup, first sync, troubleshooting, live accept
 | Order | Task | ID | Prerequisites | Outcome |
 | --- | --- | --- | --- | --- |
 | 1 | [Establish source registry and settings](ESTABLISH_SOURCE_REGISTRY_AND_SETTINGS.md) | YSS-01 | — | **Delivered repository-verifiably** (#3916 / PR #3931): durable per-account source registry + settings model + validation; live capability acceptance remains pending |
-| 2a | [Bind YouTube account with OAuth](BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md) | YSS-02 | YSS-01 | device+loopback OAuth, secret-ref token store, connect/disconnect, degradation |
+| 2a | [Bind YouTube account with OAuth](BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md) | YSS-02 | YSS-01 | **Delivered repository-verifiably** (#3917 / PR #3969; lifecycle hardening #3990): device+loopback OAuth, secret-ref token store, transactional connect/disconnect, degradation |
 | 2b | [Establish durable acquisition requests](ESTABLISH_DURABLE_ACQUISITION_REQUESTS.md) | YSS-04 | YSS-01 | source-agnostic request queue + dedup + retries + handover to `acquire_youtube` |
 | 3a | [Build YouTube Data API client](BUILD_YOUTUBE_DATA_API_CLIENT.md) | YSS-03 | YSS-02 (token provider interface only — stubbable) | bounded read-only API client: pagination, ETag, quota accounting, host allowlist |
 | 3b | [Sync subscriptions from Takeout and RSS](SYNC_SUBSCRIPTIONS_FROM_TAKEOUT_AND_RSS.md) | YSS-07 | YSS-01, YSS-04 | Takeout adoption (operator WIP baseline), channel-RSS incremental discovery, policy modes |
@@ -153,7 +153,10 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   missing token-store key, disables exactly the authenticated capabilities with a per-source
   `reason_code`; logged-out capabilities (RSS, backfill, explicit URLs) continue. No cursor is
   mutated by an auth failure; no empty poll result caused by auth/API failure is ever recorded as
-  a successful sync. Disconnect stops future polling but deletes no acquired Mimer artifacts.
+  a successful sync. Connect never records `connected` before encrypted token persistence.
+  Disconnect stops future polling only after provider revocation succeeds; transient revoke
+  failure preserves the encrypted credential and source state for retry. Disconnect deletes no
+  acquired Mimer artifacts.
 - **INV-YSS-5 — secrets never leave the private boundary.** OAuth client identifiers, refresh/access
   tokens, and token-store key material never appear in the repo, vault files, settings values,
   candidate notes, events, receipts, logs, or exception text. Settings and receipts may carry only
@@ -214,7 +217,8 @@ checklist entries on the parent issue — never claimed shipped in owner docs un
 
 ## Relationship to GitHub issues
 
-Filed via `feature-breakdown` 2026-07-17: parent feature issue #3915 (validation hub, `agent:blocked`)
-plus children #3916 (YSS-01, `agent:ready`) and #3917–#3926 (YSS-02..YSS-11, `agent:blocked` until
-their prerequisites merge). `PARENT_FEATURE_ISSUE.md` mirrors the filed parent. The spec directory
-is the source of truth; issues are execution artifacts.
+Filed via `feature-breakdown` 2026-07-17: parent feature issue #3915 is the validation hub. Children
+#3916 (YSS-01) and #3917 (YSS-02) are delivered repository-verifiably; #3990 hardens YSS-02's
+transactional OAuth lifecycle. Children #3918–#3926 (YSS-03..YSS-11) remain governed by their live
+GitHub dependency/lifecycle state. `PARENT_FEATURE_ISSUE.md` mirrors the filed parent. The spec
+directory is the source of truth; issues are execution artifacts.
