@@ -668,3 +668,87 @@ def test_drain_one_dead_letters_unknown_source_kind() -> None:
     result = drain_one(q.get(row.request_id), vault_context=None, queue=q, conn=conn)
     assert result.status == "dead_lettered"
     assert result.last_failure["reason_code"] == "source_unsupported"
+
+
+def test_drain_candidate_metadata_only_does_not_run_transcript_acquisition() -> None:
+    """The drain boundary must not turn a shallow request into a full fetch."""
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={"policy_version": 1, "mode": "candidate_metadata_only"},
+    )
+    claimed = q.claim_batch(1, conn=conn)
+    calls: list[dict[str, Any]] = []
+
+    def acquire_must_not_run(*args: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+        raise AssertionError("metadata-only requests must not enter the transcript pipeline")
+
+    result = drain_one(
+        claimed[0], vault_context=None, queue=q, conn=conn, acquire_fn=acquire_must_not_run
+    )
+
+    assert calls == []
+    assert result.status == "dead_lettered"
+    assert result.completed_at is None
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "policy_unsupported"
+    assert "candidate_metadata_only" in result.last_failure["error"]
+
+
+def test_drain_honors_captions_false_before_acquire_youtube() -> None:
+    """A disabled-caption policy cannot silently use the current full pipeline."""
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={"policy_version": 1, "mode": "acquire_transcript", "captions": False},
+    )
+    claimed = q.claim_batch(1, conn=conn)
+    calls: list[dict[str, Any]] = []
+
+    def acquire_must_not_run(*args: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+        raise AssertionError("captions=false requests must not enter acquire_youtube")
+
+    result = drain_one(
+        claimed[0], vault_context=None, queue=q, conn=conn, acquire_fn=acquire_must_not_run
+    )
+
+    assert calls == []
+    assert result.status == "dead_lettered"
+    assert result.completed_at is None
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "policy_unsupported"
+    assert "captions=false" in result.last_failure["error"]
+
+
+def test_drain_unsupported_policy_depth_is_legible_non_completed() -> None:
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={"policy_version": 1, "mode": "discover_only"},
+    )
+    claimed = q.claim_batch(1, conn=conn)
+
+    def acquire_must_not_run(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("unsupported policies must stop before acquire_youtube")
+
+    result = drain_one(
+        claimed[0],
+        vault_context=None,
+        queue=q,
+        conn=conn,
+        acquire_fn=acquire_must_not_run,
+    )
+
+    assert result.status == "dead_lettered"
+    assert result.completed_at is None
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "policy_unsupported"
+    assert "discover_only" in result.last_failure["error"]
