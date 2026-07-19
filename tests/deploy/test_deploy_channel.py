@@ -193,6 +193,18 @@ exec {sys.executable!s} "$@"
     )
 
     env = os.environ.copy()
+    for name in (
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS",
+        "INSTANCE_LEGACY_OWNER_CONFIG_PATHS",
+        "VAULT_HOST_ROOT",
+        "VAULT_ROOT",
+        "VAULT_ROOT_DEV",
+        "VAULT_ROOT_PROD",
+        "VAULT_ROOT_TEST",
+        "WATCHER_RUNTIME_ENV_FILE",
+        "WATCHER_VAULT_PATH",
+    ):
+        env.pop(name, None)
     env.update(
         {
             "PATH": f"{bin_dir}:{env['PATH']}",
@@ -200,6 +212,7 @@ exec {sys.executable!s} "$@"
             "FAKE_SHA": sha,
             "FAKE_DEPLOY_EVENT_LOG": str(event_log),
             "DEPLOY_HEALTH_TIMEOUT_SECONDS": "1",
+            "XDG_DATA_HOME": str(tmp_path / "xdg"),
         }
     )
     return root, env, sha

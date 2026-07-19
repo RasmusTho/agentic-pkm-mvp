@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -50,6 +51,27 @@ from scripts.instance_state_writer_inventory import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITER_INVENTORY_HELPER = REPO_ROOT / "scripts/instance_state_writer_inventory.py"
+
+
+def _legacy_owner_inventory_payload(
+    owners: list[dict[str, str]],
+    *,
+    inventory_complete: bool = True,
+    writers_drained: bool = True,
+    validated_after_quiescence: bool = True,
+) -> dict[str, object]:
+    source_digest = hashlib.sha256(
+        json.dumps(owners, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "schema": "agentic-pkm.legacy-owner-inventory.v1",
+        "inventory_complete": inventory_complete,
+        "writers_drained": writers_drained,
+        "source_probe_count": 2,
+        "validated_after_quiescence": validated_after_quiescence,
+        "source_digest": source_digest,
+        "owners": owners,
+    }
 
 
 def _empty_docker_path(tmp_path: Path) -> str:
@@ -306,15 +328,12 @@ def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
     inventory_path = host_global_root / "legacy-owner-inventory.json"
     inventory_path.write_text(
         json.dumps(
-            {
-                "schema": "agentic-pkm.legacy-owner-inventory.v1",
-                "inventory_complete": True,
-                "writers_drained": True,
-                "owners": [
+            _legacy_owner_inventory_payload(
+                [
                     {"channel_id": "test", "root": str(first)},
                     {"channel_id": "test", "root": str(second)},
-                ],
-            }
+                ]
+            )
         ),
         encoding="utf-8",
     )
@@ -378,13 +397,52 @@ def test_deployment_producer_keeps_restart_fenced_on_incomplete_inventory(
     )
     inventory_path = host_global_root / "legacy-owner-inventory.json"
     inventory_path.write_text(
+        json.dumps(_legacy_owner_inventory_payload([], inventory_complete=False)),
+        encoding="utf-8",
+    )
+    os.chmod(inventory_path, 0o600)
+
+    with pytest.raises(InstanceStatePreflightError, match="complete drained"):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=instance_state_root,
+            host_global_root=host_global_root,
+            legacy_path=legacy_path,
+            inventory_path=inventory_path,
+            backup_root=host_global_root / "backups" / "prod" / "latest",
+            restore_root=None,
+            quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
+        )
+
+    assert _deployment_fence_path(host_global_root, "prod").is_file()
+    assert not (host_global_root / "ownership-ledger.json").exists()
+    assert not (host_global_root / "ownership-key.json").exists()
+
+
+def test_deployment_producer_rejects_inventory_not_revalidated_after_quiescence(
+    tmp_path,
+) -> None:
+    instance_state_root = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    instance_state_root.mkdir()
+    host_global_root.mkdir()
+    legacy_path = tmp_path / "missing-legacy.md"
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
+    )
+    inventory_path = host_global_root / "legacy-owner-inventory.json"
+    inventory_path.write_text(
         json.dumps(
-            {
-                "schema": "agentic-pkm.legacy-owner-inventory.v1",
-                "inventory_complete": False,
-                "writers_drained": True,
-                "owners": [],
-            }
+            _legacy_owner_inventory_payload(
+                [],
+                writers_drained=False,
+                validated_after_quiescence=False,
+            )
         ),
         encoding="utf-8",
     )
@@ -424,14 +482,7 @@ def test_finalizer_rejects_caller_booleans_without_a_durable_quiescence_proof(tm
     )
     inventory = ownership / "legacy-owner-inventory.json"
     inventory.write_text(
-        json.dumps(
-            {
-                "schema": "agentic-pkm.host-deployment-quiescence.v1",
-                "inventory_complete": True,
-                "writers_drained": True,
-                "owners": [],
-            }
-        ),
+        json.dumps(_legacy_owner_inventory_payload([])),
         encoding="utf-8",
     )
     os.chmod(inventory, 0o600)
@@ -508,6 +559,446 @@ def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None
     assert "pgrep" not in producer
     assert producer.index(" stop api worker watcher") < producer.index("deployment-prove")
     assert producer.index("deployment-prove") < producer.index("deployment-finish")
+
+
+def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window(
+    tmp_path,
+) -> None:
+    """A fresh rollout derives owners before init, lease, fence, or writer stop."""
+
+    event_log = tmp_path / "events.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    python = fake_bin / "python3"
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
+        'case " $* " in\n'
+        "  *' produce-legacy-owners '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{"writers_drained":false}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+        "  *' prove-quiescent '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "  *' validate-legacy-owners '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{"writers_drained":true}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "esac\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    harness = tmp_path / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() {\n"
+        "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        "  return 0\n"
+        "}\n"
+        "prepare_instance_state_deployment fake_compose prod\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env={
+            **os.environ,
+            "EVENT_LOG": str(event_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    events = event_log.read_text(encoding="utf-8").splitlines()
+    assert "produce-legacy-owners" in events[0]
+    assert "instance-state-init" in events[1]
+    produce_index = next(i for i, event in enumerate(events) if "produce-legacy-owners" in event)
+    begin_index = next(i for i, event in enumerate(events) if "deployment-begin" in event)
+    stop_index = next(i for i, event in enumerate(events) if event.startswith("compose:stop "))
+    proof_index = next(i for i, event in enumerate(events) if "deployment-prove" in event)
+    validate_index = next(i for i, event in enumerate(events) if "validate-legacy-owners" in event)
+    finish_index = next(i for i, event in enumerate(events) if "deployment-finish" in event)
+    assert produce_index < begin_index < stop_index < proof_index < validate_index < finish_index
+
+
+def _legacy_owner_source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
+    repo_root = tmp_path / "repo"
+    (repo_root / "config" / "deploy").mkdir(parents=True)
+    roots: dict[str, Path] = {}
+    for channel in ("dev", "test", "prod", "native"):
+        root = tmp_path / f"vault-{channel}"
+        root.mkdir()
+        roots[channel] = root
+        (repo_root / f".env.{channel}.local").write_text(
+            f"VAULT_ROOT={root}\nWATCHER_VAULT_PATH={root}\n",
+            encoding="utf-8",
+        )
+    return repo_root, roots
+
+
+def test_legacy_owner_producer_derives_all_domains_without_preseeded_inventory(
+    tmp_path,
+) -> None:
+    repo_root, roots = _legacy_owner_source_fixture(tmp_path)
+    exported_dev_root = tmp_path / "vault-dev-exported"
+    exported_dev_root.mkdir()
+    native_scalar_root = tmp_path / "vault-native-scalar"
+    native_scalar_root.mkdir()
+    blocked_xdg = tmp_path / "blocked-xdg"
+    blocked_xdg.write_text("not a directory\n", encoding="utf-8")
+    native_home = tmp_path / "home"
+    native_store = (
+        native_home / "Library" / "Application Support" / "Agentic PKM" / "app-local.md"
+    )
+    native_store.parent.mkdir(parents=True)
+    native_store.write_text(
+        "---\n"
+        "schema: agentic-pkm.app-local.v1\n"
+        "knownVaults:\n"
+        "  native-scalar:\n"
+        f"    path: {native_scalar_root}\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    env = {
+        **os.environ,
+        "PATH": _empty_docker_path(tmp_path),
+        "HOME": str(native_home),
+        "XDG_DATA_HOME": str(blocked_xdg / "child"),
+        # A governed caller may export bindings for more than the channel it is
+        # deploying. Non-active bindings are owner sources too and cannot be
+        # silently omitted from the host-wide baseline.
+        "VAULT_ROOT_DEV": str(exported_dev_root),
+    }
+
+    produced = subprocess.run(
+        [
+            sys.executable,
+            str(WRITER_INVENTORY_HELPER),
+            "produce-legacy-owners",
+            "--repo-root",
+            str(repo_root),
+            "--active-channel",
+            "prod",
+            "--output",
+            str(inventory),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert produced.returncode == 0, produced.stderr
+    payload = json.loads(inventory.read_text(encoding="utf-8"))
+    assert payload["inventory_complete"] is True
+    assert payload["writers_drained"] is False
+    assert payload["owners"] == [
+        {"channel_id": "dev", "root": str(roots["dev"].resolve())},
+        {"channel_id": "dev", "root": str(exported_dev_root.resolve())},
+        {"channel_id": "native", "root": str(roots["native"].resolve())},
+        {"channel_id": "native", "root": str(native_scalar_root.resolve())},
+        {"channel_id": "prod", "root": str(roots["prod"].resolve())},
+        {"channel_id": "test", "root": str(roots["test"].resolve())},
+    ]
+    validated = subprocess.run(
+        [
+            sys.executable,
+            str(WRITER_INVENTORY_HELPER),
+            "validate-legacy-owners",
+            "--repo-root",
+            str(repo_root),
+            "--active-channel",
+            "prod",
+            "--inventory",
+            str(inventory),
+            "--output",
+            str(inventory),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert validated.returncode == 0, validated.stderr
+    assert json.loads(inventory.read_text(encoding="utf-8"))["writers_drained"] is True
+
+
+def test_legacy_owner_producer_rejects_racing_config_source(tmp_path) -> None:
+    repo_root, roots = _legacy_owner_source_fixture(tmp_path)
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    ready_r, ready_w = os.pipe()
+    continue_r, continue_w = os.pipe()
+    env = {
+        **os.environ,
+        "PATH": _empty_docker_path(tmp_path),
+        "XDG_DATA_HOME": str(tmp_path / "xdg"),
+        "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_READY_FD": str(ready_w),
+        "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_CONTINUE_FD": str(continue_r),
+    }
+    helper = subprocess.Popen(
+        [
+            sys.executable,
+            str(WRITER_INVENTORY_HELPER),
+            "produce-legacy-owners",
+            "--repo-root",
+            str(repo_root),
+            "--active-channel",
+            "prod",
+            "--output",
+            str(inventory),
+        ],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        pass_fds=(ready_w, continue_r),
+        text=True,
+    )
+    os.close(ready_w)
+    os.close(continue_r)
+    try:
+        assert os.read(ready_r, 1) == b"R"
+        (repo_root / ".env.test.local").write_text(
+            f"VAULT_ROOT={roots['test']}\n# raced\n", encoding="utf-8"
+        )
+        os.write(continue_w, b"C")
+        _, stderr = helper.communicate(timeout=10)
+    finally:
+        os.close(ready_r)
+        os.close(continue_w)
+        if helper.poll() is None:
+            helper.kill()
+            helper.wait(timeout=5)
+    assert helper.returncode != 0
+    assert stderr == "legacy owner sources are incomplete or racing\n"
+    assert not inventory.exists()
+
+
+def test_legacy_owner_validation_rejects_source_change_after_preflight(tmp_path) -> None:
+    repo_root, roots = _legacy_owner_source_fixture(tmp_path)
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    env = {
+        **os.environ,
+        "PATH": _empty_docker_path(tmp_path),
+        "XDG_DATA_HOME": str(tmp_path / "xdg"),
+    }
+    command = [
+        sys.executable,
+        str(WRITER_INVENTORY_HELPER),
+        "produce-legacy-owners",
+        "--repo-root",
+        str(repo_root),
+        "--active-channel",
+        "prod",
+        "--output",
+        str(inventory),
+    ]
+    produced = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    assert produced.returncode == 0, produced.stderr
+    (repo_root / ".env.dev.local").write_text(
+        f"VAULT_ROOT={roots['dev']}\n# changed after preflight\n", encoding="utf-8"
+    )
+
+    validated = subprocess.run(
+        [
+            *command[:2],
+            "validate-legacy-owners",
+            *command[3:-2],
+            "--inventory",
+            str(inventory),
+            "--output",
+            str(inventory),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert validated.returncode != 0
+    assert validated.stderr == "legacy owner sources are incomplete or racing\n"
+    assert json.loads(inventory.read_text(encoding="utf-8"))["writers_drained"] is False
+
+
+def test_legacy_owner_validation_rejects_root_identity_change_after_preflight(tmp_path) -> None:
+    repo_root, roots = _legacy_owner_source_fixture(tmp_path)
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    env = {
+        **os.environ,
+        "PATH": _empty_docker_path(tmp_path),
+        "XDG_DATA_HOME": str(tmp_path / "xdg"),
+    }
+    command = [
+        sys.executable,
+        str(WRITER_INVENTORY_HELPER),
+        "produce-legacy-owners",
+        "--repo-root",
+        str(repo_root),
+        "--active-channel",
+        "prod",
+        "--output",
+        str(inventory),
+    ]
+    produced = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    assert produced.returncode == 0, produced.stderr
+    replaced = tmp_path / "vault-test-replaced"
+    roots["test"].rename(replaced)
+    roots["test"].mkdir()
+
+    validated = subprocess.run(
+        [
+            *command[:2],
+            "validate-legacy-owners",
+            *command[3:-2],
+            "--inventory",
+            str(inventory),
+            "--output",
+            str(inventory),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert validated.returncode != 0
+    assert validated.stderr == "legacy owner sources are incomplete or racing\n"
+    assert json.loads(inventory.read_text(encoding="utf-8"))["writers_drained"] is False
+
+
+def test_legacy_owner_producer_rejects_missing_explicit_source_before_output(
+    tmp_path,
+) -> None:
+    repo_root, _ = _legacy_owner_source_fixture(tmp_path)
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    env = {
+        **os.environ,
+        "PATH": _empty_docker_path(tmp_path),
+        "XDG_DATA_HOME": str(tmp_path / "xdg"),
+        "INSTANCE_LEGACY_OWNER_CONFIG_PATHS": str(tmp_path / "missing.env"),
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WRITER_INVENTORY_HELPER),
+            "produce-legacy-owners",
+            "--repo-root",
+            str(repo_root),
+            "--active-channel",
+            "prod",
+            "--output",
+            str(inventory),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert result.stderr == "required legacy owner config source is missing\n"
+    assert not inventory.exists()
+
+
+def test_legacy_owner_producer_reads_stopped_compose_config_and_scalar_store(
+    tmp_path, monkeypatch
+) -> None:
+    mounted = tmp_path / "mounted-vault"
+    selected = tmp_path / "selected-vault"
+    mounted.mkdir()
+    selected.mkdir()
+    container_id = "a" * 64
+    inspected = [
+        {
+            "Id": container_id,
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "pkm-test",
+                    "com.docker.compose.service": "api",
+                },
+                "Env": [
+                    "VAULT_ROOT=/app/vault",
+                    "WATCHER_VAULT_PATH=/app/vault",
+                    "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp-test/agentic-pkm/app-local.md",
+                ],
+            },
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(mounted),
+                    "Destination": "/app/vault",
+                },
+                {
+                    "Type": "bind",
+                    "Source": str(tmp_path),
+                    "Destination": "/Users/tester",
+                },
+            ],
+        }
+    ]
+
+    def fake_checked(command, *, label, env=None):
+        del label, env
+        if command[:3] == ["docker", "ps", "-a"]:
+            return f"{container_id}\n"
+        if command[:2] == ["docker", "inspect"]:
+            return json.dumps(inspected)
+        raise AssertionError(command)
+
+    app_local = (
+        "---\n"
+        "schema: agentic-pkm.app-local.v1\n"
+        "knownVaults:\n"
+        "  selected:\n"
+        "    path: /Users/tester/selected-vault\n"
+        "---\n"
+        "# App Local Settings\n"
+    ).encode()
+    monkeypatch.setattr(writer_inventory, "_run_checked", fake_checked)
+    monkeypatch.setattr(writer_inventory, "_docker_copy_file", lambda *_: app_local)
+
+    owners, fingerprints = writer_inventory._docker_legacy_owner_sources()
+
+    assert owners == [
+        writer_inventory.LegacyOwnerRecord("test", str(mounted.resolve())),
+        writer_inventory.LegacyOwnerRecord("test", str(selected.resolve())),
+    ]
+    assert len(fingerprints) == 1
+
+
+def test_legacy_owner_producer_parses_canonical_quoted_app_local_paths() -> None:
+    raw = (
+        "---\n"
+        "schema: agentic-pkm.app-local.v1\n"
+        "knownVaults:\n"
+        "  path:/private/example:\n"
+        "    path: '/Users/operator/Vault #1'\n"
+        "  quote-ref:\n"
+        '    path: "/Users/operator/Vault \\u2603"\n'
+        "---\n"
+    ).encode()
+
+    assert writer_inventory._parse_app_local_roots(raw) == [
+        "/Users/operator/Vault #1",
+        "/Users/operator/Vault ☃",
+    ]
 
 
 def test_foreground_controller_inventory_helper_passes_without_self_observation(tmp_path) -> None:

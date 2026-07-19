@@ -65,17 +65,24 @@ resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. I
 missing registry or ledger during consumer preflight.
 
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
-`scripts/lib/instance_state_deployment.sh`. The shared producer installs a durable host-global
-deployment lease before its channel restart fence, stops API/worker/watcher/Heimdal, probes dev,
-test, prod, and native consumers twice, and only then runs the finalizer. A live or racing domain
-leaves the fence in place; the nonce-plus-inventory-digest proof is required for restore, final
-export/preservation, and legacy bootstrap. The finalizer rejects an
-incomplete or non-private `/app/instance-ownership/legacy-owner-inventory.json`, captures the final
-legacy fingerprint, imports it on first volume or preserves it beside an established dormant
-registry, calls the host-global legacy-owner bootstrap, creates a verified registry/ledger/key
-backup, and clears the fence. `INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored
-inside that stopped interval before finalization and consumer startup. Failure leaves the fence in
-place, so upgraded consumer preflight refuses restart.
+`scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the
+shared producer derives every dev/test/prod/native legacy owner from canonical channel and runtime
+env sources, stopped or running Compose writer config and scalar stores, the native scalar store,
+and the governed caller binding. It writes a private baseline only after two complete snapshots are
+identical. The wrapper then installs a durable host-global deployment lease before its channel
+restart fence, stops API/worker/watcher/Heimdal, probes dev/test/prod/native consumers twice, and
+durably proves quiescence. Two new owner-source snapshots must reproduce the baseline exactly before
+the producer marks the inventory drained and copies it to
+`/app/instance-ownership/legacy-owner-inventory.json`; missing sources, config/store races, and
+equal or nested roots across owner domains abort without seeding a partial set. A live writer or a
+post-stop owner validation failure leaves the fence in place. The nonce-plus-inventory-digest proof
+is required for restore, final export/preservation, and legacy bootstrap. The finalizer rejects an
+incomplete, non-private, or unvalidated inventory, captures the final legacy fingerprint, imports it
+on first volume or preserves it beside an established dormant registry, calls the host-global
+legacy-owner bootstrap, creates a verified registry/ledger/key backup, and clears the fence.
+`INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored inside that stopped interval
+before finalization and consumer startup. Failure leaves the fence in place, so upgraded consumer
+preflight refuses restart.
 
 This 01B recovery boundary also includes canonical-root overlap rejection and dormant recoverable
 lifecycle lineage. It deliberately leaves `authority: dormant`: the production picker continues to

@@ -107,14 +107,20 @@ consumers fail-exit through one resolved-path/permissions preflight before start
 preventing equal or overlapping content roots from becoming active in different channels.
 
 MVR-01B also wires the canonical deploy and start wrappers to one host-global-leased and
-channel-fenced producer. Before recreate it installs the host lease and restart fence, stops API,
-worker, watcher, and Heimdal, and probes dev/test/prod/native consumers twice; any live or racing
-domain fails closed. While stopped it
-captures the final legacy scalar payload, imports or preserves it on the durable volume, verifies
-the private complete host-wide legacy-owner inventory, seeds the shared ledger, optionally restores
-a verified backup, and creates the next registry/ledger/key backup. The fence is removed only after
-that sequence succeeds; consumer preflight rejects a missing mount, missing established state,
-incomplete owner bootstrap, or surviving fence without creating replacement state.
+channel-fenced producer. Before any init or mutation, it derives dev/test/prod/native legacy owners
+from canonical channel/runtime env files, stopped or running Compose writer config and scalar
+stores, the native scalar store, and the governed caller binding; two identical snapshots are
+required to create the private baseline. Before recreate it then installs the host lease and restart
+fence, stops API, worker, watcher, and Heimdal, probes dev/test/prod/native consumers twice, and
+durably proves quiescence. The owner producer must reproduce its baseline twice after that stop
+before marking it drained. A missing or racing source, or an equal/nested root across owner domains,
+fails closed before partial ledger seeding; a post-stop failure leaves the fence in place. While
+stopped the finalizer captures the final legacy scalar payload, imports or preserves it on the
+durable volume, verifies the private production-derived owner inventory, seeds the shared ledger,
+optionally restores a verified backup, and creates the next registry/ledger/key backup. The fence is
+removed only after that sequence succeeds; consumer preflight rejects a missing mount, missing
+established state, incomplete owner bootstrap, or surviving fence without creating replacement
+state.
 
 Those recovery facilities do not authorize cutover. The registry remains `authority: dormant`, the
 legacy scalar app-local store remains authoritative in every channel, and second-registration,

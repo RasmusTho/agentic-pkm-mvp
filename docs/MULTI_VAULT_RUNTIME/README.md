@@ -92,12 +92,16 @@ Before recreate, both canonical wrappers invoke one new-image deployment produce
 legacy path on the shared runtime volume, records a diagnostic fingerprint, installs the durable
 channel restart fence, and stops API, worker, watcher, and Heimdal. The stopped finalizer then
 exports the **final post-stop** file, validates its fingerprint again, and imports it on a first
-volume or preserves it beside an established dormant registry. It requires a private operator
-inventory whose receipt declares every legacy dev/test/prod/native owner and all legacy writers
-drained; it seeds that complete inventory before any upgraded consumer can claim a root. The fence
-prevents upgraded consumers from restarting through a failed import; a changed final fingerprint,
-missing inventory, missing established ledger/key, or unfenced finalizer aborts rather than using a
-pre-quiescence snapshot. The independently durable legacy source is never deleted.
+volume or preserves it beside an established dormant registry. Before any init, lease, fence, or
+writer stop, the production wrapper derives the complete dev/test/prod/native legacy-owner set from
+canonical channel/runtime env files, stopped or running Compose service config plus scalar stores,
+the native scalar store, and the governed caller binding. Two identical probes create a private
+baseline; after lease-bound quiescence is proven, two more probes must reproduce it exactly before
+the wrapper marks the inventory drained and seeds every owner. A missing, changed, ambiguous, or
+cross-domain-overlapping source fails closed rather than being silently omitted. The fence prevents
+upgraded consumers from restarting through a failed post-stop validation or import; a changed final
+fingerprint, missing inventory, missing established ledger/key, or unfenced finalizer also aborts.
+The independently durable legacy source is never deleted.
 
 All registry-backed mutation uses one store transaction contract: an exclusive OS file lock on a
 sidecar in the shared volume, reload plus monotonic schema revision/CAS validation, write to a
