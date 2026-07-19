@@ -16,8 +16,8 @@ colours ~31 capability boxes red regardless of what evidence actually exists, an
 zero score and no citations are indistinguishable from dimensions that were never assessed. This
 directory specifies **Phase 1** of the ratified evidence-profile redesign: stop rendering the
 scalar, make the per-dimension "unassessed" state a first-class render state, fix the documentation
-scorer's empty-set behaviour, and add a per-subsystem counts view — **with zero schema DDL** and a
-real-store validation merge gate.
+scorer's empty-set behaviour, and add a per-subsystem counts view — with **additive DDL but no
+schema-version/epoch bump** and slice-specific real-store validation gates.
 
 Phase 1 alone resolves the Gate-A contradiction (the operator's Retrieval capability renders a
 `0.00` aggregate and a red `critical` band while its shipped functionality is real, delivered under
@@ -165,16 +165,14 @@ These invariants hold *across* the three tasks. Each task names the ones it must
   (scored / evidence-starved / unassessed) honest — Direction A already names the `unassessed` cell
   state, so CKM-EP-02 makes that per-dimension state actually reachable rather than reachable only
   when the whole assessment is `None`.
-- **INV-EP-6 (real-store validation merge gate — shared acceptance criterion).** Fixture purity tests
-  are insufficient for a change whose job is killing a false picture. Every Phase-1 task carries this
-  shared acceptance gate: replay `seed → ingest → link → assess → overview` against the operator's
-  real 31-capability store and confirm (a) the Retrieval capability no longer renders falsely red /
-  `critical`, (b) the counts view matches reality on the 5 capabilities the owner knows cold, and
-  (c) each of the 22 seed-path-sharing capabilities exposes the shared-evidence indicator, so any
-  near-identical distinct-artifact totals are visibly classified as fan-out contamination rather
-  than independent coverage (see [Known substrate defects](#known-substrate-defects)). This is the
-  Gate-A failure replayed as a validation receipt. The real-store replay runs where authorized
-  runtime DB access exists rather than on the laptop; the merge is gated on that receipt.
+- **INV-EP-6 (slice-specific real-store validation gates).** Fixture purity tests are insufficient
+  for changes whose job is killing a false picture, but a slice is gated only on surfaces it
+  delivers: CKM-EP-01 proves Retrieval no longer renders falsely red / `critical`; CKM-EP-02 proves
+  genuinely absent documentation evidence renders `unassessed`; CKM-EP-03 proves counts match the 5
+  capabilities the owner knows cold and all 22 seed-path-sharing capabilities expose the
+  shared-evidence indicator beside any near-identical total. The terminal parent acceptance gate
+  replays `seed → ingest → link → assess → overview` and combines all three receipts. Real-store
+  replay runs where authorized runtime DB access exists rather than on the laptop.
 
 ### Partial-failure paths
 

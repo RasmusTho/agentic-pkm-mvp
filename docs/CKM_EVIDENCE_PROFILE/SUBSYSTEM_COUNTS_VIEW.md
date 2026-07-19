@@ -24,9 +24,11 @@ inflated, near-identical numbers for the 22 seed-path-sharing capabilities — a
 - Add a new per-subsystem counts section to `render_overview_html` in
   `app/builderops/ckm/overview_html.py` (and an optional Markdown twin in
   `app/builderops/ckm/projections.py`), reusing `_forest` **unmodified** for subsystem grouping.
-- Count **distinct artifacts** per capability and per subsystem: `COUNT(DISTINCT artifact_id)` over a
-  capability's evidence edges, aggregated up the `_forest` subsystem roots. Raw edge counts are either
-  omitted or shown clearly as a secondary, de-emphasized number — never the primary figure.
+- Count **distinct artifacts** per capability and per subsystem: capability totals use
+  `COUNT(DISTINCT artifact_id)` over that capability's edges; each subsystem total counts the union
+  of distinct artifact IDs across every descendant capability, never the sum of capability-level
+  distinct counts. Raw edge counts are either omitted or shown clearly as a secondary,
+  de-emphasized number — never the primary figure.
 - Add a **shared-evidence indicator** per capability and per subsystem: the share of a capability's
   edges whose `(artifact_id, basis)` pair also appears on ≥2 capabilities, labeled in plain language
   (e.g. `shared evidence: 92%`) so fan-out contamination is visible rather than laundered into a
@@ -65,7 +67,7 @@ workstream, out of scope here).
 
 - [ ] A per-subsystem counts section exists in the overview, reuses `_forest` unmodified, and reports
   **distinct-artifact** counts as the primary figure (raw edge counts omitted or clearly secondary).
-  Verify: `tests/builderops/ckm/test_overview_html.py::test_subsystem_counts_distinct_artifacts` (new) asserts distinct-artifact counting and that a capability with N edges over M distinct artifacts (M<N) reports M.
+  Verify: `tests/builderops/ckm/test_overview_html.py::test_subsystem_counts_distinct_artifacts` (new) asserts distinct-artifact counting, that a capability with N edges over M distinct artifacts (M<N) reports M, and that one artifact linked to multiple capabilities in the same subsystem contributes exactly once to the subsystem total.
 - [ ] Each capability and subsystem shows a shared-evidence indicator = share of its edges whose
   `(artifact_id, basis)` also appears on ≥2 capabilities, labeled in plain language.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_subsystem_counts_shared_evidence_indicator` (new) asserts the indicator is present and computed over cross-capability `(artifact_id, basis)` pairs.

@@ -26,12 +26,13 @@ DDL through the governed additive-column path without a schema-version bump or e
   pattern**, with **no `CKM_SCHEMA_VERSION` bump**:
   1. add the column to the `CREATE TABLE ckm_assessment` DDL in `app/builderops/ckm/schema.py`;
   2. register it in `CKM_REQUIRED_COLUMNS["ckm_assessment"]`;
-  3. register it in `CKM_LEGACY_ADDED_COLUMNS["ckm_assessment"]` so pre-existing databases pass the
-     "required minus legacy-added" preflight (`store.py`);
+  3. register it in `CKM_LEGACY_ADDED_COLUMNS["ckm_assessment"]` for the legacy-v0 schema path;
   4. back-fill existing rows idempotently via `ALTER TABLE ckm_assessment ADD COLUMN dimension_status
-     TEXT NOT NULL DEFAULT '{}'` in a `store.py` migration mirroring
-     `_migrate_assessment_explainability`, and write/read the column in
-     `store.append_assessment` and the assessment row reader.
+     TEXT NOT NULL DEFAULT '{}'` in `_migrate_assessment_explainability`, and move that idempotent
+     additive migration before the strict `_validate_required_columns(..., legacy=False)` check for
+     an existing current-v5 store. `CKM_LEGACY_ADDED_COLUMNS` alone does **not** exempt a current-v5
+     store from that strict preflight. Then write/read the column in `store.append_assessment` and
+     the assessment row reader.
 - Adopt the `app/builderops/ckm/contracts.py` `SUPPORTED_VALUE_STATES` vocabulary
   (`measured` / `missing` / `unassessed` / `unsupported`) for `dimension_status` values; scores stay
   float-valued (the status column tags absence semantics alongside the score, it does not replace it).
@@ -71,10 +72,10 @@ version-mismatch refusal, so the column must be additive.
 
 ## Acceptance Criteria
 
-- [ ] `dimension_status` is added to `ckm_assessment` via the 4-place additive pattern and a legacy
-  database (created before this task) opens and back-fills without error; `CKM_SCHEMA_VERSION` is
-  unchanged at `5`.
-  Verify: `tests/builderops/ckm/test_store.py` additive-column round-trip + legacy-DB back-fill test asserting the column exists, defaults, and the schema version is unchanged.
+- [ ] `dimension_status` is added to `ckm_assessment` via the 4-place additive pattern and both a
+  current-v5 store created immediately before this task and the older legacy-v0 shape open and
+  back-fill before strict required-column validation; `CKM_SCHEMA_VERSION` is unchanged at `5`.
+  Verify: `tests/builderops/ckm/test_store.py` additive-column round-trip + pre-task current-v5 and legacy-v0 back-fill fixtures asserting the column exists, defaults, and the schema version is unchanged.
 - [ ] `dimension_status` values are constrained to the `SUPPORTED_VALUE_STATES` vocabulary and round-
   trip through `store.append_assessment` and the row reader.
   Verify: `tests/builderops/ckm/test_store.py` asserts persisted `dimension_status` values are a subset of `contracts.SUPPORTED_VALUE_STATES`.
