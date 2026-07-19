@@ -100,6 +100,7 @@ esac
 pin_file="${ROOT}/config/deploy/${channel}.env"
 previous_pin_file="${ROOT}/config/deploy/${channel}.previous.env"
 migration_pending_file="${ROOT}/config/deploy/${channel}.migration-pending.env"
+migration_no_baseline_marker="__NO_BASELINE__"
 receipt_dir="${ROOT}/ops/deployments"
 promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
@@ -163,10 +164,11 @@ read_pending_migration_field() {
 }
 
 write_pending_migration() {
-  local from_sha="$1" to_sha="$2" tmp_file
+  local from_sha="$1" to_sha="$2" tmp_file persisted_from
+  persisted_from="${from_sha:-${migration_no_baseline_marker}}"
   tmp_file="$(mktemp "${migration_pending_file}.tmp.XXXXXX")"
   printf 'FROM_SHA=%s\nTARGET_SHA=%s\nACK_FORWARD_ONLY=%s\n' \
-    "${from_sha}" "${to_sha}" "${ack_forward_only}" >"${tmp_file}"
+    "${persisted_from}" "${to_sha}" "${ack_forward_only}" >"${tmp_file}"
   mv "${tmp_file}" "${migration_pending_file}"
 }
 
@@ -659,11 +661,15 @@ if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
     echo "migration retry blocked: pending target ${pending_target} must be reconciled before deploying ${target_sha}" >&2
     exit 88
   fi
-  migration_from_sha="${pending_from}"
+  if [ "${pending_from}" = "${migration_no_baseline_marker}" ]; then
+    migration_from_sha=""
+  else
+    migration_from_sha="${pending_from}"
+  fi
   if [ "${pending_ack}" = "1" ]; then
     ack_forward_only=1
   fi
-  echo "migration retry: revalidating ${migration_from_sha}..${target_sha} from durable pending marker"
+  echo "migration retry: revalidating ${migration_from_sha:-<no-baseline>}..${target_sha} from durable pending marker"
 fi
 migration_gate "${migration_from_sha}" "${target_sha}"
 
