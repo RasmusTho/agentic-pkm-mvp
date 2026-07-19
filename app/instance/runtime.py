@@ -10,7 +10,7 @@ import stat
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Mapping
 from uuid import uuid4
 
 import yaml
@@ -413,8 +413,89 @@ class InstanceRegistryRuntime:
         )
         return registration
 
-    def rotate_ledger_key(self, *, crash_after: str | None = None) -> LedgerSnapshot:
-        return self.ledger.rotate_key(crash_after=crash_after)
+    def rotate_ledger_key(
+        self,
+        *,
+        quiescence_proof: DeploymentQuiescenceProof | None = None,
+        legacy_owner_inventory_path: Path | None = None,
+        crash_after: str | None = None,
+    ) -> LedgerSnapshot:
+        """Rotate only inside the existing lease-bound all-owner drain fence."""
+
+        if quiescence_proof is None:
+            raise InstanceStatePreflightError("durable quiescence proof is required")
+        if legacy_owner_inventory_path is None:
+            raise InstanceStatePreflightError("complete drained legacy-owner inventory is required")
+        expected_lease_path = _deployment_lease_path(self.ledger.root).resolve(strict=False)
+        proof_lease_path = (
+            None
+            if quiescence_proof.lease_path is None
+            else Path(quiescence_proof.lease_path).expanduser().resolve(strict=False)
+        )
+        inventory_path = Path(legacy_owner_inventory_path).expanduser().resolve(strict=False)
+        ownership_root = self.ledger.root.expanduser().resolve(strict=False)
+
+        def require_rotation_authority(
+            current: LedgerSnapshot, live_roots: Mapping[str, Path]
+        ) -> None:
+            if proof_lease_path != expected_lease_path or inventory_path.parent != ownership_root:
+                raise InstanceStatePreflightError(
+                    "key rotation authority is not bound to this host-global ownership root"
+                )
+            quiescence_proof.require_valid(channel_id=self.layout.channel_id)
+            try:
+                lease_metadata = expected_lease_path.lstat()
+                lease = json.loads(expected_lease_path.read_text(encoding="utf-8"))
+                if (
+                    not stat.S_ISREG(lease_metadata.st_mode)
+                    or lease_metadata.st_uid != os.geteuid()
+                    or lease_metadata.st_mode & 0o777 != 0o600
+                    or lease.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
+                    or lease.get("channel_id") != self.layout.channel_id
+                    or lease.get("nonce") != quiescence_proof.nonce
+                    or lease.get("phase") != "proved"
+                    or lease.get("inventory_digest") != quiescence_proof.inventory_digest
+                    or lease.get("all_consumers_stopped") is not True
+                ):
+                    raise ValueError
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise InstanceStatePreflightError(
+                    "durable quiescence proof is required for key rotation"
+                ) from exc
+            fence = _read_deployment_fence(ownership_root, self.layout.channel_id)
+            if (
+                fence.get("deployment_nonce") != quiescence_proof.nonce
+                or fence.get("controller") != lease.get("controller")
+            ):
+                raise InstanceStatePreflightError(
+                    "key rotation quiescence proof does not match the active restart fence"
+                )
+            owners = _load_legacy_owner_inventory(
+                inventory_path,
+                registry=self.registry.load(),
+                channel=self.layout.channel_id,
+            )
+            represented = {(owner.channel_id, owner.vault_binding_id) for owner in owners}
+            live = {(lease.channel_id, binding_id) for binding_id, lease in current.leases.items()}
+            owner_by_binding = {owner.vault_binding_id: owner for owner in owners}
+            if (
+                represented != live
+                or any(
+                    not same_filesystem_root(
+                        resolve_filesystem_root_identity(owner_by_binding[binding_id].root),
+                        resolve_filesystem_root_identity(live_root),
+                    )
+                    for binding_id, live_root in live_roots.items()
+                )
+            ):
+                raise InstanceStatePreflightError(
+                    "complete drained legacy-owner inventory does not match live ownership"
+                )
+
+        return self.ledger.rotate_key(
+            precondition=require_rotation_authority,
+            crash_after=crash_after,
+        )
 
     def require_initialized(self, vault_binding_id: str) -> VaultRegistration:
         registration = self.registry.lookup(vault_binding_id)

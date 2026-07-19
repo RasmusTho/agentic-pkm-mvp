@@ -12,7 +12,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 from uuid import uuid4
 
 from app.instance.filesystem_identity import resolve_filesystem_root_identity
@@ -359,10 +359,20 @@ class OwnershipLedger:
             self._write_ledger_locked(staged, key)
             return staged
 
-    def rotate_key(self, *, crash_after: str | None = None) -> LedgerSnapshot:
+    def rotate_key(
+        self,
+        *,
+        precondition: Callable[[LedgerSnapshot, Mapping[str, Path]], None],
+        crash_after: str | None = None,
+    ) -> LedgerSnapshot:
         with self._locked():
             old_key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(old_key)
+            live_roots = {
+                binding: Path(self._open_root(lease.sealed_root, old_key))
+                for binding, lease in current.leases.items()
+            }
+            precondition(current, live_roots)
             new_key = _KeyMaterial(
                 key_id=f"key-{uuid4()}",
                 generation=old_key.generation + 1,
