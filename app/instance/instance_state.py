@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import stat
@@ -19,7 +20,7 @@ _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v2"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
-_FINAL_EXPORT_SEAL = object()
+_FINAL_EXPORT_SEAL = os.urandom(32)
 
 
 class InstanceStatePreflightError(RuntimeError):
@@ -81,6 +82,7 @@ class DeploymentQuiescenceProof:
         channel_id: str,
         host_global_root: Path,
         owner_receipt_path: Path | None,
+        legacy_path: Path | None = None,
     ) -> None:
         """Authenticate the complete host-global deployment authority in place."""
 
@@ -98,6 +100,11 @@ class DeploymentQuiescenceProof:
             None
             if owner_receipt_path is None
             else Path(owner_receipt_path).expanduser().resolve(strict=False)
+        )
+        expected_legacy_path = (
+            None
+            if legacy_path is None
+            else Path(legacy_path).expanduser().resolve(strict=False)
         )
         try:
             root_metadata = root.lstat()
@@ -159,6 +166,13 @@ class DeploymentQuiescenceProof:
                 or fence.get("channel_id") != channel_id
                 or fence.get("deployment_nonce") != self.nonce
                 or fence.get("controller") != controller
+                or (
+                    expected_legacy_path is not None
+                    and Path(str(fence.get("legacy_path") or ""))
+                    .expanduser()
+                    .resolve(strict=False)
+                    != expected_legacy_path
+                )
                 or hashlib.sha256(inventory_bytes).hexdigest() != self.inventory_digest
                 or inventory.get("schema") != _QUIESCENCE_INVENTORY_SCHEMA
                 or inventory.get("inventory_complete") is not True
@@ -238,7 +252,7 @@ class _FinalLegacyExport:
     source_path: Path
     payload: bytes
     fingerprint: str
-    _seal: object
+    _authority: bytes
 
 
 class LegacyRegistryFinalExport:
@@ -260,17 +274,26 @@ class LegacyRegistryFinalExport:
     ) -> _FinalLegacyExport:
         if quiescence_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
+        source_path = Path(legacy_path).expanduser().resolve(strict=False)
         quiescence_proof.require_canonical_authority(
             channel_id=self.layout.channel_id,
             host_global_root=host_global_root,
             owner_receipt_path=owner_receipt_path,
+            legacy_path=source_path,
         )
-        captured = self._capture(legacy_path)
+        captured = self._capture(source_path)
+        authority = self._authority_digest(
+            source_path=captured.source_path,
+            payload_digest=captured.fingerprint,
+            quiescence_proof=quiescence_proof,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
         return _FinalLegacyExport(
             captured.source_path,
             captured.payload,
             captured.fingerprint,
-            _FINAL_EXPORT_SEAL,
+            authority,
         )
 
     def import_final_export(
@@ -301,6 +324,14 @@ class LegacyRegistryFinalExport:
             host_global_root=host_global_root,
             owner_receipt_path=owner_receipt_path,
         )
+        self._require_final_authority(
+            export,
+            quiescence_proof=quiescence_proof,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
+        if self._capture(export.source_path).fingerprint != export.fingerprint:
+            raise InstanceStatePreflightError("legacy registry changed after final export")
         _atomic_private_write(self.layout.registry_path, export.payload)
         return VaultRegistryStore(self.layout.registry_path).load_or_migrate()
 
@@ -342,15 +373,76 @@ class LegacyRegistryFinalExport:
     ) -> None:
         if (
             not isinstance(export, _FinalLegacyExport)
-            or export._seal is not _FINAL_EXPORT_SEAL
+            or not isinstance(export._authority, bytes)
             or quiescence_proof is None
             or host_global_root is None
         ):
             raise InstanceStatePreflightError("final export authority is required")
+        source_path = Path(export.source_path).expanduser().resolve(strict=False)
+        payload_digest = hashlib.sha256(export.payload).hexdigest()
+        if (
+            export.source_path != source_path
+            or export.fingerprint != payload_digest
+        ):
+            raise InstanceStatePreflightError("final export binding is invalid")
         quiescence_proof.require_canonical_authority(
             channel_id=self.layout.channel_id,
             host_global_root=host_global_root,
             owner_receipt_path=owner_receipt_path,
+            legacy_path=source_path,
+        )
+        expected_authority = self._authority_digest(
+            source_path=source_path,
+            payload_digest=payload_digest,
+            quiescence_proof=quiescence_proof,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
+        if not hmac.compare_digest(export._authority, expected_authority):
+            raise InstanceStatePreflightError("final export binding is invalid")
+
+    def _authority_digest(
+        self,
+        *,
+        source_path: Path,
+        payload_digest: str,
+        quiescence_proof: DeploymentQuiescenceProof,
+        host_global_root: Path,
+        owner_receipt_path: Path | None,
+    ) -> bytes:
+        evidence = {
+            "channel_id": self.layout.channel_id,
+            "controller_pid": quiescence_proof.controller_pid,
+            "controller_start_token": quiescence_proof.controller_start_token,
+            "host_global_root": str(
+                Path(host_global_root).expanduser().resolve(strict=False)
+            ),
+            "inventory_digest": quiescence_proof.inventory_digest,
+            "lease_path": (
+                None
+                if quiescence_proof.lease_path is None
+                else str(
+                    Path(quiescence_proof.lease_path)
+                    .expanduser()
+                    .resolve(strict=False)
+                )
+            ),
+            "nonce": quiescence_proof.nonce,
+            "owner_receipt_digest": quiescence_proof.owner_receipt_digest,
+            "owner_receipt_path": (
+                None
+                if owner_receipt_path is None
+                else str(
+                    Path(owner_receipt_path).expanduser().resolve(strict=False)
+                )
+            ),
+            "payload_digest": payload_digest,
+            "source_path": str(source_path),
+        }
+        return hmac.digest(
+            _FINAL_EXPORT_SEAL,
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+            "sha256",
         )
 
     def _capture(self, legacy_path: Path) -> LegacyExport:

@@ -509,6 +509,95 @@ def test_final_import_rejects_copied_quiescence_authority_without_mutation(
     } == before
 
 
+@pytest.mark.parametrize("operation", ["import", "preserve"])
+def test_final_import_rejects_rewritten_final_export_without_mutation(
+    tmp_path, operation: str
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod")
+    layout.ensure()
+    registry = VaultRegistryStore(layout.registry_path)
+    registry.load()
+    host_global_root = tmp_path / "host-global"
+    ledger = InstanceRegistryRuntime.for_paths(
+        layout,
+        host_global_root,
+    ).ledger
+    ledger.load()
+    legacy = AppLocalSettingsStore(tmp_path / "legacy" / "app-local.md")
+    legacy.upsert_known_vault(KnownVaultRef("path:one", str(tmp_path / "one")))
+    replacement = AppLocalSettingsStore(tmp_path / "replacement" / "app-local.md")
+    replacement.upsert_known_vault(
+        KnownVaultRef("path:forged", str(tmp_path / "forged"))
+    )
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=host_global_root,
+        legacy_path=legacy.path,
+        owners=[],
+    )
+    exporter = LegacyRegistryFinalExport(layout)
+    with pytest.raises(InstanceStatePreflightError, match="canonical quiescence authority"):
+        exporter.export_final_after_stop(
+            replacement.path,
+            quiescence_proof=proof,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt,
+        )
+    final_export = exporter.export_final_after_stop(
+        legacy.path,
+        quiescence_proof=proof,
+        host_global_root=host_global_root,
+        owner_receipt_path=owner_receipt,
+    )
+    replacement_payload = replacement.path.read_bytes()
+    rewritten = replace(
+        final_export,
+        source_path=replacement.path.resolve(),
+        payload=replacement_payload,
+        fingerprint=hashlib.sha256(replacement_payload).hexdigest(),
+    )
+    payload_rewritten = replace(
+        final_export,
+        payload=replacement_payload,
+        fingerprint=hashlib.sha256(replacement_payload).hexdigest(),
+    )
+    revision_before = registry.load().revision
+    generation_before = ledger.load().generation
+    scalar_before = legacy.path.read_bytes()
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    for candidate, diagnostic in (
+        (rewritten, "canonical quiescence authority"),
+        (payload_rewritten, "final export binding"),
+    ):
+        mutation = (
+            exporter.import_final_export
+            if operation == "import"
+            else exporter.preserve_final_export
+        )
+        with pytest.raises(InstanceStatePreflightError, match=diagnostic):
+            mutation(
+                candidate,
+                quiescence_proof=proof,
+                host_global_root=host_global_root,
+                owner_receipt_path=owner_receipt,
+            )
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+    assert registry.load().revision == revision_before
+    assert ledger.load().generation == generation_before
+    assert legacy.path.read_bytes() == scalar_before
+    assert not ledger.rotation_path.exists()
+
+
 def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
     tmp_path,
 ) -> None:
