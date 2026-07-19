@@ -16,11 +16,13 @@ Design (from the spec):
   (``WritesBlockedError``); the governance action never silently proceeds DB-only (C-8).
 - Receipt-before-ack (C-5/P-5): the durable log append is the commit point;
   ``insert_decision`` writes the log *first*, then the DB projection.
-- ``vault_uuid`` resolution: best-effort at write time. ``decisions.object_id`` is the
-  canonical ``store_objects.object_id``. Retained rows may still carry an older continuity UUID
-  in ``objects.uuid``. Fresh canonical-only rows have no proven frontmatter continuity identity,
-  so they use ``vault_uuid: null``; the same honest null is used when no row resolves or the
-  durable lookup is unavailable. Historical receipts that already contain the former canonical-id
+- ``vault_uuid`` resolution: best-effort for absence, fail-loud for ambiguity.
+  ``decisions.object_id`` is the canonical ``store_objects.object_id``. Retained rows may
+  still carry an older continuity UUID in ``objects.uuid``. Fresh canonical-only rows have
+  no proven frontmatter continuity identity, so they use ``vault_uuid: null``; the same
+  honest null is used when no row resolves or the durable lookup is unavailable. An
+  ambiguous retained mapping raises instead of recording null or arbitrary lineage.
+  Historical receipts that already contain the former canonical-id
   fallback remain replay-compatible,
   never invented. Carrying it lets the projection rebuild re-link a decision whose
   ``object_id`` was re-minted (§5 decoupling payoff, Slice 2).
@@ -103,12 +105,17 @@ def decisions_receipts_dir(vault_root: Path | None = None) -> Path:
 
 
 def resolve_vault_uuid(object_id: str) -> str | None:
-    """Best-effort resolve the vault frontmatter uuid for a runtime ``object_id``.
+    """Resolve the vault frontmatter uuid for a runtime ``object_id``.
 
     ``decisions.object_id`` references ``store_objects.object_id``. Return the retained
     ``objects.uuid`` continuity mapping when present. Fresh canonical-only rows have no
     proven frontmatter UUID, so return ``None`` rather than inventing one; ``None`` is also
-    returned when no matching object row exists or the durable lookup is unavailable.
+    returned when no matching object row exists or the durable lookup is unavailable
+    (transport-level ``psycopg.Error``). An ambiguous retained mapping — duplicate
+    ``objects.uuid`` rows or a cross-key alias — raises ``RuntimeError`` from the shared
+    identity seam instead of guessing: a receipt recorded with silently wrong lineage
+    would corrupt the projection-rebuild contract, so the write fails loud on exactly
+    the states the #3510 migration and runtime resolver also refuse.
     """
     try:
         with conn_rw() as conn:

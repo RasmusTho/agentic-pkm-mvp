@@ -330,3 +330,42 @@ def test_receipts_are_dated_shards_and_append_only(
     ]
     assert all_records[0]["vault_uuid"] == "uuid-1"
     assert all_records[2]["vault_uuid"] == "uuid-2"
+
+
+def test_resolve_vault_uuid_transport_error_returns_none(monkeypatch) -> None:
+    """Transport-level psycopg errors stay best-effort (honest null lineage)."""
+    import psycopg as _psycopg
+
+    from app.receipts import decision_receipt_log as receipt_log
+
+    class _BrokenConn:
+        def __enter__(self):
+            raise _psycopg.OperationalError("db unavailable")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(receipt_log, "conn_rw", lambda: _BrokenConn())
+    assert receipt_log.resolve_vault_uuid("00000000-0000-0000-0000-000000000000") is None
+
+
+def test_resolve_vault_uuid_ambiguous_identity_fails_loud(monkeypatch) -> None:
+    """Ambiguous retained identity must abort the write, never record wrong lineage."""
+    import pytest as _pytest
+
+    from app.receipts import decision_receipt_log as receipt_log
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _ambiguous(conn, object_id):
+        raise RuntimeError("ambiguous retained identity mapping for test")
+
+    monkeypatch.setattr(receipt_log, "conn_rw", lambda: _Conn())
+    monkeypatch.setattr(receipt_log, "retained_vault_uuid_with_connection", _ambiguous)
+    with _pytest.raises(RuntimeError, match="ambiguous retained identity"):
+        receipt_log.resolve_vault_uuid("00000000-0000-0000-0000-000000000000")

@@ -555,3 +555,33 @@ def test_channel_lock_is_acquired_before_mutable_state_snapshot() -> None:
     snapshot = text.index('current_sha="$(read_pin')
 
     assert lock_call < snapshot
+
+
+def test_incomplete_pending_marker_blocks_retry_with_exit_88(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    marker = root / "config/deploy/dev.migration-pending.env"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("FROM_SHA=\nACK_FORWARD_ONLY=0\n", encoding="utf-8")
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 88
+    assert "pending migration marker is incomplete" in result.stderr
+    assert marker.exists(), "an incomplete marker must be preserved for operator inspection"
+
+
+def test_pending_target_mismatch_blocks_different_deploy_with_exit_88(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    pending_target = "6" * 40
+    marker = root / "config/deploy/dev.migration-pending.env"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        f"FROM_SHA=__NO_BASELINE__\nTARGET_SHA={pending_target}\nACK_FORWARD_ONLY=0\n",
+        encoding="utf-8",
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 88
+    assert f"pending target {pending_target} must be reconciled" in result.stderr
+    assert marker.exists(), "a mismatched marker must survive until reconciled"
