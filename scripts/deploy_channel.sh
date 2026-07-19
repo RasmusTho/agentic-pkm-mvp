@@ -367,9 +367,9 @@ rollback_failed_startup() {
     fi
     return 0
   fi
-  rm -f "${migration_pending_file}"
-  echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
   if [ -n "${current_sha}" ]; then
+    rm -f "${migration_pending_file}"
+    echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
     if ! write_pin "${pin_file}" "${current_sha}"; then
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
       return 0
@@ -378,7 +378,7 @@ rollback_failed_startup() {
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
   else
-    echo "rollback unavailable: no previous pin was recorded" >&2
+    echo "${reason} (status ${original_status}); rollback unavailable because no previous pin was recorded; retaining the no-baseline migration marker for same-target retry" >&2
   fi
 }
 

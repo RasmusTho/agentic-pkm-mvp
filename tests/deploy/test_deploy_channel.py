@@ -756,6 +756,39 @@ def test_first_deploy_retry_replays_full_target_migration_inventory(tmp_path: Pa
     assert len(migrate_events) == 2
 
 
+def test_first_deploy_pull_failure_preserves_no_baseline_retry_epoch(tmp_path: Path) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    migration = root / "app/alembic/versions/first_deploy_pull_retry.py"
+    migration.write_text(
+        'revision = "first_deploy_pull_retry"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add first-deploy pull retry"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = "pull api worker"
+
+    first = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert first.returncode == 24
+    pending = root / "config/deploy/dev.migration-pending.env"
+    assert "FROM_SHA=__NO_BASELINE__" in pending.read_text(encoding="utf-8")
+    pin_path = root / "config/deploy/dev.env"
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+
+    env.pop("FAKE_DOCKER_FAIL_MATCH")
+    second = _run_deploy(root, env, target_sha)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating <no-baseline>" in second.stdout
+    assert not pending.exists()
+    migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
+    assert len(migrate_events) == 1
+
+
 def test_applied_reversible_migration_retains_target_for_governed_reversal(
     tmp_path: Path,
 ) -> None:
