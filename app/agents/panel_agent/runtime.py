@@ -662,10 +662,27 @@ def _refresh_companion_hash(
         from app.services.companion_note import read_companion, write_companion
         from scripts.yaml_roundtrip import load_frontmatter
 
-        companion = read_companion(vault_root, note_uuid)
+        frontmatter, body = load_frontmatter(updated_text)
+        # Companions are keyed by the vault-native frontmatter uuid. After the
+        # #3510 cutover the panel chain carries the canonical store id, which for
+        # retained legacy rows differs from the vault uuid, so resolve the
+        # companion from the note's own frontmatter first and only fall back to
+        # the caller-supplied id.
+        vault_uuid = ""
+        if isinstance(frontmatter, dict):
+            raw = frontmatter.get("uuid") or frontmatter.get("id") or ""
+            vault_uuid = str(raw).strip()
+            if vault_uuid.startswith("[[") and vault_uuid.endswith("]]"):
+                vault_uuid = vault_uuid[2:-2].strip()
+        companion = None
+        for candidate in dict.fromkeys([vault_uuid, note_uuid]):
+            if not candidate:
+                continue
+            companion = read_companion(vault_root, candidate)
+            if companion is not None:
+                break
         if companion is None:
             return
-        _, body = load_frontmatter(updated_text)
         # Canonicalize the same way ingest does (KERNEL-06, #2768 fix): strip both
         # the `%% AI:Start/End %%` fence and the `> [!info]- AI status` receipt
         # callout before hashing, so this post-writeback refresh converges on the
