@@ -89,7 +89,8 @@ Issue #3510 completes the deferred parent-row cutover: Alembic revision `7e4f2a1
 and moves supported legacy `objects(id)` foreign keys to canonical `store_objects(object_id)`.
 `PgObjects.upsert` therefore delegates only to `PgObjectStore` and no longer fabricates an empty
 legacy `objects` row. The migration is forward-only and fails loud on unknown FK consumers or
-orphaned ids, with reconciliation guidance in `docs/DB_SCHEMA.md :: Explicit Deltas / Known Gaps`.
+orphaned ids, with reconciliation guidance in
+`docs/DB_SCHEMA.md :: #3510 legacy-FK cutover (current reality)`.
 The retained filesystem-watcher compatibility lane still mirrors complete note state into
 `objects`; its `FilesystemVaultAdapter` producer resolves a retained `objects.uuid` to `objects.id`
 before writing the canonical `store_objects` parent through the single store writer on the same

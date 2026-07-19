@@ -716,3 +716,79 @@ def test_runtime_bootstrap_preserves_objects_primary_key_after_cutover(scratch_d
         ).fetchone()
 
     assert after == before
+
+
+def test_migration_retargets_every_reviewed_consumer_with_live_rows(scratch_dsn: str) -> None:
+    """Seed a row through every reviewed objects(id) FK consumer, then cut over.
+
+    Covers the structural cases the generic retarget loop must handle beyond the
+    decisions-only seeds used elsewhere: two FK columns on one table
+    (relations.src_id/dst_id), the composite-membership shape, and the CASCADE
+    vs SET NULL delete-rule preservation across all eight reviewed pairs.
+    """
+    _upgrade(PRE_CUTOVER_REVISION)
+    object_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    set_id = uuid.uuid4()
+    chunk_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
+            (object_id,),
+        )
+        conn.execute(
+            "INSERT INTO objects (id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
+            (other_id,),
+        )
+        conn.execute("INSERT INTO sets (id, name) VALUES (%s, 'inventory-set')", (set_id,))
+        conn.execute(
+            "INSERT INTO chunks (id, object_id, idx, offset_start, offset_end, text) "
+            "VALUES (%s, %s, 0, 0, 1, 'x')",
+            (chunk_id, object_id),
+        )
+        conn.execute(
+            "INSERT INTO embeddings (id, object_id, chunk_id, dim) VALUES (%s, %s, %s, 3)",
+            (uuid.uuid4(), object_id, chunk_id),
+        )
+        conn.execute(
+            "INSERT INTO relations (id, src_id, dst_id, type) VALUES (%s, %s, %s, 'refs')",
+            (uuid.uuid4(), object_id, other_id),
+        )
+        conn.execute(
+            "INSERT INTO membership (id, set_id, object_id) VALUES (%s, %s, %s)",
+            (uuid.uuid4(), set_id, object_id),
+        )
+        conn.execute(
+            "INSERT INTO decisions (object_id, key, value) VALUES (%s, 'review', '{}'::jsonb)",
+            (object_id,),
+        )
+        conn.execute(
+            "INSERT INTO audit (id, object_id, agent, action) VALUES (%s, %s, 'test', 'seed')",
+            (uuid.uuid4(), object_id),
+        )
+
+    _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        rows = conn.execute(
+            "SELECT conrelid::regclass::text, a.attname, confrelid::regclass::text, c.confdeltype "
+            "FROM pg_constraint c "
+            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] "
+            "WHERE c.contype = 'f' "
+            "  AND c.confrelid IN ('public.store_objects'::regclass, 'public.objects'::regclass) "
+            "ORDER BY 1, 2"
+        ).fetchall()
+        counts = {
+            table: conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            for table in ("chunks", "embeddings", "relations", "membership", "decisions", "audit")
+        }
+    retargeted = {(table, column): (target, rule) for table, column, target, rule in rows}
+    assert retargeted[("chunks", "object_id")] == ("store_objects", "c")
+    assert retargeted[("embeddings", "object_id")] == ("store_objects", "c")
+    assert retargeted[("relations", "src_id")] == ("store_objects", "c")
+    assert retargeted[("relations", "dst_id")] == ("store_objects", "c")
+    assert retargeted[("membership", "object_id")] == ("store_objects", "c")
+    assert retargeted[("decisions", "object_id")] == ("store_objects", "n")
+    assert retargeted[("audit", "object_id")] == ("store_objects", "n")
+    assert not any(target == "objects" for target, _ in retargeted.values())
+    assert all(count == 1 for count in counts.values())
