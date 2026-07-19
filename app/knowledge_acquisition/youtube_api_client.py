@@ -591,6 +591,11 @@ class YouTubeApiClient:
                 self._quota.mark_exhausted(quota_date)
             return error
 
+        def response_failure(reason_code: str, detail: str) -> YouTubeApiError:
+            if status >= 400:
+                return status_error(_decode_error_object(raw))
+            return YouTubeApiError(reason_code, status, detail)
+
         try:
             if status == 304 and allow_not_modified:
                 not_modified = NotModified(response_etag or etag)
@@ -649,14 +654,20 @@ class YouTubeApiClient:
         finally:
             try:
                 response.close()
+            except httpx.TimeoutException:
+                if pending_error is None:
+                    pending_error = response_failure(
+                        "api_unavailable", "Data API response close timed out"
+                    )
+            except httpx.TransportError:
+                if pending_error is None:
+                    pending_error = response_failure(
+                        "network_error", "Data API response close transport failed"
+                    )
             except httpx.StreamError:
                 if pending_error is None:
-                    pending_error = (
-                        status_error(_decode_error_object(raw))
-                        if status >= 400
-                        else YouTubeApiError(
-                            "api_unavailable", status, "Data API response stream failed"
-                        )
+                    pending_error = response_failure(
+                        "api_unavailable", "Data API response stream failed"
                     )
 
         if pending_error is not None:

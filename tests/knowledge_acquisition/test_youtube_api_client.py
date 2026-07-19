@@ -492,6 +492,87 @@ def test_actual_stream_error_on_success_status_is_safely_normalized(
     _assert_exception_graph_secret_free(error, sentinel)
 
 
+@pytest.mark.parametrize(
+    ("status", "allow_not_modified", "body", "headers", "fail_on_close", "status_reason"),
+    (
+        (304, True, b"", {"ETag": "etag-v2"}, 1, None),
+        (
+            302,
+            False,
+            b"",
+            {"Location": "https://www.googleapis.com/youtube/v3/channels"},
+            1,
+            "api_unavailable",
+        ),
+        (200, False, b'{"items": []}', {}, 2, None),
+        (401, False, b'{"error": {}}', {}, 2, "auth_expired"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("failure_type", "close_reason"),
+    ((httpx.CloseError, "network_error"), (httpx.ReadTimeout, "api_unavailable")),
+)
+def test_explicit_response_close_failure_is_safely_normalized(
+    status: int,
+    allow_not_modified: bool,
+    body: bytes,
+    headers: dict[str, str],
+    fail_on_close: int,
+    status_reason: str | None,
+    failure_type: type[httpx.RequestError],
+    close_reason: str,
+) -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    sentinel = f"SENTINEL-explicit-close-{failure_type.__name__}-must-never-leak"
+    response_holder: list[httpx.Response] = []
+    stream_holder: list[httpx.SyncByteStream] = []
+
+    class _TrackedBodyStream(httpx.SyncByteStream):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            yield body
+
+    class _ExplicitCloseFailureResponse(httpx.Response):
+        close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == fail_on_close:
+                raise failure_type(sentinel, request=self.request)
+            super().close()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stream = _TrackedBodyStream()
+        response = _ExplicitCloseFailureResponse(
+            status,
+            request=request,
+            headers=headers,
+            stream=stream,
+        )
+        stream_holder.append(stream)
+        response_holder.append(response)
+        return response
+
+    client = _client(_Api(handler))
+    with pytest.raises(YouTubeApiError) as captured:
+        if allow_not_modified:
+            client.list_playlist_items("PL__test__playlist", etag="etag-v1")
+        else:
+            client.get_my_channel()
+
+    error = captured.value
+    assert error.reason_code == (status_reason or close_reason)
+    assert error.status == status
+    assert response_holder[0].close_calls == fail_on_close
+    assert stream_holder[0].iterations == (0 if status in {302, 304} else 1)
+    assert sentinel not in error.detail
+    assert sentinel not in "".join(traceback.format_exception(error))
+    _assert_exception_graph_secret_free(error, sentinel)
+
+
 @pytest.mark.parametrize("resource", ("playlists", "playlist_items"))
 def test_provider_controlled_shape_value_is_absent_from_exception_chain(
     resource: str,
