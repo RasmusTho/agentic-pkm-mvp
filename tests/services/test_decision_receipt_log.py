@@ -23,6 +23,7 @@ import pytest
 
 import app.receipts.decision_receipt_log as receipt_log
 import app.services.decisions as decisions_module
+from app.objects.identity import retained_vault_uuid_with_connection
 from app.receipts.decision_receipt_log import (
     RECEIPT_WRITE_ACTION,
     SCHEMA_VERSION,
@@ -162,6 +163,16 @@ def test_resolve_vault_uuid_never_invents_canonical_id(monkeypatch: pytest.Monke
     monkeypatch.setattr(receipt_log, "conn_rw", lambda: conn)
 
     assert receipt_log.resolve_vault_uuid("canonical-id") is None
+
+
+def test_reverse_identity_query_checks_alias_without_retained_row() -> None:
+    """The canonical-key direction checks whether another row retains that key."""
+    conn = MagicMock()
+    cur = conn.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value = (None, 0, False, False)
+
+    assert retained_vault_uuid_with_connection(conn, "canonical-id") is None
+    assert "requested_alias_exists" in cur.execute.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
