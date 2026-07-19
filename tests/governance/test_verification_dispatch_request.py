@@ -30,7 +30,7 @@ def _event(
         "workflow_run": {
             "id": 987654,
             "run_attempt": 2,
-            "name": "CI",
+            "name": "CI Smoke",
             "event": event_name,
             "conclusion": conclusion,
             "head_sha": head_sha,
@@ -75,7 +75,7 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
     assert "head_ref" not in first
     assert first["current_head_sha"] == HEAD_SHA
     assert first["source_workflow"] == {
-        "name": "CI",
+        "name": "CI Smoke",
         "run_id": 987654,
         "run_attempt": 2,
         "head_sha": HEAD_SHA,

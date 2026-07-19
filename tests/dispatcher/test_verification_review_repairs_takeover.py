@@ -309,8 +309,8 @@ def _gh_source(
     source = {
         "id": 99,
         "run_attempt": 1,
-        "name": "CI",
-        "path": ".github/workflows/ci.yml",
+        "name": "CI Smoke",
+        "path": ".github/workflows/ci-smoke.yaml",
         "event": "pull_request",
         "status": "completed",
         "conclusion": "success",

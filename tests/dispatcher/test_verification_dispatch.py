@@ -170,6 +170,16 @@ def test_shared_request_fixture_carries_governing_issue() -> None:
     assert payload["supporting_issues"] == []
 
 
+def test_verification_request_rejects_non_ci_smoke_source_identity(tmp_path) -> None:
+    payload = request()
+    source_workflow = dict(payload["source_workflow"])
+    source_workflow["name"] = "CI"
+    payload["source_workflow"] = source_workflow
+
+    with pytest.raises(ValueError, match="malformed verification source identity"):
+        ledger(tmp_path).ingest(payload)
+
+
 @pytest.mark.parametrize(
     ("path", "field"),
     [

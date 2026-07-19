@@ -18,7 +18,7 @@ from app.dispatcher.verification_contract import (
 
 CONTRACT_VERSION = "verification_dispatch_request.v2"
 STAGE = "verification"
-SOURCE_WORKFLOW = "CI"
+SOURCE_WORKFLOW = "CI Smoke"
 EVIDENCE_WORKFLOW = "PR Evidence Pack"
 
 

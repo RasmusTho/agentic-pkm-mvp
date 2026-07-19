@@ -2,7 +2,7 @@ name: Verification Dispatch Request
 
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [CI Smoke]
     types: [completed]
 
 permissions:

@@ -1774,7 +1774,7 @@ def _required_check_authority(
         "workflow_run": {
             "id": 1000 + suite_id,
             "workflow_id": 198962230,
-            "path": ".github/workflows/ci.yml",
+            "path": ".github/workflows/ci-smoke.yaml",
             "event": "pull_request",
             "head_sha": head_sha,
             "check_suite_id": suite_id,
@@ -1879,8 +1879,8 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
                     {
                         "id": 99,
                         "run_attempt": 1,
-                        "name": "CI",
-                        "path": ".github/workflows/ci.yml",
+                        "name": "CI Smoke",
+                        "path": ".github/workflows/ci-smoke.yaml",
                         "event": "pull_request",
                         "status": "completed",
                         "conclusion": "success",
@@ -1925,7 +1925,7 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
             "app": {"slug": "github-actions"},
             "check_suite": {"id": 88},
             "workflow_run": {
-                "path": ".github/workflows/ci.yml",
+                "path": ".github/workflows/ci-smoke.yaml",
                 "check_suite_id": 88,
             },
             "status": "completed",
@@ -1949,7 +1949,7 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
                             {
                                 "id": 123,
                                 "workflow_id": 198962230,
-                                "path": ".github/workflows/ci.yml",
+                                "path": ".github/workflows/ci-smoke.yaml",
                                 "event": "pull_request",
                                 "head_sha": HEAD,
                                 "check_suite_id": 77,
@@ -1968,7 +1968,7 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
     assert checks[0]["workflow_run"] == {
         "id": 123,
         "workflow_id": 198962230,
-        "path": ".github/workflows/ci.yml",
+        "path": ".github/workflows/ci-smoke.yaml",
         "event": "pull_request",
         "head_sha": HEAD,
         "check_suite_id": 77,
@@ -3080,8 +3080,8 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
                     {
                         "id": 99,
                         "run_attempt": 1,
-                        "name": "CI",
-                        "path": ".github/workflows/ci.yml",
+                        "name": "CI Smoke",
+                        "path": ".github/workflows/ci-smoke.yaml",
                         "event": "pull_request",
                         "status": "completed",
                         "conclusion": "success",

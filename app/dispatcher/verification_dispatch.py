@@ -466,7 +466,7 @@ def _validate_request(
     source_run_id = _required_positive_int(source, "run_id")
     _required_positive_int(source, "run_attempt")
     source_head_sha = _required_string(source, "head_sha")
-    if source_name != "CI" or source_head_sha != head_sha:
+    if source_name != "CI Smoke" or source_head_sha != head_sha:
         raise ValueError("malformed verification source identity")
     artifact_provenance = _required_mapping(request, "artifact_provenance")
     _required_positive_int(artifact_provenance, "workflow_run_id")
