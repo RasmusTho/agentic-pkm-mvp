@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -580,10 +582,129 @@ def test_disconnect_and_reconnect_are_serialized_across_service_instances(
     assert disconnect_binder.status(binding_id)["status"] == "connected"
     lock_root = store.path.parent / f".{store.path.name}.locks"
     lock_files = tuple(lock_root.iterdir())
-    assert len(lock_files) == 1
-    assert binding_id not in lock_files[0].name
-    assert all(secret not in str(lock_files[0]) for secret in _ALL_SENTINELS)
-    assert lock_files[0].read_bytes() == b""
+    assert len(lock_files) >= 2
+    assert all(binding_id not in path.name for path in lock_files)
+    assert all(secret not in str(path) for path in lock_files for secret in _ALL_SENTINELS)
+    assert all(path.read_bytes() == b"\0" for path in lock_files)
+
+
+def test_distinct_binding_writes_serialize_across_store_instances(store, monkeypatch):
+    second = tokstore.YouTubeTokenStore(path=store.path)
+    first_inside_write = threading.Event()
+    release_first = threading.Event()
+    original_write = store._write_file
+
+    def paused_write(data):
+        first_inside_write.set()
+        assert release_first.wait(timeout=2)
+        original_write(data)
+
+    monkeypatch.setattr(store, "_write_file", paused_write)
+    token = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH,
+        access_token=SENTINEL_ACCESS,
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-01-01T00:00:00+00:00",
+        provider_channel_id=SYNTH_CHANNEL_ID,
+    )
+    first = threading.Thread(target=store.put, args=("binding-a", token))
+    second_done = threading.Event()
+    other = threading.Thread(
+        target=lambda: (second.put("binding-b", token), second_done.set())
+    )
+    first.start()
+    assert first_inside_write.wait(timeout=2)
+    other.start()
+    assert not second_done.wait(timeout=0.2)
+    release_first.set()
+    first.join(timeout=2)
+    other.join(timeout=2)
+    assert set(store.binding_ids()) == {"binding-a", "binding-b"}
+
+
+def test_concurrent_first_connects_re_resolve_identity_under_shared_authority(
+    store, bindings, registry, monkeypatch
+):
+    first_provider = _Provider()
+    second_provider = _Provider()
+    first_binder = _binder(first_provider, store, bindings, registry)
+    second_store = tokstore.YouTubeTokenStore(path=store.path)
+    second_binder = _binder(second_provider, second_store, bindings, registry)
+    first_connection = first_binder.start_device_connection()
+    second_connection = second_binder.start_device_connection()
+    first_inside = threading.Event()
+    release_first = threading.Event()
+    original_commit = first_binder._commit_binding
+
+    def paused_commit(*args, **kwargs):
+        first_inside.set()
+        assert release_first.wait(timeout=2)
+        return original_commit(*args, **kwargs)
+
+    monkeypatch.setattr(first_binder, "_commit_binding", paused_commit)
+    results: list[dict] = []
+    first = threading.Thread(
+        target=lambda: results.append(first_binder.finish_device_connection(first_connection))
+    )
+    second_done = threading.Event()
+
+    def connect_second():
+        results.append(second_binder.finish_device_connection(second_connection))
+        second_done.set()
+
+    second = threading.Thread(target=connect_second)
+    first.start()
+    assert first_inside.wait(timeout=2)
+    second.start()
+    assert not second_done.wait(timeout=0.2)
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+    binding_ids = {result["account"]["binding_id"] for result in results}
+    assert len(binding_ids) == 1
+    binding_id = binding_ids.pop()
+    assert store.has_record(binding_id)
+    assert bindings.get(binding_id).state == "connected"
+
+
+def test_distinct_binding_writes_serialize_across_processes(store, tmp_path):
+    release = tmp_path / "release"
+    script = """
+import os, sys, time
+from app.knowledge_acquisition.youtube_token_store import StoredToken, YouTubeTokenStore
+os.environ['YOUTUBE_TOKEN_STORE_KEY'] = sys.argv[3]
+while not os.path.exists(sys.argv[4]): time.sleep(0.01)
+YouTubeTokenStore(sys.argv[1]).put(sys.argv[2], StoredToken('refresh', 'access', None, ('scope',), '2026-01-01T00:00:00+00:00', 'channel'))
+"""
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(store.path), binding, TEST_STORE_KEY, str(release)],
+            cwd=Path.cwd(),
+        )
+        for binding in ("process-a", "process-b")
+    ]
+    release.touch()
+    for process in processes:
+        assert process.wait(timeout=10) == 0
+    assert set(store.binding_ids()) == {"process-a", "process-b"}
+
+
+def test_portable_lock_uses_windows_backend_when_fcntl_unavailable(store, monkeypatch):
+    calls: list[tuple[int, int]] = []
+
+    class FakeMsvcrt:
+        LK_LOCK = 1
+        LK_UNLCK = 2
+
+        @staticmethod
+        def locking(_descriptor, mode, size):
+            calls.append((mode, size))
+
+    monkeypatch.setattr(tokstore, "_fcntl", None)
+    monkeypatch.setattr(tokstore, "_msvcrt", FakeMsvcrt)
+    assert store.has_record("missing") is False
+    assert calls == [(FakeMsvcrt.LK_LOCK, 1), (FakeMsvcrt.LK_UNLCK, 1)]
 
 
 def test_disconnect_permanent_revoke_error_tears_down_local_state(

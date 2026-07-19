@@ -30,12 +30,15 @@ Boundary (INV-YSS-5 / INV-YSS-7):
   store instances and runtime processes. Lock filenames are SHA-256 digests of
   binding ids, and their private app-local files contain no identifiers or
   credential bytes.
+- Every aggregate token-file read/modify/write also takes one store-wide lock,
+  preventing distinct bindings from losing each other's records. The lock
+  backend is guarded and portable across POSIX ``flock`` and Windows
+  ``msvcrt.locking``; unsupported platforms fail closed.
 """
 
 from __future__ import annotations
 
 import base64
-import fcntl
 import hashlib
 import json
 import os
@@ -47,6 +50,16 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+try:  # POSIX
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - exercised through platform-path tests
+    _fcntl = None  # type: ignore[assignment]
+
+try:  # Windows
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - exercised through platform-path tests
+    _msvcrt = None  # type: ignore[assignment]
 
 KEY_ENV_VAR = "YOUTUBE_TOKEN_STORE_KEY"
 PATH_ENV_VAR = "YOUTUBE_TOKEN_STORE_PATH"
@@ -69,6 +82,35 @@ def _lifecycle_thread_lock(lock_path: Path) -> threading.RLock:
             lock = threading.RLock()
             _LIFECYCLE_THREAD_LOCKS[key] = lock
         return lock
+
+
+@contextmanager
+def _portable_file_lock(lock_path: Path) -> Iterator[None]:
+    """Exclusive portable file lock; fail closed on unsupported platforms."""
+    thread_lock = _lifecycle_thread_lock(lock_path)
+    with thread_lock:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            if _fcntl is not None:
+                _fcntl.flock(descriptor, _fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    _fcntl.flock(descriptor, _fcntl.LOCK_UN)
+            elif _msvcrt is not None:
+                _msvcrt.locking(descriptor, _msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    _msvcrt.locking(descriptor, _msvcrt.LK_UNLCK, 1)
+            else:  # pragma: no cover - defensive unsupported-platform boundary
+                raise RuntimeError("no supported cross-process file locking primitive")
+        finally:
+            os.close(descriptor)
 
 
 class TokenStoreKeyMissingError(RuntimeError):
@@ -210,18 +252,16 @@ class YouTubeTokenStore:
         lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         binding_digest = hashlib.sha256(binding_id.encode("utf-8")).hexdigest()
         lock_path = lock_root / f"{binding_digest}.lock"
-        thread_lock = _lifecycle_thread_lock(lock_path)
+        with _portable_file_lock(lock_path):
+            yield
 
-        with thread_lock:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-            finally:
-                os.close(descriptor)
+    @contextmanager
+    def _aggregate_file_lock(self) -> Iterator[None]:
+        store_path = self._path.resolve(strict=False)
+        lock_root = store_path.parent / f".{store_path.name}.locks"
+        lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with _portable_file_lock(lock_root / "store.lock"):
+            yield
 
     # --- file helpers (no key required) -------------------------------------
 
@@ -243,12 +283,12 @@ class YouTubeTokenStore:
 
     def has_record(self, binding_id: str) -> bool:
         """True if a token record exists for ``binding_id`` (no key required)."""
-        with self._lock:
+        with self._lock, self._aggregate_file_lock():
             return binding_id in self._load_file()["records"]
 
     def binding_ids(self) -> tuple[str, ...]:
         """All binding ids with a token record (no key required)."""
-        with self._lock:
+        with self._lock, self._aggregate_file_lock():
             return tuple(self._load_file()["records"].keys())
 
     def delete(self, binding_id: str) -> bool:
@@ -256,7 +296,7 @@ class YouTubeTokenStore:
 
         No key is required: deletion removes ciphertext, it does not read it.
         """
-        with self._lock:
+        with self._lock, self._aggregate_file_lock():
             data = self._load_file()
             existed = binding_id in data["records"]
             if existed:
@@ -272,7 +312,7 @@ class YouTubeTokenStore:
         plaintext = json.dumps(token._to_plain(), sort_keys=True).encode("utf-8")
         nonce = os.urandom(_NONCE_BYTES)
         ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
-        with self._lock:
+        with self._lock, self._aggregate_file_lock():
             data = self._load_file()
             data["records"][binding_id] = {
                 "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
@@ -288,7 +328,7 @@ class YouTubeTokenStore:
         raises :class:`TokenStoreKeyMissingError` -- there is no plaintext read
         path (fail closed, INV-YSS-4).
         """
-        with self._lock:
+        with self._lock, self._aggregate_file_lock():
             record = self._load_file()["records"].get(binding_id)
         if record is None:
             return None

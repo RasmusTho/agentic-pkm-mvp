@@ -44,7 +44,9 @@ touch the repo, vault, settings values, logs, events, or receipts.
    token before claiming a binding is connected. Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file
-   contains no account identifier or secret. `disconnect()` revokes at
+   contains no account identifier or secret. A portable store-wide lock serializes aggregate-file
+   mutations across distinct bindings on POSIX and Windows, while concurrent first connects
+   re-resolve provider identity under shared authority. `disconnect()` revokes at
    `oauth2.googleapis.com/revoke` before local teardown. Retryable failures (transport, 408, 429,
    or 5xx) preserve the encrypted token and dependent-source state for retry; a permanent 4xx
    rejection completes local teardown with `revoked=false` because the old grant supplies no

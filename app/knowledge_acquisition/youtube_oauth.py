@@ -45,6 +45,7 @@ import os
 import secrets
 import threading
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -681,8 +682,6 @@ class YouTubeAccountBinder:
             # carry one.
             raise OAuthProviderError(status=200, error_code="missing_refresh_token")
         identity = self._identity(bundle.access_token)
-        binding = self._resolve_binding(identity, reconnect_binding_id)
-        binding_id = binding.account_binding_id if binding is not None else str(uuid.uuid4())
         token = StoredToken(
             refresh_token=bundle.refresh_token,
             access_token=bundle.access_token,
@@ -691,48 +690,63 @@ class YouTubeAccountBinder:
             obtained_at=_now_iso(),
             provider_channel_id=identity.channel_id,
         )
-        with self._store.binding_lifecycle_lock(binding_id):
-            if binding is not None:
-                # The binding object was resolved before waiting for the
-                # cross-instance lock. Re-read it inside the critical section
-                # so a completed disconnect cannot leave reconnect acting on
-                # stale ``connected`` state.
-                current_binding = self._bindings.get(binding_id)
-                if current_binding is None:
-                    raise KeyError(f"no such account binding: {binding_id}")
-                binding = current_binding
+        identity_authority = reconnect_binding_id or f"channel:{identity.channel_id}"
+        with self._store.binding_lifecycle_lock(identity_authority):
+            binding = self._resolve_binding(identity, reconnect_binding_id)
+            binding_id = binding.account_binding_id if binding is not None else str(uuid.uuid4())
+            lifecycle = (
+                self._store.binding_lifecycle_lock(binding_id)
+                if binding_id != identity_authority
+                else nullcontext()
+            )
+            with lifecycle:
+                return self._commit_binding(binding, binding_id, identity, token)
+
+    def _commit_binding(
+        self,
+        binding: AccountBinding | None,
+        binding_id: str,
+        identity: ChannelIdentity,
+        token: StoredToken,
+    ) -> dict[str, Any]:
+        if binding is not None:
+            # Re-read inside shared authority so a completed disconnect cannot
+            # leave reconnect acting on stale ``connected`` state.
+            current_binding = self._bindings.get(binding_id)
+            if current_binding is None:
+                raise KeyError(f"no such account binding: {binding_id}")
+            binding = current_binding
             # Persist the encrypted credential before creating a row whose durable
             # state claims the account is connected. A missing/invalid key therefore
             # cannot leave a connected binding without a token record (#3990).
-            self._store.put(binding_id, token)
-            if binding is None:
-                try:
-                    binding = self._bindings.create(
-                        provider_channel_id=identity.channel_id,
-                        display_label=identity.channel_title,
-                        scopes=[SCOPE],
-                        account_binding_id=binding_id,
-                    )
-                except Exception:
-                    # Compensate the private-store write if the non-secret binding
-                    # cannot be committed. No orphan credential should survive a
-                    # failed initial connect.
-                    self._store.delete(binding_id)
-                    raise
-            if binding.state != "connected" or binding.reason_code is not None:
-                binding = self._bindings.set_state(
-                    binding.account_binding_id, state="connected", reason_code=None
+        self._store.put(binding_id, token)
+        if binding is None:
+            try:
+                binding = self._bindings.create(
+                    provider_channel_id=identity.channel_id,
+                    display_label=identity.channel_title,
+                    scopes=[SCOPE],
+                    account_binding_id=binding_id,
                 )
-            _log.info("youtube oauth: account connected (binding %s)", binding.account_binding_id)
-            return redact(
-                {
-                    "status": "connected",
-                    "account": {
-                        "binding_id": binding.account_binding_id,
-                        "channel_title": binding.display_label,
-                    },
-                }
+            except Exception:
+                # Compensate the private-store write if the non-secret binding
+                # cannot be committed. No orphan credential should survive.
+                self._store.delete(binding_id)
+                raise
+        if binding.state != "connected" or binding.reason_code is not None:
+            binding = self._bindings.set_state(
+                binding.account_binding_id, state="connected", reason_code=None
             )
+        _log.info("youtube oauth: account connected (binding %s)", binding.account_binding_id)
+        return redact(
+            {
+                "status": "connected",
+                "account": {
+                    "binding_id": binding.account_binding_id,
+                    "channel_title": binding.display_label,
+                },
+            }
+        )
 
     def _resolve_binding(
         self, identity: ChannelIdentity, reconnect_binding_id: str | None
