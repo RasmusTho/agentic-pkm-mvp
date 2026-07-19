@@ -16,6 +16,11 @@ from app.db.dsn import resolve_dsn
 from app.db.errors import StoreSchemaMissingError
 from app.embedding_config import coerce_floats, l2_normalize
 from app.index.artifact_metadata import canonicalize_indexable_text
+from app.objects.identity import (
+    resolve_vault_uuid_with_connection as _resolve_vault_uuid_with_connection,
+    retained_vault_uuid_with_connection as _retained_vault_uuid_with_connection,
+    vault_uuid_to_canonical_id_map_with_connection as _vault_uuid_to_canonical_id_map_with_connection,
+)
 
 from .base import ObjectStore, RelationIndex, RelationMembership, VectorIndex, _IDENTITY_HASH_LEN
 
@@ -161,35 +166,51 @@ def _assert_tables() -> None:
     supervision, never spend poison budget or dead-letter.
     """
     with _connect() as conn:
-        with conn.cursor() as cur:
-            missing_tables: list[str] = []
-            for table in _STORE_TABLES:
-                cur.execute("SELECT to_regclass(%s) AS oid", (table,))
-                row = cur.fetchone()
-                if not (row and row.get("oid")):
-                    missing_tables.append(table)
-            if missing_tables:
-                raise StoreSchemaMissingError(
-                    f"Missing store table(s) {missing_tables} in the configured Postgres. "
-                    f"{_MIGRATION_HINT}"
-                )
-            # Schema-scope the column check to match to_regclass resolution
-            # (first schema on search_path): an unfiltered information_schema
-            # query could see a same-named table in another schema and mask a
-            # genuinely missing column, or fail on a complete one.
-            cur.execute(
-                """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema = current_schema() AND table_name = 'store_vector_index'
-                """
+        assert_store_schema_with_connection(conn, repair_data=True)
+
+
+def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> None:
+    """Run the canonical schema assertion on a caller-owned transaction.
+
+    Per-row boot repairs remain an ``_ensure_tables`` responsibility; ordinary
+    transactional producers only need the fail-loud table/identity assertion.
+    """
+    with conn.cursor() as cur:
+        missing_tables: list[str] = []
+        for table in _STORE_TABLES:
+            cur.execute("SELECT to_regclass(%s) AS oid", (table,))
+            row = cur.fetchone()
+            oid = row.get("oid") if isinstance(row, dict) else (row[0] if row else None)
+            if oid is None:
+                missing_tables.append(table)
+        if missing_tables:
+            raise StoreSchemaMissingError(
+                f"Missing store table(s) {missing_tables} in the configured Postgres. "
+                f"{_MIGRATION_HINT}"
             )
-            present = {row["column_name"] for row in cur.fetchall()}
-            missing_columns = [col for col in _IDENTITY_COLUMNS if col not in present]
-            if missing_columns:
-                raise StoreSchemaMissingError(
-                    f"store_vector_index is missing identity column(s) {missing_columns}. "
-                    f"{_MIGRATION_HINT}"
-                )
+        # Bind the column check to the exact relation resolved by to_regclass.
+        # This remains correct when the first search-path schema contains only
+        # a caller-owned store_objects table and other canonical tables resolve
+        # from a later schema.
+        cur.execute(
+            """
+            SELECT attname AS column_name
+            FROM pg_attribute
+            WHERE attrelid = to_regclass('store_vector_index')
+              AND attnum > 0
+              AND NOT attisdropped
+            """
+        )
+        present = {
+            row.get("column_name") if isinstance(row, dict) else row[0] for row in cur.fetchall()
+        }
+        missing_columns = [col for col in _IDENTITY_COLUMNS if col not in present]
+        if missing_columns:
+            raise StoreSchemaMissingError(
+                f"store_vector_index is missing identity column(s) {missing_columns}. "
+                f"{_MIGRATION_HINT}"
+            )
+        if repair_data:
             # Idempotent data repair (not DDL) — same repairs the old boot path ran.
             _run_data_repairs(cur)
 
@@ -252,7 +273,9 @@ def _load_index_identity(cur) -> EmbeddingIdentity | None:
         return None
 
 
-def _ensure_index_identity(cur, requested: EmbeddingIdentity, *, allow_create: bool) -> EmbeddingIdentity:
+def _ensure_index_identity(
+    cur, requested: EmbeddingIdentity, *, allow_create: bool
+) -> EmbeddingIdentity:
     stored = _load_index_identity(cur)
     if stored is None:
         if not allow_create:
@@ -322,16 +345,97 @@ def truncate_pg_tables() -> None:
     _ensure_tables()
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE store_objects")
-            cur.execute("TRUNCATE TABLE store_vector_index")
-            cur.execute("TRUNCATE TABLE store_relations")
-            cur.execute("TRUNCATE TABLE store_relation_memberships")
-            cur.execute("TRUNCATE TABLE vector_index_meta")
+            # Do not hide reset scope behind an implicit CASCADE. Delete every
+            # canonical-FK CASCADE consumer explicitly, then let the remaining
+            # SET NULL consumers (decisions/audit) keep their declared rows.
+            cur.execute("DELETE FROM store_vector_index")
+            cur.execute("DELETE FROM store_relation_memberships")
+            cur.execute("DELETE FROM store_relations")
+            cur.execute("DELETE FROM vector_index_meta")
+            cur.execute(
+                """
+                DO $$ BEGIN
+                    IF to_regclass('public.chunks') IS NOT NULL THEN DELETE FROM public.chunks; END IF;
+                    IF to_regclass('public.embeddings') IS NOT NULL THEN DELETE FROM public.embeddings; END IF;
+                    IF to_regclass('public.relations') IS NOT NULL THEN DELETE FROM public.relations; END IF;
+                    IF to_regclass('public.membership') IS NOT NULL THEN DELETE FROM public.membership; END IF;
+                END $$
+                """
+            )
+            cur.execute("DELETE FROM store_objects")
 
 
 def reset_vector_index(cur) -> None:
     cur.execute("DELETE FROM store_vector_index")
     cur.execute("DELETE FROM vector_index_meta")
+
+
+def put_object_with_connection(
+    conn,
+    *,
+    object_id: UUID,
+    kind: str,
+    source_ref: str | None,
+    payload: dict,
+) -> None:
+    """Write a canonical object on a caller-owned Postgres transaction."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
+            VALUES (%s, %s, %s, %s::jsonb, now(), now())
+            ON CONFLICT (object_id) DO UPDATE
+            SET kind = EXCLUDED.kind,
+                source_ref = EXCLUDED.source_ref,
+                payload = EXCLUDED.payload,
+                updated_at = now()
+            """,
+            (object_id, kind, source_ref, json.dumps(payload)),
+        )
+
+
+def resolve_vault_uuid_with_connection(conn, vault_uuid: str) -> str:
+    """Resolve a retained vault UUID to one unambiguous canonical object id."""
+    return _resolve_vault_uuid_with_connection(conn, vault_uuid)
+
+
+def resolve_vault_uuid(vault_uuid: str) -> str:
+    """Resolve retained identity through a fresh collision-checked snapshot."""
+    with _connect() as conn:
+        return resolve_vault_uuid_with_connection(conn, vault_uuid)
+
+
+def vault_uuid_to_canonical_id_map_with_connection(conn) -> dict[str, str]:
+    """Return retained vault UUID -> canonical id from the shared identity join."""
+    return _vault_uuid_to_canonical_id_map_with_connection(conn)
+
+
+def retained_vault_uuid_with_connection(conn, object_id: str) -> str | None:
+    """Resolve canonical id -> retained vault UUID without inventing an alias."""
+    return _retained_vault_uuid_with_connection(conn, object_id)
+
+
+def update_object_source_ref_with_connection(
+    conn,
+    *,
+    object_id: UUID,
+    source_ref: str | None,
+) -> None:
+    """Move an existing canonical object's source on a caller transaction."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE store_objects
+            SET source_ref = %s, updated_at = now()
+            WHERE object_id = %s
+            """,
+            (source_ref, object_id),
+        )
+        if cur.rowcount != 1:
+            raise RuntimeError(
+                "Canonical store_objects parent is missing for vault-sync object "
+                f"{object_id}; run migrations and reconcile the legacy objects row before retrying"
+            )
 
 
 class PgObjectStore(ObjectStore):
@@ -363,19 +467,13 @@ class PgObjectStore(ObjectStore):
     def put(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict) -> None:
         _ensure_tables()
         with _connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s::jsonb, now(), now())
-                    ON CONFLICT (object_id) DO UPDATE
-                    SET kind = EXCLUDED.kind,
-                        source_ref = EXCLUDED.source_ref,
-                        payload = EXCLUDED.payload,
-                        updated_at = now()
-                    """,
-                    (object_id, kind, source_ref, json.dumps(payload)),
-                )
+            put_object_with_connection(
+                conn,
+                object_id=object_id,
+                kind=kind,
+                source_ref=source_ref,
+                payload=payload,
+            )
 
     def list_by_kind(self, kind: str, *, limit: int = 100) -> Iterable[dict]:
         with _connect() as conn:
@@ -425,17 +523,21 @@ class PgObjectStore(ObjectStore):
             with conn.cursor() as cur:
                 table = self._active_table(conn)
                 if kind is not None:
-                    stmt = sql.SQL("SELECT count(*) AS total FROM {table} WHERE kind = %s").format(table=sql.Identifier(table))
+                    stmt = sql.SQL("SELECT count(*) AS total FROM {table} WHERE kind = %s").format(
+                        table=sql.Identifier(table)
+                    )
                     params = (kind,)
                 else:
-                    stmt = sql.SQL("SELECT count(*) AS total FROM {table}").format(table=sql.Identifier(table))
+                    stmt = sql.SQL("SELECT count(*) AS total FROM {table}").format(
+                        table=sql.Identifier(table)
+                    )
                     params = ()
                 cur.execute(stmt, params)
                 row = cur.fetchone()
         if not row:
             return 0
         if isinstance(row, dict):
-            return int(row.get('total') or row.get('count') or 0)
+            return int(row.get("total") or row.get("count") or 0)
         return int(row[0] or 0)
 
 
@@ -547,7 +649,9 @@ class PgVectorIndex(VectorIndex):
                     ),
                 )
 
-    def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> List[_VectorHit]:
+    def search(
+        self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None
+    ) -> List[_VectorHit]:
         _ensure_tables()
 
         query = coerce_floats(vector)
@@ -556,18 +660,26 @@ class PgVectorIndex(VectorIndex):
             with conn.cursor() as cur:
                 cur.execute("SELECT count(*) AS total FROM store_vector_index")
                 total_row = cur.fetchone() or {}
-                total = int(total_row.get("total") or 0) if isinstance(total_row, dict) else int(total_row[0] or 0)
+                total = (
+                    int(total_row.get("total") or 0)
+                    if isinstance(total_row, dict)
+                    else int(total_row[0] or 0)
+                )
                 if total == 0:
                     return []
                 requested_identity = identity or get_embedding_identity()
-                stored_identity = _ensure_index_identity(cur, requested_identity, allow_create=False)
+                stored_identity = _ensure_index_identity(
+                    cur, requested_identity, allow_create=False
+                )
                 if stored_identity.normalize:
                     query_norm = l2_normalize(query)
                 else:
                     query_norm = query
                 index_dim = stored_identity.dim
                 if len(query_norm) != index_dim:
-                    raise ValueError(f"query embedding dim mismatch: expected {index_dim}, got {len(query_norm)}")
+                    raise ValueError(
+                        f"query embedding dim mismatch: expected {index_dim}, got {len(query_norm)}"
+                    )
                 cur.execute(
                     """
                     SELECT DISTINCT dim
@@ -584,8 +696,7 @@ class PgVectorIndex(VectorIndex):
                     SELECT object_id, payload, embedding, updated_at
                     FROM store_vector_index
                     WHERE dim = %s
-                    """
-                    ,
+                    """,
                     (index_dim,),
                 )
                 rows = cur.fetchall()
@@ -646,8 +757,7 @@ class PgVectorIndex(VectorIndex):
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT payload FROM store_objects "
-                    "WHERE object_id = %s FOR UPDATE",
+                    "SELECT payload FROM store_objects " "WHERE object_id = %s FOR UPDATE",
                     (object_id,),
                 )
                 row = cur.fetchone()
@@ -688,7 +798,7 @@ class PgVectorIndex(VectorIndex):
         if not row:
             return 0
         if isinstance(row, dict):
-            return int(row.get('total') or 0)
+            return int(row.get("total") or 0)
         return int(list(row.values())[0] or 0)
 
     def generation(self) -> str:
@@ -773,7 +883,9 @@ class PgVectorIndex(VectorIndex):
 
 
 class PgRelationIndex(RelationIndex):
-    rebuild_source = "vault frontmatter links + PgObjectStore (see docs/CONCEPTS/RELATION_TAXONOMY.md)"
+    rebuild_source = (
+        "vault frontmatter links + PgObjectStore (see docs/CONCEPTS/RELATION_TAXONOMY.md)"
+    )
 
     def __init__(self) -> None:
         _ensure_tables()
@@ -824,7 +936,9 @@ class PgRelationIndex(RelationIndex):
                 row = cur.fetchone()
         return bool(row)
 
-    def add_membership(self, src: UUID, *, rel: str, value: str, payload: dict | None = None) -> None:
+    def add_membership(
+        self, src: UUID, *, rel: str, value: str, payload: dict | None = None
+    ) -> None:
         _ensure_tables()
         with _connect() as conn:
             with conn.cursor() as cur:

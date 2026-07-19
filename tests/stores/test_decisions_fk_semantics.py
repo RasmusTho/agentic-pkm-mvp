@@ -100,6 +100,10 @@ def _insert_object(dsn: str) -> str:
     object_id = str(uuid.uuid4())
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
+            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, %s, %s::jsonb)",
+            (object_id, "note", "{}"),
+        )
+        conn.execute(
             "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, %s::jsonb)",
             (object_id, "note", "{}"),
         )
@@ -131,7 +135,7 @@ def test_object_delete_preserves_decisions(
 
         # The FK action itself: deleting the object must not cascade-delete
         # the decision row, it must null out object_id (mirrors `audit`).
-        conn.execute("DELETE FROM objects WHERE id = %s", (object_id,))
+        conn.execute("DELETE FROM store_objects WHERE object_id = %s", (object_id,))
 
         rows_after = conn.execute(
             "SELECT object_id FROM decisions WHERE key = 'classification'"

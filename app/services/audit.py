@@ -89,11 +89,10 @@ def _insert_audit_row(
 ) -> None:
     """Insert one audit row, falling back to a NULL object_id on FK violation.
 
-    The ``audit.object_id`` FK references the legacy ``objects`` table, but the
-    active object store writes to ``store_objects`` (``PgObjectStore``). An
-    object-scoped audit call (e.g. the promotion-gate path) therefore carries an
-    ``object_id`` that exists in ``store_objects`` but not in ``objects``, so the
-    first INSERT raises an FK ``IntegrityError`` and would drop the row entirely.
+    The ``audit.object_id`` FK references canonical ``store_objects`` after
+    migration #3510. An audit emitted before its object's canonical upsert, or
+    for a genuinely unknown id, still raises an FK ``IntegrityError`` and would
+    otherwise drop the row entirely.
 
     To keep the audit trail honest without repointing/dropping the FK (DB audit
     is not the durable system-of-record — that is a separate Storage-lifecycle
@@ -138,10 +137,10 @@ def _insert_audit_row(
                 )
         return
     except IntegrityError:
-        # object_id is not present in the FK-referenced `objects` table (it lives
-        # in `store_objects`). Preserve it in details and write with NULL FK.
+        # object_id is not present in the FK-referenced canonical store.
+        # Preserve it in details and write with NULL FK.
         logger.warning(
-            "audit object_id %s not in objects table (FK); writing row with NULL "
+            "audit object_id %s not in store_objects table (FK); writing row with NULL "
             "object_id and preserving the id in details.object_ref",
             object_id,
         )

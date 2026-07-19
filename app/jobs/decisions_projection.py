@@ -9,8 +9,8 @@ judgment record; the ``decisions`` table is a rebuildable projection index over 
 - ``rebuild_decisions_projection()`` — truncate the ``decisions`` table and replay every
   JSONL receipt (all shards, ordered by ``created_at``) back into it. It re-links each
   receipt's runtime ``object_id`` when the DB was rebuilt and ids were re-minted: if the
-  receipt's ``object_id`` is no longer a current ``objects.id`` but its ``vault_uuid``
-  resolves to a current ``objects.uuid``, the row is re-linked to that object's new id
+  receipt's ``object_id`` is no longer a current ``store_objects.object_id`` but its
+  ``vault_uuid`` resolves to a canonical object identity, the row is re-linked
   (the §5 identity-decoupling payoff).
 - ``doctor_decisions_projection()`` — assert the DB projection equals the log row-for-row
   on ``(object_id, key, created_at, value)`` (verify-the-verifier). Returns a structured
@@ -28,7 +28,9 @@ from pathlib import Path
 from typing import Any
 
 from app.db.db import conn_rw
+from app.db.decisions_schema import assert_decisions_schema
 from app.receipts.decision_receipt_log import iter_decision_receipts
+from app.objects.identity import vault_uuid_to_canonical_id_map_with_connection
 
 
 @dataclass
@@ -62,19 +64,8 @@ def _parse_ts(raw: Any) -> datetime | None:
 
 
 def _existing_object_ids(cur) -> set[str]:
-    cur.execute("SELECT id FROM objects")
-    return {str(r["id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
-
-
-def _uuid_to_id_map(cur) -> dict[str, str]:
-    cur.execute("SELECT id, uuid FROM objects WHERE uuid IS NOT NULL")
-    out: dict[str, str] = {}
-    for r in cur.fetchall():
-        rid = str(r["id"] if isinstance(r, dict) else r[0])
-        ruuid = r["uuid"] if isinstance(r, dict) else r[1]
-        if ruuid is not None:
-            out[str(ruuid)] = rid
-    return out
+    cur.execute("SELECT object_id FROM store_objects")
+    return {str(r["object_id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
 
 
 def _resolve_target_object_id(
@@ -109,8 +100,9 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
 
     with conn_rw() as conn:
         with conn.cursor() as cur:
+            assert_decisions_schema(conn)
             existing_ids = _existing_object_ids(cur)
-            uuid_to_id = _uuid_to_id_map(cur)
+            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(conn)
 
             cur.execute("TRUNCATE TABLE decisions")
 
@@ -159,7 +151,7 @@ def _log_projection_rows(vault_root: Path | None = None) -> list[tuple[str, str,
     with conn_rw() as conn:
         with conn.cursor() as cur:
             existing_ids = _existing_object_ids(cur)
-            uuid_to_id = _uuid_to_id_map(cur)
+            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(conn)
     for receipt in receipts:
         key = receipt.get("key")
         if not key:

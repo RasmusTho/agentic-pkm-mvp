@@ -13,9 +13,11 @@ pytestmark = pytest.mark.not_pg
 class _DummyStore:
     def __init__(self) -> None:
         self.put_calls: list[uuid.UUID] = []
+        self.payloads: list[dict] = []
 
-    def put(self, object_uuid: uuid.UUID, **_kwargs) -> None:
+    def put(self, object_uuid: uuid.UUID, **kwargs) -> None:
         self.put_calls.append(object_uuid)
+        self.payloads.append(dict(kwargs.get("payload") or {}))
 
 
 def test_invalid_frontmatter_uuid_generates_uuid4(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -45,3 +47,45 @@ def test_invalid_frontmatter_uuid_generates_uuid4(monkeypatch: pytest.MonkeyPatc
     assert parsed.version == 4
     assert dummy_store.put_calls
     assert dummy_store.put_calls[0] == uuid.UUID(note_uuid)
+
+
+def test_vault_alpha_uses_resolved_canonical_id_for_all_durable_producers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    vault_uuid = str(uuid.uuid4())
+    canonical_id = str(uuid.uuid4())
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    note_path = vault_root / "retained.md"
+    content = f"---\nuuid: {vault_uuid}\n---\n# Retained\n"
+    note_path.write_text(content, encoding="utf-8")
+
+    dummy_store = _DummyStore()
+    classified: list[str] = []
+    indexed: list[uuid.UUID] = []
+    monkeypatch.setattr(vault_alpha, "resolve_canonical_object_id", lambda value: canonical_id)
+    monkeypatch.setattr(vault_alpha, "get_object_store", lambda: dummy_store)
+    monkeypatch.setattr(
+        vault_alpha,
+        "index_ingest_object",
+        lambda **kwargs: indexed.append(kwargs["object_id"]),
+    )
+    monkeypatch.setattr(
+        vault_alpha,
+        "classify_run",
+        lambda object_id, **_kwargs: (classified.append(object_id), {})[1],
+    )
+
+    result = vault_alpha._ingest_single(
+        note_path,
+        vault_root=vault_root,
+        trace_id="canonical-id",
+        raw_text=content,
+    )
+
+    assert result == canonical_id
+    assert classified == [canonical_id]
+    assert dummy_store.put_calls == [uuid.UUID(canonical_id)]
+    assert indexed == [uuid.UUID(canonical_id)]
+    assert dummy_store.payloads[0]["vault_uuid"] == vault_uuid

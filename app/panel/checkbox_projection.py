@@ -23,6 +23,7 @@ from app.agents.panel_agent.execution import refresh_panel_note_object, run_pane
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.text.helpers import content_hash as _content_hash
 from app.knowledge.write_ops import write_note_from_absolute
+from app.objects import resolve_canonical_object_id
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -480,16 +481,18 @@ class CheckboxProjectionService:
         vault_root: Path,
     ) -> CheckboxProjectionResponse:
         try:
+            canonical_artifact_id = resolve_canonical_object_id(request.artifact_id)
             refresh_panel_note_object(
-                note_uuid=request.artifact_id,
+                note_uuid=canonical_artifact_id,
                 note_path=note_path,
                 raw_text=raw_text,
                 trace_id=request.idempotency_key,
             )
             run_panel_note_execution(
-                request.artifact_id,
+                canonical_artifact_id,
                 trace_id=request.idempotency_key,
                 vault_root=vault_root,
+                vault_uuid=request.artifact_id,
                 trigger="companion",
             )
         except Exception as exc:

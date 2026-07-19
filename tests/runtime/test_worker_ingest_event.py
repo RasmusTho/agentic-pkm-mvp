@@ -285,6 +285,51 @@ def test_handle_panel_scan_requested_emits_panel_events(tmp_path: Path, monkeypa
     assert "promote.intent.created" in events
 
 
+def test_handle_panel_scan_requested_uses_canonical_store_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    vault_uuid = str(uuid.uuid4())
+    canonical_id = str(uuid.uuid4())
+    vault_root = tmp_path / "vault"
+    note_path = vault_root / "panel.md"
+    vault_root.mkdir()
+    note_path.write_text(f"---\nuuid: {vault_uuid}\n---\n\n# Panel\n", encoding="utf-8")
+    seen: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        outbox_worker,
+        "resolve_canonical_object_id",
+        lambda value: seen.setdefault("vault_uuid", value) and canonical_id,
+    )
+
+    def fake_refresh_panel_note_object(*, note_uuid, **_kwargs):
+        seen["refresh_id"] = note_uuid
+
+    class _Execution:
+        emitted_count = 0
+
+    def fake_run_panel_note_execution(note_uuid, **_kwargs):
+        seen["execution_id"] = note_uuid
+        seen["execution_vault_uuid"] = _kwargs.get("vault_uuid")
+        return _Execution()
+
+    monkeypatch.setattr(outbox_worker, "refresh_panel_note_object", fake_refresh_panel_note_object)
+    monkeypatch.setattr(outbox_worker, "run_panel_note_execution", fake_run_panel_note_execution)
+
+    summary = outbox_worker.handle_panel_scan_requested(
+        {"vault_path": str(note_path), "relative_path": "panel.md"},
+        vault_root=vault_root,
+    )
+
+    assert summary.emitted == 0
+    assert seen == {
+        "vault_uuid": vault_uuid,
+        "refresh_id": canonical_id,
+        "execution_id": canonical_id,
+        "execution_vault_uuid": vault_uuid,
+    }
+
+
 def test_handle_panel_scan_requested_emits_promotion_after_checked_transition(
     tmp_path: Path, monkeypatch
 ) -> None:

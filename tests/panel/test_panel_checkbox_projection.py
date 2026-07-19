@@ -124,6 +124,32 @@ def test_projection_endpoint_checks_markdown_source_and_projects_checkbox(
     assert "- [ ] ordinary task" in updated
 
 
+def test_projection_uses_canonical_store_id_and_retains_vault_uuid(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = _write_note(tmp_path)
+    canonical_id = "canonical-object-id"
+    refresh = MagicMock()
+    runtime = MagicMock(return_value=MagicMock(runtime_results=[object()]))
+    monkeypatch.setattr(
+        projection_module,
+        "resolve_canonical_object_id",
+        lambda vault_uuid: canonical_id if vault_uuid == "note-uuid-1" else vault_uuid,
+    )
+    monkeypatch.setattr(projection_module, "refresh_panel_note_object", refresh)
+    monkeypatch.setattr(projection_module, "run_panel_note_execution", runtime)
+
+    response = client.post("/api/panel/checkbox-projection", json=_request_for(note))
+
+    assert response.status_code == 200
+    assert refresh.call_args.kwargs["note_uuid"] == canonical_id
+    assert runtime.call_args.args[0] == canonical_id
+    assert runtime.call_args.kwargs["vault_uuid"] == "note-uuid-1"
+
+
 def test_projection_endpoint_rejects_stale_content_hash(
     client: TestClient,
     tmp_path: Path,

@@ -45,13 +45,15 @@ class _Connection:
         self.closed = True
 
 
-def test_pgobjects_upsert_keeps_only_minimal_legacy_fk_parent(monkeypatch) -> None:
-    """The adapter delegates store writes and creates only the FK parent row."""
+def test_pgobjects_upsert_writes_only_canonical_store(monkeypatch) -> None:
+    """The adapter delegates without opening a legacy-parent connection."""
     canonical_store = _CanonicalStore()
-    connection = _Connection()
     monkeypatch.setattr(postgres, "PgObjectStore", lambda: canonical_store)
-    monkeypatch.setattr(postgres.psycopg, "connect", lambda _dsn: connection)
-    monkeypatch.setattr(postgres, "_dsn", lambda: "postgresql://test")
+    monkeypatch.setattr(
+        postgres.psycopg,
+        "connect",
+        lambda _dsn: (_ for _ in ()).throw(AssertionError("legacy connection opened")),
+    )
 
     result = postgres.PgObjects().upsert(
         id="9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
@@ -69,10 +71,3 @@ def test_pgobjects_upsert_keeps_only_minimal_legacy_fk_parent(monkeypatch) -> No
         "payload": {"text": "test"},
         "source_ref": "vault/note.md",
     }
-    assert connection.closed
-    assert connection.cursor_instance.calls == [
-        (
-            "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, '{}'::jsonb) ON CONFLICT (id) DO NOTHING",
-            ("9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", "note"),
-        )
-    ]

@@ -43,8 +43,9 @@ class DomainObject:
     created_at: datetime
 
 
-# In-process mirror used by the explicit memory backend and as a read-through
-# cache. It is never a fallback for a failed durable write (I-S4).
+# In-process storage for the explicit memory backend. Durable backends always
+# read their own committed state: this dictionary has no transaction-aware
+# invalidation protocol and therefore must not act as a Postgres cache (I-S4).
 _MEMORY_STORE: dict[str, DomainObject] = {}
 
 
@@ -83,25 +84,20 @@ class ObjectStore:
 
     Fail-loud contract (KERNEL-03 / audit invariant I-S4): backend resolution
     and durable store errors propagate to the caller. The in-process mirror is
-    only the storage for the explicit memory backend and a read-through cache
-    for durable rows — never an error fallback.
+    only stores the explicit memory backend; durable reads always consult their
+    canonical store and never fall back to process memory.
     """
 
     def get_object(self, object_id: str, *, strict_backend: bool = False) -> DomainObject | None:
         # ``strict_backend`` is retained for signature compatibility; store
         # errors always propagate now.
-        if object_id in _MEMORY_STORE:
-            return _MEMORY_STORE[object_id]
-
         binding = resolve_object_store_port()
         if binding.backend == "memory":
             return _MEMORY_STORE.get(object_id)
         record = binding.store.get(UUID(str(object_id)))
         if not record:
-            return _MEMORY_STORE.get(object_id)
-        domain = _to_domain(record)
-        _MEMORY_STORE[domain.uuid] = domain
-        return domain
+            return None
+        return _to_domain(record)
 
     def save_object(
         self,
@@ -144,9 +140,9 @@ class ObjectStore:
                 source="object_store",
                 observation=payload_fingerprint(obj.payload),
             )
-        # Mirror only after the durable write succeeded — the mirror must never
-        # hold state the durable store does not (I-S4).
-        _MEMORY_STORE[obj.uuid] = obj
+        # Do not mirror durable state in-process: transactional producers can
+        # commit through another connection, so a process-local cache cannot be
+        # invalidated atomically with every canonical write.
 
     def list_objects(
         self,
@@ -157,10 +153,7 @@ class ObjectStore:
         if binding.backend == "memory":
             return _list_from_memory(kind, limit)
         rows = list(binding.store.list_objects(kind=kind, limit=limit))
-        out = [_to_domain(row if isinstance(row, dict) else dict(row)) for row in rows]
-        for domain in out:
-            _MEMORY_STORE[domain.uuid] = domain
-        return out
+        return [_to_domain(row if isinstance(row, dict) else dict(row)) for row in rows]
 
     def count_objects(self, kind: Optional[str] = None) -> int:
         binding = resolve_object_store_port()
@@ -172,6 +165,81 @@ class ObjectStore:
         return int(binding.store.count_objects(kind=kind))
 
 
+def save_object_in_transaction(conn: Any, obj: DomainObject) -> None:
+    """Persist a canonical object inside an existing Postgres transaction.
+
+    Vault filesystem ingestion also maintains the retained ``objects`` mirror.
+    This seam lets that compatibility producer update the canonical parent and
+    its outbox/file-state writes atomically without becoming a second SQL
+    writer for ``store_objects``.
+    """
+    from app.stores.pg import assert_store_schema_with_connection, put_object_with_connection
+
+    assert_store_schema_with_connection(conn)
+
+    put_object_with_connection(
+        conn,
+        object_id=UUID(str(obj.uuid)),
+        kind=str(obj.kind or "note"),
+        source_ref=obj.source_ref,
+        payload=dict(obj.payload or {}),
+    )
+    # Defensive cleanup for processes that populated this key while using the
+    # explicit memory backend. Postgres reads never consult this dictionary.
+    _MEMORY_STORE.pop(str(obj.uuid), None)
+
+
+def resolve_canonical_object_id_in_transaction(conn: Any, vault_uuid: str) -> str:
+    """Resolve a retained vault UUID to the canonical object id on ``conn``."""
+    from app.stores.pg import resolve_vault_uuid_with_connection
+
+    return resolve_vault_uuid_with_connection(conn, vault_uuid)
+
+
+def resolve_canonical_object_id(vault_uuid: str) -> str:
+    """Resolve runtime vault identity without weakening durable fail-loud behavior.
+
+    The explicit memory backend has no retained compatibility table, so its
+    vault UUID is already the object id.  The Postgres backend must consult the
+    retained ``objects.uuid -> objects.id`` mapping before any canonical write
+    or lifecycle event; database failures propagate just like the write that
+    follows.
+    """
+    binding = resolve_object_store_port()
+    if binding.backend != "pg":
+        return str(vault_uuid)
+
+    from app.stores.pg import resolve_vault_uuid
+
+    return resolve_vault_uuid(str(vault_uuid))
+
+
+def canonical_event_identity(canonical_object_id: str, vault_uuid: str) -> dict[str, str]:
+    """Return the single reviewed lifecycle-event identity shape for #3510."""
+    return {
+        "uuid": str(canonical_object_id),
+        "object_id": str(canonical_object_id),
+        "vault_uuid": str(vault_uuid),
+    }
+
+
+def update_object_source_ref_in_transaction(
+    conn: Any,
+    *,
+    object_id: str,
+    source_ref: str | None,
+) -> None:
+    """Update canonical source identity inside an existing transaction."""
+    from app.stores.pg import update_object_source_ref_with_connection
+
+    update_object_source_ref_with_connection(
+        conn,
+        object_id=UUID(str(object_id)),
+        source_ref=source_ref,
+    )
+    _MEMORY_STORE.pop(str(object_id), None)
+
+
 __all__ = [
     "DomainObject",
     "ObjectStore",
@@ -180,4 +248,9 @@ __all__ = [
     "RelationIndex",
     "ScoredNeighbor",
     "VectorIndex",
+    "save_object_in_transaction",
+    "resolve_canonical_object_id",
+    "resolve_canonical_object_id_in_transaction",
+    "canonical_event_identity",
+    "update_object_source_ref_in_transaction",
 ]

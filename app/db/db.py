@@ -20,6 +20,32 @@ _LOGGER = logging.getLogger(__name__)
 _SCHEMA_INITIALIZED = False
 
 
+def _objects_id_primary_key_exists(conn: psycopg.Connection) -> bool:
+    """Return whether ``objects`` already has exactly ``id`` as its primary key."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(
+                bool_and(att.attname = 'id') AND count(*) = 1,
+                false
+            ) AS id_primary_key
+            FROM pg_constraint constraint_row
+            JOIN LATERAL unnest(constraint_row.conkey) WITH ORDINALITY key(attnum, position)
+              ON true
+            JOIN pg_attribute att
+              ON att.attrelid = constraint_row.conrelid
+             AND att.attnum = key.attnum
+            WHERE constraint_row.conrelid = to_regclass('public.objects')
+              AND constraint_row.contype = 'p'
+            """
+        )
+        row = cur.fetchone()
+    if not row:
+        return False
+    value = row.get("id_primary_key") if isinstance(row, dict) else row[0]
+    return bool(value)
+
+
 def _psycopg_dsn() -> str:
     """Allow DATABASE_URL overrides while keeping Pydantic defaults."""
     url = resolve_runtime_database_url(os.environ)
@@ -60,10 +86,23 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     ]
     if not statements:
         return
+    objects_id_primary_key_ready: bool | None = None
     for statement in statements:
+        upper_stmt = statement.upper()
+        rewrites_objects_primary_key = (
+            "ALTER TABLE PUBLIC.OBJECTS DROP CONSTRAINT IF EXISTS OBJECTS_PKEY" in upper_stmt
+            or "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt
+        )
+        if rewrites_objects_primary_key:
+            if objects_id_primary_key_ready is None:
+                objects_id_primary_key_ready = _objects_id_primary_key_exists(conn)
+            if objects_id_primary_key_ready:
+                continue
         try:
             with conn.cursor() as cur:
                 cur.execute(statement)
+            if "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt:
+                objects_id_primary_key_ready = True
         except InsufficientPrivilege:
             conn.rollback()
             _LOGGER.warning(
@@ -72,21 +111,18 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             )
         except DependentObjectsStillExist:
             conn.rollback()
-            upper_stmt = statement.upper()
             if "ALTER TABLE PUBLIC.OBJECTS DROP CONSTRAINT IF EXISTS OBJECTS_PKEY" in upper_stmt:
                 _LOGGER.warning("Skipping legacy objects_pkey drop; dependent FKs exist")
                 continue
             raise
         except DuplicateObject:
             conn.rollback()
-            upper_stmt = statement.upper()
             if "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt:
                 _LOGGER.info("objects_pkey already present; skipping duplicate ADD CONSTRAINT")
                 continue
             raise
         except InvalidTableDefinition as exc:
             conn.rollback()
-            upper_stmt = statement.upper()
             if (
                 "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt
                 and "MULTIPLE PRIMARY KEYS FOR TABLE" in str(exc).upper()
@@ -98,7 +134,6 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             raise
         except UndefinedColumn as exc:
             conn.rollback()
-            upper_stmt = statement.upper()
             if (
                 "CREATE INDEX" in upper_stmt
                 and "OBJECTS_SOURCE_REF_IDX" in upper_stmt

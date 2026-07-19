@@ -35,6 +35,7 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.indexer.consumer import process_event as process_indexer_event
+from app.objects import resolve_canonical_object_id
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.logging_setup import configure_json_logging
 from app.observability.tracer import start_span
@@ -44,7 +45,11 @@ from app.workers.metrics import (
     WORKER_PROCESSED,
     maybe_start_worker_metrics_server,
 )
-from app.services.indexer import handle_ingest_object_created, purge_object_vectors
+from app.services.indexer import (
+    handle_ingest_object_created,
+    purge_object_vectors,
+    resolve_event_object_id,
+)
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
@@ -531,7 +536,7 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
     on for their own purge+upsert writes -- this handler does not need its
     own bespoke cache-eviction path to stay consistent with that contract.
     """
-    raw_uuid = payload.get("uuid")
+    raw_uuid = resolve_event_object_id(dict(payload))
     object_id: UUID | None = None
     if raw_uuid:
         try:
@@ -1497,18 +1502,24 @@ def handle_panel_scan_requested(
     except (AttributeError, TypeError, ValueError) as exc:
         raise InvalidPanelNoteUUIDDispatchError(note_uuid) from exc
 
+    # The scan event carries the retained vault UUID. Historical rows may map
+    # it to a different canonical objects.id; all ObjectStore-facing refresh,
+    # intent, and writeback work must use that canonical key.
+    canonical_note_id = resolve_canonical_object_id(note_uuid)
+
     refresh_panel_note_object(
-        note_uuid=note_uuid,
+        note_uuid=canonical_note_id,
         note_path=note_path,
         raw_text=raw_text,
         trace_id=trace_id or "",
     )
 
     execution = run_panel_note_execution(
-        note_uuid,
+        canonical_note_id,
         trace_id=trace_id,
         outbox_path=_outbox_audit_path(),
         vault_root=resolved_root,
+        vault_uuid=note_uuid,
         persist_created_to_db=_use_db_outbox(),
     )
     emitted = execution.emitted_count

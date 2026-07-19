@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.panel_agent.agent import run_panel_intent_for_note
+from app.agents.panel_agent import runtime as panel_runtime
 from app.agents.panel_agent.execution import run_panel_note_execution
 from app.agents.panel_agent.runtime import PanelRuntimeResult, _write_proposals_to_panel, execute_panel_intent
 from app.components.concurrency import IdempotencyGuard
@@ -322,6 +323,7 @@ def test_runtime_appends_ai_log_entry(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_run_panel_note_execution_runs_full_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     note_uuid = str(uuid4())
+    vault_uuid = str(uuid4())
     outbox_path = tmp_path / "index-outbox.jsonl"
     settings_path = _settings_file(
         tmp_path,
@@ -337,12 +339,24 @@ def test_run_panel_note_execution_runs_full_pipeline(tmp_path: Path, monkeypatch
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    refreshed: list[str] = []
+    monkeypatch.setattr(
+        panel_runtime,
+        "_apply_note_writeback",
+        lambda *_args, vault_uuid=None, **_kwargs: refreshed.append(vault_uuid),
+    )
 
-    result = run_panel_note_execution(note_uuid, trace_id="trace-panel-pipeline", outbox_path=outbox_path)
+    result = run_panel_note_execution(
+        note_uuid,
+        trace_id="trace-panel-pipeline",
+        outbox_path=outbox_path,
+        vault_uuid=vault_uuid,
+    )
 
     assert len(result.intent_events) == 1
     assert len(result.runtime_results) == 1
     assert result.emitted_count >= 3
+    assert refreshed == [vault_uuid]
 
     records = _read_outbox(outbox_path)
     topics = {rec["event"] for rec in records}

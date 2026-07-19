@@ -31,18 +31,20 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   `tests/migrations/test_outbox_schema_parity.py`.
 - The active legacy **`decisions`** writer schema is **migration-owned** (#3488): Alembic revision
   `e1d2c3b4a5f6` carries forward the table's creation, compatibility columns, generated UUID default,
-  and nullable `object_id` / `ON DELETE SET NULL` FK. `app/stores/postgres.py::_ensure_decisions()`
-  now only asserts that shape and directs a stale database to `alembic upgrade head`; it never runs
-  runtime DDL. The migration proof is
+  and nullable `object_id` / `ON DELETE SET NULL` FK. The neutral database seam
+  `app/db/decisions_schema.py::assert_decisions_schema()` is shared by the retained compatibility
+  adapter and projection rebuild, and only asserts that shape before either can mutate the
+  projection; it directs a stale database to `alembic upgrade head` and never runs runtime DDL.
+  The migration proof is
   `tests/migrations/test_decisions_schema_parity.py` and
   `tests/migrations/test_decisions_fk_set_null.py`.
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
   (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
-  these are historical-only, **but `objects` and `decisions` remain on the active runtime path**: vault
-  ingest writes `objects` via `app/stores/postgres.py` (`PgObjects.upsert`, reached through
-  `app/ingest/vault_root.py` → `get_stores()`), and `app/services/decisions.py` reads/writes
-  `decisions`. `chunks`/`embeddings`/`membership` are touched by the backfill job
-  (`app/jobs/backfill.py`) and `app/store/membership_store.py` rather than purely historical.
+  these are historical-only, **but `objects` and `decisions` remain on active compatibility paths**:
+  the filesystem watcher maintains `objects` as a continuity mirror while canonical ingest writes
+  `store_objects`, and `app/services/decisions.py` reads/writes the rebuildable `decisions`
+  projection. `chunks`/`embeddings`/`membership` are still touched by the canonical-source backfill
+  job (`app/jobs/backfill.py`) and `app/store/membership_store.py` rather than purely historical.
 
 This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. The
 runtime store shape is mirrored from `app/stores/pg.py`; if you change the store schema there, update
@@ -198,11 +200,27 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
 
 The tables below are the legacy AMG-core schema defined by Alembic migrations under
 `app/alembic/versions/`. The primary runtime store is the `store_*` set above, but **`objects` and
-`decisions` from this set are still on the active runtime path** (vault ingest upserts `objects` via
-`app/stores/postgres.py`; `app/services/decisions.py` reads/writes `decisions`), and
-`chunks`/`embeddings`/`membership` are exercised by the backfill job and `membership_store`. The
+`decisions` from this set remain on active compatibility paths** (the filesystem watcher maintains
+the `objects` continuity mirror; `app/services/decisions.py` reads/writes the `decisions`
+projection), and `chunks`/`embeddings`/`membership` are exercised by the canonical-source backfill
+job and `membership_store`. The
 remaining shapes here are historical lineage. Do not read these shapes as the current contract. Note
 there is no `search_vector` column anywhere in the schema (active or legacy).
+
+## #3510 legacy-FK cutover (current reality)
+
+Alembic revision `7e4f2a1c9d30` moves every inventoried live single-column FK that referenced
+`objects.id` to `store_objects.object_id`, preserving its `ON UPDATE`, `ON DELETE`, and deferral
+semantics. Before retargeting it transactionally backfills a missing canonical parent from each
+retained legacy row and refuses unknown, composite, orphaned, or `objects.uuid`-referencing FKs with
+repair-and-rerun guidance; it is forward-only.
+
+`objects` remains a readable continuity and filesystem-watcher mirror. Watcher frontmatter and
+`file_state` retain `objects.uuid`, but the watcher resolves a retained `objects.uuid` to its
+`objects.id` before writing, updating, or deleting the canonical `store_objects` row. Thus an
+historical row whose `id != uuid` has exactly one canonical parent and decision/audit children use
+that `id`; fresh canonical-only ingest uses its canonical id directly. Canonical backfill scans
+`store_objects`, and reset uses ordered deletes so inbound child FKs retain their declared semantics.
 
 ### `objects` (legacy)
 - `id` (`uuid`, PK)
@@ -213,7 +231,7 @@ there is no `search_vector` column anywhere in the schema (active or legacy).
 
 ### `chunks` (legacy)
 - `id` (`uuid`, PK)
-- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
+- `object_id` (`uuid`, FK → `store_objects.object_id`, `ON DELETE CASCADE` after #3510)
 - `idx` (`int`)
 - `offset_start` / `offset_end` (`int`)
 - `text` (`text`)
@@ -235,17 +253,18 @@ precondition is not met — one read reference remains (`app/jobs/backfill.py` u
 own forward-only migration.
 
 - `id` (`uuid`, PK; default varies by migration)
-- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
+- `object_id` (`uuid`, FK → `store_objects.object_id`, `ON DELETE CASCADE` after #3510)
 - `chunk_id` (`uuid`, nullable FK → `chunks.id`, `ON DELETE CASCADE`)
 - `provider` (`text`, default `mock`)
 - `dim` (`int`, default `1536`)
 - `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
 - `created_at` (`timestamptz`, default `now()`)
 
-### `decisions` (legacy, active writer schema)
+### `decisions` (legacy lineage, active writer schema)
 - `id` (`uuid`, PK; default `gen_random_uuid()` after `e1d2c3b4a5f6`)
-- `object_id` (`uuid`, nullable, FK → `objects.id`, `ON DELETE SET NULL` — realigned to the
-  `audit.object_id` posture by `1a739d9494af_decisions_fk_set_null.py`, #2788; was
+- `object_id` (`uuid`, nullable, FK → `store_objects.object_id`, `ON DELETE SET NULL` after
+  #3510; the pre-cutover `objects.id` FK was realigned to the `audit.object_id` posture by
+  `1a739d9494af_decisions_fk_set_null.py`, #2788; it was
   `ON DELETE CASCADE` and `NOT NULL` before this migration, see D-5/D-7 in
   `docs/architecture/runtime-semantics.md :: Divergences`)
 - `agent` (`text`, optional)
@@ -271,8 +290,9 @@ Interpretation:
 
 ### `membership` (legacy)
 The legacy baseline retains the **composite** key form:
-- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
-- `set_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`) (sets are stored as objects in this baseline)
+- `object_id` (`uuid`, FK → `store_objects.object_id`, `ON DELETE CASCADE` after #3510)
+- `set_id` (`uuid`, `ON DELETE CASCADE`; fresh lineage keeps its FK to `sets.id`, while #3510
+  retargets only retained legacy objects-as-sets schemas to `store_objects.object_id`)
 - `created_at` (`timestamptz`, default `now()`)
 - `PRIMARY KEY (object_id, set_id)`
 
@@ -418,9 +438,10 @@ Interpretation:
 - The primary runtime store is the `store_*` set, migration-owned since Alembic revision
   `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables
   under `app/alembic/versions/` are mostly legacy lineage,
-  **except `objects` and `decisions`, which are still on the active runtime path** (vault ingest →
-  `PgObjects.upsert` INSERTs into `objects`; `app/services/decisions.py` reads/writes `decisions`);
-  `chunks`/`embeddings`/`membership` are touched by the backfill job and `membership_store`. An earlier
+  **except `objects` and `decisions`, which remain on active compatibility paths** (the watcher
+  maintains the retained `objects` continuity mirror; `app/services/decisions.py` reads/writes the
+  rebuildable `decisions` projection); `chunks`/`embeddings`/`membership` are touched by the
+  canonical-source backfill job and `membership_store`. An earlier
   revision of this doc mis-attributed the store tables to Alembic, listed a fabricated `search_vector`
   column, and over-broadly claimed none of the AMG-core tables were active — all corrected here.
 - This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.

@@ -1,16 +1,12 @@
-import os
 import json
+import os
 from uuid import UUID, uuid4
 
 import psycopg
 
+from app.db.decisions_schema import assert_decisions_schema
+
 from .pg import PgObjectStore
-
-
-_DECISIONS_MIGRATION_HINT = (
-    "Decisions schema is migration-owned (#3488): run 'alembic upgrade head' "
-    "against this database. See docs/DB_SCHEMA.md :: decisions."
-)
 
 
 def _dsn() -> str:
@@ -20,63 +16,6 @@ def _dsn() -> str:
     return url.replace("+psycopg", "")
 
 
-def _ensure_decisions(conn) -> None:
-    """Assert the Alembic-owned decisions schema without mutating it at runtime."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('public.decisions')")
-        table_row = cur.fetchone()
-        if table_row is None or table_row[0] is None:
-            raise RuntimeError(_DECISIONS_MIGRATION_HINT)
-        cur.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'decisions'
-            """
-        )
-        required_columns = {"id", "object_id", "agent", "kind", "key", "value", "created_at"}
-        if missing_columns := required_columns - {row[0] for row in cur.fetchall()}:
-            raise RuntimeError(
-                f"{_DECISIONS_MIGRATION_HINT} Missing columns: {', '.join(sorted(missing_columns))}."
-            )
-        cur.execute(
-            """
-            SELECT object_id_column.is_nullable, id_column.column_default, fk.delete_rule
-            FROM information_schema.columns AS object_id_column
-            JOIN information_schema.columns AS id_column
-              ON id_column.table_schema = object_id_column.table_schema
-             AND id_column.table_name = object_id_column.table_name
-             AND id_column.column_name = 'id'
-            LEFT JOIN (
-                SELECT rc.delete_rule
-                FROM information_schema.table_constraints AS tc
-                JOIN information_schema.key_column_usage AS kcu
-                  ON tc.constraint_name = kcu.constraint_name
-                 AND tc.table_schema = kcu.table_schema
-                JOIN information_schema.referential_constraints AS rc
-                  ON rc.constraint_name = tc.constraint_name
-                 AND rc.constraint_schema = tc.table_schema
-                WHERE tc.table_schema = 'public'
-                  AND tc.table_name = 'decisions'
-                  AND tc.constraint_type = 'FOREIGN KEY'
-                  AND kcu.column_name = 'object_id'
-                LIMIT 1
-            ) AS fk ON TRUE
-            WHERE object_id_column.table_schema = 'public'
-              AND object_id_column.table_name = 'decisions'
-              AND object_id_column.column_name = 'object_id'
-            """
-        )
-        shape_row = cur.fetchone()
-        if (
-            shape_row is None
-            or shape_row[0] != "YES"
-            or "gen_random_uuid" not in (shape_row[1] or "")
-            or shape_row[2] != "SET NULL"
-        ):
-            raise RuntimeError(f"{_DECISIONS_MIGRATION_HINT} Schema shape is stale.")
-
-
 class PgObjects:
     def upsert(self, *, id: str | None = None, kind: str, payload: dict, source_ref: str | None = None, path: str | None = None):
         # PgObjects is a temporary compatibility adapter for the vault-root
@@ -84,21 +23,6 @@ class PgObjects:
         # migration preflight and migration hint remain the single contract.
         str_id = id or str(uuid4())
         canonical_store = PgObjectStore()
-
-        # ``decisions.object_id`` still has a live FK to the legacy ``objects``
-        # table.  Keep the smallest possible parent row until #3510 migrates
-        # that FK; ``store_objects`` remains exclusively canonical-owned.
-        conn = psycopg.connect(_dsn())
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, '{}'::jsonb) "
-                        "ON CONFLICT (id) DO NOTHING",
-                        (str_id, kind),
-                    )
-        finally:
-            conn.close()
 
         canonical_store.put(
             object_id=UUID(str_id),
@@ -114,7 +38,7 @@ class PgDecisions:
         conn = psycopg.connect(_dsn())
         try:
             with conn:
-                _ensure_decisions(conn)
+                assert_decisions_schema(conn)
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO decisions (id, object_id, agent, kind, key, value, created_at) "

@@ -20,6 +20,7 @@ from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
+from app.objects import resolve_canonical_object_id
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
@@ -380,8 +381,11 @@ def _process_panel_note(
     note_title = frontmatter.get("title") if isinstance(frontmatter, dict) else None
 
     try:
+        # Keep the retained frontmatter UUID as filesystem/companion identity,
+        # but route every panel-store operation through canonical objects.id.
+        canonical_note_id = resolve_canonical_object_id(note_uuid)
         result = handle_note_update(
-            note_id=note_uuid,
+            note_id=canonical_note_id,
             old_markdown=markdown,
             new_markdown=markdown,
             action_mappings=action_mappings,

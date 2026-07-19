@@ -113,6 +113,11 @@ def _insert_object(dsn: str, *, object_id: str | None = None, obj_uuid: str | No
     ouuid = obj_uuid or oid
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
+            "INSERT INTO store_objects (object_id, kind, source_ref, payload) "
+            "VALUES (%s, 'note', 'test://decision-projection', '{}'::jsonb)",
+            (oid,),
+        )
+        conn.execute(
             "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, %s, %s::jsonb)",
             (oid, ouuid, "note", "{}"),
         )
@@ -215,6 +220,48 @@ def test_rebuild_relinks_via_vault_uuid_after_object_remint(
             "SELECT object_id FROM decisions WHERE key = 'review'"
         ).fetchone()
     assert str(row[0]) == new_id  # re-linked to the current object row
+
+
+@pytest.mark.pg
+def test_receipt_and_projection_fail_loud_on_post_cutover_cross_key_collision(
+    scratch_db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every retained-identity read rejects a UUID that is also a canonical key."""
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    _allow_guard(monkeypatch)
+
+    retained_uuid = str(uuid.uuid4())
+    canonical_id = str(uuid.uuid4())
+    _insert_object(scratch_db, object_id=canonical_id, obj_uuid=retained_uuid)
+    with psycopg.connect(scratch_db, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO store_objects (object_id, kind, source_ref, payload) "
+            "VALUES (%s, 'note', 'test://collision', '{}'::jsonb)",
+            (retained_uuid,),
+        )
+
+    import app.receipts.decision_receipt_log as receipt_log
+
+    with pytest.raises(RuntimeError, match="cross-key identity collision"):
+        receipt_log.resolve_vault_uuid(canonical_id)
+    with pytest.raises(RuntimeError, match="cross-key identity collision"):
+        receipt_log.resolve_vault_uuid(retained_uuid)
+
+    append_decision_receipt(
+        object_id="old-object-id",
+        key="review",
+        value={"allow": True},
+        trace_id="t-collision",
+        created_at=datetime(2026, 3, 3, tzinfo=timezone.utc),
+        vault_root=vault,
+        vault_uuid=retained_uuid,
+    )
+    with pytest.raises(RuntimeError, match="cross-key identity collision"):
+        rebuild_decisions_projection(vault)
+    with pytest.raises(RuntimeError, match="cross-key identity collision"):
+        doctor_decisions_projection(vault)
 
 
 @pytest.mark.pg

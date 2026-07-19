@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 
 import psycopg
 
-from app.db.db import conn_rw
+from app.db.db import conn_ro, conn_rw
+from app.db.decisions_schema import assert_decisions_schema
 from app.db.dsn import resolve_dsn
 from app.receipts.decision_receipt_log import append_decision_receipt
 
@@ -19,6 +20,35 @@ from app.receipts.decision_receipt_log import append_decision_receipt
 _MEM_DECISIONS: Dict[str, List[dict[str, Any]]] = {}
 
 _ALLOWED_BACKENDS = {"memory", "pg"}
+
+
+class DecisionsSchemaMigrationRequired(RuntimeError):
+    """The active decisions projection still has its pre-#3510 FK parent."""
+
+
+def _assert_decisions_fk_cutover() -> None:
+    _assert_decisions_fk_cutover_for_dsn(resolve_dsn())
+
+
+@lru_cache(maxsize=8)
+def _assert_decisions_fk_cutover_for_dsn(_dsn: str) -> None:
+    """Fail before receipt append unless decisions uses the canonical parent.
+
+    This preflight is deliberately read-only and uses ``conn_ro`` so it never
+    invokes the legacy ``conn_rw`` schema bootstrap. Receipt-before-ack still
+    governs the actual decision write; the schema gate merely proves that the
+    rebuildable projection can accept that receipt before the canonical log is
+    mutated.
+    """
+    try:
+        with conn_ro() as conn:
+            assert_decisions_schema(conn)
+    except RuntimeError as exc:
+        raise DecisionsSchemaMigrationRequired(
+            "#3510 decisions FK migration is required before a durable decision receipt can be "
+            "appended: run 'alembic upgrade head' and retry. Expected "
+            "public.decisions(object_id) -> public.store_objects(object_id) ON DELETE SET NULL."
+        ) from exc
 
 
 @lru_cache(maxsize=8)
@@ -99,6 +129,12 @@ def insert_decision(object_id: str, key: str, value: dict[str, Any], trace_id: s
     # Durable path — decision-receipt log is CANONICAL, Postgres is the
     # projection (feat #2969, docs/DECISION_RECEIPT_LOG/README.md).
     #
+    # The read-only #3510 schema preflight must run before the canonical log is
+    # mutated. Otherwise a pre-cutover FK can accept the receipt and then reject
+    # its projection with a raw ForeignKeyViolation, leaving an avoidable
+    # durable-but-unprojected decision.
+    _assert_decisions_fk_cutover()
+
     # Receipt-before-ack (C-5/P-5): append the WriteGuard-gated durable receipt
     # FIRST — that append is the commit point. A blocked WriteGuard raises
     # (WritesBlockedError) and any I/O failure raises (DecisionReceiptWriteError);

@@ -113,10 +113,10 @@ def test_pin_write_preserves_channel_runtime_env() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     write_pin = text.split("write_pin() {", 1)[1].split("\n}\n", 1)[0]
 
-    assert 'APP_IMAGE_REPOSITORY=%s\\nAPP_IMAGE_TAG=%s\\n' in write_pin
+    assert "APP_IMAGE_REPOSITORY=%s\\nAPP_IMAGE_TAG=%s\\n" in write_pin
     assert '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG"' in write_pin
-    assert ">>\"${tmp_file}\"" in write_pin
-    assert "mv \"${tmp_file}\" \"${file}\"" in write_pin
+    assert '>>"${tmp_file}"' in write_pin
+    assert 'mv "${tmp_file}" "${file}"' in write_pin
 
 
 def test_health_gate_blocks_and_triggers_rollback() -> None:
@@ -154,7 +154,10 @@ def test_rollback_dry_run_without_sha_parses_flag_and_skips_writes(tmp_path: Pat
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"target={current_sha}" in result.stdout
-    assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
+    assert (
+        "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
+        in result.stdout
+    )
     assert pin_path.read_text(encoding="utf-8") == original_pin
     assert not docker_marker.exists()
     assert not curl_marker.exists()
@@ -171,7 +174,10 @@ def test_rollback_with_explicit_sha_still_allows_flags(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"target={explicit_sha}" in result.stdout
-    assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
+    assert (
+        "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
+        in result.stdout
+    )
     assert pin_path.read_text(encoding="utf-8") == original_pin
     assert not docker_marker.exists()
     assert not curl_marker.exists()
@@ -204,10 +210,10 @@ def test_version_gate_accepts_health_version_string_or_object() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     version_gate = text.split("version_gate() {", 1)[1].split("\n}\n", 1)[0]
 
-    assert "value=data.get(\"version\")" in version_gate
+    assert 'value=data.get("version")' in version_gate
     assert "isinstance(value, dict)" in version_gate
     assert "isinstance(value, str)" in version_gate
-    assert "value.get(\"git_sha\", \"\")" in version_gate
+    assert 'value.get("git_sha", "")' in version_gate
 
 
 def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
@@ -224,13 +230,10 @@ def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     assert run_block.index("fleet_model_fitness_gate") < run_block.index("record_receipt")
 
 
-def _seed_previous_pin(
-    root: Path, previous_sha: str, *, channel: str = "dev"
-) -> Path:
+def _seed_previous_pin(root: Path, previous_sha: str, *, channel: str = "dev") -> Path:
     pin_path = root / f"config/deploy/{channel}.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     return pin_path
@@ -264,10 +267,7 @@ def test_postdeploy_smoke_failure_rolls_back_previous_pin_and_services(
     assert "fake postdeploy smoke diagnostic" in result.stderr
     assert "companion UI post-deploy smoke failed" in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 2
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
@@ -346,13 +346,9 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
     assert result.returncode == expected_status
     assert diagnostic in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert (
-        sum(event.endswith(recreate) for event in _deploy_events(env))
-        == expected_recreate_attempts
+        sum(event.endswith(recreate) for event in _deploy_events(env)) == expected_recreate_attempts
     )
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
@@ -365,15 +361,19 @@ def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
     pin_path = _seed_previous_pin(root, previous_sha)
     migration = root / "app/alembic/versions/999_forward_only.py"
     migration.write_text('reversibility = "forward-only"\n', encoding="utf-8")
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = sha
     env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
 
     result = _run_deploy(root, env, sha, "--ack-forward-only")
 
     assert result.returncode == 73
-    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
     assert "forward-only migration" in result.stderr
     assert "not auto-reversed" in result.stderr
-    assert "code and services only" in result.stderr
+    assert "target pin is retained for a compatible forward fix" in result.stderr
 
 
 def test_failed_manual_rollback_retains_the_known_good_rollback_target(
@@ -390,14 +390,31 @@ def test_failed_manual_rollback_retains_the_known_good_rollback_target(
     assert "manual rollback gate failed" in result.stderr
     assert "retaining rollback target" in result.stderr
     assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
-    assert f"APP_IMAGE_TAG={pre_rollback_sha}" not in pin_path.read_text(
-        encoding="utf-8"
-    )
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    assert f"APP_IMAGE_TAG={pre_rollback_sha}" not in pin_path.read_text(encoding="utf-8")
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
+
+
+def test_manual_rollback_never_runs_target_forward_migration_authority(tmp_path: Path) -> None:
+    root, env, rollback_sha = _deploy_harness(tmp_path)
+    pre_rollback_sha = "7" * 40
+    pin_path = _seed_previous_pin(root, pre_rollback_sha)
+    migration = root / "app/alembic/versions/reversible_current_only.py"
+    migration.write_text(
+        'revision = "reversible_current_only"\n'
+        f'down_revision = "{rollback_sha[:12]}"\n'
+        'reversibility = "reversible"\n'
+        "def downgrade():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    result = _run_rollback(root, env, rollback_sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert not any(" stop api worker watcher" in event for event in events)
+    assert not any("exit-code-from migrate" in event for event in events)
 
 
 def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(
@@ -414,10 +431,7 @@ def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(
     assert "failed before target services were established" in result.stderr
     assert f"APP_IMAGE_TAG={pre_rollback_sha}" in pin_path.read_text(encoding="utf-8")
     assert f"APP_IMAGE_TAG={rollback_sha}" not in pin_path.read_text(encoding="utf-8")
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
 
 
@@ -439,3 +453,105 @@ def test_prod_promotion_receipt_failure_does_not_publish_latest_receipt(
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     assert not (root / "ops/deployments/prod-latest.json").exists()
     assert not (root / f"ops/promotions/prod-deploy-{sha}.json").exists()
+
+
+def _commit_migration(root: Path, name: str) -> str:
+    """Commit a migration file into the harness repo and return the new HEAD."""
+    migration = root / "app/alembic/versions" / name
+    migration.write_text(
+        'revision = "feedc0de0001"\ndown_revision = None\nreversibility = "reversible"\n'
+        "\n\ndef upgrade() -> None:\n    pass\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "app"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add migration"], cwd=root, check=True)
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+
+def test_missing_target_git_object_blocks_migration_gate(tmp_path: Path) -> None:
+    """A partial/corrupt object store must fail the gate loudly, never yield an empty set."""
+    root, env, _sha = _deploy_harness(tmp_path)
+    target = _commit_migration(root, "feedc0de0001_gate_probe.py")
+    blob = subprocess.check_output(
+        ["git", "rev-parse", f"{target}:app/alembic/versions/feedc0de0001_gate_probe.py"],
+        cwd=root,
+        text=True,
+    ).strip()
+    object_path = root / ".git/objects" / blob[:2] / blob[2:]
+    assert object_path.exists()
+    object_path.unlink()
+
+    result = _run_deploy(root, env, target)
+
+    assert result.returncode != 0, result.stdout
+    assert "failed to materialize the exact" in result.stderr
+    assert not (root / "config/deploy/dev.migration-pending.env").exists()
+
+
+def test_first_deploy_marker_retry_replays_full_classification(tmp_path: Path) -> None:
+    """An interrupted first-ever deploy must be retryable from its durable marker."""
+    root, env, _sha = _deploy_harness(tmp_path)
+    target = _commit_migration(root, "feedc0de0002_first_deploy.py")
+    marker = root / "config/deploy/dev.migration-pending.env"
+    env = dict(env)
+    env["FAKE_VERSION_SHA"] = target
+    env["FAKE_HEALTH_VERSION_SHA"] = target
+
+    fail_env = dict(env)
+    fail_env["FAKE_DOCKER_FAIL_MATCH"] = "--exit-code-from migrate"
+    first = _run_deploy(root, fail_env, target)
+    assert first.returncode != 0
+    assert marker.exists(), first.stderr
+    assert "FROM_SHA=__NO_BASELINE__" in marker.read_text(encoding="utf-8")
+
+    retry = _run_deploy(root, env, target)
+    combined = retry.stdout + retry.stderr
+    assert "migration retry blocked" not in combined
+    assert "migration retry: revalidating" in combined
+    assert retry.returncode == 0, retry.stderr
+    assert not marker.exists()
+
+
+def test_rollback_failure_preserves_foreign_pending_marker(tmp_path: Path) -> None:
+    """A failing rollback must not delete another deploy attempt's pending marker."""
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "5" * 40
+    _seed_previous_pin(root, sha)
+    (root / "config/deploy/dev.previous.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    marker = root / "config/deploy/dev.migration-pending.env"
+    marker.write_text(
+        f"FROM_SHA=<none>\nTARGET_SHA={sha}\nACK_FORWARD_ONLY=0\n", encoding="utf-8"
+    )
+
+    fail_env = dict(env)
+    fail_env["FAKE_DOCKER_FAIL_MATCH"] = "pull"
+    result = _run_rollback(root, fail_env, previous_sha)
+
+    assert result.returncode != 0
+    assert marker.exists(), "rollback failure must not clear a deploy's pending marker"
+
+
+def test_channel_mutation_lock_blocks_concurrent_deploy(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    lock_dir = root / "config/deploy/dev.env.lock"
+    lock_dir.mkdir(parents=True)
+
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 89
+    assert "channel mutation blocked" in result.stderr
+
+    lock_dir.rmdir()
+    clean = _run_deploy(root, env, sha)
+    assert clean.returncode == 0, clean.stderr
+    assert not lock_dir.exists(), "lock must be released on exit"
+
+
+def test_channel_lock_is_acquired_before_mutable_state_snapshot() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    lock_call = text.index("\nacquire_channel_mutation_lock\n")
+    snapshot = text.index('current_sha="$(read_pin')
+
+    assert lock_call < snapshot

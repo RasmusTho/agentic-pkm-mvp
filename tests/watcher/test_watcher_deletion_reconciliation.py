@@ -77,6 +77,20 @@ class _FakeCursor:
             (path,) = params
             self.rowcount = 1 if self.conn.file_state.pop(path, None) else 0
             return
+        if normalized.startswith("select id::text, count(*) over ()"):
+            canonical_alias, uuid_value = params
+            self._fetchone = (
+                (uuid_value, 1, str(canonical_alias) in self.conn.store_objects)
+                if uuid_value in self.conn.objects
+                else None
+            )
+            return
+        if normalized.startswith("select exists(select 1 from store_objects"):
+            canonical_id, _id, uuid_value, expected, _again = params
+            canonical = str(canonical_id) in self.conn.store_objects
+            mirror = uuid_value in self.conn.objects
+            self._fetchone = (canonical, mirror, canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected)
+            return
         if normalized.startswith("select count(*) from file_state where uuid = %s"):
             (uuid_value,) = params
             count = sum(1 for row in self.conn.file_state.values() if row.get("uuid") == uuid_value)
@@ -94,7 +108,16 @@ class _FakeCursor:
                 self.conn.objects[uuid_value]["path"] = None
                 self.rowcount = 1
             return
-        if normalized.startswith("select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"):
+        if normalized.startswith("update store_objects"):
+            source_ref, object_id = params
+            row = self.conn.store_objects.get(str(object_id))
+            if row is not None:
+                row["source_ref"] = source_ref
+                self.rowcount = 1
+            return
+        if normalized.startswith(
+            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+        ):
             (path,) = params
             self._fetchone = self.conn.file_state.get(path)
             return
@@ -108,6 +131,7 @@ class _FakeConn:
     def __init__(self) -> None:
         self.file_state: dict[str, dict[str, object]] = {}
         self.objects: dict[str, dict[str, object]] = {}
+        self.store_objects: dict[str, dict[str, object]] = {}
 
     def __enter__(self) -> "_FakeConn":
         return self
@@ -142,14 +166,17 @@ def _stub_tick_ingest(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         vault_watcher,
         "run_vault_alpha_ingest_paths",
-        lambda vault_root, paths, force=False: SimpleNamespace(
-            ingested=len(list(paths)), errors=0
-        ),
+        lambda vault_root, paths, force=False: SimpleNamespace(ingested=len(list(paths)), errors=0),
     )
 
 
 def _seed_file_state(conn: _FakeConn, *, object_id: str, path: str) -> None:
     conn.objects[object_id] = {"id": object_id, "kind": "note", "path": path}
+    conn.store_objects[object_id] = {
+        "object_id": object_id,
+        "kind": "note",
+        "source_ref": path,
+    }
     conn.file_state[path] = {
         "path": path,
         "uuid": object_id,
@@ -258,7 +285,9 @@ def test_fs_delete_purges_index_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     assert vector_index.count_vectors() == 0
 
 
-def test_run_watcher_tick_emits_deleted_tombstones(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_watcher_tick_emits_deleted_tombstones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC2: the purge path is exercised from the production
     ``run_watcher_tick`` entrypoint, not only the service-level delete --
     i.e. run_watcher_tick itself must call the vault_sync.delete_note seam
@@ -279,7 +308,9 @@ def test_run_watcher_tick_emits_deleted_tombstones(tmp_path: Path, monkeypatch: 
     # First tick: establishes the snapshot with the note present. No
     # deletions yet, so the seam must not be called.
     calls: list[tuple[str,]] = []
-    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: (calls.append((path,)), True)[1])
+    monkeypatch.setattr(
+        vault_watcher, "delete_note", lambda path, **kw: (calls.append((path,)), True)[1]
+    )
 
     summary_first, _ = vault_watcher.run_watcher_tick(
         vault_root=vault,
@@ -335,7 +366,9 @@ def test_run_watcher_tick_emits_deleted_tombstones(tmp_path: Path, monkeypatch: 
     assert len(calls) == 1
 
 
-def test_run_watcher_tick_dry_run_never_purges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_watcher_tick_dry_run_never_purges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """dry_run must never invoke the purge seam, even when a deletion is
     detected (dry-run is a preview, not an action)."""
     vault = tmp_path / "vault"
@@ -347,7 +380,9 @@ def test_run_watcher_tick_dry_run_never_purges(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
 
     calls: list[tuple[str,]] = []
-    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: (calls.append((path,)), True)[1])
+    monkeypatch.setattr(
+        vault_watcher, "delete_note", lambda path, **kw: (calls.append((path,)), True)[1]
+    )
 
     vault_watcher.run_watcher_tick(
         vault_root=vault,
@@ -376,7 +411,9 @@ def test_run_watcher_tick_dry_run_never_purges(tmp_path: Path, monkeypatch: pyte
     assert calls == [], "dry_run must never call the purge seam"
 
 
-def test_run_watcher_tick_falls_back_to_derived_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_watcher_tick_falls_back_to_derived_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A note ingested only through the tick's vault-alpha path has no
     file_state row, so delete_note cannot emit for it (returns False). The
     tick must then resolve the identity the way vault-alpha ingest derived
@@ -403,7 +440,9 @@ def test_run_watcher_tick_falls_back_to_derived_identity(tmp_path: Path, monkeyp
     monkeypatch.setattr(
         vault_watcher,
         "insert_object_and_outbox",
-        lambda payload, topic, trace_id=None, **kw: emitted.append((payload, topic, kw.get("observation"))),
+        lambda payload, topic, trace_id=None, **kw: emitted.append(
+            (payload, topic, kw.get("observation"))
+        ),
     )
 
     vault_watcher.run_watcher_tick(
@@ -445,7 +484,9 @@ def test_run_watcher_tick_falls_back_to_derived_identity(tmp_path: Path, monkeyp
     assert observation is not None
 
 
-def test_run_watcher_tick_prefers_companion_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_watcher_tick_prefers_companion_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When a companion note survives the deletion, its uuid (the canonical
     ingest identity) wins over the uuid5 fallback."""
     vault = tmp_path / "vault"
@@ -466,6 +507,12 @@ def test_run_watcher_tick_prefers_companion_identity(tmp_path: Path, monkeypatch
         lambda root, source_ref: (
             type("C", (), {"uuid": companion_uuid})() if source_ref == "Concepts/C.md" else None
         ),
+    )
+    canonical_uuid = str(uuid4())
+    monkeypatch.setattr(
+        vault_watcher,
+        "resolve_canonical_object_id",
+        lambda vault_uuid: canonical_uuid,
     )
     emitted: list[dict] = []
     monkeypatch.setattr(
@@ -496,10 +543,14 @@ def test_run_watcher_tick_prefers_companion_identity(tmp_path: Path, monkeypatch
     )
 
     assert len(emitted) == 1
-    assert emitted[0]["uuid"] == companion_uuid
+    assert emitted[0]["uuid"] == canonical_uuid
+    assert emitted[0]["object_id"] == canonical_uuid
+    assert emitted[0]["vault_uuid"] == companion_uuid
 
 
-def test_run_watcher_tick_rename_does_not_purge_live_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_watcher_tick_rename_does_not_purge_live_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Rename safety: when the resolved identity's companion points at a
     path that still exists (the rename target this tick already re-ingested),
     no tombstone is emitted -- an async purge would wipe the freshly

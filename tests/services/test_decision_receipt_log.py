@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 from typing import Any
 
 import pytest
 
 import app.receipts.decision_receipt_log as receipt_log
 import app.services.decisions as decisions_module
+from app.objects.identity import retained_vault_uuid_with_connection
 from app.receipts.decision_receipt_log import (
     RECEIPT_WRITE_ACTION,
     SCHEMA_VERSION,
@@ -84,6 +86,7 @@ class _RecordingConn:
 def durable_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force the durable (non-memory) branch of ``insert_decision``."""
     monkeypatch.setattr(decisions_module, "_use_memory_backend", lambda: False)
+    monkeypatch.setattr(decisions_module, "_assert_decisions_fk_cutover", lambda: None)
     # vault_uuid resolution touches the DB; keep it deterministic/offline here.
     monkeypatch.setattr(receipt_log, "resolve_vault_uuid", lambda object_id: None)
 
@@ -150,6 +153,26 @@ def test_write_appends_receipt_then_db(
     assert rec["value"]["trace_id"] == "trace-ac1"
     assert rec["value"]["allow"] is True
     assert rec["created_at"]
+
+
+def test_resolve_vault_uuid_never_invents_canonical_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A canonical-only row has no proven frontmatter continuity identity."""
+    conn = MagicMock()
+    cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value = (None, 0, False, False)
+    monkeypatch.setattr(receipt_log, "conn_rw", lambda: conn)
+
+    assert receipt_log.resolve_vault_uuid("canonical-id") is None
+
+
+def test_reverse_identity_query_checks_alias_without_retained_row() -> None:
+    """The canonical-key direction checks whether another row retains that key."""
+    conn = MagicMock()
+    cur = conn.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value = (None, 0, False, False)
+
+    assert retained_vault_uuid_with_connection(conn, "canonical-id") is None
+    assert "requested_alias_exists" in cur.execute.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------

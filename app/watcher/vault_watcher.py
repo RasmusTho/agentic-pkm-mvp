@@ -26,7 +26,7 @@ from app.services.outbox import insert_object_and_outbox
 from app.services.vault_sync import delete_note
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
-from app.objects import ObjectStore
+from app.objects import ObjectStore, canonical_event_identity, resolve_canonical_object_id
 from app.watcher.events import emit_watcher_run_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.vault.manager import iter_vault_markdown_files
@@ -369,6 +369,7 @@ def _emit_watcher_delete_event(
     companion = find_companion_by_source_ref(vault_root, str(rel_deleted))
     companion_uuid = companion.uuid if companion else ""
     note_uuid = vault_alpha._derive_note_uuid("", companion_uuid, rel_deleted)
+    canonical_object_id = resolve_canonical_object_id(note_uuid)
     live_companion = read_companion(vault_root, note_uuid)
     if live_companion is not None and live_companion.source_ref:
         live_path = vault_root / live_companion.source_ref
@@ -381,7 +382,7 @@ def _emit_watcher_delete_event(
         "deleted": True,
         "reason": "vault_note_deleted",
         "source": "vault_watcher.run_watcher_tick",
-        "uuid": note_uuid,
+        **canonical_event_identity(canonical_object_id, note_uuid),
     }
     insert_object_and_outbox(
         payload,
@@ -635,6 +636,14 @@ def run_watcher_tick(
                 summary["errors"] += 1
                 continue
 
+            # Filesystem/companion identity remains the retained vault UUID,
+            # but every ObjectStore-facing panel operation must use the
+            # canonical objects.id.  Historical rows may deliberately have
+            # objects.uuid != objects.id after the #3510 cutover; using the
+            # frontmatter UUID here would let panel writeback create a second
+            # store_objects parent and split executed-action history.
+            canonical_object_id = resolve_canonical_object_id(note_uuid)
+
             content_hash = _content_hash(current_markdown)
             dedup_key = _build_dedup_key(_PANEL_POLICY_ID, rel_path, content_hash)
             if not _DEDUP_QUEUE.try_acquire(dedup_key):
@@ -650,16 +659,16 @@ def run_watcher_tick(
                     messages.append(f"Watcher auto-exec blocked for {rel_path}: {exc}")
                     continue
 
-                _hydrate_store_with_markdown(note_uuid, note_path)
+                _hydrate_store_with_markdown(canonical_object_id, note_path)
                 expected_version = _WRITE_GUARD.compute_version(current_markdown.encode("utf-8"))
 
-                stored = store.get_object(note_uuid)
+                stored = store.get_object(canonical_object_id)
                 old_markdown = ""
                 if stored:
                     old_markdown = str((stored.payload or {}).get("raw_text") or "")
 
                 panel_result = handle_note_update(
-                    note_uuid,
+                    canonical_object_id,
                     old_markdown,
                     current_markdown,
                     action_mappings=action_mappings,
@@ -713,7 +722,7 @@ def run_watcher_tick(
                             expected_version,
                             panel_result.updated_markdown,
                         )
-                        _hydrate_store_with_markdown(note_uuid, note_path)
+                        _hydrate_store_with_markdown(canonical_object_id, note_path)
                     except VersionMismatch:
                         messages.append(f"Warning: stale write prevented for {note_path}")
                         summary["errors"] += 1
