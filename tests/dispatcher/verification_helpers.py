@@ -35,7 +35,7 @@ def request(head: str = HEAD) -> dict[str, object]:
             "workflow_run": {
                 "id": 99,
                 "run_attempt": 1,
-                "name": "CI",
+                "name": "CI Smoke",
                 "event": "pull_request",
                 "conclusion": "success",
                 "head_sha": head,
@@ -61,6 +61,12 @@ def request(head: str = HEAD) -> dict[str, object]:
 def pre_trust_request(head: str = HEAD) -> dict[str, object]:
     """Return the exact producer shape deployed before artifact authority."""
     result = request(head)
+    # Historical v1 artifacts retain the retired source identity so migration
+    # tests continue to prove they are recognized only as inert audit records.
+    result["source_workflow"] = {
+        **result["source_workflow"],
+        "name": "CI",
+    }
     result["contract_version"] = "verification_dispatch_request.v1"
     identity = {
         "contract_version": result["contract_version"],
@@ -87,6 +93,10 @@ def b4e2310_pre_trust_request(head: str = HEAD) -> dict[str, object]:
     (``artifact_provenance`` present) but still predates ``supporting_issues``.
     """
     result = request(head)
+    result["source_workflow"] = {
+        **result["source_workflow"],
+        "name": "CI",
+    }
     result["contract_version"] = "verification_dispatch_request.v1"
     identity = {
         "contract_version": result["contract_version"],

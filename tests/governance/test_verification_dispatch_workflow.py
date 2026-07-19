@@ -14,11 +14,11 @@ def _workflow_text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_workflow_triggers_from_completed_ci_workflow_run() -> None:
+def test_workflow_triggers_from_completed_ci_smoke_workflow() -> None:
     text = _workflow_text()
 
     assert "workflow_run:" in text
-    assert "workflows: [CI]" in text
+    assert "workflows: [CI Smoke]" in text
     assert "types: [completed]" in text
     assert "github.event.workflow_run.event == 'pull_request'" in text
     assert "github.event.workflow_run.conclusion == 'success'" in text

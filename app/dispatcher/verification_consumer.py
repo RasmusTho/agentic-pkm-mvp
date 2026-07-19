@@ -144,7 +144,7 @@ CANONICAL_RECEIPT_SCHEMA_PATH = (
     Path(__file__).resolve().parent
     / "schemas/verification_closer_receipt.schema.json"
 )
-_VERIFICATION_SOURCE_PATH = ".github/workflows/ci.yml"
+_VERIFICATION_SOURCE_PATH = ".github/workflows/ci-smoke.yaml"
 _VERIFICATION_ARTIFACT_NAME = re.compile(
     r"verification-dispatch-(?P<pr_number>[1-9][0-9]*)-(?P<head_sha>[0-9a-fA-F]{40})\Z"
 )
@@ -890,7 +890,7 @@ class GhCliVerificationSource:
                 or not isinstance(source_head_repository, Mapping)
                 or source_run.get("id") != source_run_id
                 or source_run.get("name") != source_workflow.get("name")
-                or source_run.get("name") != "CI"
+                or source_run.get("name") != "CI Smoke"
                 or source_run.get("path") != _VERIFICATION_SOURCE_PATH
                 or source_run.get("run_attempt")
                 != source_workflow.get("run_attempt")
@@ -2984,7 +2984,7 @@ def _checks_rejection(
 ) -> str | None:
     if not checks:
         return "missing_checks"
-    required_checks = {"Unit tests (not pg)": ".github/workflows/ci.yml"}
+    required_checks = {"Unit tests (not pg)": ".github/workflows/ci-smoke.yaml"}
     latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
     for index, check in enumerate(checks):
         name = check.get("name")

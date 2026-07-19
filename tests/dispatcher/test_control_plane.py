@@ -184,6 +184,9 @@ def _write_v1_empty_supporting_v3_state(
     legacy_request = verification_request()
     legacy_request["contract_version"] = "verification_dispatch_request.v1"
     legacy_request.pop("closing_issues")
+    source_workflow = dict(legacy_request["source_workflow"])
+    source_workflow["name"] = "CI"
+    legacy_request["source_workflow"] = source_workflow
     assert legacy_request["supporting_issues"] == []
     identity = {
         "contract_version": legacy_request["contract_version"],
@@ -354,6 +357,9 @@ def test_v1_empty_supporting_backup_restore_quarantines_without_budget_reset(
     assert migrated.status == "legacy_untrusted"
     assert migrated.authority_state == "legacy_untrusted"
     assert migrated.request == legacy_request
+    migrated_source = migrated.request["source_workflow"]
+    assert isinstance(migrated_source, dict)
+    assert migrated_source["name"] == "CI"
     assert migrated.supporting_authority == ()
     assert migrated.closing_authority == ()
     assert migrated.claimed_by is None

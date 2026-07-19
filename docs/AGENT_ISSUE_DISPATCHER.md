@@ -37,6 +37,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 **Verification dispatch consumer: SHIPPED IN REPO (host enablement is separate)**
 
+- The artifact-only producer, ledger, and host-local consumer authenticate the same `CI Smoke`
+  pull-request source workflow at `.github/workflows/ci-smoke.yaml`; a retired `CI` identity or
+  mismatched path is rejected before verification work can start.
+
 - `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
   idempotent PR/head verification runs, one global active subscription slot, exact lease-token
   fencing, durable retry timestamps, attempts, receipts, and deduplicated Human Exception packets.
@@ -131,7 +135,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
   GitHub read must contain a named, completed, successful `Unit tests (not pg)` check produced by
   the authoritative `github-actions` App and authenticated as a pull-request run of
-  `.github/workflows/ci.yml` on that exact head. Its workflow run must correlate to the check run's
+  `.github/workflows/ci-smoke.yaml` on that exact head. Its workflow run must correlate to the check run's
   exact suite before latest-rerun selection; same-name checks from another App, workflow, suite,
   event, or head are ignored. The required workflow job runs repo-wide `mypy app` before it can
   publish success. Missing, ambiguous, unnamed, skipped, neutral, pending, or failed required-check

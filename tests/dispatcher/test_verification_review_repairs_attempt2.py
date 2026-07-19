@@ -185,7 +185,7 @@ def test_live_truth_uses_latest_check_rerun_by_name(tmp_path) -> None:
             "check_suite": {"id": 10},
             "workflow_run": {
                 "id": 110,
-                "path": ".github/workflows/ci.yml",
+                "path": ".github/workflows/ci-smoke.yaml",
                 "event": "pull_request",
                 "head_sha": HEAD,
                 "check_suite_id": 10,
@@ -200,7 +200,7 @@ def test_live_truth_uses_latest_check_rerun_by_name(tmp_path) -> None:
             "check_suite": {"id": 11},
             "workflow_run": {
                 "id": 111,
-                "path": ".github/workflows/ci.yml",
+                "path": ".github/workflows/ci-smoke.yaml",
                 "event": "pull_request",
                 "head_sha": HEAD,
                 "check_suite_id": 11,
