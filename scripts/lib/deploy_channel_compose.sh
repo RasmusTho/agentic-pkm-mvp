@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_deploy_channel_compose_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_deploy_channel_compose_lib_dir}/instance_ownership_host_state.sh"
+unset _deploy_channel_compose_lib_dir
+
 _deploy_channel_env_value() {
   local file_path="${1:?env file required}"
   local key="${2:?env key required}"
@@ -47,6 +51,8 @@ deploy_channel_compose() {
   local compose_project="${4:?compose project required}"
   local channel_env_file="${5:?channel env file required}"
   shift 5
+
+  resolve_instance_ownership_host_state_dir || return $?
 
   local runtime_env_ref runtime_env_file vault_host_root vault_container_root
   local -a compose_args

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +13,33 @@ from app.instance.instance_state import (
     LegacyRegistryFinalExport,
 )
 from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
+
+
+def _durable_test_quiescence_proof(tmp_path: Path) -> DeploymentQuiescenceProof:
+    root = tmp_path / "proof"
+    root.mkdir(mode=0o700)
+    lease_path = root / "deployment-host-global-lease.json"
+    inventory_digest = hashlib.sha256(b"test").hexdigest()
+    lease_path.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-lease.v2",
+                "channel_id": "test",
+                "nonce": "test-nonce",
+                "phase": "proved",
+                "inventory_digest": inventory_digest,
+                "all_consumers_stopped": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(lease_path, 0o600)
+    return DeploymentQuiescenceProof(
+        channel_id="test",
+        nonce="test-nonce",
+        inventory_digest=inventory_digest,
+        lease_path=lease_path,
+    )
 
 
 def _read_revision(path: Path, consumer: str) -> dict[str, object]:
@@ -42,7 +71,7 @@ def test_registry_survives_recreate_and_is_shared_cross_process(tmp_path) -> Non
     legacy.upsert_known_vault(KnownVaultRef("path:two", str(tmp_path / "two")))
     final_export = exporter.export_final_after_stop(
         legacy.path,
-        quiescence_proof=DeploymentQuiescenceProof.for_test("test"),
+        quiescence_proof=_durable_test_quiescence_proof(tmp_path),
     )
     imported = exporter.import_final_export(final_export)
 

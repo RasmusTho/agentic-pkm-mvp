@@ -21,6 +21,7 @@ from app.instance.instance_state import (
     preflight_instance_state,
     validate_registry_disjoint_from_content,
 )
+from app.instance.ownership_ledger import LedgerCollisionError
 from app.instance.runtime import (
     InstanceRegistryRuntime,
     _begin_instance_state_deployment,
@@ -191,6 +192,71 @@ def _run_quiescence_helper(
     return result, output
 
 
+def _prove_empty_quiescence(
+    *, channel: str, host_global_root: Path
+) -> DeploymentQuiescenceProof:
+    lease = json.loads(
+        (host_global_root / "deployment-host-global-lease.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    inventory = host_global_root / "deployment-quiescence-inventory.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": lease["controller"],
+                "domains": domains,
+                "snapshot_digests": [digest, digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(inventory, 0o600)
+    return _prove_instance_state_quiescence(
+        channel=channel,
+        host_global_root=host_global_root,
+        inventory_path=inventory,
+    )
+
+
+def _durable_test_quiescence_proof(
+    tmp_path: Path, channel: str
+) -> DeploymentQuiescenceProof:
+    root = tmp_path / f"{channel}-proof"
+    root.mkdir(mode=0o700)
+    lease_path = root / "deployment-host-global-lease.json"
+    nonce = f"{channel}-test-nonce"
+    inventory_digest = hashlib.sha256(channel.encode()).hexdigest()
+    lease_path.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-lease.v2",
+                "channel_id": channel,
+                "nonce": nonce,
+                "phase": "proved",
+                "inventory_digest": inventory_digest,
+                "all_consumers_stopped": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(lease_path, 0o600)
+    return DeploymentQuiescenceProof(
+        channel_id=channel,
+        nonce=nonce,
+        inventory_digest=inventory_digest,
+        lease_path=lease_path,
+    )
+
+
 def _linux_stat_fixture(
     pid: int,
     *,
@@ -291,7 +357,7 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
         )
     final = exporter.export_final_after_stop(
         legacy.path,
-        quiescence_proof=DeploymentQuiescenceProof.for_test(),
+        quiescence_proof=_durable_test_quiescence_proof(tmp_path, "test"),
     )
     assert final.fingerprint != diagnostic.fingerprint
 
@@ -336,7 +402,7 @@ def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
     )
     fence = _deployment_fence_path(host_global_root, "test")
     assert fence.is_file()
-    with pytest.raises(RegistryError, match="restart is fenced"):
+    with pytest.raises(RegistryError, match="host-global deployment lease"):
         _preflight_runtime(
             channel="test",
             instance_state_root=instance_state_root,
@@ -368,7 +434,9 @@ def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
         inventory_path=inventory_path,
         backup_root=host_global_root / "backups" / "test" / "latest",
         restore_root=None,
-        quiescence_proof=DeploymentQuiescenceProof.for_test("test"),
+        quiescence_proof=_prove_empty_quiescence(
+            channel="test", host_global_root=host_global_root
+        ),
     )
 
     assert receipt["final_fingerprint"] != diagnostic["diagnostic_fingerprint"]
@@ -433,7 +501,9 @@ def test_deployment_producer_keeps_restart_fenced_on_incomplete_inventory(
             inventory_path=inventory_path,
             backup_root=host_global_root / "backups" / "prod" / "latest",
             restore_root=None,
-            quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
+            quiescence_proof=_prove_empty_quiescence(
+                channel="prod", host_global_root=host_global_root
+            ),
         )
 
     assert _deployment_fence_path(host_global_root, "prod").is_file()
@@ -479,7 +549,9 @@ def test_deployment_producer_rejects_inventory_not_revalidated_after_quiescence(
             inventory_path=inventory_path,
             backup_root=host_global_root / "backups" / "prod" / "latest",
             restore_root=None,
-            quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
+            quiescence_proof=_prove_empty_quiescence(
+                channel="prod", host_global_root=host_global_root
+            ),
         )
 
     assert _deployment_fence_path(host_global_root, "prod").is_file()
@@ -1874,14 +1946,244 @@ def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
     assert "instance-state" in compose["volumes"]
     init = compose["services"]["instance-state-init"]
     assert "instance-state:/app/instance-state" in init["volumes"]
-    assert any("/app/instance-ownership" in mount for mount in init["volumes"])
+    assert any(
+        isinstance(mount, dict)
+        and mount.get("target") == "/app/instance-ownership"
+        for mount in init["volumes"]
+    )
     for consumer in receipt.consumers:
         service = compose["services"][consumer]
         assert "instance-state:/app/instance-state" in service["volumes"]
-        assert any("/app/instance-ownership" in mount for mount in service["volumes"])
+        assert any(
+            isinstance(mount, dict)
+            and mount.get("target") == "/app/instance-ownership"
+            for mount in service["volumes"]
+        )
         assert "app.instance.runtime preflight" in service["command"][2]
+        assert "INSTANCE_STATE_LEGACY_ROLLBACK" in service["command"][2]
         assert f"--consumer {consumer}" in service["command"][2]
         assert service["depends_on"]["instance-state-init"]["condition"] == "service_completed_successfully"
+
+
+def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mutation(
+    tmp_path,
+) -> None:
+    host_global_root = tmp_path / "host-global"
+    prod_state_root = tmp_path / "prod-state"
+    prod_layout = InstanceStateLayout.for_channel(prod_state_root, "prod")
+    prod_runtime = InstanceRegistryRuntime.for_paths(prod_layout, host_global_root)
+    prod_vault = tmp_path / "prod-vault"
+    prod_vault.mkdir()
+    prod_runtime.bootstrap_env_binding(
+        vault_root=prod_vault,
+        watcher_vault_path=prod_vault,
+    )
+    prod_runtime.ledger.bootstrap_legacy_owners(
+        [], inventory_complete=True, writers_drained=True
+    )
+    dev_state_root = tmp_path / "dev-state"
+    dev_state_root.mkdir()
+    _begin_instance_state_deployment(
+        channel="dev",
+        instance_state_root=dev_state_root,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "legacy.md",
+        controller_pid=os.getpid(),
+        controller_start_token="linux:" + "0" * 64,
+    )
+    protected_paths = tuple(
+        path
+        for path in (
+            prod_layout.registry_path,
+            prod_runtime.ledger.key_path,
+            prod_runtime.ledger.path,
+            host_global_root / "deployment-host-global-lease.json",
+            _deployment_fence_path(host_global_root, "dev"),
+        )
+        if path.exists()
+    )
+    before = {path: path.read_bytes() for path in protected_paths}
+
+    with pytest.raises(RegistryError, match="host-global deployment lease"):
+        _preflight_runtime(
+            channel="prod",
+            instance_state_root=prod_state_root,
+            host_global_root=host_global_root,
+            consumer="worker",
+        )
+
+    assert {path: path.read_bytes() for path in protected_paths} == before
+    (host_global_root / "deployment-host-global-lease.json").unlink()
+    _deployment_fence_path(host_global_root, "dev").unlink()
+    assert (
+        _preflight_runtime(
+            channel="prod",
+            instance_state_root=prod_state_root,
+            host_global_root=host_global_root,
+            consumer="worker",
+        )
+        == 0
+    )
+
+
+def test_previous_image_without_runtime_preflight_module_uses_only_explicit_safe_rollback(
+    tmp_path,
+) -> None:
+    compose = _load_compose(REPO_ROOT / "docker-compose.yaml")
+    command = compose["services"]["api"]["command"][2]
+    ownership = tmp_path / "ownership"
+    runtime_tmp = tmp_path / "runtime-tmp"
+    ownership.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = -c ]; then exit 1; fi\n"
+        "exit 91\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    executable = command.replace("$$", "$").replace("/app/tmp", str(runtime_tmp)).replace(
+        "/app/instance-ownership", str(ownership)
+    ).replace("exec bash /app/scripts/start_api.sh", "printf rollback-started")
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PKM_ENVIRONMENT": "prod",
+        "INSTANCE_STATE_LEGACY_ROLLBACK": "1",
+    }
+
+    ordinary_start = subprocess.run(
+        ["/bin/bash", "-c", executable],
+        env={**env, "INSTANCE_STATE_LEGACY_ROLLBACK": "0"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ordinary_start.returncode != 0
+    assert "unavailable outside an explicit rollback" in ordinary_start.stderr
+
+    safe = subprocess.run(
+        ["/bin/bash", "-c", executable],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert safe.returncode == 0, safe.stderr
+    assert safe.stdout == "rollback-started"
+
+    for blocked_name in (
+        "deployment-host-global-lease.json",
+        "deployment-dev-restart-fence.json",
+    ):
+        blocked_path = ownership / blocked_name
+        blocked_path.write_text("{}", encoding="utf-8")
+        blocked = subprocess.run(
+            ["/bin/bash", "-c", executable],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert blocked.returncode != 0
+        assert blocked.stdout == ""
+        blocked_path.unlink()
+
+
+def test_host_global_bind_source_resolves_identically_across_checkouts_and_channels(
+    tmp_path,
+) -> None:
+    resolver = REPO_ROOT / "scripts/lib/instance_ownership_host_state.sh"
+    assert resolver.is_file()
+    home = tmp_path / "home"
+    home.mkdir()
+    resolved = []
+    for checkout in (tmp_path / "checkout-a", tmp_path / "checkout-b"):
+        checkout.mkdir()
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                f"source '{resolver}'; prepare_instance_ownership_host_state_dir; printf %s \"$INSTANCE_OWNERSHIP_HOST_STATE_DIR\"",
+            ],
+            cwd=checkout,
+            env={**os.environ, "HOME": str(home), "XDG_STATE_HOME": ""},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        resolved.append(result.stdout)
+    assert resolved == [
+        str(home / ".local/state/agentic-pkm/instance-ownership"),
+        str(home / ".local/state/agentic-pkm/instance-ownership"),
+    ]
+    relative = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            f"source '{resolver}'; resolve_instance_ownership_host_state_dir",
+        ],
+        env={**os.environ, "INSTANCE_OWNERSHIP_HOST_STATE_DIR": "relative/state"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert relative.returncode == 64
+    assert "must be an absolute host path" in relative.stderr
+    for launcher in (
+        "scripts/deploy_channel.sh",
+        "scripts/start_full_system.sh",
+        "scripts/cold_boot.sh",
+        "scripts/dev_bootstrap.sh",
+        "scripts/run_alpha_stack.sh",
+        "scripts/verify_runtime_chain.sh",
+    ):
+        assert "prepare_instance_ownership_host_state_dir" in (
+            REPO_ROOT / launcher
+        ).read_text(encoding="utf-8")
+    shared_root = Path(resolved[0])
+    assert shared_root.stat().st_mode & 0o777 == 0o700
+    dev_runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "dev-state", "dev"), shared_root
+    )
+    prod_runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"), shared_root
+    )
+    dev_vault = tmp_path / "vault"
+    prod_overlap = dev_vault / "nested"
+    prod_overlap.mkdir(parents=True)
+    dev_runtime.bootstrap_env_binding(
+        vault_root=dev_vault, watcher_vault_path=dev_vault
+    )
+    with pytest.raises(LedgerCollisionError):
+        prod_runtime.bootstrap_env_binding(
+            vault_root=prod_overlap, watcher_vault_path=prod_overlap
+        )
+
+    compose = _load_compose(REPO_ROOT / "docker-compose.yaml")
+    for service_name in (
+        "instance-state-init",
+        "api",
+        "worker",
+        "watcher",
+        "heimdal-capture-watch",
+    ):
+        ownership_mounts = [
+            mount
+            for mount in compose["services"][service_name]["volumes"]
+            if isinstance(mount, dict) and mount.get("target") == "/app/instance-ownership"
+        ]
+        assert ownership_mounts == [
+            {
+                "type": "bind",
+                "source": "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}",
+                "target": "/app/instance-ownership",
+                "bind": {"create_host_path": False},
+            }
+        ]
 
 
 def test_runtime_preflight_rejects_missing_mounts_before_mutation(tmp_path) -> None:
@@ -1982,9 +2284,10 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     stale_checksum.write_text("stale", encoding="ascii")
     os.chmod(stale_final, 0o600)
     os.chmod(stale_checksum, 0o600)
+    restore_proof = _durable_test_quiescence_proof(tmp_path, "prod")
     restored = InstanceStateBackup(layout, runtime.ledger).restore(
         tmp_path / "backup",
-        quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
+        quiescence_proof=restore_proof,
     )
     assert restored.registry_checksum == expected["registry_checksum"]
     assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
@@ -2000,7 +2303,10 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
 
     (tmp_path / "backup" / "ownership-key.json").unlink()
     with pytest.raises(InstanceStatePreflightError, match="complete ledger/key"):
-        InstanceStateBackup(layout, runtime.ledger).restore(tmp_path / "backup", quiescence_proof=DeploymentQuiescenceProof.for_test("prod"))
+        InstanceStateBackup(layout, runtime.ledger).restore(
+            tmp_path / "backup",
+            quiescence_proof=restore_proof,
+        )
 
 
 def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_path) -> None:
@@ -2049,7 +2355,7 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
     with pytest.raises(InstanceStatePreflightError, match="channel_id"):
         InstanceStateBackup(target_layout, target_runtime.ledger).restore(
             tmp_path / "dev-backup",
-            quiescence_proof=DeploymentQuiescenceProof.for_test("prod"),
+            quiescence_proof=_durable_test_quiescence_proof(tmp_path, "prod"),
         )
 
     after = {

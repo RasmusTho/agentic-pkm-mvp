@@ -5,6 +5,8 @@ echo "DEPRECATED: use make alpha-up (scripts/start_full_system.sh) instead of sc
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "scripts/lib/instance_ownership_host_state.sh"
+prepare_instance_ownership_host_state_dir
 
 STATUS_URL="http://127.0.0.1:18000/api/status"
 MAX_ATTEMPTS=30

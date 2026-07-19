@@ -760,6 +760,7 @@ FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
 VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
 resolve_channel_defaults
+prepare_instance_ownership_host_state_dir
 export_prod_build_identity
 API_BASE_URL="${API_BASE_URL%/}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-$API_BASE_URL/healthz}"

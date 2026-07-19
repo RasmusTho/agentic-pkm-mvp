@@ -423,7 +423,7 @@ rollback_failed_startup() {
       # interrupted deploy's ambiguous migration state.
       rm -f "${migration_pending_file}"
     fi
-    if ! compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
+    if ! INSTANCE_STATE_LEGACY_ROLLBACK=1 compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
   else
@@ -732,6 +732,15 @@ if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
   exit 86
 fi
+
+prepare_instance_ownership_host_state_dir
+
+if [ "${action}" = "rollback" ]; then
+  INSTANCE_STATE_LEGACY_ROLLBACK=1
+else
+  INSTANCE_STATE_LEGACY_ROLLBACK=0
+fi
+export INSTANCE_STATE_LEGACY_ROLLBACK
 
 # Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
 # the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).

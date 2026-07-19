@@ -104,7 +104,10 @@ external and the canonical prod startup/deploy wrappers provision it idempotentl
 consumers fail-exit through one resolved-path/permissions preflight before starting and use
 `/app/instance-state/agentic-pkm/vault-registry.md`. A separate private host bind at
 `/app/instance-ownership` carries the HMAC-keyed canonical-root ledger shared across dev/test/prod,
-preventing equal or overlapping content roots from becoming active in different channels.
+preventing equal or overlapping content roots from becoming active in different channels. Canonical
+wrappers resolve its source to one absolute, checkout-independent host-state path before Compose
+interpolation; checkout-relative fallbacks are forbidden, and every consumer rejects an active
+host-global deployment lease regardless of which channel owns it.
 
 MVR-01B also wires the canonical deploy and start wrappers to one host-global-leased and
 channel-fenced producer. Before any init or mutation, it derives dev/test/prod/native legacy owners
@@ -120,7 +123,10 @@ durable volume, verifies the private production-derived owner inventory, seeds t
 optionally restores a verified backup, and creates the next registry/ledger/key backup. The fence is
 removed only after that sequence succeeds; consumer preflight rejects a missing mount, missing
 established state, incomplete owner bootstrap, or surviving fence without creating replacement
-state.
+state. An explicitly selected rollback image that predates the runtime preflight module may pass
+only the Compose-owned compatibility guard and only when the host-global lease and every channel
+restart fence are absent; module absence during normal startup or deploy remains a fail-closed
+error.
 
 Those recovery facilities do not authorize cutover. The registry remains `authority: dormant`, the
 legacy scalar app-local store remains authoritative in every channel, and second-registration,

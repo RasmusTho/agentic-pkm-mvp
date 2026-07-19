@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "${ROOT}/scripts/lib/instance_ownership_host_state.sh"
+prepare_instance_ownership_host_state_dir
 
 docker info >/dev/null 2>&1 || true
 if ! docker info >/dev/null 2>&1; then

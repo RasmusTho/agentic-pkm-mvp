@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+_instance_state_deployment_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_instance_state_deployment_lib_dir}/instance_ownership_host_state.sh"
+unset _instance_state_deployment_lib_dir
+
 # MVR-01B deploy/start producer. The caller supplies its channel-aware compose
 # function so the same fenced sequence is used by pinned deploys and local
 # full-system starts.

@@ -5,8 +5,8 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-07-18
-Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
+Last reviewed: 2026-07-19
+Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
 
 ## Why this document exists
 
@@ -62,7 +62,12 @@ and corruption-recovery contracts. MVR-01B now provides the protected channel-sc
 and identical fail-loud preflight for API, worker, watcher, and Heimdal capture watcher. The
 `instance-state-init` producer verifies owner-only state before those consumers start; their
 resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. It does not invent a
-missing registry or ledger during consumer preflight.
+missing registry or ledger during consumer preflight. The host bind source is resolved before
+Compose interpolation to the canonical absolute
+`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path (or an explicit absolute
+override), so separate checkouts and all three channel projects mount the same ledger. Compose may
+not create a checkout-relative substitute. Every consumer rejects any active host-global deployment
+lease, including a lease owned by another channel, before reading or mutating channel state.
 
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
 `scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the
@@ -82,7 +87,11 @@ on first volume or preserves it beside an established dormant registry, calls th
 legacy-owner bootstrap, creates a verified registry/ledger/key backup, and clears the fence.
 `INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored inside that stopped interval
 before finalization and consumer startup. Failure leaves the fence in place, so upgraded consumer
-preflight refuses restart.
+preflight refuses restart. Rollback to a previous image that predates `app.instance.runtime` is
+selected explicitly by the deploy wrapper and uses a Compose-owned compatibility guard: it may
+start only when neither the host-global lease nor any channel restart fence exists. Current images
+always run the full authenticated runtime preflight; module absence outside explicit rollback fails
+closed.
 
 This 01B recovery boundary also includes canonical-root overlap rejection and dormant recoverable
 lifecycle lineage. It deliberately leaves `authority: dormant`: the production picker continues to

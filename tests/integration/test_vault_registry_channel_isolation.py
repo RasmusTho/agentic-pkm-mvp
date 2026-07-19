@@ -785,6 +785,43 @@ def _protected_rotation_state(runtime: InstanceRegistryRuntime) -> dict[str, byt
     }
 
 
+def test_key_rotation_rejects_public_test_only_proof_bypass_without_mutation(
+    tmp_path,
+) -> None:
+    runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, owner_inventory = _rotation_authority(
+        runtime,
+        [("dev", registration.vault_binding_id, root)],
+    )
+    assert "_test_only" not in DeploymentQuiescenceProof.__dataclass_fields__
+    assert not hasattr(DeploymentQuiescenceProof, "for_test")
+    _rewrite_owner_receipt(
+        owner_inventory,
+        lambda payload: payload.update(
+            {
+                "controller": {
+                    "pid": os.getpid() + 1,
+                    "start_token": "linux:" + "f" * 64,
+                }
+            }
+        ),
+    )
+    before = _protected_rotation_state(runtime)
+    generation_before = runtime.ledger.load().generation
+
+    with pytest.raises(InstanceStatePreflightError):
+        runtime.rotate_ledger_key(
+            quiescence_proof=proof,
+            legacy_owner_inventory_path=owner_inventory,
+        )
+
+    assert _protected_rotation_state(runtime) == before
+    assert runtime.ledger.load().generation == generation_before
+
+
 @pytest.mark.parametrize("missing_artifact", ["key", "ledger"])
 def test_key_rotation_requires_established_artifacts_without_creating_them(
     tmp_path, missing_artifact

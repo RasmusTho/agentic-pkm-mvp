@@ -36,17 +36,10 @@ class DeploymentQuiescenceProof:
     controller_pid: int | None = None
     controller_start_token: str | None = None
     owner_receipt_digest: str | None = None
-    _test_only: bool = False
-
-    @classmethod
-    def for_test(cls, channel_id: str = "test") -> "DeploymentQuiescenceProof":
-        return cls(channel_id, "test-nonce", "test-digest", _test_only=True)
 
     def require_valid(self, *, channel_id: str | None = None) -> None:
         if channel_id is not None and self.channel_id != channel_id:
             raise InstanceStatePreflightError("quiescence proof targets another channel")
-        if self._test_only:
-            return
         if self.lease_path is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
         try:

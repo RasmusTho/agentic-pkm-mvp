@@ -418,6 +418,8 @@ def _preflight_runtime(
     )
     if not instance_state_root.is_dir() or not host_global_root.is_dir():
         raise RegistryError("instance-state and host-global mounts must already exist")
+    if _deployment_lease_path(host_global_root).exists():
+        raise RegistryError("host-global deployment lease blocks every runtime consumer")
     if _deployment_fence_path(host_global_root, channel).exists():
         raise RegistryError("channel restart is fenced pending instance-state finalization")
     preflight_instance_state(
@@ -770,8 +772,6 @@ def _bind_legacy_owner_inventory_to_proof(
 ) -> DeploymentQuiescenceProof:
     """Bind the drained-owner receipt to the already-proved deployment lease."""
 
-    if quiescence_proof._test_only:
-        return quiescence_proof
     ownership_root = Path(host_global_root).expanduser().resolve(strict=False)
     inventory = Path(inventory_path).expanduser().resolve(strict=False)
     lease_path = _deployment_lease_path(ownership_root).resolve(strict=False)
@@ -890,7 +890,7 @@ def _load_legacy_owner_inventory(
     quiescence_proof: DeploymentQuiescenceProof | None = None,
 ) -> list[LegacyOwner]:
     payload = _load_legacy_owner_inventory_payload(inventory_path)
-    if quiescence_proof is not None and not quiescence_proof._test_only:
+    if quiescence_proof is not None:
         expected_controller = {
             "pid": quiescence_proof.controller_pid,
             "start_token": quiescence_proof.controller_start_token,

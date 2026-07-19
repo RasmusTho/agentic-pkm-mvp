@@ -53,6 +53,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_state_deployment.sh",
+        "scripts/lib/instance_ownership_host_state.sh",
         "scripts/instance_state_writer_inventory.py",
     ):
         destination = root / relative
@@ -240,6 +241,7 @@ exec {sys.executable!s} "$@"
             "FAKE_DEPLOY_EVENT_LOG": str(event_log),
             "DEPLOY_HEALTH_TIMEOUT_SECONDS": "1",
             "XDG_DATA_HOME": str(tmp_path / "xdg"),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "instance-ownership"),
         }
     )
     return root, env, sha

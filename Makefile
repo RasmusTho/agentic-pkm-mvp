@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap prepare-instance-ownership dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 # Test vault root for bootstrap / seeded test startup lanes. Honors an
@@ -27,6 +27,9 @@ TEST_DATABASE_URL ?= postgresql+psycopg://app:app@127.0.0.1:15434/app_test
 TEST_API_BASE_URL ?= http://127.0.0.1:18002
 TEST_LLM_PROVIDER ?= mock
 TEST_LLM_MODEL ?= llama3.1:8b
+PKM_HOST_STATE_HOME := $(if $(strip $(XDG_STATE_HOME)),$(XDG_STATE_HOME),$(HOME)/.local/state)
+INSTANCE_OWNERSHIP_HOST_STATE_DIR ?= $(PKM_HOST_STATE_HOME)/agentic-pkm/instance-ownership
+export INSTANCE_OWNERSHIP_HOST_STATE_DIR
 SMOKE_WORKERS ?= auto
 SMOKE_E2E_WORKERS ?= 0
 APP_CODE_BIND_COMPOSE ?=
@@ -163,7 +166,10 @@ test-bootstrap: require-test-vault-root
 	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" API_BASE_URL="$(TEST_API_BASE_URL)" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=30 bash scripts/verify_runtime_stack.sh
 	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" $(PYTHON) -m app.cli uat-run-vault-test --vault-root "$(TEST_VAULT_ROOT)" --assert
 
-dev-up:
+prepare-instance-ownership:
+	@bash -c 'source scripts/lib/instance_ownership_host_state.sh; prepare_instance_ownership_host_state_dir'
+
+dev-up: prepare-instance-ownership
 	@$(COMPOSE_DEV) up -d $(COMPOSE_UP_BUILD)
 
 dev-down:
@@ -204,7 +210,7 @@ prod-ui:
 prod-ui-doctor:
 	@bash scripts/prod/prod_ui_doctor.sh
 
-prod-up:
+prod-up: prepare-instance-ownership
 	@$(COMPOSE_PROD) up -d $(COMPOSE_UP_BUILD)
 
 prod-down:
@@ -225,7 +231,7 @@ test-start-full: require-vault-root
 	VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=60 \
 	scripts/start_full_system.sh
 
-test-up:
+test-up: prepare-instance-ownership
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" VAULT_HOST_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) -f docker-compose.legacy-vault.yml -f docker-compose.test-vault.yml up -d $(COMPOSE_UP_BUILD)
 
 test-down:
