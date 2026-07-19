@@ -147,6 +147,7 @@ substrate (the `settings_receipts`/`promotion_receipts` pattern).
 `auth_expired`, `auth_revoked`, `auth_disconnected` (operator action), `quota_exhausted`,
 `api_unavailable` (5xx/timeout), `network_error`, `source_gone` (404/private-without-access),
 `source_unsupported` (Watch Later / Watch History), `writeguard_blocked`, `pipeline_dead_letter`,
+`policy_unsupported` (queued acquisition mode/depth has no delivered production path),
 `paused_global`, `paused_source`, `runner_offline` (staleness derived, not self-reported),
 `media_policy_disabled`. UI copy maps these through the Companion UI's single degraded-copy module;
 unknown codes fail closed to the generic degraded message.

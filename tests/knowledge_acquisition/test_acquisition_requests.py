@@ -726,6 +726,42 @@ def test_drain_honors_captions_false_before_acquire_youtube() -> None:
     assert "captions=false" in result.last_failure["error"]
 
 
+def test_drain_media_enabled_fails_closed_before_acquire_youtube() -> None:
+    """The undelivered media engine must be refused before acquisition egress."""
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={
+            "policy_version": 1,
+            "mode": "acquire_transcript",
+            "captions": True,
+            "media": {"enabled": True},
+        },
+    )
+    claimed = q.claim_batch(1, conn=conn)
+    calls: list[dict[str, Any]] = []
+
+    def acquire_must_not_run(*args: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+        raise AssertionError("media-enabled requests must stop before acquire_youtube")
+
+    result = drain_one(
+        claimed[0], vault_context=None, queue=q, conn=conn, acquire_fn=acquire_must_not_run
+    )
+
+    assert calls == []
+    assert result.status == "dead_lettered"
+    assert result.completed_at is None
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "media_policy_disabled"
+    assert "media" in result.last_failure["error"]
+    failed_events = conn.payloads_for(ACQUISITION_FAILED_TOPIC)
+    assert failed_events[-1]["reason_code"] == "media_policy_disabled"
+    assert failed_events[-1]["terminal"] is True
+
+
 def test_drain_unsupported_policy_depth_is_legible_non_completed() -> None:
     conn = FakeOutboxConn()
     q = _queue()

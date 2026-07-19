@@ -1254,10 +1254,11 @@ def drain_one(
     A queue row carries the effective acquisition policy at enqueue time, so
     the drain is its enforcement boundary.  The current ``acquire_youtube``
     entrypoint is a full transcript/caption pipeline: it cannot truthfully
-    service ``candidate_metadata_only`` or ``captions: false``.  Those modes
-    therefore produce an explicit terminal policy disposition before any
-    external acquisition occurs; a future metadata-only pipeline must replace
-    this guarded branch rather than bypass it.
+    service ``candidate_metadata_only``, ``captions: false``, or enabled media
+    archival. Those modes therefore produce an explicit terminal policy
+    disposition before any external acquisition occurs; a future metadata-only
+    or media pipeline must replace the corresponding guarded branch rather
+    than bypass it.
 
     The scheduler slice (YSS-06) owns *when* this runs; unexpected exceptions
     (config errors such as ``DatabaseNotConfiguredError`` included) propagate
@@ -1281,8 +1282,19 @@ def drain_one(
     policy = request.policy_snapshot or {}
     mode = policy.get("mode")
     captions = policy.get("captions")
+    media = policy.get("media")
     unsupported_policy: str | None = None
-    if mode == "candidate_metadata_only":
+    if media is not None and not isinstance(media, dict):
+        unsupported_policy = "policy media must be an object when present"
+    elif media is not None and media.get("enabled") is True:
+        return queue.dead_letter(
+            request.request_id,
+            reason_code="media_policy_disabled",
+            error="media acquisition is disabled because the archival engine is not delivered",
+            now=now,
+            conn=conn,
+        )
+    elif mode == "candidate_metadata_only":
         unsupported_policy = (
             "policy mode 'candidate_metadata_only' requires a metadata-only candidate "
             "pipeline, which is not available at this drain boundary"
