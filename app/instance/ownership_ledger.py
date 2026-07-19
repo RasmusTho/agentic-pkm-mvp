@@ -365,9 +365,14 @@ class OwnershipLedger:
         precondition: Callable[[LedgerSnapshot, Mapping[str, Path]], None],
         crash_after: str | None = None,
     ) -> LedgerSnapshot:
-        with self._locked():
-            old_key = self._load_or_create_key_locked()
-            current = self._load_or_create_ledger_locked(old_key)
+        self._assert_existing_artifacts()
+        with self._locked(recover_rotation=False):
+            if self.rotation_path.exists():
+                raise LedgerKeyError(
+                    "pending key rotation must be recovered before another rotation"
+                )
+            old_key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(old_key, allow_create=False)
             live_roots = {
                 binding: Path(self._open_root(lease.sealed_root, old_key))
                 for binding, lease in current.leases.items()
@@ -556,7 +561,7 @@ class OwnershipLedger:
         return replace(current, **changes)
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self, *, recover_rotation: bool = True) -> Iterator[None]:
         _ensure_private_directory(self.root)
         descriptor = os.open(
             self.lock_path,
@@ -567,7 +572,8 @@ class OwnershipLedger:
         with os.fdopen(descriptor, "a+b", closefd=True) as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
-                self._recover_rotation_locked()
+                if recover_rotation:
+                    self._recover_rotation_locked()
                 yield
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

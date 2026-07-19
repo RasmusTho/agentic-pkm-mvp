@@ -24,6 +24,7 @@ from app.instance.runtime import (
     LifecycleActivationProof,
     TransferActivationProof,
     _begin_instance_state_deployment,
+    _bind_legacy_owner_inventory_to_proof,
     _deployment_fence_path,
     _prove_instance_state_quiescence,
 )
@@ -87,6 +88,22 @@ def _rotation_authority(
         }
         for channel_id, binding_id, root in owners
     ]
+    owner_identities = []
+    for channel_id, _, root in owners:
+        metadata = os.stat(root)
+        owner_identities.append(
+            {
+                "channel_id": channel_id,
+                "root": str(root),
+                "identity": f"inode:{metadata.st_dev}:{metadata.st_ino}",
+            }
+        )
+    source_evidence = {
+        "docker": [],
+        "config": [],
+        "owners": owner_rows,
+        "owner_identities": owner_identities,
+    }
     owner_inventory = runtime.ledger.root / "legacy-owner-inventory.json"
     owner_inventory.write_text(
         json.dumps(
@@ -97,15 +114,26 @@ def _rotation_authority(
                 "source_probe_count": 2,
                 "validated_after_quiescence": True,
                 "source_digest": hashlib.sha256(
-                    json.dumps(owner_rows, sort_keys=True, separators=(",", ":")).encode()
+                    json.dumps(
+                        source_evidence, sort_keys=True, separators=(",", ":")
+                    ).encode()
                 ).hexdigest(),
+                "source_evidence": source_evidence,
                 "owners": owner_rows,
             }
         ),
         encoding="utf-8",
     )
     os.chmod(owner_inventory, 0o600)
-    return proof, owner_inventory
+    return (
+        _bind_legacy_owner_inventory_to_proof(
+            inventory_path=owner_inventory,
+            quiescence_proof=proof,
+            channel=runtime.layout.channel_id,
+            host_global_root=runtime.ledger.root,
+        ),
+        owner_inventory,
+    )
 
 
 def test_overlapping_content_roots_cannot_be_active_in_two_channels(tmp_path) -> None:
@@ -426,6 +454,159 @@ def test_key_rotation_preserves_removed_root_tombstone_match_on_reregistration(t
 
     reactivated = runtime.reactivate_removed(root, proof=proof)
     assert reactivated.vault_binding_id == registration.vault_binding_id
+
+
+def _protected_rotation_state(runtime: InstanceRegistryRuntime) -> dict[str, bytes | None]:
+    return {
+        path.name: path.read_bytes() if path.exists() else None
+        for path in (
+            runtime.ledger.key_path,
+            runtime.ledger.path,
+            runtime.ledger.rotation_path,
+        )
+    }
+
+
+@pytest.mark.parametrize("missing_artifact", ["key", "ledger"])
+def test_key_rotation_requires_established_artifacts_without_creating_them(
+    tmp_path, missing_artifact
+) -> None:
+    runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
+    runtime.ledger.root.mkdir(mode=0o700)
+    if missing_artifact == "ledger":
+        runtime.ledger.load()
+        runtime.ledger.path.unlink()
+    proof, owner_inventory = _rotation_authority(runtime, [])
+    before = _protected_rotation_state(runtime)
+
+    with pytest.raises(LedgerKeyError):
+        runtime.rotate_ledger_key(
+            quiescence_proof=proof,
+            legacy_owner_inventory_path=owner_inventory,
+        )
+
+    assert _protected_rotation_state(runtime) == before
+
+
+def _rewrite_owner_receipt(path: Path, mutate) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutate(payload)
+    if payload.get("receipt_digest") != "invalid":
+        payload["receipt_digest"] = hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in payload.items() if key != "receipt_digest"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    else:
+        payload["receipt_digest"] = "0" * 64
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def _unbind_owner_receipt(payload: dict[str, object]) -> None:
+    for key in (
+        "deployment_nonce",
+        "controller",
+        "quiescence_inventory_digest",
+        "receipt_digest",
+    ):
+        payload.pop(key, None)
+
+
+@pytest.mark.parametrize(
+    "invalid_receipt",
+    [
+        "stale-receipt",
+        "unbound-receipt",
+        "swapped-receipt",
+        "forged-source-digest",
+        "forged-receipt-digest",
+        "wrong-nonce",
+        "wrong-controller",
+        "wrong-inventory-digest",
+    ],
+)
+def test_key_rotation_rejects_unbound_or_forged_owner_receipt_without_mutation(
+    tmp_path, invalid_receipt
+) -> None:
+    runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, owner_inventory = _rotation_authority(
+        runtime,
+        [("dev", registration.vault_binding_id, root)],
+    )
+    if invalid_receipt == "stale-receipt":
+        stale_receipt = owner_inventory.read_bytes()
+        _deployment_fence_path(runtime.ledger.root, "dev").unlink()
+        (runtime.ledger.root / "deployment-host-global-lease.json").unlink()
+        (runtime.ledger.root / "deployment-quiescence-proof.json").unlink()
+        proof, owner_inventory = _rotation_authority(
+            runtime,
+            [("dev", registration.vault_binding_id, root)],
+        )
+        owner_inventory.write_bytes(stale_receipt)
+        os.chmod(owner_inventory, 0o600)
+    elif invalid_receipt == "unbound-receipt":
+        _rewrite_owner_receipt(owner_inventory, _unbind_owner_receipt)
+    elif invalid_receipt == "swapped-receipt":
+        _rewrite_owner_receipt(
+            owner_inventory,
+            lambda payload: payload.update(
+                {
+                    "deployment_nonce": "foreign-deployment-nonce",
+                    "controller": {
+                        "pid": os.getpid() + 1,
+                        "start_token": "linux:" + "f" * 64,
+                    },
+                    "quiescence_inventory_digest": "f" * 64,
+                }
+            ),
+        )
+    elif invalid_receipt == "forged-source-digest":
+        _rewrite_owner_receipt(
+            owner_inventory,
+            lambda payload: payload.update({"source_digest": "0" * 64}),
+        )
+    elif invalid_receipt == "forged-receipt-digest":
+        _rewrite_owner_receipt(
+            owner_inventory,
+            lambda payload: payload.update({"receipt_digest": "invalid"}),
+        )
+    elif invalid_receipt == "wrong-nonce":
+        _rewrite_owner_receipt(
+            owner_inventory,
+            lambda payload: payload.update({"deployment_nonce": "stale-deployment-nonce"}),
+        )
+    elif invalid_receipt == "wrong-controller":
+        _rewrite_owner_receipt(
+            owner_inventory,
+            lambda payload: payload.update(
+                {
+                    "controller": {
+                        "pid": os.getpid() + 1,
+                        "start_token": "linux:" + "e" * 64,
+                    }
+                }
+            ),
+        )
+    else:
+        _rewrite_owner_receipt(
+            owner_inventory,
+            lambda payload: payload.update({"quiescence_inventory_digest": "e" * 64}),
+        )
+    before = _protected_rotation_state(runtime)
+
+    with pytest.raises(InstanceStatePreflightError):
+        runtime.rotate_ledger_key(
+            quiescence_proof=proof,
+            legacy_owner_inventory_path=owner_inventory,
+        )
+
+    assert _protected_rotation_state(runtime) == before
 
 
 @pytest.mark.parametrize(

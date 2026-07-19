@@ -33,6 +33,9 @@ class DeploymentQuiescenceProof:
     nonce: str
     inventory_digest: str
     lease_path: Path | None = None
+    controller_pid: int | None = None
+    controller_start_token: str | None = None
+    owner_receipt_digest: str | None = None
     _test_only: bool = False
 
     @classmethod
@@ -48,12 +51,27 @@ class DeploymentQuiescenceProof:
             raise InstanceStatePreflightError("durable quiescence proof is required")
         try:
             payload = json.loads(self.lease_path.read_text(encoding="utf-8"))
+            controller = payload.get("controller")
+            expected_controller = None
+            if self.controller_pid is not None or self.controller_start_token is not None:
+                if self.controller_pid is None or self.controller_start_token is None:
+                    raise ValueError
+                expected_controller = {
+                    "pid": self.controller_pid,
+                    "start_token": self.controller_start_token,
+                }
             if (
                 payload.get("schema") != "agentic-pkm.host-deployment-lease.v2"
                 or payload.get("channel_id") != self.channel_id
                 or payload.get("nonce") != self.nonce
+                or payload.get("phase") != "proved"
                 or payload.get("inventory_digest") != self.inventory_digest
                 or payload.get("all_consumers_stopped") is not True
+                or (expected_controller is not None and controller != expected_controller)
+                or (
+                    self.owner_receipt_digest is not None
+                    and payload.get("owner_receipt_digest") != self.owner_receipt_digest
+                )
             ):
                 raise ValueError
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:

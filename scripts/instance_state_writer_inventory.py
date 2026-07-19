@@ -909,21 +909,24 @@ def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str,
         repo_root, active_channel=active_channel
     )
     owners, owner_identities = _normalize_legacy_owners(docker_owners + config_owners)
+    owner_rows = [record.__dict__ for record in owners]
+    source_evidence = {
+        "docker": docker_fingerprints,
+        "config": config_fingerprints,
+        "owners": owner_rows,
+        "owner_identities": owner_identities,
+    }
     source_digest = hashlib.sha256(
         json.dumps(
-            {
-                "docker": docker_fingerprints,
-                "config": config_fingerprints,
-                "owners": [record.__dict__ for record in owners],
-                "owner_identities": owner_identities,
-            },
+            source_evidence,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
     return {
         "source_digest": source_digest,
-        "owners": [record.__dict__ for record in owners],
+        "source_evidence": source_evidence,
+        "owners": owner_rows,
     }
 
 
@@ -971,6 +974,7 @@ def validate_legacy_owners(
         or baseline.get("source_probe_count") != 2
         or baseline.get("validated_after_quiescence") is not False
         or not isinstance(baseline.get("source_digest"), str)
+        or not isinstance(baseline.get("source_evidence"), dict)
         or not isinstance(baseline.get("owners"), list)
     ):
         raise InventoryError("legacy owner baseline inventory is invalid")
@@ -979,6 +983,7 @@ def validate_legacy_owners(
     if (
         first != second
         or baseline.get("source_digest") != first["source_digest"]
+        or baseline.get("source_evidence") != first["source_evidence"]
         or baseline.get("owners") != first["owners"]
     ):
         raise InventoryError("legacy owner sources are incomplete or racing")

@@ -60,8 +60,29 @@ def _legacy_owner_inventory_payload(
     writers_drained: bool = True,
     validated_after_quiescence: bool = True,
 ) -> dict[str, object]:
+    owner_identities = []
+    for owner in owners:
+        root = Path(owner["root"])
+        if root.is_dir():
+            metadata = os.stat(root)
+            identity = f"inode:{metadata.st_dev}:{metadata.st_ino}"
+        else:
+            identity = f"missing:{hashlib.sha256(str(root).encode()).hexdigest()}"
+        owner_identities.append(
+            {
+                "channel_id": owner["channel_id"],
+                "root": owner["root"],
+                "identity": identity,
+            }
+        )
+    source_evidence = {
+        "docker": [],
+        "config": [],
+        "owners": owners,
+        "owner_identities": owner_identities,
+    }
     source_digest = hashlib.sha256(
-        json.dumps(owners, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(source_evidence, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return {
         "schema": "agentic-pkm.legacy-owner-inventory.v1",
@@ -70,6 +91,7 @@ def _legacy_owner_inventory_payload(
         "source_probe_count": 2,
         "validated_after_quiescence": validated_after_quiescence,
         "source_digest": source_digest,
+        "source_evidence": source_evidence,
         "owners": owners,
     }
 
@@ -465,6 +487,71 @@ def test_deployment_producer_rejects_inventory_not_revalidated_after_quiescence(
     assert not (host_global_root / "ownership-key.json").exists()
 
 
+def test_finalizer_rejects_legacy_digest_only_owner_receipt_before_state_mutation(
+    tmp_path,
+) -> None:
+    instance_state_root = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    instance_state_root.mkdir()
+    host_global_root.mkdir()
+    legacy_path = tmp_path / "missing-legacy.md"
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    controller_token = _controller_token(controller_pid, env=env)
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        controller_pid=controller_pid,
+        controller_start_token=controller_token,
+    )
+    result, quiescence_inventory = _run_quiescence_helper(
+        tmp_path,
+        controller_pid=controller_pid,
+        controller_token=controller_token,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    proof = _prove_instance_state_quiescence(
+        channel="prod",
+        host_global_root=host_global_root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_inventory = host_global_root / "legacy-owner-inventory.json"
+    legacy_payload = _legacy_owner_inventory_payload([])
+    legacy_payload.pop("source_evidence")
+    owner_inventory.write_text(json.dumps(legacy_payload), encoding="utf-8")
+    os.chmod(owner_inventory, 0o600)
+    state_before = {
+        path.relative_to(instance_state_root): path.read_bytes()
+        for path in instance_state_root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(InstanceStatePreflightError, match="complete drained"):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=instance_state_root,
+            host_global_root=host_global_root,
+            legacy_path=legacy_path,
+            inventory_path=owner_inventory,
+            backup_root=host_global_root / "backups" / "prod" / "latest",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+
+    assert {
+        path.relative_to(instance_state_root): path.read_bytes()
+        for path in instance_state_root.rglob("*")
+        if path.is_file()
+    } == state_before
+    assert _deployment_fence_path(host_global_root, "prod").is_file()
+    assert not (host_global_root / "ownership-ledger.json").exists()
+    assert not (host_global_root / "ownership-key.json").exists()
+    assert not (host_global_root / "ownership-key-rotation.json").exists()
+
+
 def test_finalizer_rejects_caller_booleans_without_a_durable_quiescence_proof(tmp_path) -> None:
     """AC5/AC14: a caller assertion is never a production stop proof."""
 
@@ -717,6 +804,12 @@ def test_legacy_owner_producer_derives_all_domains_without_preseeded_inventory(
         {"channel_id": "prod", "root": str(roots["prod"].resolve())},
         {"channel_id": "test", "root": str(roots["test"].resolve())},
     ]
+    assert payload["source_evidence"]["owners"] == payload["owners"]
+    assert payload["source_digest"] == hashlib.sha256(
+        json.dumps(
+            payload["source_evidence"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
     validated = subprocess.run(
         [
             sys.executable,
@@ -737,7 +830,9 @@ def test_legacy_owner_producer_derives_all_domains_without_preseeded_inventory(
         check=False,
     )
     assert validated.returncode == 0, validated.stderr
-    assert json.loads(inventory.read_text(encoding="utf-8"))["writers_drained"] is True
+    validated_payload = json.loads(inventory.read_text(encoding="utf-8"))
+    assert validated_payload["writers_drained"] is True
+    assert validated_payload["source_evidence"] == payload["source_evidence"]
 
 
 def test_legacy_owner_producer_rejects_racing_config_source(tmp_path) -> None:

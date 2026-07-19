@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -438,11 +439,21 @@ class InstanceRegistryRuntime:
         def require_rotation_authority(
             current: LedgerSnapshot, live_roots: Mapping[str, Path]
         ) -> None:
-            if proof_lease_path != expected_lease_path or inventory_path.parent != ownership_root:
+            if (
+                proof_lease_path != expected_lease_path
+                or inventory_path.parent != ownership_root
+                or quiescence_proof.controller_pid is None
+                or quiescence_proof.controller_start_token is None
+                or quiescence_proof.owner_receipt_digest is None
+            ):
                 raise InstanceStatePreflightError(
                     "key rotation authority is not bound to this host-global ownership root"
                 )
             quiescence_proof.require_valid(channel_id=self.layout.channel_id)
+            expected_controller = {
+                "pid": quiescence_proof.controller_pid,
+                "start_token": quiescence_proof.controller_start_token,
+            }
             try:
                 lease_metadata = expected_lease_path.lstat()
                 lease = json.loads(expected_lease_path.read_text(encoding="utf-8"))
@@ -456,6 +467,9 @@ class InstanceRegistryRuntime:
                     or lease.get("phase") != "proved"
                     or lease.get("inventory_digest") != quiescence_proof.inventory_digest
                     or lease.get("all_consumers_stopped") is not True
+                    or lease.get("controller") != expected_controller
+                    or lease.get("owner_receipt_digest")
+                    != quiescence_proof.owner_receipt_digest
                 ):
                     raise ValueError
             except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -474,6 +488,7 @@ class InstanceRegistryRuntime:
                 inventory_path,
                 registry=self.registry.load(),
                 channel=self.layout.channel_id,
+                quiescence_proof=quiescence_proof,
             )
             represented = {(owner.channel_id, owner.vault_binding_id) for owner in owners}
             live = {(lease.channel_id, binding_id) for binding_id, lease in current.leases.items()}
@@ -704,6 +719,38 @@ def _write_private_json(path: Path, payload: dict[str, object]) -> None:
         os.close(directory)
 
 
+def _replace_private_json(path: Path, payload: dict[str, object]) -> None:
+    """Atomically replace an established private JSON authority artifact."""
+
+    metadata = path.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o777 != 0o600
+    ):
+        raise InstanceStatePreflightError("private deployment authority file is unsafe")
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def _read_deployment_fence(host_global_root: Path, channel: str) -> dict[str, object]:
     path = _deployment_fence_path(host_global_root, channel)
     try:
@@ -838,26 +885,43 @@ def _prove_instance_state_quiescence(
         raise InstanceStatePreflightError("complete two-pass host-wide quiescence inventory is required") from exc
     digest = hashlib.sha256(inventory_bytes).hexdigest()
     lease |= {"phase": "proved", "inventory_digest": digest, "all_consumers_stopped": True}
-    lease_path.unlink()
-    _write_private_json(lease_path, lease)
+    _replace_private_json(lease_path, lease)
     proof_path = root / "deployment-quiescence-proof.json"
+    controller = lease["controller"]
+    if not isinstance(controller, dict):
+        raise InstanceStatePreflightError("valid deployment controller identity is required")
     proof_payload: dict[str, object] = {
         "channel_id": channel,
         "nonce": str(lease["nonce"]),
         "inventory_digest": digest,
         "lease_path": str(lease_path),
+        "controller": controller,
     }
     proof_path.unlink(missing_ok=True)
     _write_private_json(proof_path, proof_payload)
-    return DeploymentQuiescenceProof(channel, str(lease["nonce"]), digest, lease_path)
+    return DeploymentQuiescenceProof(
+        channel,
+        str(lease["nonce"]),
+        digest,
+        lease_path,
+        int(controller["pid"]),
+        str(controller["start_token"]),
+    )
 
 
-def _load_legacy_owner_inventory(
-    inventory_path: Path,
-    *,
-    registry: RegistrySnapshot,
-    channel: str,
-) -> list[LegacyOwner]:
+def _canonical_json_digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _legacy_owner_receipt_digest(payload: Mapping[str, object]) -> str:
+    return _canonical_json_digest(
+        {key: value for key, value in payload.items() if key != "receipt_digest"}
+    )
+
+
+def _load_legacy_owner_inventory_payload(inventory_path: Path) -> dict[str, object]:
     try:
         inventory = Path(inventory_path)
         metadata = inventory.lstat()
@@ -868,25 +932,198 @@ def _load_legacy_owner_inventory(
         ):
             raise ValueError
         payload = json.loads(inventory.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError
+        source_evidence = payload.get("source_evidence")
+        owners = payload.get("owners")
         if (
-            not isinstance(payload, dict)
-            or payload.get("schema") != _LEGACY_INVENTORY_SCHEMA
+            payload.get("schema") != _LEGACY_INVENTORY_SCHEMA
             or payload.get("inventory_complete") is not True
             or payload.get("writers_drained") is not True
             or payload.get("source_probe_count") != 2
             or payload.get("validated_after_quiescence") is not True
-            or _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(str(payload.get("source_digest") or ""))
-            is None
-            or not isinstance(payload.get("owners"), list)
+            or not isinstance(source_evidence, dict)
+            or not isinstance(owners, list)
+            or source_evidence.get("owners") != owners
+            or not isinstance(source_evidence.get("docker"), list)
+            or not isinstance(source_evidence.get("config"), list)
+            or not isinstance(source_evidence.get("owner_identities"), list)
+            or any(
+                not isinstance(item, str)
+                or (
+                    item != "docker:empty"
+                    and _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(item) is None
+                )
+                for item in source_evidence["docker"]
+            )
+            or any(
+                not isinstance(item, str)
+                or _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(item) is None
+                for item in source_evidence["config"]
+            )
+            or payload.get("source_digest") != _canonical_json_digest(source_evidence)
         ):
             raise ValueError
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise InstanceStatePreflightError(
             "complete drained legacy-owner inventory is required"
         ) from exc
+    return payload
 
+
+def _bind_legacy_owner_inventory_to_proof(
+    *,
+    inventory_path: Path,
+    quiescence_proof: DeploymentQuiescenceProof,
+    channel: str,
+    host_global_root: Path,
+) -> DeploymentQuiescenceProof:
+    """Bind the drained-owner receipt to the already-proved deployment lease."""
+
+    if quiescence_proof._test_only:
+        return quiescence_proof
+    ownership_root = Path(host_global_root).expanduser().resolve(strict=False)
+    inventory = Path(inventory_path).expanduser().resolve(strict=False)
+    lease_path = _deployment_lease_path(ownership_root).resolve(strict=False)
+    proof_lease_path = (
+        None
+        if quiescence_proof.lease_path is None
+        else Path(quiescence_proof.lease_path).expanduser().resolve(strict=False)
+    )
+    if inventory.parent != ownership_root or proof_lease_path != lease_path:
+        raise InstanceStatePreflightError(
+            "drained legacy-owner receipt is not bound to this host-global ownership root"
+        )
+    quiescence_proof.require_valid(channel_id=channel)
+    controller_pid = quiescence_proof.controller_pid
+    controller_start_token = quiescence_proof.controller_start_token
+    if controller_pid is None or controller_start_token is None:
+        raise InstanceStatePreflightError(
+            "durable quiescence proof is required for drained-owner binding"
+        )
+    try:
+        lease_metadata = lease_path.lstat()
+        lease = json.loads(lease_path.read_text(encoding="utf-8"))
+        controller = lease.get("controller")
+        expected_controller = {
+            "pid": controller_pid,
+            "start_token": controller_start_token,
+        }
+        if (
+            not stat.S_ISREG(lease_metadata.st_mode)
+            or lease_metadata.st_uid != os.geteuid()
+            or lease_metadata.st_mode & 0o777 != 0o600
+            or lease.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
+            or lease.get("channel_id") != channel
+            or lease.get("nonce") != quiescence_proof.nonce
+            or lease.get("phase") != "proved"
+            or lease.get("inventory_digest") != quiescence_proof.inventory_digest
+            or lease.get("all_consumers_stopped") is not True
+            or controller != expected_controller
+        ):
+            raise ValueError
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise InstanceStatePreflightError(
+            "durable quiescence proof is required for drained-owner binding"
+        ) from exc
+    fence = _read_deployment_fence(ownership_root, channel)
+    if (
+        fence.get("deployment_nonce") != quiescence_proof.nonce
+        or fence.get("controller") != controller
+    ):
+        raise InstanceStatePreflightError(
+            "drained legacy-owner receipt does not match the active restart fence"
+        )
+    payload = _load_legacy_owner_inventory_payload(inventory)
+    binding_fields = {
+        "deployment_nonce": quiescence_proof.nonce,
+        "controller": controller,
+        "quiescence_inventory_digest": quiescence_proof.inventory_digest,
+    }
+    existing_binding = {
+        key: payload.get(key)
+        for key in (*binding_fields, "receipt_digest")
+        if key in payload
+    }
+    if existing_binding:
+        receipt_digest = str(payload.get("receipt_digest") or "")
+        if (
+            any(payload.get(key) != value for key, value in binding_fields.items())
+            or _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(receipt_digest) is None
+            or receipt_digest != _legacy_owner_receipt_digest(payload)
+        ):
+            raise InstanceStatePreflightError(
+                "drained legacy-owner receipt is stale or forged"
+            )
+        bound_payload = payload
+    else:
+        bound_payload = payload | binding_fields
+        receipt_digest = _legacy_owner_receipt_digest(bound_payload)
+        bound_payload = bound_payload | {"receipt_digest": receipt_digest}
+
+    existing_lease_digest = lease.get("owner_receipt_digest")
+    if existing_lease_digest not in (None, receipt_digest):
+        raise InstanceStatePreflightError(
+            "proved deployment lease is bound to another drained-owner receipt"
+        )
+    if not existing_binding:
+        _replace_private_json(inventory, bound_payload)
+    if existing_lease_digest is None:
+        lease = lease | {"owner_receipt_digest": receipt_digest}
+        _replace_private_json(lease_path, lease)
+
+    bound_proof = replace(
+        quiescence_proof,
+        controller_pid=controller_pid,
+        controller_start_token=controller_start_token,
+        owner_receipt_digest=receipt_digest,
+    )
+    proof_path = ownership_root / "deployment-quiescence-proof.json"
+    proof_payload: dict[str, object] = {
+        "channel_id": bound_proof.channel_id,
+        "nonce": bound_proof.nonce,
+        "inventory_digest": bound_proof.inventory_digest,
+        "lease_path": str(lease_path),
+        "controller": expected_controller,
+        "owner_receipt_digest": receipt_digest,
+    }
+    _replace_private_json(proof_path, proof_payload)
+    bound_proof.require_valid(channel_id=channel)
+    return bound_proof
+
+
+def _load_legacy_owner_inventory(
+    inventory_path: Path,
+    *,
+    registry: RegistrySnapshot,
+    channel: str,
+    quiescence_proof: DeploymentQuiescenceProof | None = None,
+) -> list[LegacyOwner]:
+    payload = _load_legacy_owner_inventory_payload(inventory_path)
+    if quiescence_proof is not None and not quiescence_proof._test_only:
+        expected_controller = {
+            "pid": quiescence_proof.controller_pid,
+            "start_token": quiescence_proof.controller_start_token,
+        }
+        receipt_digest = str(payload.get("receipt_digest") or "")
+        if (
+            quiescence_proof.owner_receipt_digest is None
+            or payload.get("deployment_nonce") != quiescence_proof.nonce
+            or payload.get("controller") != expected_controller
+            or payload.get("quiescence_inventory_digest")
+            != quiescence_proof.inventory_digest
+            or receipt_digest != quiescence_proof.owner_receipt_digest
+            or receipt_digest != _legacy_owner_receipt_digest(payload)
+        ):
+            raise InstanceStatePreflightError(
+                "drained legacy-owner receipt is not bound to this deployment proof"
+            )
+
+    owner_payload = payload.get("owners")
+    if not isinstance(owner_payload, list):
+        raise InstanceStatePreflightError("legacy-owner inventory entries are invalid")
     owners: list[LegacyOwner] = []
-    for item in payload["owners"]:
+    for item in owner_payload:
         if not isinstance(item, dict):
             raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
         owner_channel = str(item.get("channel_id") or "").strip()
@@ -936,6 +1173,12 @@ def _finish_instance_state_deployment(
     ownership_root = _assert_mount_root(host_global_root, "host-global")
     quiescence_proof.require_valid(channel_id=channel)
     _read_deployment_fence(ownership_root, channel)
+    quiescence_proof = _bind_legacy_owner_inventory_to_proof(
+        inventory_path=inventory_path,
+        quiescence_proof=quiescence_proof,
+        channel=channel,
+        host_global_root=ownership_root,
+    )
     layout = InstanceStateLayout.for_channel(state_mount, channel)
     layout.ensure()
     ledger = OwnershipLedger(ownership_root)
@@ -978,6 +1221,7 @@ def _finish_instance_state_deployment(
             inventory_path,
             registry=registry,
             channel=channel,
+            quiescence_proof=quiescence_proof,
         )
         ledger_snapshot = ledger.bootstrap_legacy_owners(
             owners,
@@ -1070,11 +1314,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "deployment-finish":
         proof_payload = json.loads(args.quiescence_proof_path.read_text(encoding="utf-8"))
+        controller = proof_payload.get("controller")
+        if not isinstance(controller, dict):
+            raise InstanceStatePreflightError("durable quiescence proof is required")
         proof = DeploymentQuiescenceProof(
             channel_id=str(proof_payload["channel_id"]),
             nonce=str(proof_payload["nonce"]),
             inventory_digest=str(proof_payload["inventory_digest"]),
             lease_path=Path(str(proof_payload["lease_path"])),
+            controller_pid=int(controller["pid"]),
+            controller_start_token=str(controller["start_token"]),
+            owner_receipt_digest=(
+                str(proof_payload["owner_receipt_digest"])
+                if proof_payload.get("owner_receipt_digest") is not None
+                else None
+            ),
         )
         print(
             json.dumps(
@@ -1096,7 +1350,21 @@ def main(argv: list[str] | None = None) -> int:
         proof = _prove_instance_state_quiescence(
             channel=args.channel, host_global_root=args.host_global_root, inventory_path=args.inventory_path
         )
-        print(json.dumps({"channel_id": proof.channel_id, "nonce": proof.nonce, "inventory_digest": proof.inventory_digest, "lease_path": str(proof.lease_path)}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "channel_id": proof.channel_id,
+                    "nonce": proof.nonce,
+                    "inventory_digest": proof.inventory_digest,
+                    "lease_path": str(proof.lease_path),
+                    "controller": {
+                        "pid": proof.controller_pid,
+                        "start_token": proof.controller_start_token,
+                    },
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     raise AssertionError("unreachable")
 
