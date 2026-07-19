@@ -975,7 +975,11 @@ def _finish_instance_state_deployment(
     backup = InstanceStateBackup(layout, ledger)
 
     if restore_root is not None:
-        backup.restore(restore_root, quiescence_proof=quiescence_proof)
+        backup.restore(
+            restore_root,
+            quiescence_proof=quiescence_proof,
+            owner_receipt_path=inventory_path,
+        )
 
     store = VaultRegistryStore(layout.registry_path)
     has_registry_state = layout.registry_path.is_file() or (
@@ -992,12 +996,24 @@ def _finish_instance_state_deployment(
         final = exporter.export_final_after_stop(
             source,
             quiescence_proof=quiescence_proof,
+            host_global_root=ownership_root,
+            owner_receipt_path=inventory_path,
         )
         final_fingerprint = final.fingerprint
         if not layout.registry_path.is_file() or store.load().revision == 0:
-            exporter.import_final_export(final)
+            exporter.import_final_export(
+                final,
+                quiescence_proof=quiescence_proof,
+                host_global_root=ownership_root,
+                owner_receipt_path=inventory_path,
+            )
         else:
-            exporter.preserve_final_export(final)
+            exporter.preserve_final_export(
+                final,
+                quiescence_proof=quiescence_proof,
+                host_global_root=ownership_root,
+                owner_receipt_path=inventory_path,
+            )
     elif not layout.registry_path.is_file():
         store.load()
 

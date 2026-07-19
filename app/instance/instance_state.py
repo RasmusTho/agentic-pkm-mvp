@@ -15,6 +15,11 @@ from app.instance.vault_registry import RegistrySnapshot, VaultRegistryStore
 
 _REQUIRED_CONSUMERS = frozenset({"api", "worker", "watcher", "heimdal-capture-watch"})
 _BACKUP_SCHEMA = "agentic-pkm.instance-state-backup.v1"
+_DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
+_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v2"
+_LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
+_QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
+_FINAL_EXPORT_SEAL = object()
 
 
 class InstanceStatePreflightError(RuntimeError):
@@ -70,6 +75,125 @@ class DeploymentQuiescenceProof:
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             raise InstanceStatePreflightError("durable quiescence proof is required") from exc
 
+    def require_canonical_authority(
+        self,
+        *,
+        channel_id: str,
+        host_global_root: Path,
+        owner_receipt_path: Path | None,
+    ) -> None:
+        """Authenticate the complete host-global deployment authority in place."""
+
+        root = Path(host_global_root).expanduser().resolve(strict=False)
+        canonical_lease = root / "deployment-host-global-lease.json"
+        canonical_inventory = root / "deployment-quiescence-inventory.json"
+        canonical_receipt = root / "legacy-owner-inventory.json"
+        canonical_fence = root / f"deployment-{channel_id}-restart-fence.json"
+        proof_lease = (
+            None
+            if self.lease_path is None
+            else Path(self.lease_path).expanduser().resolve(strict=False)
+        )
+        receipt = (
+            None
+            if owner_receipt_path is None
+            else Path(owner_receipt_path).expanduser().resolve(strict=False)
+        )
+        try:
+            root_metadata = root.lstat()
+            if (
+                not stat.S_ISDIR(root_metadata.st_mode)
+                or root_metadata.st_uid != os.geteuid()
+                or root_metadata.st_mode & 0o777 != 0o700
+                or proof_lease != canonical_lease
+                or receipt != canonical_receipt
+            ):
+                raise ValueError
+            self.require_valid(channel_id=channel_id)
+            lease = _read_private_json(canonical_lease)
+            fence = _read_private_json(canonical_fence)
+            inventory_bytes = _read_private_bytes(canonical_inventory)
+            inventory = json.loads(inventory_bytes)
+            owner_payload = _read_private_json(canonical_receipt)
+            controller = {
+                "pid": self.controller_pid,
+                "start_token": self.controller_start_token,
+            }
+            empty_domains: dict[str, list[object]] = {
+                domain: [] for domain in ("dev", "native", "prod", "test")
+            }
+            empty_digest = hashlib.sha256(
+                json.dumps(
+                    empty_domains, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+            source_evidence = owner_payload.get("source_evidence")
+            receipt_payload = {
+                key: value
+                for key, value in owner_payload.items()
+                if key != "receipt_digest"
+            }
+            receipt_digest = hashlib.sha256(
+                json.dumps(
+                    receipt_payload, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+            source_digest = hashlib.sha256(
+                json.dumps(
+                    source_evidence, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                self.controller_pid is None
+                or self.controller_start_token is None
+                or self.owner_receipt_digest is None
+                or lease.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
+                or lease.get("channel_id") != channel_id
+                or lease.get("nonce") != self.nonce
+                or lease.get("phase") != "proved"
+                or lease.get("inventory_digest") != self.inventory_digest
+                or lease.get("owner_receipt_digest") != self.owner_receipt_digest
+                or lease.get("controller") != controller
+                or lease.get("all_consumers_stopped") is not True
+                or fence.get("schema") != _DEPLOYMENT_FENCE_SCHEMA
+                or fence.get("channel_id") != channel_id
+                or fence.get("deployment_nonce") != self.nonce
+                or fence.get("controller") != controller
+                or hashlib.sha256(inventory_bytes).hexdigest() != self.inventory_digest
+                or inventory.get("schema") != _QUIESCENCE_INVENTORY_SCHEMA
+                or inventory.get("inventory_complete") is not True
+                or inventory.get("all_consumers_stopped") is not True
+                or inventory.get("probe_count") != 2
+                or inventory.get("controller") != controller
+                or inventory.get("domains") != empty_domains
+                or inventory.get("snapshot_digests") != [empty_digest, empty_digest]
+                or owner_payload.get("schema") != _LEGACY_INVENTORY_SCHEMA
+                or owner_payload.get("inventory_complete") is not True
+                or owner_payload.get("writers_drained") is not True
+                or owner_payload.get("source_probe_count") != 2
+                or owner_payload.get("validated_after_quiescence") is not True
+                or not isinstance(source_evidence, dict)
+                or source_evidence.get("owners") != owner_payload.get("owners")
+                or owner_payload.get("source_digest") != source_digest
+                or owner_payload.get("deployment_nonce") != self.nonce
+                or owner_payload.get("controller") != controller
+                or owner_payload.get("quiescence_inventory_digest")
+                != self.inventory_digest
+                or owner_payload.get("receipt_digest") != self.owner_receipt_digest
+                or receipt_digest != self.owner_receipt_digest
+            ):
+                raise ValueError
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            InstanceStatePreflightError,
+        ) as exc:
+            raise InstanceStatePreflightError(
+                "canonical quiescence authority is required"
+            ) from exc
+
 
 @dataclass(frozen=True)
 class InstanceStateLayout:
@@ -109,6 +233,14 @@ class LegacyExport:
     fingerprint: str
 
 
+@dataclass(frozen=True)
+class _FinalLegacyExport:
+    source_path: Path
+    payload: bytes
+    fingerprint: str
+    _seal: object
+
+
 class LegacyRegistryFinalExport:
     """Quiescence-gated exact export of the legacy scalar authority."""
 
@@ -123,13 +255,39 @@ class LegacyRegistryFinalExport:
         legacy_path: Path,
         *,
         quiescence_proof: DeploymentQuiescenceProof | None,
-    ) -> LegacyExport:
+        host_global_root: Path,
+        owner_receipt_path: Path,
+    ) -> _FinalLegacyExport:
         if quiescence_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
-        quiescence_proof.require_valid(channel_id=self.layout.channel_id)
-        return self._capture(legacy_path)
+        quiescence_proof.require_canonical_authority(
+            channel_id=self.layout.channel_id,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
+        captured = self._capture(legacy_path)
+        return _FinalLegacyExport(
+            captured.source_path,
+            captured.payload,
+            captured.fingerprint,
+            _FINAL_EXPORT_SEAL,
+        )
 
-    def import_final_export(self, export: LegacyExport) -> RegistrySnapshot:
+    def import_final_export(
+        self,
+        export: object,
+        *,
+        quiescence_proof: DeploymentQuiescenceProof | None = None,
+        host_global_root: Path | None = None,
+        owner_receipt_path: Path | None = None,
+    ) -> RegistrySnapshot:
+        self._require_final_authority(
+            export,
+            quiescence_proof=quiescence_proof,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
+        assert isinstance(export, _FinalLegacyExport)
         if self._capture(export.source_path).fingerprint != export.fingerprint:
             raise InstanceStatePreflightError("legacy registry changed after final export")
         self.layout.ensure()
@@ -137,13 +295,32 @@ class LegacyRegistryFinalExport:
             current = VaultRegistryStore(self.layout.registry_path).load()
             if current.revision > 0:
                 raise InstanceStatePreflightError("registry import target is already populated")
-        self.preserve_final_export(export)
+        self.preserve_final_export(
+            export,
+            quiescence_proof=quiescence_proof,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
         _atomic_private_write(self.layout.registry_path, export.payload)
         return VaultRegistryStore(self.layout.registry_path).load_or_migrate()
 
-    def preserve_final_export(self, export: LegacyExport) -> Path:
+    def preserve_final_export(
+        self,
+        export: object,
+        *,
+        quiescence_proof: DeploymentQuiescenceProof | None = None,
+        host_global_root: Path | None = None,
+        owner_receipt_path: Path | None = None,
+    ) -> Path:
         """Persist the post-stop legacy authority without changing registry authority."""
 
+        self._require_final_authority(
+            export,
+            quiescence_proof=quiescence_proof,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
+        assert isinstance(export, _FinalLegacyExport)
         if self._capture(export.source_path).fingerprint != export.fingerprint:
             raise InstanceStatePreflightError("legacy registry changed after final export")
         self.layout.ensure()
@@ -154,6 +331,27 @@ class LegacyRegistryFinalExport:
             (export.fingerprint + "\n").encode("ascii"),
         )
         return target
+
+    def _require_final_authority(
+        self,
+        export: object,
+        *,
+        quiescence_proof: DeploymentQuiescenceProof | None,
+        host_global_root: Path | None,
+        owner_receipt_path: Path | None,
+    ) -> None:
+        if (
+            not isinstance(export, _FinalLegacyExport)
+            or export._seal is not _FINAL_EXPORT_SEAL
+            or quiescence_proof is None
+            or host_global_root is None
+        ):
+            raise InstanceStatePreflightError("final export authority is required")
+        quiescence_proof.require_canonical_authority(
+            channel_id=self.layout.channel_id,
+            host_global_root=host_global_root,
+            owner_receipt_path=owner_receipt_path,
+        )
 
     def _capture(self, legacy_path: Path) -> LegacyExport:
         path = Path(legacy_path).expanduser().resolve(strict=False)
@@ -280,10 +478,15 @@ class InstanceStateBackup:
         backup_root: Path,
         *,
         quiescence_proof: DeploymentQuiescenceProof | None,
+        owner_receipt_path: Path | None = None,
     ) -> InstanceStateRestoreReceipt:
         if quiescence_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
-        quiescence_proof.require_valid(channel_id=self.layout.channel_id)
+        quiescence_proof.require_canonical_authority(
+            channel_id=self.layout.channel_id,
+            host_global_root=self.ledger.root,
+            owner_receipt_path=owner_receipt_path,
+        )
         source = Path(backup_root).expanduser().resolve(strict=False)
         required = {
             "manifest.json",
@@ -380,6 +583,24 @@ def _atomic_private_write(path: Path, payload: bytes) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _read_private_bytes(path: Path) -> bytes:
+    metadata = path.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o777 != 0o600
+    ):
+        raise ValueError
+    return path.read_bytes()
+
+
+def _read_private_json(path: Path) -> dict[str, object]:
+    payload = json.loads(_read_private_bytes(path))
+    if not isinstance(payload, dict):
+        raise ValueError
+    return payload
 
 
 __all__ = [

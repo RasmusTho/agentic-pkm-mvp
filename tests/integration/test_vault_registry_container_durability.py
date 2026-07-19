@@ -12,33 +12,87 @@ from app.instance.instance_state import (
     InstanceStateLayout,
     LegacyRegistryFinalExport,
 )
+from app.instance.runtime import (
+    _begin_instance_state_deployment,
+    _bind_legacy_owner_inventory_to_proof,
+    _prove_instance_state_quiescence,
+)
 from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
 
 
-def _durable_test_quiescence_proof(tmp_path: Path) -> DeploymentQuiescenceProof:
-    root = tmp_path / "proof"
+def _canonical_test_quiescence_authority(
+    tmp_path: Path,
+    layout: InstanceStateLayout,
+    legacy_path: Path,
+) -> tuple[DeploymentQuiescenceProof, Path, Path]:
+    root = tmp_path / "host-global"
     root.mkdir(mode=0o700)
-    lease_path = root / "deployment-host-global-lease.json"
-    inventory_digest = hashlib.sha256(b"test").hexdigest()
-    lease_path.write_text(
+    layout.root.parent.mkdir(parents=True, exist_ok=True)
+    controller = {"pid": os.getpid(), "start_token": "linux:" + "0" * 64}
+    _begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=layout.root.parent,
+        host_global_root=root,
+        legacy_path=legacy_path,
+        controller_pid=controller["pid"],
+        controller_start_token=controller["start_token"],
+    )
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    empty_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    inventory = root / "deployment-quiescence-inventory.json"
+    inventory.write_text(
         json.dumps(
             {
-                "schema": "agentic-pkm.host-deployment-lease.v2",
-                "channel_id": "test",
-                "nonce": "test-nonce",
-                "phase": "proved",
-                "inventory_digest": inventory_digest,
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
                 "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": controller,
+                "domains": domains,
+                "snapshot_digests": [empty_digest, empty_digest],
             }
         ),
         encoding="utf-8",
     )
-    os.chmod(lease_path, 0o600)
-    return DeploymentQuiescenceProof(
-        channel_id="test",
-        nonce="test-nonce",
-        inventory_digest=inventory_digest,
-        lease_path=lease_path,
+    os.chmod(inventory, 0o600)
+    proof = _prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=root,
+        inventory_path=inventory,
+    )
+    source_evidence = {"docker": [], "config": [], "owners": [], "owner_identities": []}
+    owner_receipt = root / "legacy-owner-inventory.json"
+    owner_receipt.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.legacy-owner-inventory.v1",
+                "inventory_complete": True,
+                "writers_drained": True,
+                "source_probe_count": 2,
+                "validated_after_quiescence": True,
+                "source_digest": hashlib.sha256(
+                    json.dumps(
+                        source_evidence, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest(),
+                "source_evidence": source_evidence,
+                "owners": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(owner_receipt, 0o600)
+    return (
+        _bind_legacy_owner_inventory_to_proof(
+            inventory_path=owner_receipt,
+            quiescence_proof=proof,
+            channel="test",
+            host_global_root=root,
+        ),
+        root,
+        owner_receipt,
     )
 
 
@@ -69,11 +123,23 @@ def test_registry_survives_recreate_and_is_shared_cross_process(tmp_path) -> Non
 
     diagnostic = exporter.capture_diagnostic_snapshot(legacy.path)
     legacy.upsert_known_vault(KnownVaultRef("path:two", str(tmp_path / "two")))
+    proof, host_global_root, owner_receipt = _canonical_test_quiescence_authority(
+        tmp_path,
+        layout,
+        legacy.path,
+    )
     final_export = exporter.export_final_after_stop(
         legacy.path,
-        quiescence_proof=_durable_test_quiescence_proof(tmp_path),
+        quiescence_proof=proof,
+        host_global_root=host_global_root,
+        owner_receipt_path=owner_receipt,
     )
-    imported = exporter.import_final_export(final_export)
+    imported = exporter.import_final_export(
+        final_export,
+        quiescence_proof=proof,
+        host_global_root=host_global_root,
+        owner_receipt_path=owner_receipt,
+    )
 
     assert diagnostic.fingerprint != final_export.fingerprint
     assert imported.revision == 1

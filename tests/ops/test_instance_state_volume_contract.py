@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from app.instance.ownership_ledger import LedgerCollisionError
 from app.instance.runtime import (
     InstanceRegistryRuntime,
     _begin_instance_state_deployment,
+    _bind_legacy_owner_inventory_to_proof,
     _deployment_fence_path,
     _finish_instance_state_deployment,
     _preflight_runtime,
@@ -257,6 +259,45 @@ def _durable_test_quiescence_proof(
     )
 
 
+def _canonical_test_quiescence_authority(
+    *,
+    layout: InstanceStateLayout,
+    host_global_root: Path,
+    legacy_path: Path,
+    owners: list[dict[str, str]],
+) -> tuple[DeploymentQuiescenceProof, Path]:
+    layout.root.parent.mkdir(parents=True, exist_ok=True)
+    host_global_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(host_global_root, 0o700)
+    _begin_instance_state_deployment(
+        channel=layout.channel_id,
+        instance_state_root=layout.root.parent,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token="linux:" + "0" * 64,
+    )
+    proof = _prove_empty_quiescence(
+        channel=layout.channel_id,
+        host_global_root=host_global_root,
+    )
+    owner_inventory = host_global_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(_legacy_owner_inventory_payload(owners)),
+        encoding="utf-8",
+    )
+    os.chmod(owner_inventory, 0o600)
+    return (
+        _bind_legacy_owner_inventory_to_proof(
+            inventory_path=owner_inventory,
+            quiescence_proof=proof,
+            channel=layout.channel_id,
+            host_global_root=host_global_root,
+        ),
+        owner_inventory,
+    )
+
+
 def _linux_stat_fixture(
     pid: int,
     *,
@@ -354,16 +395,31 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
         exporter.export_final_after_stop(
             legacy.path,
             quiescence_proof=None,
+            host_global_root=tmp_path / "host-global",
+            owner_receipt_path=tmp_path / "host-global" / "legacy-owner-inventory.json",
         )
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=tmp_path / "host-global",
+        legacy_path=legacy.path,
+        owners=[],
+    )
     final = exporter.export_final_after_stop(
         legacy.path,
-        quiescence_proof=_durable_test_quiescence_proof(tmp_path, "test"),
+        quiescence_proof=proof,
+        host_global_root=tmp_path / "host-global",
+        owner_receipt_path=owner_receipt,
     )
     assert final.fingerprint != diagnostic.fingerprint
 
     legacy.upsert_known_vault(KnownVaultRef("racing", str(tmp_path / "racing")))
     with pytest.raises(InstanceStatePreflightError, match="changed after final export"):
-        exporter.import_final_export(final)
+        exporter.import_final_export(
+            final,
+            quiescence_proof=proof,
+            host_global_root=tmp_path / "host-global",
+            owner_receipt_path=owner_receipt,
+        )
 
     repo_root = Path(__file__).resolve().parents[2]
     deploy = (repo_root / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
@@ -377,6 +433,80 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
     assert producer.index(" stop api worker watcher") < producer.index("deployment-finish")
     assert "deployment-prove" in producer
     assert "probe_count" in WRITER_INVENTORY_HELPER.read_text(encoding="utf-8")
+
+
+def test_diagnostic_export_cannot_be_imported_as_final_authority_without_mutation(
+    tmp_path,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod")
+    legacy = AppLocalSettingsStore(tmp_path / "legacy" / "app-local.md")
+    legacy.upsert_known_vault(KnownVaultRef("path:one", str(tmp_path / "one")))
+    exporter = LegacyRegistryFinalExport(layout)
+    diagnostic = exporter.capture_diagnostic_snapshot(legacy.path)
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(InstanceStatePreflightError, match="final export authority"):
+        exporter.import_final_export(diagnostic)
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+
+
+def test_final_import_rejects_copied_quiescence_authority_without_mutation(
+    tmp_path,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod")
+    legacy = AppLocalSettingsStore(tmp_path / "legacy" / "app-local.md")
+    legacy.upsert_known_vault(KnownVaultRef("path:one", str(tmp_path / "one")))
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=tmp_path / "host-global",
+        legacy_path=legacy.path,
+        owners=[],
+    )
+    exporter = LegacyRegistryFinalExport(layout)
+    final_export = exporter.export_final_after_stop(
+        legacy.path,
+        quiescence_proof=proof,
+        host_global_root=tmp_path / "host-global",
+        owner_receipt_path=owner_receipt,
+    )
+    copied_root = tmp_path / "copied-authority"
+    copied_root.mkdir(mode=0o700)
+    copied_lease = copied_root / "deployment-host-global-lease.json"
+    assert proof.lease_path is not None
+    copied_lease.write_bytes(proof.lease_path.read_bytes())
+    os.chmod(copied_lease, 0o600)
+    copied_proof = replace(proof, lease_path=copied_lease)
+    protected_roots = (layout.root, tmp_path / "host-global")
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for protected_root in protected_roots
+        for path in protected_root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(InstanceStatePreflightError, match="canonical quiescence authority"):
+        exporter.import_final_export(
+            final_export,
+            quiescence_proof=copied_proof,
+            host_global_root=tmp_path / "host-global",
+            owner_receipt_path=owner_receipt,
+        )
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for protected_root in protected_roots
+        for path in protected_root.rglob("*")
+        if path.is_file()
+    } == before
 
 
 def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
@@ -2257,7 +2387,10 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
     root = tmp_path / "vault"
     root.mkdir()
-    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    registration = runtime.bootstrap_env_binding(
+        vault_root=root,
+        watcher_vault_path=root,
+    )
     runtime.registry.set_extension_state(
         default_vault_binding_id="binding-default",
         dimensions={"d": ["binding-default"]},
@@ -2284,10 +2417,22 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
     stale_checksum.write_text("stale", encoding="ascii")
     os.chmod(stale_final, 0o600)
     os.chmod(stale_checksum, 0o600)
-    restore_proof = _durable_test_quiescence_proof(tmp_path, "prod")
+    restore_proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(root),
+            }
+        ],
+    )
     restored = InstanceStateBackup(layout, runtime.ledger).restore(
         tmp_path / "backup",
         quiescence_proof=restore_proof,
+        owner_receipt_path=owner_receipt,
     )
     assert restored.registry_checksum == expected["registry_checksum"]
     assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
@@ -2306,7 +2451,136 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
         InstanceStateBackup(layout, runtime.ledger).restore(
             tmp_path / "backup",
             quiescence_proof=restore_proof,
+            owner_receipt_path=owner_receipt,
         )
+
+
+@pytest.mark.parametrize(
+    "lease_kind",
+    [
+        "arbitrary",
+        "copied",
+        "missing-fence",
+        "wrong-fence-nonce",
+        "changed-inventory",
+        "changed-owner-receipt",
+        "wrong-controller",
+    ],
+)
+def test_prod_restore_rejects_noncanonical_quiescence_authority_without_mutation(
+    tmp_path,
+    lease_kind,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=root,
+        watcher_vault_path=root,
+    )
+    backup_root = tmp_path / "backup"
+    InstanceStateBackup(layout, runtime.ledger).create(backup_root)
+    runtime.registry.set_extension_state(
+        default_vault_binding_id="new-default",
+        dimensions={"new": [registration.vault_binding_id]},
+        principal_state={"operator": "changed"},
+        background_state={"mode": "changed"},
+        runtime_floors={"registry": "changed"},
+    )
+
+    owner_receipt = None
+    if lease_kind == "arbitrary":
+        proof = _durable_test_quiescence_proof(tmp_path, "prod")
+    else:
+        _begin_instance_state_deployment(
+            channel="prod",
+            instance_state_root=layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            controller_pid=os.getpid(),
+            controller_start_token="linux:" + "0" * 64,
+        )
+        proof = _prove_empty_quiescence(
+            channel="prod",
+            host_global_root=runtime.ledger.root,
+        )
+        owner_inventory = runtime.ledger.root / "legacy-owner-inventory.json"
+        owner_inventory.write_text(
+            json.dumps(
+                _legacy_owner_inventory_payload(
+                    [
+                        {
+                            "channel_id": "prod",
+                            "vault_binding_id": registration.vault_binding_id,
+                            "root": str(root),
+                        }
+                    ]
+                )
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(owner_inventory, 0o600)
+        proof = _bind_legacy_owner_inventory_to_proof(
+            inventory_path=owner_inventory,
+            quiescence_proof=proof,
+            channel="prod",
+            host_global_root=runtime.ledger.root,
+        )
+        owner_receipt = owner_inventory
+        if lease_kind == "copied":
+            copied_root = tmp_path / "copied-authority"
+            copied_root.mkdir(mode=0o700)
+            copied_lease = copied_root / "deployment-host-global-lease.json"
+            assert proof.lease_path is not None
+            copied_lease.write_bytes(proof.lease_path.read_bytes())
+            os.chmod(copied_lease, 0o600)
+            proof = replace(proof, lease_path=copied_lease)
+        elif lease_kind == "missing-fence":
+            _deployment_fence_path(runtime.ledger.root, "prod").unlink()
+        elif lease_kind == "wrong-fence-nonce":
+            fence_path = _deployment_fence_path(runtime.ledger.root, "prod")
+            fence = json.loads(fence_path.read_text(encoding="utf-8"))
+            fence["deployment_nonce"] = "wrong-nonce"
+            fence_path.write_text(json.dumps(fence), encoding="utf-8")
+            os.chmod(fence_path, 0o600)
+        elif lease_kind == "changed-inventory":
+            inventory_path = runtime.ledger.root / "deployment-quiescence-inventory.json"
+            inventory_path.write_bytes(inventory_path.read_bytes() + b"\n")
+            os.chmod(inventory_path, 0o600)
+        elif lease_kind == "changed-owner-receipt":
+            owner_payload = json.loads(owner_inventory.read_text(encoding="utf-8"))
+            owner_payload["writers_drained"] = False
+            owner_inventory.write_text(json.dumps(owner_payload), encoding="utf-8")
+            os.chmod(owner_inventory, 0o600)
+        elif lease_kind == "wrong-controller":
+            proof = replace(proof, controller_pid=os.getpid() + 1)
+
+    protected_roots = (layout.root, runtime.ledger.root)
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for protected_root in protected_roots
+        for path in protected_root.rglob("*")
+        if path.is_file()
+    }
+    revision_before = runtime.registry.load().revision
+    generation_before = runtime.ledger.load().generation
+
+    with pytest.raises(InstanceStatePreflightError, match="canonical quiescence authority"):
+        InstanceStateBackup(layout, runtime.ledger).restore(
+            backup_root,
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
+        )
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for protected_root in protected_roots
+        for path in protected_root.rglob("*")
+        if path.is_file()
+    } == before
+    assert runtime.registry.load().revision == revision_before
+    assert runtime.ledger.load().generation == generation_before
 
 
 def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_path) -> None:
@@ -2332,7 +2606,7 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
     )
     target_root = tmp_path / "prod-vault"
     target_root.mkdir()
-    target_runtime.bootstrap_env_binding(
+    target_registration = target_runtime.bootstrap_env_binding(
         vault_root=target_root,
         watcher_vault_path=target_root,
     )
@@ -2344,6 +2618,18 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
         runtime_floors={"registry": "prod"},
     )
 
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=target_layout,
+        host_global_root=target_runtime.ledger.root,
+        legacy_path=tmp_path / "missing-prod-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": target_registration.vault_binding_id,
+                "root": str(target_root),
+            }
+        ],
+    )
     target_roots = (target_layout.root, target_runtime.ledger.root)
     before = {
         path.relative_to(tmp_path): path.read_bytes()
@@ -2351,11 +2637,11 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
         for path in root.iterdir()
         if path.is_file()
     }
-
     with pytest.raises(InstanceStatePreflightError, match="channel_id"):
         InstanceStateBackup(target_layout, target_runtime.ledger).restore(
             tmp_path / "dev-backup",
-            quiescence_proof=_durable_test_quiescence_proof(tmp_path, "prod"),
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
         )
 
     after = {
