@@ -32,6 +32,9 @@ def _canonical_v1_request(*, supporting_issues: list[int]) -> dict[str, object]:
     payload["contract_version"] = "verification_dispatch_request.v1"
     payload["supporting_issues"] = supporting_issues
     payload.pop("closing_issues")
+    source_workflow = dict(payload["source_workflow"])
+    source_workflow["name"] = "CI"
+    payload["source_workflow"] = source_workflow
     identity = {
         "contract_version": payload["contract_version"],
         "head_sha": payload["current_head_sha"],
@@ -388,9 +391,15 @@ def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) ->
     legacy = state.get(run_id)
     assert legacy is not None
     assert legacy.status == "legacy_untrusted"
+    legacy_source = legacy.request["source_workflow"]
+    assert isinstance(legacy_source, dict)
+    assert legacy_source["name"] == "CI"
     attempts_before = state.attempts(run_id)
     budget_before = state.repair_budget_projection(run_id)
     observed = _live_observed_request(state, request())
+    current_source = observed["source_workflow"]
+    assert isinstance(current_source, dict)
+    assert current_source["name"] == "CI Smoke"
 
     recovered = state.ingest(observed)
 
@@ -408,6 +417,8 @@ def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) ->
     quarantined = audit["quarantined_row"]
     assert quarantined["status"] == "legacy_untrusted"
     assert json.loads(quarantined["request_json"]) == legacy_request
+    archived_request = json.loads(quarantined["request_json"])
+    assert archived_request["source_workflow"]["name"] == "CI"
     assert quarantined["idempotency_key"] == legacy_request["idempotency_key"]
     assert audit["quarantined_exceptions"] == []
 
