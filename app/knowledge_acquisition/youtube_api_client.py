@@ -21,7 +21,7 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -86,6 +86,13 @@ class YouTubeApiError(RuntimeError):
         self.status = status
         self.detail = detail
         super().__init__(f"{reason_code}: {detail}")
+
+
+def _raise_detached(error: BaseException) -> NoReturn:
+    """Raise a normalized failure without retaining a prior exception graph."""
+    error.__cause__ = None
+    error.__context__ = None
+    raise error from None
 
 
 @dataclass(frozen=True)
@@ -521,10 +528,13 @@ class YouTubeApiClient:
             raise _shape_error()
         channel_id = _required_str(item.get("id"))
         title = _required_str(snippet.get("title"))
+        shape_error: YouTubeApiError | None = None
         try:
             validate_channel_id(channel_id)
         except InvalidYouTubeRefError:
-            raise _shape_error() from None
+            shape_error = _shape_error()
+        if shape_error is not None:
+            _raise_detached(shape_error)
         return Channel(channel_id, title)
 
     def quota_status(self) -> dict[str, int | bool]:
@@ -555,14 +565,19 @@ class YouTubeApiClient:
         request.headers.pop("cookie", None)
         _validate_absolute_data_url(str(request.url), require_path=True)
         quota_date = self._quota.increment().quota_date
+        response: httpx.Response | None = None
+        send_error: YouTubeApiError | None = None
         try:
             response = self._http.send(request, stream=True, follow_redirects=False)
         except httpx.TimeoutException:
-            raise YouTubeApiError("api_unavailable", None, "Data API request timed out") from None
+            send_error = YouTubeApiError("api_unavailable", None, "Data API request timed out")
         except httpx.TransportError:
-            raise YouTubeApiError("network_error", None, "Data API transport failed") from None
+            send_error = YouTubeApiError("network_error", None, "Data API transport failed")
         except httpx.StreamError:
-            raise YouTubeApiError("api_unavailable", None, "Data API stream failed") from None
+            send_error = YouTubeApiError("api_unavailable", None, "Data API stream failed")
+        if send_error is not None:
+            _raise_detached(send_error)
+        assert response is not None
 
         status = response.status_code
         response_etag = response.headers.get("etag")
@@ -645,11 +660,11 @@ class YouTubeApiClient:
                     )
 
         if pending_error is not None:
-            raise pending_error from None
+            _raise_detached(pending_error)
         if not_modified is not None:
             return not_modified, response_etag
         if status >= 400:
-            raise status_error(_decode_error_object(raw)) from None
+            _raise_detached(status_error(_decode_error_object(raw)))
         payload = _decode_object(raw, status=status)
         return payload, response_etag
 
@@ -697,10 +712,14 @@ def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
 
 
 def _decode_object(raw: bytes, *, status: int | None = None) -> dict[str, Any]:
+    value: Any = None
+    decode_error: YouTubeApiError | None = None
     try:
         value = json.loads(raw or b"{}")
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise YouTubeApiError("api_unavailable", status, "Data API returned invalid JSON") from None
+        decode_error = YouTubeApiError("api_unavailable", status, "Data API returned invalid JSON")
+    if decode_error is not None:
+        _raise_detached(decode_error)
     if not isinstance(value, dict):
         raise YouTubeApiError(
             "api_unavailable", status, "Data API returned an invalid object shape"
@@ -773,10 +792,15 @@ def _payload_page_token(payload: Mapping[str, Any]) -> str | None:
         return None
     if not isinstance(value, str):
         raise _shape_error()
+    validated: str | None = None
+    shape_error: YouTubeApiError | None = None
     try:
-        return _validate_page_token(value)
+        validated = _validate_page_token(value)
     except InvalidYouTubeRefError:
-        raise _shape_error() from None
+        shape_error = _shape_error()
+    if shape_error is not None:
+        _raise_detached(shape_error)
+    return validated
 
 
 def _reject_token_cycle(previous: str | None, next_token: str) -> None:
@@ -795,11 +819,16 @@ def _parse_playlists(payload: Mapping[str, Any]) -> tuple[Playlist, ...]:
         count_value = content.get("itemCount")
         if isinstance(count_value, bool) or not isinstance(count_value, (int, str)):
             raise _shape_error()
+        count: int | None = None
+        shape_error: YouTubeApiError | None = None
         try:
             validate_playlist_id(playlist_id)
             count = int(count_value)
         except (InvalidYouTubeRefError, TypeError, ValueError):
-            raise _shape_error() from None
+            shape_error = _shape_error()
+        if shape_error is not None:
+            _raise_detached(shape_error)
+        assert count is not None
         if count < 0:
             raise _shape_error()
         parsed.append(Playlist(playlist_id, _required_str(snippet.get("title")), count))
@@ -819,11 +848,16 @@ def _parse_playlist_items(payload: Mapping[str, Any]) -> tuple[PlaylistItem, ...
         position_value = snippet.get("position")
         if isinstance(position_value, bool) or not isinstance(position_value, (int, str)):
             raise _shape_error()
+        position: int | None = None
+        shape_error: YouTubeApiError | None = None
         try:
             validate_video_id(video_id)
             position = int(position_value)
         except (InvalidYouTubeRefError, TypeError, ValueError):
-            raise _shape_error() from None
+            shape_error = _shape_error()
+        if shape_error is not None:
+            _raise_detached(shape_error)
+        assert position is not None
         if position < 0:
             raise _shape_error()
         parsed.append(

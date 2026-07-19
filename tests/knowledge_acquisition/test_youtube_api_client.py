@@ -45,6 +45,39 @@ class _Api:
         return self._handler(request)
 
 
+def _exception_graph(error: BaseException) -> tuple[BaseException, ...]:
+    pending = [error]
+    seen: set[int] = set()
+    graph: list[BaseException] = []
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        graph.append(current)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return tuple(graph)
+
+
+def _assert_exception_graph_secret_free(error: BaseException, sentinel: str) -> None:
+    graph = _exception_graph(error)
+    for current in graph:
+        inspectable = "\n".join(
+            (
+                str(current),
+                repr(current),
+                repr(current.args),
+                repr(vars(current)),
+            )
+        )
+        assert sentinel not in inspectable
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
 @pytest.fixture(autouse=True)
 def _memory_quota(monkeypatch: pytest.MonkeyPatch):
     from app.knowledge_acquisition import youtube_api_client as api
@@ -256,6 +289,7 @@ def test_error_taxonomy_mapping_secret_free() -> None:
         assert sentinel not in error.detail
         assert sentinel not in str(error)
         assert "sentinel-access-token-never-leak" not in error.detail
+        _assert_exception_graph_secret_free(error, sentinel)
 
     timeout_api = _Api(
         lambda request: (_ for _ in ()).throw(httpx.ReadTimeout(sentinel, request=request))
@@ -264,7 +298,7 @@ def test_error_taxonomy_mapping_secret_free() -> None:
         _client(timeout_api).get_my_channel()
     assert timeout_error.value.reason_code == "api_unavailable"
     assert sentinel not in timeout_error.value.detail
-    assert timeout_error.value.__cause__ is None
+    _assert_exception_graph_secret_free(timeout_error.value, sentinel)
 
     network_api = _Api(
         lambda request: (_ for _ in ()).throw(httpx.ConnectError(sentinel, request=request))
@@ -273,7 +307,7 @@ def test_error_taxonomy_mapping_secret_free() -> None:
         _client(network_api).get_my_channel()
     assert network_error.value.reason_code == "network_error"
     assert sentinel not in network_error.value.detail
-    assert network_error.value.__cause__ is None
+    _assert_exception_graph_secret_free(network_error.value, sentinel)
 
     class _FailingResponseStream(httpx.SyncByteStream):
         def __iter__(self):
@@ -290,7 +324,7 @@ def test_error_taxonomy_mapping_secret_free() -> None:
         _client(stream_api).get_my_channel()
     assert stream_error.value.reason_code == "network_error"
     assert sentinel not in stream_error.value.detail
-    assert stream_error.value.__cause__ is None
+    _assert_exception_graph_secret_free(stream_error.value, sentinel)
 
     invalid_json_api = _Api(
         lambda request: httpx.Response(
@@ -302,7 +336,7 @@ def test_error_taxonomy_mapping_secret_free() -> None:
     with pytest.raises(YouTubeApiError) as invalid_json_error:
         _client(invalid_json_api).get_my_channel()
     assert invalid_json_error.value.reason_code == "api_unavailable"
-    assert invalid_json_error.value.__cause__ is None
+    _assert_exception_graph_secret_free(invalid_json_error.value, sentinel)
 
     auth_api = _Api(lambda request: _response(request, {"items": []}))
     with pytest.raises(AuthDegradedError) as auth_error:
@@ -362,7 +396,7 @@ def test_malformed_content_encoding_is_normalized_without_raw_cause() -> None:
     assert captured.value.reason_code == "api_unavailable"
     assert captured.value.status == 200
     assert sentinel.decode() not in captured.value.detail
-    assert captured.value.__cause__ is None
+    _assert_exception_graph_secret_free(captured.value, sentinel.decode())
 
 
 @pytest.mark.parametrize(
@@ -404,9 +438,9 @@ def test_actual_stream_error_uses_known_status_and_keeps_exception_chain_secret(
     error = captured.value
     assert error.reason_code == reason_code
     assert error.status == status
-    assert error.__cause__ is None
     assert sentinel not in error.detail
     assert sentinel not in "".join(traceback.format_exception(error))
+    _assert_exception_graph_secret_free(error, sentinel)
 
     if status == 429:
         now["value"] = datetime(2026, 7, 19, 23, 59, tzinfo=timezone.utc)
@@ -423,7 +457,7 @@ def test_actual_stream_error_uses_known_status_and_keeps_exception_chain_secret(
         }
 
 
-@pytest.mark.parametrize("failure_stage", ("iterate", "close"))
+@pytest.mark.parametrize("failure_stage", ("send", "iterate", "close"))
 def test_actual_stream_error_on_success_status_is_safely_normalized(
     failure_stage: str,
 ) -> None:
@@ -441,16 +475,21 @@ def test_actual_stream_error_on_success_status_is_safely_normalized(
             if failure_stage == "close":
                 raise httpx.StreamError(sentinel)
 
-    api = _Api(lambda request: httpx.Response(200, request=request, stream=_ActualStreamError()))
+    def handler(request: httpx.Request) -> httpx.Response:
+        if failure_stage == "send":
+            raise httpx.StreamError(sentinel)
+        return httpx.Response(200, request=request, stream=_ActualStreamError())
+
+    api = _Api(handler)
     with pytest.raises(YouTubeApiError) as captured:
         _client(api).get_my_channel()
 
     error = captured.value
     assert error.reason_code == "api_unavailable"
-    assert error.status == 200
-    assert error.__cause__ is None
+    assert error.status == (None if failure_stage == "send" else 200)
     assert sentinel not in error.detail
     assert sentinel not in "".join(traceback.format_exception(error))
+    _assert_exception_graph_secret_free(error, sentinel)
 
 
 @pytest.mark.parametrize("resource", ("playlists", "playlist_items"))
@@ -488,9 +527,9 @@ def test_provider_controlled_shape_value_is_absent_from_exception_chain(
 
     error = captured.value
     assert error.reason_code == "api_unavailable"
-    assert error.__cause__ is None
     assert sentinel not in error.detail
     assert sentinel not in "".join(traceback.format_exception(error))
+    _assert_exception_graph_secret_free(error, sentinel)
 
 
 def test_quota_accounting_durable_and_exhaustion() -> None:
