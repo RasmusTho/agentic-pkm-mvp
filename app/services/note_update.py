@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.agents.panel.integration import handle_panel_update
 from app.agents.panel.writeback import upsert_executed_ids
+from app.objects import resolve_canonical_object_id
 from app.components.concurrency import OptimisticWriteGuard
 from app.domain.state_axes import resolve_promotion_axes
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
@@ -132,8 +133,14 @@ def process_note_update(
 
     DEFAULT_WRITE_GUARD.assert_writes_allowed("panel runtimes")
 
+    # ObjectStore-facing panel state is keyed by the canonical store id; a
+    # retained legacy note's frontmatter uuid may map to a different
+    # objects.id after #3510, and using it verbatim would split the note
+    # across two parents (the defect class every sibling call site resolves).
+    canonical_note_id = resolve_canonical_object_id(note_uuid)
+
     panel_result = handle_panel_update(
-        note_id=note_uuid,
+        note_id=canonical_note_id,
         old_markdown=old_markdown,
         new_markdown=raw_markdown,
         ctx=ctx,
@@ -158,7 +165,7 @@ def process_note_update(
             panel_result.panel.updated_markdown,
             expected_version=expected_version,
         )
-        upsert_executed_ids(note_uuid, panel_result.panel.executed_action_ids)
+        upsert_executed_ids(canonical_note_id, panel_result.panel.executed_action_ids)
 
     snapshot_path = _snapshot_path(snapshot_dir, note_uuid, ensure_parent=True)
     if snapshot_path is not None:

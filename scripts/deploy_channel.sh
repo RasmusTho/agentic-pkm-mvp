@@ -733,7 +733,11 @@ export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
 fi
-if [ -n "${current_sha}" ]; then
+if [ -n "${current_sha}" ] && [ "${current_sha}" != "${target_sha}" ]; then
+  # A same-target retry (or same-SHA redeploy) reads current_sha == target_sha
+  # because a prior failed attempt already advanced the pin; overwriting the
+  # rollback anchor with the failed target would make the true last-known-good
+  # SHA unrecoverable through the rollback contract.
   write_pin "${previous_pin_file}" "${current_sha}"
 fi
 write_pin "${pin_file}" "${target_sha}"

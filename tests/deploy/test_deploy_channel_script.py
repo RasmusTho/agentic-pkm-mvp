@@ -585,3 +585,28 @@ def test_pending_target_mismatch_blocks_different_deploy_with_exit_88(tmp_path: 
     assert result.returncode == 88
     assert f"pending target {pending_target} must be reconciled" in result.stderr
     assert marker.exists(), "a mismatched marker must survive until reconciled"
+
+
+def test_same_target_retry_preserves_rollback_anchor(tmp_path: Path) -> None:
+    """A failed-then-retried deploy must not stamp previous.env with the failed target."""
+    root, env, sha = _deploy_harness(tmp_path)
+    good_previous = "5" * 40
+    _seed_previous_pin(root, good_previous)
+    target = _commit_migration(root, "feedc0de0003_anchor_probe.py")
+    env = dict(env)
+    env["FAKE_VERSION_SHA"] = target
+    env["FAKE_HEALTH_VERSION_SHA"] = target
+    previous_pin = root / "config/deploy/dev.previous.env"
+
+    fail_env = dict(env)
+    fail_env["FAKE_DOCKER_FAIL_MATCH"] = "--exit-code-from migrate"
+    first = _run_deploy(root, fail_env, target)
+    assert first.returncode != 0
+    assert f"APP_IMAGE_TAG={good_previous}" in previous_pin.read_text(encoding="utf-8")
+
+    retry = _run_deploy(root, env, target)
+    assert retry.returncode == 0, retry.stderr
+    assert f"APP_IMAGE_TAG={good_previous}" in previous_pin.read_text(encoding="utf-8"), (
+        "the rollback anchor must survive a same-target retry"
+    )
+    assert f"APP_IMAGE_TAG={target}" in (root / "config/deploy/dev.env").read_text(encoding="utf-8")
