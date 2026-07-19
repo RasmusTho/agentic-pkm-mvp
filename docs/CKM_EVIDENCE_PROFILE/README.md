@@ -40,38 +40,18 @@ Phase 1 is exactly three bounded implementation tasks plus a shared real-store v
 | CKM-EP-02 | [TRISTATE_STATUS.md](TRISTATE_STATUS.md) | WP1 | Additive JSON `dimension_status` column (4-place additive pattern, no schema-version bump) adopting the `contracts.py` `SUPPORTED_VALUE_STATES` vocabulary; make per-dimension `unassessed` render distinctly from evidence-starved zero; fix `_documentation` empty-set → `unassessed` and bump its formula id `current-doc-evidence-v1` → `-v2`. |
 | CKM-EP-03 | [SUBSYSTEM_COUNTS_VIEW.md](SUBSYSTEM_COUNTS_VIEW.md) | WP3 | New per-subsystem counts section in the overview (and optional Markdown twin) reusing `_forest` unmodified; **distinct-artifact counts** plus a **shared-evidence indicator** so the ~79% seed-path fan-out duplication is visible, not laundered; static-contract-compliant; purity tests preserved; global-linkage masthead denominator. |
 
-### Deferred — Phase 2 (behind the owner's validation gate)
+### Superseded original Phase 2 (not authorized)
 
-Phase 2 is **not specified here**. It is deferred behind the owner's 2026-07-16 standing decision that
-the cross-provider model inquiry must validate or break the contested design *before* it is built.
-Phase 2 content (named so the boundary is explicit, not to authorize it): dimensions 7→3 (merge
-`functional_completeness` + `requirement_coverage` → `intent_realization`; rename `test_completeness`
-→ `tested_surface`; remove `operational_readiness` / `architectural_stability` /
-`integration_completeness`), schema epoch v5→v6 with a CLI rebuild, a render-time discrimination
-self-check, the rename to "evidence profile", and one scoped superseding ADR.
+The original Phase 2 package — dimensions 7→3, schema epoch v5→v6 plus rebuild, a render-time
+discrimination self-check, the maturity→evidence-profile rename, and a superseding ADR — was
+superseded by the 2026-07-18 validation-panel verdict. It is **not deferred work**, cannot be filed
+from this directory, and has no surviving waiver path. Its former prerequisite list is historical
+input only, not an execution gate.
 
-Phase 2 cannot be ratified until all of these named prerequisites are met (all verified against
-`origin/main` by the plan's red team):
-
-1. A redone coupling census proving the full `rebuild → re-ingest → re-assess → re-gaps` path
-   compiles and runs — `linkers.py` dimension routing, `gaps.py` four-detector rewrite, `assess.py`'s
-   three parallel 7-key dicts, `models.py` edge/finding validation. WP2 re-estimated after the census.
-2. A stub-scorer bridge: any dimension whose real scorer lands later must register in all three
-   `assess.py` dicts, persist `unassessed` (never bare `0.0`), stay out of any aggregate, and render
-   `—` not "starved".
-3. A CLI rebuild command with the correct keep-set (retain capability/artifact/edge public ids;
-   deliberately re-mint assessment/finding ids), an I-MA identity-survival test, a pre-rebuild
-   backup, an operator run-book, and a rollback path.
-4. Sequencing against #3775/#3777: the Measurement & Access query service refuses version-mismatched
-   state, so the v6 epoch must land coordinated with (or before) its pinning.
-5. One scoped superseding ADR (per the ADR-0052/0059 partial-supersession precedent) covering
-   dimension count, scalar/aggregate posture, and the maturity→evidence-profile reframe. In-place ADR
-   edit is off the table (repo convention).
-6. A rename exit condition expressed as a concrete dated owner decision (measurable linkage-density
-   threshold and/or review date + named owner + tracking issue) before the rename ships.
-7. WP2 split into bounded slices per repo granularity norms.
-
-Alternative to the gate: the owner records an explicit waiver of the 2026-07-16 decision.
+The panel selected a separate **linker-precision successor**: increase traceability rows that cite
+real `app/` paths and resolve specification `parent_capability:` links before considering more
+scorers or model-shape changes. That successor requires its own specification, authority decision,
+and issue contract. This directory authorizes Phase 1 only.
 
 ### Cut — Phase 3 (not on the ratification path)
 
@@ -222,9 +202,14 @@ These invariants hold *across* the three tasks. Each task names the ones it must
 - [ ] `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` acceptance rows referencing the
   `min` aggregate and the maturity band are updated in the same PR as CKM-EP-01.
   Verify: doc writeback at `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md :: Acceptance criteria` in the CKM-EP-01 PR diff.
-- [ ] The real-store validation gate (INV-EP-6) passes: Retrieval no longer renders falsely red and the
-  counts view matches the owner's 5 known-cold capabilities.
-  Verify: real-store replay receipt on the (coordinator-filed) parent feature issue.
+- [ ] The terminal real-store validation gate (INV-EP-6) records all three slice receipts: CKM-EP-01
+  proves Retrieval no longer renders falsely red / `critical`; CKM-EP-02 proves one named,
+  genuinely absent documentation-evidence case renders `unassessed`; and CKM-EP-03 proves the
+  distinct-artifact totals and shared-evidence indicators for the five stable validation
+  capabilities named in `SUBSYSTEM_COUNTS_VIEW.md`, plus the indicator for all 22
+  seed-path-sharing capabilities.
+  Verify: real-store replay receipt on the (coordinator-filed) parent feature issue containing the
+  CKM-EP-01, CKM-EP-02, and CKM-EP-03 result sections.
 
 ## Relationship to GitHub issues
 
@@ -237,8 +222,10 @@ number here and reconcile the `State:` line so this directory no longer reads as
 
 Each task ships its named focused tests under `tests/builderops/ckm/`, runs `ruff check app tests`,
 `mypy app`, and the standard `pytest -q -m "not pg"` suite, and passes current-SHA CI plus the local
-review gate. The capability is not accepted until the shared real-store validation gate (INV-EP-6)
-passes on the operator's real 31-capability store and the parent feature issue records that receipt.
+review gate. The capability is not accepted until the parent feature issue records a terminal
+INV-EP-6 receipt that combines the CKM-EP-01 Retrieval result, the CKM-EP-02 named-absence result,
+and the CKM-EP-03 five-capability count comparison plus all-22 shared-evidence-indicator result on
+the operator's real 31-capability store.
 No owner-doc promotion beyond the bundled Direction A row updates (INV-EP-5) is implied by Phase 1;
 the maturity→evidence-profile rename and any broader owner-doc claim belong to Phase 2.
 

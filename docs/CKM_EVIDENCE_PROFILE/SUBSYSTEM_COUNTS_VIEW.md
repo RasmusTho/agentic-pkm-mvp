@@ -78,9 +78,15 @@ workstream, out of scope here).
 - [ ] Shared real-store validation gate (INV-EP-6), extended: on the operator's real 31-capability
   store every seed-path-sharing capability exposes the shared-evidence indicator alongside its
   distinct-artifact total; near-identical totals are explicitly labeled as shared fan-out rather
-  than presented as independent coverage, and the counts match reality on the 5 capabilities the
-  owner knows cold.
-  Verify: real-store replay receipt on the coordinator-filed parent feature issue explicitly comparing the 22 seed-path-sharing capabilities' distinct-artifact counts and shared-evidence indicators.
+  than presented as independent coverage. The five fixed validation identities are
+  `ckm-capability-0023` (Retrieval), `ckm-capability-0024` (Orientation),
+  `ckm-capability-0025` (Resurfacing), `ckm-capability-0026` (Context building), and
+  `ckm-capability-0027` (Citation checking).
+  Verify: the real-store replay receipt on the coordinator-filed parent feature issue records an
+  immutable edge-export hash, then independently derives each five-capability expected tuple from
+  that export as `(count(distinct artifact_id), shared-edge count / total edge count)` before
+  comparing it with the rendered view. The same receipt lists the distinct-artifact total and
+  shared-evidence indicator rendered for every one of the 22 seed-path-sharing capabilities.
 
 ## How to Verify (Pre-Merge)
 
