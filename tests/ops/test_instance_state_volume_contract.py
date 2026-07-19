@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -887,6 +888,21 @@ def test_linux_record_disappearance_is_skipped_only_after_final_proven_absence(
     assert _linux_record(pid, "boot-fixture") is None
 
 
+def test_linux_record_snapshot_disappearance_fails_closed(monkeypatch) -> None:
+    pid = 338
+    stat = _linux_stat_fixture(pid)
+    missing = FileNotFoundError()
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[stat, stat, missing],
+        cmdlines=[missing, missing],
+        gone=True,
+    )
+
+    with pytest.raises(InventoryError, match="enumeration failed"):
+        _linux_record(pid, "boot-fixture", fail_closed_on_gone=True)
+
+
 def test_linux_record_pid_reuse_returns_only_the_new_identity_pair(monkeypatch) -> None:
     pid = 324
     old = _linux_stat_fixture(pid, start_ticks=100)
@@ -1060,12 +1076,14 @@ def test_linux_actual_unreaped_zombie_is_inert(tmp_path) -> None:
     if child == 0:
         os._exit(0)
     try:
-        for _ in range(1000):
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
             raw = (Path("/proc") / str(child) / "stat").read_text(encoding="utf-8")
             if _parse_linux_stat(child, raw)[0] == "Z":
                 break
+            time.sleep(0.01)
         else:
-            pytest.fail("child did not become a zombie")
+            pytest.fail("child did not become a zombie within 5 seconds")
         env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
         controller_pid = os.getpid()
         result, _ = _run_quiescence_helper(

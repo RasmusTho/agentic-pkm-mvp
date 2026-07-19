@@ -125,9 +125,15 @@ def _linux_inert(state: str, flags: int) -> bool:
     return state in LINUX_DEAD_STATES or bool(flags & PF_KTHREAD)
 
 
-def _linux_gone_result(*, strict_controller: bool) -> None:
+def _linux_gone_result(
+    *,
+    strict_controller: bool,
+    fail_closed_on_gone: bool,
+) -> None:
     if strict_controller:
         raise InventoryError("controller process identity is unavailable")
+    if fail_closed_on_gone:
+        raise InventoryError("native process enumeration failed")
     return None
 
 
@@ -136,6 +142,7 @@ def _linux_record(
     boot_id: str,
     *,
     strict_controller: bool = False,
+    fail_closed_on_gone: bool = False,
 ) -> ProcessRecord | None:
     """Read one PID without binding argv across exit, exec, or PID reuse races."""
 
@@ -147,12 +154,18 @@ def _linux_record(
         except (FileNotFoundError, ProcessLookupError):
             last_error = InventoryError("native process enumeration failed")
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
         except (PermissionError, OSError):
             last_error = InventoryError("native process enumeration failed")
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
 
         try:
@@ -160,7 +173,10 @@ def _linux_record(
         except InventoryError as exc:
             last_error = exc
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
 
         try:
@@ -168,12 +184,18 @@ def _linux_record(
         except (FileNotFoundError, ProcessLookupError):
             last_error = InventoryError("native process enumeration failed")
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
         except (PermissionError, OSError):
             last_error = InventoryError("native process enumeration failed")
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
 
         executable_hint: str | None = None
@@ -186,17 +208,26 @@ def _linux_record(
             except (FileNotFoundError, ProcessLookupError):
                 last_error = InventoryError("native process executable identity is unavailable")
                 if final_attempt and _linux_pid_is_gone(pid):
-                    return _linux_gone_result(strict_controller=strict_controller)
+                    return _linux_gone_result(
+                        strict_controller=strict_controller,
+                        fail_closed_on_gone=fail_closed_on_gone,
+                    )
                 continue
             except (PermissionError, OSError):
                 last_error = InventoryError("native process executable identity is unavailable")
                 if final_attempt and _linux_pid_is_gone(pid):
-                    return _linux_gone_result(strict_controller=strict_controller)
+                    return _linux_gone_result(
+                        strict_controller=strict_controller,
+                        fail_closed_on_gone=fail_closed_on_gone,
+                    )
                 continue
             except InventoryError as exc:
                 last_error = exc
                 if final_attempt and _linux_pid_is_gone(pid):
-                    return _linux_gone_result(strict_controller=strict_controller)
+                    return _linux_gone_result(
+                        strict_controller=strict_controller,
+                        fail_closed_on_gone=fail_closed_on_gone,
+                    )
                 continue
             exec_pair_changed = (
                 cmdline_raw != confirmed_cmdline
@@ -208,12 +239,18 @@ def _linux_record(
         except (FileNotFoundError, ProcessLookupError):
             last_error = InventoryError("native process enumeration failed")
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
         except (PermissionError, OSError):
             last_error = InventoryError("native process enumeration failed")
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
 
         try:
@@ -221,7 +258,10 @@ def _linux_record(
         except InventoryError as exc:
             last_error = exc
             if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(strict_controller=strict_controller)
+                return _linux_gone_result(
+                    strict_controller=strict_controller,
+                    fail_closed_on_gone=fail_closed_on_gone,
+                )
             continue
 
         before_start = before[4]
@@ -258,7 +298,10 @@ def _linux_record(
         )
 
     if _linux_pid_is_gone(pid):
-        return _linux_gone_result(strict_controller=strict_controller)
+        return _linux_gone_result(
+            strict_controller=strict_controller,
+            fail_closed_on_gone=fail_closed_on_gone,
+        )
     raise last_error
 
 
@@ -334,7 +377,7 @@ def _enumerate_linux(*, boot_id: str) -> list[ProcessRecord]:
     )
     records: list[ProcessRecord] = []
     for pid in pids:
-        record = _linux_record(pid, boot_id)
+        record = _linux_record(pid, boot_id, fail_closed_on_gone=True)
         if record is not None:
             records.append(record)
     return records
