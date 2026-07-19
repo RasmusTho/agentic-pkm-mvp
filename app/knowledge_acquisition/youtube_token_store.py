@@ -25,18 +25,26 @@ Boundary (INV-YSS-5 / INV-YSS-7):
   clear. The record index (which binding ids have tokens) is readable without
   the key so upstream can detect "a binding exists" and fail closed; decrypting
   a record's bytes always requires the key.
+- A binding-scoped lifecycle lock combines a process-local ``RLock`` with an OS
+  file lock so connect, reconnect, refresh, and disconnect can serialize across
+  store instances and runtime processes. Lock filenames are SHA-256 digests of
+  binding ids, and their private app-local files contain no identifiers or
+  credential bytes.
 """
 
 from __future__ import annotations
 
 import base64
+import fcntl
+import hashlib
 import json
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -47,6 +55,20 @@ _AES_KEY_BYTES = 32  # AES-256
 _NONCE_BYTES = 12  # standard AES-GCM nonce size
 _SCHEMA = "youtube-token-store.v1"
 _DEFAULT_REL_PATH = Path("runtime/knowledge_acquisition/youtube_token_store.enc")
+
+_LIFECYCLE_LOCKS_GUARD = threading.Lock()
+_LIFECYCLE_THREAD_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _lifecycle_thread_lock(lock_path: Path) -> threading.RLock:
+    """Return the process-local half of one cross-process lifecycle lock."""
+    key = str(lock_path)
+    with _LIFECYCLE_LOCKS_GUARD:
+        lock = _LIFECYCLE_THREAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _LIFECYCLE_THREAD_LOCKS[key] = lock
+        return lock
 
 
 class TokenStoreKeyMissingError(RuntimeError):
@@ -156,8 +178,9 @@ class StoredToken:
 class YouTubeTokenStore:
     """AES-256-GCM encrypted token store, one JSON file, one record per binding.
 
-    Thread-safe for concurrent access within a process; cross-process safety is
-    provided by an atomic replace on every write.
+    Individual file operations are thread-safe and writes use atomic replace.
+    Multi-operation credential lifecycles use :meth:`binding_lifecycle_lock`
+    for cross-instance and cross-process serialization.
     """
 
     def __init__(self, path: Path | str | None = None) -> None:
@@ -170,6 +193,35 @@ class YouTubeTokenStore:
     @property
     def path(self) -> Path:
         return self._path
+
+    @contextmanager
+    def binding_lifecycle_lock(self, binding_id: str) -> Iterator[None]:
+        """Serialize one binding's credential lifecycle across actors.
+
+        The process-local ``RLock`` serializes separate service/store instances
+        in one runtime, while ``flock`` on an app-local hashed lock file extends
+        the same critical section across runtime processes sharing this channel
+        token store. The lock file contains no binding id or credential bytes.
+        """
+        if not isinstance(binding_id, str) or not binding_id:
+            raise ValueError("binding_id must be a non-empty string")
+        store_path = self._path.resolve(strict=False)
+        lock_root = store_path.parent / f".{store_path.name}.locks"
+        lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        binding_digest = hashlib.sha256(binding_id.encode("utf-8")).hexdigest()
+        lock_path = lock_root / f"{binding_digest}.lock"
+        thread_lock = _lifecycle_thread_lock(lock_path)
+
+        with thread_lock:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
     # --- file helpers (no key required) -------------------------------------
 

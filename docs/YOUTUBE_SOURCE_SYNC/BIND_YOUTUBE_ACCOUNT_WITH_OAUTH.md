@@ -41,12 +41,16 @@ touch the repo, vault, settings values, logs, events, or receipts.
    boundary); their *values* are never persisted or printed.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
    reason codes on the binding and dependent sources (INV-YSS-4). Connect persists the encrypted
-   token before claiming a binding is connected. `disconnect()` revokes at
-   `oauth2.googleapis.com/revoke` before local teardown; provider revoke failure returns a
-   retryable failure and preserves the encrypted token plus dependent-source state. Successful
-   revoke deletes the token record, disables dependent sources with `auth_disconnected`, and
-   deletes no acquired artifacts. `reconnect()` re-runs consent onto the same binding when the
-   provider channel id matches.
+   token before claiming a binding is connected. Connect, reconnect, refresh, and disconnect are
+   serialized per binding across service instances and runtime processes sharing the channel token
+   store. The app-local lock filename is a digest of the binding id and the private lock file
+   contains no account identifier or secret. `disconnect()` revokes at
+   `oauth2.googleapis.com/revoke` before local teardown. Retryable failures (transport, 408, 429,
+   or 5xx) preserve the encrypted token and dependent-source state for retry; a permanent 4xx
+   rejection completes local teardown with `revoked=false` because the old grant supplies no
+   useful retry authority. Teardown deletes the token record, disables dependent sources with
+   `auth_disconnected`, and deletes no acquired artifacts. `reconnect()` re-runs consent onto the
+   same binding when the provider channel id matches.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + error
    class only); no token, code, or client secret in any emitted string.
 

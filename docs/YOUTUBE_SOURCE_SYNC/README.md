@@ -154,9 +154,10 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   `reason_code`; logged-out capabilities (RSS, backfill, explicit URLs) continue. No cursor is
   mutated by an auth failure; no empty poll result caused by auth/API failure is ever recorded as
   a successful sync. Connect never records `connected` before encrypted token persistence.
-  Disconnect stops future polling only after provider revocation succeeds; transient revoke
-  failure preserves the encrypted credential and source state for retry. Disconnect deletes no
-  acquired Mimer artifacts.
+  Connect, reconnect, refresh, and disconnect serialize each binding's credential lifecycle across
+  actors sharing its channel token store. Retryable revoke failures (transport, 408, 429, or 5xx)
+  preserve the encrypted credential and source state for retry; permanent 4xx rejection completes
+  local teardown with `revoked=false`. Disconnect deletes no acquired Mimer artifacts.
 - **INV-YSS-5 — secrets never leave the private boundary.** OAuth client identifiers, refresh/access
   tokens, and token-store key material never appear in the repo, vault files, settings values,
   candidate notes, events, receipts, logs, or exception text. Settings and receipts may carry only

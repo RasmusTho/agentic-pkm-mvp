@@ -27,10 +27,12 @@ the secret-bearing dataclasses, provider-error sanitization (HTTP status + the
 Auth degradation (INV-YSS-4): a revoked/expired grant or a missing token-store
 key degrades the binding and its dependent authenticated sources with a legible
 reason code, mutates no source cursor, and never records an auth failure as an
-empty-success. Disconnect deletes the token record and disables dependent
-sources only after provider revocation succeeds; a provider failure preserves
-the encrypted credential so revocation remains retryable. Acquired artifacts
-are never deleted.
+empty-success. Connect, reconnect, refresh, and disconnect serialize each
+binding's credential lifecycle across service instances and processes that
+share its channel token store. A retryable revoke failure preserves the
+encrypted credential and source state; a permanent provider rejection completes
+local teardown because the old grant no longer provides useful retry authority.
+Acquired artifacts are never deleted.
 """
 
 from __future__ import annotations
@@ -206,6 +208,11 @@ def _safe_error_code(response: httpx.Response) -> str | None:
         if isinstance(error, str):
             return error
     return None
+
+
+def _retryable_revoke_error(error: OAuthProviderError) -> bool:
+    """Whether provider revocation can safely be retried with this token."""
+    return error.status == 0 or error.status in {408, 429} or 500 <= error.status < 600
 
 
 def _now_iso() -> str:
@@ -550,14 +557,15 @@ class TokenProvider:
         self._lock = threading.Lock()
 
     def get_access_token(self) -> str:
-        token = self._read_token()
-        if self._is_fresh(token):
-            return token.access_token  # type: ignore[return-value]
         with self._lock:
-            token = self._read_token()
-            if self._is_fresh(token):
-                return token.access_token  # type: ignore[return-value]
-            return self._refresh(token)
+            # This file-backed binding lock composes the single-flight refresh
+            # with connect/reconnect/disconnect across service instances and
+            # runtime processes (#3990 review repair).
+            with self._store.binding_lifecycle_lock(self._binding_id):
+                token = self._read_token()
+                if self._is_fresh(token):
+                    return token.access_token  # type: ignore[return-value]
+                return self._refresh(token)
 
     def _read_token(self) -> StoredToken:
         try:
@@ -683,38 +691,48 @@ class YouTubeAccountBinder:
             obtained_at=_now_iso(),
             provider_channel_id=identity.channel_id,
         )
-        # Persist the encrypted credential before creating a row whose durable
-        # state claims the account is connected. A missing/invalid key therefore
-        # cannot leave a connected binding without a token record (#3990).
-        self._store.put(binding_id, token)
-        if binding is None:
-            try:
-                binding = self._bindings.create(
-                    provider_channel_id=identity.channel_id,
-                    display_label=identity.channel_title,
-                    scopes=[SCOPE],
-                    account_binding_id=binding_id,
+        with self._store.binding_lifecycle_lock(binding_id):
+            if binding is not None:
+                # The binding object was resolved before waiting for the
+                # cross-instance lock. Re-read it inside the critical section
+                # so a completed disconnect cannot leave reconnect acting on
+                # stale ``connected`` state.
+                current_binding = self._bindings.get(binding_id)
+                if current_binding is None:
+                    raise KeyError(f"no such account binding: {binding_id}")
+                binding = current_binding
+            # Persist the encrypted credential before creating a row whose durable
+            # state claims the account is connected. A missing/invalid key therefore
+            # cannot leave a connected binding without a token record (#3990).
+            self._store.put(binding_id, token)
+            if binding is None:
+                try:
+                    binding = self._bindings.create(
+                        provider_channel_id=identity.channel_id,
+                        display_label=identity.channel_title,
+                        scopes=[SCOPE],
+                        account_binding_id=binding_id,
+                    )
+                except Exception:
+                    # Compensate the private-store write if the non-secret binding
+                    # cannot be committed. No orphan credential should survive a
+                    # failed initial connect.
+                    self._store.delete(binding_id)
+                    raise
+            if binding.state != "connected" or binding.reason_code is not None:
+                binding = self._bindings.set_state(
+                    binding.account_binding_id, state="connected", reason_code=None
                 )
-            except Exception:
-                # Compensate the private-store write if the non-secret binding
-                # cannot be committed. No orphan credential should survive a
-                # failed initial connect.
-                self._store.delete(binding_id)
-                raise
-        if binding.state != "connected" or binding.reason_code is not None:
-            binding = self._bindings.set_state(
-                binding.account_binding_id, state="connected", reason_code=None
+            _log.info("youtube oauth: account connected (binding %s)", binding.account_binding_id)
+            return redact(
+                {
+                    "status": "connected",
+                    "account": {
+                        "binding_id": binding.account_binding_id,
+                        "channel_title": binding.display_label,
+                    },
+                }
             )
-        _log.info("youtube oauth: account connected (binding %s)", binding.account_binding_id)
-        return redact(
-            {
-                "status": "connected",
-                "account": {
-                    "binding_id": binding.account_binding_id,
-                    "channel_title": binding.display_label,
-                },
-            }
-        )
 
     def _resolve_binding(
         self, identity: ChannelIdentity, reconnect_binding_id: str | None
@@ -772,64 +790,81 @@ class YouTubeAccountBinder:
     def disconnect(self, binding_id: str) -> dict[str, Any]:
         """Revoke at the provider, then tear down local authenticated state.
 
-        Provider failure leaves the encrypted token and connected source state
-        intact so the operator can retry revocation. Successful revocation
-        deletes the token record, disables dependent sources with
-        ``auth_disconnected``, and deletes no acquired artifacts.
+        Retryable provider failure leaves the encrypted token and connected
+        source state intact so the operator can retry revocation. Successful
+        revocation or a permanent provider rejection deletes the token record,
+        disables dependent sources with ``auth_disconnected``, and deletes no
+        acquired artifacts. The whole transition is binding-serialized with
+        connect/reconnect/refresh across service instances and processes.
         """
-        binding = self._bindings.get(binding_id)
-        if binding is None:
-            raise KeyError(f"no such account binding: {binding_id}")
+        with self._store.binding_lifecycle_lock(binding_id):
+            binding = self._bindings.get(binding_id)
+            if binding is None:
+                raise KeyError(f"no such account binding: {binding_id}")
 
-        revoked = False
-        try:
-            token = self._store.get(binding_id)
-        except TokenStoreKeyMissingError:
-            # The encrypted record is the only recoverable remote-revocation
-            # authority. Preserve it until the key is re-provisioned.
+            revoked = False
+            try:
+                token = self._store.get(binding_id)
+            except TokenStoreKeyMissingError:
+                # The encrypted record is the only recoverable remote-revocation
+                # authority. Preserve it until the key is re-provisioned.
+                return redact(
+                    {
+                        "status": "disconnect_failed",
+                        "reason_code": "auth_key_missing",
+                        "revoked": False,
+                        "retryable": True,
+                        "sources_disabled": 0,
+                    }
+                )
+            if token is not None:
+                revocation_token = token.refresh_token or token.access_token or ""
+                if revocation_token:
+                    try:
+                        self._client.revoke(revocation_token)
+                        revoked = True
+                    except OAuthProviderError as error:
+                        if _retryable_revoke_error(error):
+                            _log.warning(
+                                "youtube oauth: retryable provider revoke failure; encrypted "
+                                "token preserved (binding %s)",
+                                binding_id,
+                            )
+                            return redact(
+                                {
+                                    "status": "disconnect_failed",
+                                    "revoked": False,
+                                    "retryable": True,
+                                    "sources_disabled": 0,
+                                }
+                            )
+                        _log.warning(
+                            "youtube oauth: provider permanently rejected revoke; "
+                            "continuing local disconnect (binding %s)",
+                            binding_id,
+                        )
+
+            self._store.delete(binding_id)
+            self._bindings.set_state(
+                binding_id, state="degraded", reason_code="auth_disconnected"
+            )
+
+            sources_disabled = 0
+            if self._registry is not None:
+                for source in self._registry.list_for_account(binding_id):
+                    self._registry.disable_source_for_auth(
+                        source.binding_id, reason_code="auth_disconnected"
+                    )
+                    sources_disabled += 1
+
+            _log.info("youtube oauth: account disconnected (binding %s)", binding_id)
             return redact(
                 {
-                    "status": "disconnect_failed",
-                    "reason_code": "auth_key_missing",
-                    "revoked": False,
-                    "retryable": True,
-                    "sources_disabled": 0,
+                    "status": "disconnected",
+                    "revoked": revoked,
+                    "sources_disabled": sources_disabled,
                 }
             )
-        if token is not None:
-            revocation_token = token.refresh_token or token.access_token or ""
-            if revocation_token:
-                try:
-                    self._client.revoke(revocation_token)
-                    revoked = True
-                except OAuthProviderError:
-                    _log.warning(
-                        "youtube oauth: provider revoke failed; encrypted token preserved "
-                        "for retry (binding %s)",
-                        binding_id,
-                    )
-                    return redact(
-                        {
-                            "status": "disconnect_failed",
-                            "revoked": False,
-                            "retryable": True,
-                            "sources_disabled": 0,
-                        }
-                    )
-
-        self._store.delete(binding_id)
-        self._bindings.set_state(binding_id, state="degraded", reason_code="auth_disconnected")
-
-        sources_disabled = 0
-        if self._registry is not None:
-            for source in self._registry.list_for_account(binding_id):
-                self._registry.disable_source_for_auth(source.binding_id, reason_code="auth_disconnected")
-                sources_disabled += 1
-
-        _log.info("youtube oauth: account disconnected (binding %s)", binding_id)
-        return redact(
-            {"status": "disconnected", "revoked": revoked, "sources_disabled": sources_disabled}
-        )
 
 
 __all__ = [

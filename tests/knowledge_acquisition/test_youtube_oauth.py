@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import threading
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -35,6 +36,7 @@ SYNTH_PLAYLIST_REF = "PL__test__synthetic_playlist_00"
 # Planted secrets: if any of these ever surfaces in a log line, receipt,
 # exception, or --json payload, AC5 fails. They are deliberately distinctive.
 SENTINEL_REFRESH = "sentinel-REFRESH-must-never-leak-" + secrets.token_hex(8)
+SENTINEL_REFRESH_2 = "sentinel-REFRESH2-must-never-leak-" + secrets.token_hex(8)
 SENTINEL_ACCESS = "sentinel-ACCESS-must-never-leak-" + secrets.token_hex(8)
 SENTINEL_ACCESS_2 = "sentinel-ACCESS2-must-never-leak-" + secrets.token_hex(8)
 SENTINEL_CLIENT_SECRET = "sentinel-CLIENTSECRET-must-never-leak-" + secrets.token_hex(8)
@@ -46,6 +48,7 @@ TEST_STORE_KEY = secrets.token_hex(32)
 
 _ALL_SENTINELS = (
     SENTINEL_REFRESH,
+    SENTINEL_REFRESH_2,
     SENTINEL_ACCESS,
     SENTINEL_ACCESS_2,
     SENTINEL_CLIENT_SECRET,
@@ -67,6 +70,8 @@ class _Provider:
         self.token_responses: list[httpx.Response] = []
         self.revoke_responses: list[httpx.Response] = []
         self.revoked: list[dict[str, str]] = []
+        self.revoke_started = threading.Event()
+        self.revoke_release: threading.Event | None = None
         self.device_granted = True
 
     def _body(self, request: httpx.Request) -> dict[str, str]:
@@ -105,6 +110,9 @@ class _Provider:
             )
         if path.endswith("/revoke"):
             self.revoked.append(self._body(request))
+            self.revoke_started.set()
+            if self.revoke_release is not None:
+                self.revoke_release.wait(timeout=5)
             if self.revoke_responses:
                 return self.revoke_responses.pop(0)
             return httpx.Response(200, request=request, json={})
@@ -506,6 +514,106 @@ def test_disconnect_preserves_token_when_provider_revoke_fails(store, bindings, 
     assert retried["revoked"] is True
     assert store.has_record(binding_id) is False
     assert registry.get(source.binding_id).enabled is False
+
+
+def test_disconnect_and_reconnect_are_serialized_across_service_instances(
+    store, bindings, registry
+):
+    provider = _Provider()
+    disconnect_binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(disconnect_binder)
+    binding_id = connected["account"]["binding_id"]
+
+    # A second production-style service instance shares only durable stores,
+    # not the first binder/token-store object's in-process lock.
+    reconnect_store = tokstore.YouTubeTokenStore(path=store.path)
+    reconnect_binder = _binder(provider, reconnect_store, bindings, registry)
+    reconnect_connection = reconnect_binder.start_reconnect(binding_id)
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    provider.revoke_release = threading.Event()
+
+    results: dict[str, dict] = {}
+    errors: list[BaseException] = []
+    reconnect_done = threading.Event()
+
+    def run_disconnect() -> None:
+        try:
+            results["disconnect"] = disconnect_binder.disconnect(binding_id)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def run_reconnect() -> None:
+        try:
+            results["reconnect"] = reconnect_binder.finish_device_connection(
+                reconnect_connection
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            reconnect_done.set()
+
+    disconnect_thread = threading.Thread(target=run_disconnect)
+    reconnect_thread = threading.Thread(target=run_reconnect)
+    disconnect_thread.start()
+    assert provider.revoke_started.wait(timeout=2), "disconnect never reached provider revoke"
+
+    # Exact P1 interleaving: disconnect has read the old token and is paused in
+    # provider revoke while another binder attempts to persist a new grant.
+    reconnect_thread.start()
+    reconnect_was_serialized = not reconnect_done.wait(timeout=0.2)
+    provider.revoke_release.set()
+    disconnect_thread.join(timeout=2)
+    reconnect_thread.join(timeout=2)
+
+    assert reconnect_was_serialized, "reconnect wrote while disconnect held lifecycle authority"
+    assert not disconnect_thread.is_alive()
+    assert not reconnect_thread.is_alive()
+    assert errors == []
+    assert results["disconnect"]["status"] == "disconnected"
+    assert results["reconnect"]["status"] == "connected"
+    surviving = store.get(binding_id)
+    assert surviving is not None
+    assert surviving.refresh_token == SENTINEL_REFRESH_2
+    assert bindings.get(binding_id).state == "connected"
+    assert disconnect_binder.status(binding_id)["status"] == "connected"
+    lock_root = store.path.parent / f".{store.path.name}.locks"
+    lock_files = tuple(lock_root.iterdir())
+    assert len(lock_files) == 1
+    assert binding_id not in lock_files[0].name
+    assert all(secret not in str(lock_files[0]) for secret in _ALL_SENTINELS)
+    assert lock_files[0].read_bytes() == b""
+
+
+def test_disconnect_permanent_revoke_error_tears_down_local_state(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    provider.revoke_responses.append(
+        httpx.Response(
+            400,
+            json={"error": "invalid_token", "error_description": SENTINEL_REFRESH},
+        )
+    )
+
+    disc = binder.disconnect(binding_id)
+
+    assert disc["status"] == "disconnected"
+    assert disc["revoked"] is False
+    assert store.has_record(binding_id) is False
+    assert bindings.get(binding_id).reason_code == "auth_disconnected"
+    assert registry.get(source.binding_id).enabled is False
+    assert SENTINEL_REFRESH not in json.dumps(disc)
 
 
 # --- AC7 --------------------------------------------------------------------
