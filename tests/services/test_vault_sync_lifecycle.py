@@ -13,6 +13,21 @@ UUID3 = str(UUID(int=3))
 UUID4 = str(UUID(int=4))
 
 
+def test_canonical_note_payload_projects_episode_ref_at_top_level() -> None:
+    episode_ids = [UUID1, UUID2]
+
+    payload = vault_sync._canonical_note_payload(
+        frontmatter={"episode_ref": episode_ids, "review_state": "provisional"},
+        title="Bound note",
+        review_state="provisional",
+        maturity=None,
+        content="body",
+    )
+
+    assert payload["episode_ref"] == episode_ids
+    assert payload["frontmatter"]["episode_ref"] == episode_ids
+
+
 class _FakeCursor:
     def __init__(self, conn: "_FakeConn") -> None:
         self.conn = conn

@@ -31,6 +31,7 @@ from app.events.types import (
     INGEST_OBJECT_METADATA,
     INGEST_OBJECT_UPDATED,
 )
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.objects import (
     DomainObject,
@@ -131,6 +132,25 @@ def _merge_canonical_payload(
     if not isinstance(existing, dict):
         existing = {}
     return {**existing, **updates}
+
+
+def _canonical_note_payload(
+    *,
+    frontmatter: dict[str, Any],
+    title: str,
+    review_state: str,
+    maturity: Any,
+    content: str,
+) -> dict[str, Any]:
+    """Build the canonical payload shared by every filesystem vault-sync writer."""
+    return {
+        "title": title,
+        "review_state": review_state,
+        "maturity": maturity,
+        "content": content,
+        "frontmatter": frontmatter,
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
+    }
 
 
 def _object_materialization_state(
@@ -486,13 +506,13 @@ def upsert_object_from_note(
         state = _get_state_by_uuid(conn, uuid_value)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         with conn.cursor() as cur:
-            canonical_payload = {
-                "title": title,
-                "review_state": review_state,
-                "maturity": normalized_frontmatter.get("maturity"),
-                "content": body,
-                "frontmatter": normalized_frontmatter,
-            }
+            canonical_payload = _canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=title,
+                review_state=review_state,
+                maturity=normalized_frontmatter.get("maturity"),
+                content=body,
+            )
             payload_json = json.dumps(canonical_payload)
             try:
                 cur.execute(
@@ -561,6 +581,8 @@ def upsert_object_from_note(
                 "review_state": review_state,
                 "content": body,
                 "path": path_str,
+                "frontmatter": normalized_frontmatter,
+                "episode_ref": canonical_payload["episode_ref"],
             }
             _enqueue(topic, payload, conn=conn, observation=mtime.isoformat())
         conn.commit()
@@ -637,13 +659,13 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
         # Pure rename: state known on another path → update only path (no re-embed).
         if state is None and rename_state and rename_state["path"] != str(note_path):
-            rename_payload = {
-                "title": frontmatter.get("title") or note_path.stem,
-                "review_state": normalized_frontmatter["review_state"],
-                "maturity": normalized_frontmatter.get("maturity"),
-                "content": body,
-                "frontmatter": normalized_frontmatter,
-            }
+            rename_payload = _canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=frontmatter.get("title") or note_path.stem,
+                review_state=normalized_frontmatter["review_state"],
+                maturity=normalized_frontmatter.get("maturity"),
+                content=body,
+            )
             _update_path_only(
                 conn,
                 old_path=rename_state["path"],
@@ -692,6 +714,8 @@ def sync_markdown(path: str) -> dict[str, Any]:
             "maturity": normalized_frontmatter.get("maturity"),
             "content": body,
             "path": str(note_path),
+            "frontmatter": normalized_frontmatter,
+            "episode_ref": episode_ref_from_frontmatter(normalized_frontmatter),
         }
 
         topic = (
@@ -708,12 +732,13 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
         # Write a minimal row to objects (idempotent) with rollbacks between fallbacks.
         payload_json = json.dumps(
-            {
-                "title": obj_payload["title"],
-                "review_state": obj_payload["review_state"],
-                "content": obj_payload["content"],
-                "frontmatter": normalized_frontmatter,
-            }
+            _canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=obj_payload["title"],
+                review_state=obj_payload["review_state"],
+                maturity=obj_payload["maturity"],
+                content=obj_payload["content"],
+            )
         )
         wrote = False
 
@@ -811,6 +836,9 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
         raise ValueError("Rename requires uuid in frontmatter")
     fm_hash = _hash_dict(frontmatter)
     body_hash = _hash_text(body)
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
     mtime = datetime.fromtimestamp(new.stat().st_mtime, tz=timezone.utc)
     result = {"uuid": frontmatter["uuid"], "updated": False}
     with _conn() as conn:
@@ -828,15 +856,13 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
             old_path=state["path"],
             new_path=str(new),
             uuid_value=frontmatter["uuid"],
-            payload={
-                "title": frontmatter.get("title") or new.stem,
-                "review_state": normalize_artifact_state_axes(
-                    frontmatter, default_review_state="provisional"
-                )["review_state"],
-                "maturity": frontmatter.get("maturity"),
-                "content": body,
-                "frontmatter": frontmatter,
-            },
+            payload=_canonical_note_payload(
+                frontmatter=normalized_frontmatter,
+                title=frontmatter.get("title") or new.stem,
+                review_state=normalized_frontmatter["review_state"],
+                maturity=normalized_frontmatter.get("maturity"),
+                content=body,
+            ),
             fm_hash=fm_hash,
             body_hash=body_hash,
             mtime=mtime,
