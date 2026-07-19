@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from app.instance.instance_state import InstanceStateLayout
+from app.instance.instance_state import (
+    DeploymentQuiescenceProof,
+    InstanceStateLayout,
+    InstanceStatePreflightError,
+)
 from app.instance.ownership_ledger import (
     LedgerCollisionError,
     LedgerKeyError,
@@ -16,6 +23,9 @@ from app.instance.runtime import (
     InstanceRegistryRuntime,
     LifecycleActivationProof,
     TransferActivationProof,
+    _begin_instance_state_deployment,
+    _deployment_fence_path,
+    _prove_instance_state_quiescence,
 )
 from app.instance.vault_registry import CapabilityNotReadyError, RegistryError
 from app.vault.manager import iter_vault_markdown_files
@@ -26,6 +36,76 @@ def _runtime(tmp_path: Path, channel: str, host_global: Path) -> InstanceRegistr
         InstanceStateLayout.for_channel(tmp_path / channel, channel),
         host_global,
     )
+
+
+def _rotation_authority(
+    runtime: InstanceRegistryRuntime,
+    owners: list[tuple[str, str, Path]],
+) -> tuple[DeploymentQuiescenceProof, Path]:
+    controller = {
+        "pid": os.getpid(),
+        "start_token": "linux:" + "0" * 64,
+    }
+    _begin_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=runtime.layout.root / "missing-legacy.md",
+        controller_pid=controller["pid"],
+        controller_start_token=controller["start_token"],
+    )
+    empty_domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    empty_digest = hashlib.sha256(
+        json.dumps(empty_domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory = runtime.ledger.root / "deployment-quiescence-inventory.json"
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": controller,
+                "domains": empty_domains,
+                "snapshot_digests": [empty_digest, empty_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(quiescence_inventory, 0o600)
+    proof = _prove_instance_state_quiescence(
+        channel=runtime.layout.channel_id,
+        host_global_root=runtime.ledger.root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_rows = [
+        {
+            "channel_id": channel_id,
+            "vault_binding_id": binding_id,
+            "root": str(root),
+        }
+        for channel_id, binding_id, root in owners
+    ]
+    owner_inventory = runtime.ledger.root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.legacy-owner-inventory.v1",
+                "inventory_complete": True,
+                "writers_drained": True,
+                "source_probe_count": 2,
+                "validated_after_quiescence": True,
+                "source_digest": hashlib.sha256(
+                    json.dumps(owner_rows, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                "owners": owner_rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(owner_inventory, 0o600)
+    return proof, owner_inventory
 
 
 def test_overlapping_content_roots_cannot_be_active_in_two_channels(tmp_path) -> None:
@@ -118,7 +198,14 @@ def test_transfer_mints_destination_binding_and_preserves_lineage_atomically(tmp
     assert ownership_lineage.source_binding_id == registration.vault_binding_id
     assert ownership_lineage.destination_binding_id == destination_binding
     before_rotation = ownership_lineage.root_fingerprint
-    source.rotate_ledger_key()
+    rotation_proof, owner_inventory = _rotation_authority(
+        source,
+        [("test", destination_binding, root)],
+    )
+    source.rotate_ledger_key(
+        quiescence_proof=rotation_proof,
+        legacy_owner_inventory_path=owner_inventory,
+    )
     assert source.ledger.load().transfer_lineage[-1].root_fingerprint != before_rotation
     assert source.ledger.active_owner(destination_binding).channel_id == "test"
     assert source.ledger.active_owner(registration.vault_binding_id) is None
@@ -298,8 +385,23 @@ def test_host_global_ledger_key_is_durable_shared_and_rotates_atomically(tmp_pat
     restarted = _runtime(tmp_path, "dev-restart", host_global)
     assert restarted.ledger.load().key_id == before.key_id
 
+    key_before_unfenced = runtime.ledger.key_path.read_bytes()
+    ledger_before_unfenced = runtime.ledger.path.read_bytes()
+    with pytest.raises(InstanceStatePreflightError, match="quiescence proof"):
+        runtime.rotate_ledger_key()
+    assert runtime.ledger.key_path.read_bytes() == key_before_unfenced
+    assert runtime.ledger.path.read_bytes() == ledger_before_unfenced
+
+    rotation_proof, owner_inventory = _rotation_authority(
+        runtime,
+        [("dev", registration.vault_binding_id, root)],
+    )
     with pytest.raises(RuntimeError, match="injected crash"):
-        runtime.rotate_ledger_key(crash_after="key_commit")
+        runtime.rotate_ledger_key(
+            quiescence_proof=rotation_proof,
+            legacy_owner_inventory_path=owner_inventory,
+            crash_after="key_commit",
+        )
     rotated = runtime.ledger.load()
     assert rotated.key_id != before.key_id
     assert rotated.generation == before.generation + 1
@@ -316,10 +418,64 @@ def test_key_rotation_preserves_removed_root_tombstone_match_on_reregistration(t
     registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
     proof = LifecycleActivationProof.for_test_activation()
     runtime.remove(registration.vault_binding_id, proof=proof)
-    runtime.rotate_ledger_key()
+    rotation_proof, owner_inventory = _rotation_authority(runtime, [])
+    runtime.rotate_ledger_key(
+        quiescence_proof=rotation_proof,
+        legacy_owner_inventory_path=owner_inventory,
+    )
 
     reactivated = runtime.reactivate_removed(root, proof=proof)
     assert reactivated.vault_binding_id == registration.vault_binding_id
+
+
+@pytest.mark.parametrize(
+    "invalid_authority",
+    ["stale-proof", "wrong-channel", "missing-fence", "missing-owner", "wrong-root"],
+)
+def test_key_rotation_rejects_stale_or_mismatched_authority_without_mutation(
+    tmp_path, invalid_authority
+) -> None:
+    runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, owner_inventory = _rotation_authority(
+        runtime,
+        [("dev", registration.vault_binding_id, root)],
+    )
+    if invalid_authority == "stale-proof":
+        proof = replace(proof, nonce="stale-deployment-nonce")
+    elif invalid_authority == "wrong-channel":
+        proof = replace(proof, channel_id="prod")
+    elif invalid_authority == "missing-fence":
+        _deployment_fence_path(runtime.ledger.root, "dev").unlink()
+    elif invalid_authority == "missing-owner":
+        payload = json.loads(owner_inventory.read_text(encoding="utf-8"))
+        payload["owners"] = []
+        payload["source_digest"] = hashlib.sha256(b"[]").hexdigest()
+        owner_inventory.write_text(json.dumps(payload), encoding="utf-8")
+        os.chmod(owner_inventory, 0o600)
+    else:
+        other_root = tmp_path / "other-vault"
+        other_root.mkdir()
+        payload = json.loads(owner_inventory.read_text(encoding="utf-8"))
+        payload["owners"][0]["root"] = str(other_root)
+        payload["source_digest"] = hashlib.sha256(
+            json.dumps(payload["owners"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        owner_inventory.write_text(json.dumps(payload), encoding="utf-8")
+        os.chmod(owner_inventory, 0o600)
+    key_before = runtime.ledger.key_path.read_bytes()
+    ledger_before = runtime.ledger.path.read_bytes()
+
+    with pytest.raises(InstanceStatePreflightError):
+        runtime.rotate_ledger_key(
+            quiescence_proof=proof,
+            legacy_owner_inventory_path=owner_inventory,
+        )
+
+    assert runtime.ledger.key_path.read_bytes() == key_before
+    assert runtime.ledger.path.read_bytes() == ledger_before
 
 
 def test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes(tmp_path) -> None:
