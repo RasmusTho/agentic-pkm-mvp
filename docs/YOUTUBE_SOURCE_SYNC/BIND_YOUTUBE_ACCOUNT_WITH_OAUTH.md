@@ -46,17 +46,19 @@ touch the repo, vault, settings values, logs, events, or receipts.
    store. The app-local lock filename is a digest of the binding id and the private lock file
    contains no account identifier or secret. A portable store-wide lock serializes aggregate-file
    mutations across distinct bindings on POSIX and Windows, while concurrent first connects
-   re-resolve provider identity under shared authority. A create exception after database commit
-   rolls forward through authoritative binding/channel readback; indeterminate readback preserves
-   the encrypted credential. `disconnect()` revokes at `oauth2.googleapis.com/revoke` before local
-   teardown. Only an applicable non-408/non-429 4xx response is an authoritative permanent
-   rejection and permits local teardown with `revoked=false`. Transport failures, 1xx/3xx, 408,
-   429, 5xx, and unknown statuses preserve the encrypted token and dependent-source state for
-   retry/reconciliation. Teardown deletes the token record, disables dependent sources with
-   `auth_disconnected`, and deletes no acquired artifacts. `reconnect()` re-runs consent onto the
-   same binding when the provider channel id matches.
-5. Redaction: all exception/log/serialization paths sanitize provider responses (status + error
-   class only); no token, code, or client secret in any emitted string.
+   re-resolve provider identity under shared authority. First-connect binding ids are deterministic
+   per provider channel. A create exception rolls forward when the row is visible; negative read
+   snapshots preserve the encrypted credential because a delayed commit may still appear, and retry
+   converges on the same candidate id. `disconnect()` revokes at `oauth2.googleapis.com/revoke`
+   before local teardown. Only Google's documented HTTP 400 `invalid_token` outcome (already expired
+   or revoked) permits teardown with `revoked=false`; `invalid_request`, intermediary/unknown 4xx,
+   redirects, transport failures, and every other unproven outcome preserve the encrypted token and
+   dependent-source state for retry/reconciliation. Every credential-bearing OAuth POST disables
+   redirect following at the request site. Teardown deletes the token record, disables dependent
+   sources with `auth_disconnected`, and deletes no acquired artifacts. `reconnect()` re-runs consent
+   onto the same binding when the provider channel id matches.
+5. Redaction: all exception/log/serialization paths sanitize provider responses (status + an
+   allowlisted OAuth error enum only); no token, code, or client secret in any emitted string.
 
 ## Concretely
 

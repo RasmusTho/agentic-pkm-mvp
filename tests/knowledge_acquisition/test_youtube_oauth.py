@@ -138,8 +138,11 @@ def _invalid_grant() -> httpx.Response:
     return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Token has been revoked."})
 
 
-def _client(provider: _Provider) -> oauth.OAuthClient:
-    http = httpx.Client(transport=httpx.MockTransport(provider.handler))
+def _client(provider: _Provider, *, follow_redirects: bool = False) -> oauth.OAuthClient:
+    http = httpx.Client(
+        transport=httpx.MockTransport(provider.handler),
+        follow_redirects=follow_redirects,
+    )
     return oauth.OAuthClient(client_id=TEST_CLIENT_ID, client_secret=SENTINEL_CLIENT_SECRET, http=http)
 
 
@@ -183,9 +186,11 @@ def _binder(
     store: tokstore.YouTubeTokenStore,
     bindings: yab.AccountBindingStore,
     registry: sr.SourceRegistry,
+    *,
+    follow_redirects: bool = False,
 ) -> oauth.YouTubeAccountBinder:
     return oauth.YouTubeAccountBinder(
-        oauth_client=_client(provider),
+        oauth_client=_client(provider, follow_redirects=follow_redirects),
         token_store=store,
         binding_store=bindings,
         source_registry=registry,
@@ -346,7 +351,7 @@ def test_connect_post_commit_exception_reconciles_without_deleting_token(
     assert store.binding_ids() == (binding_id,)
 
 
-def test_connect_precommit_binding_failure_compensates_after_authoritative_absence(
+def test_connect_precommit_binding_failure_preserves_deterministic_retry_authority(
     store, bindings, registry, monkeypatch
 ):
     binder = _binder(_Provider(), store, bindings, registry)
@@ -360,7 +365,67 @@ def test_connect_precommit_binding_failure_compensates_after_authoritative_absen
         _connect_device(binder)
 
     assert bindings.list_all() == ()
-    assert store.binding_ids() == ()
+    first_candidate_ids = store.binding_ids()
+    assert len(first_candidate_ids) == 1
+    assert store.get(first_candidate_ids[0]).refresh_token == SENTINEL_REFRESH
+
+    # Another failed attempt targets the same idempotency key rather than
+    # accumulating uncorrelated credential records.
+    with pytest.raises(RuntimeError, match="synthetic pre-insert failure"):
+        _connect_device(binder)
+    assert store.binding_ids() == first_candidate_ids
+
+
+def test_connect_delayed_commit_after_negative_readbacks_preserves_and_converges(
+    store, bindings, registry, monkeypatch
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+    original_create = bindings.create
+    original_get = bindings.get
+    original_get_by_channel_id = bindings.get_by_channel_id
+    create_kwargs: dict[str, object] = {}
+    readbacks: list[str] = []
+
+    def lose_ack_before_delayed_commit(**kwargs):
+        create_kwargs.update(kwargs)
+        raise RuntimeError("synthetic delayed insert acknowledgement")
+
+    def negative_exact_readback(_binding_id):
+        readbacks.append("exact")
+        return None
+
+    def negative_channel_readback(_channel_id):
+        if not create_kwargs:
+            # Initial identity resolution happens before create is attempted.
+            return None
+        readbacks.append("channel")
+        # The insert becomes visible only after both negative snapshots. This
+        # is precisely why absence at either read is not temporal proof.
+        original_create(**create_kwargs)
+        return None
+
+    monkeypatch.setattr(bindings, "create", lose_ack_before_delayed_commit)
+    monkeypatch.setattr(bindings, "get", negative_exact_readback)
+    monkeypatch.setattr(bindings, "get_by_channel_id", negative_channel_readback)
+
+    with pytest.raises(RuntimeError, match="synthetic delayed insert acknowledgement"):
+        _connect_device(binder)
+
+    assert readbacks == ["exact", "channel"]
+    candidate_id = str(create_kwargs["account_binding_id"])
+    assert store.binding_ids() == (candidate_id,)
+    assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH
+
+    monkeypatch.setattr(bindings, "create", original_create)
+    monkeypatch.setattr(bindings, "get", original_get)
+    monkeypatch.setattr(bindings, "get_by_channel_id", original_get_by_channel_id)
+
+    # Retry resolves the delayed row, retains its deterministic id, and does
+    # not create a second binding or credential record.
+    retried = _connect_device(binder)
+    assert retried["account"]["binding_id"] == candidate_id
+    assert [row.account_binding_id for row in bindings.list_all()] == [candidate_id]
+    assert store.binding_ids() == (candidate_id,)
 
 
 def test_connect_indeterminate_create_readback_preserves_token(
@@ -589,7 +654,10 @@ def test_disconnect_preserves_token_when_provider_revoke_fails(store, bindings, 
     assert registry.get(source.binding_id).enabled is False
 
 
-@pytest.mark.parametrize("status", [0, 100, 199, 300, 302, 399, 408, 429, 500, 599, 600])
+@pytest.mark.parametrize(
+    "status",
+    [0, 100, 199, 300, 302, 399, 400, 401, 403, 404, 407, 408, 409, 429, 499, 500, 599, 600],
+)
 def test_disconnect_indeterminate_revoke_status_preserves_retry_authority(
     store, bindings, registry, monkeypatch, status
 ):
@@ -811,9 +879,8 @@ def test_portable_lock_uses_windows_backend_when_fcntl_unavailable(store, monkey
     assert calls == [(FakeMsvcrt.LK_LOCK, 1), (FakeMsvcrt.LK_UNLCK, 1)]
 
 
-@pytest.mark.parametrize("status", [400, 407, 409, 499])
-def test_disconnect_permanent_revoke_error_tears_down_local_state(
-    store, bindings, registry, status
+def test_disconnect_documented_invalid_token_tears_down_local_state(
+    store, bindings, registry
 ):
     provider = _Provider()
     binder = _binder(provider, store, bindings, registry)
@@ -827,7 +894,7 @@ def test_disconnect_permanent_revoke_error_tears_down_local_state(
     )
     provider.revoke_responses.append(
         httpx.Response(
-            status,
+            400,
             json={"error": "invalid_token", "error_description": SENTINEL_REFRESH},
         )
     )
@@ -840,6 +907,45 @@ def test_disconnect_permanent_revoke_error_tears_down_local_state(
     assert bindings.get(binding_id).reason_code == "auth_disconnected"
     assert registry.get(source.binding_id).enabled is False
     assert SENTINEL_REFRESH not in json.dumps(disc)
+
+
+@pytest.mark.parametrize(
+    ("status", "error_code"),
+    [
+        (400, "invalid_request"),
+        (400, "unsupported_token_type"),
+        (400, SENTINEL_REFRESH),
+        (407, "invalid_token"),
+        (409, "invalid_token"),
+        (499, "invalid_token"),
+    ],
+)
+def test_disconnect_unproven_4xx_outcome_preserves_retry_authority(
+    store, bindings, registry, status, error_code
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    provider.revoke_responses.append(
+        httpx.Response(
+            status,
+            json={"error": error_code, "error_description": SENTINEL_ACCESS},
+        )
+    )
+
+    disc = binder.disconnect(binding_id)
+
+    assert disc == {
+        "status": "disconnect_failed",
+        "revoked": False,
+        "retryable": True,
+        "sources_disabled": 0,
+    }
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
+    assert bindings.get(binding_id).state == "connected"
+    assert SENTINEL_REFRESH not in json.dumps(disc)
+    assert SENTINEL_ACCESS not in json.dumps(disc)
 
 
 # --- AC7 --------------------------------------------------------------------
@@ -888,6 +994,59 @@ def test_oauth_client_refuses_off_allowlist_host():
     client = oauth.OAuthClient(client_id=TEST_CLIENT_ID, client_secret=SENTINEL_CLIENT_SECRET, http=http)
     with pytest.raises(oauth.DisallowedOAuthHostError):
         client._post("https://evil.example.com/token", {"grant_type": "refresh_token"})
+
+
+@pytest.mark.parametrize("status", [302, 307])
+def test_disconnect_redirect_never_replays_token_and_preserves_retry_authority(
+    store, bindings, registry, status
+):
+    provider = _Provider()
+    # The injected client is deliberately redirect-enabled. The OAuth call
+    # site must override that ambient policy for every credential-bearing POST.
+    binder = _binder(
+        provider,
+        store,
+        bindings,
+        registry,
+        follow_redirects=True,
+    )
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    request_count_before_revoke = len(provider.requests)
+    provider.revoke_responses.append(
+        httpx.Response(
+            status,
+            headers={"Location": "https://off-allowlist.example/collect"},
+        )
+    )
+
+    disc = binder.disconnect(binding_id)
+
+    revoke_requests = provider.requests[request_count_before_revoke:]
+    assert len(revoke_requests) == 1
+    assert urlsplit(str(revoke_requests[0].url)).hostname == "oauth2.googleapis.com"
+    assert disc["status"] == "disconnect_failed"
+    assert disc["retryable"] is True
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
+
+
+def test_provider_error_enum_is_allowlisted_before_exception_rendering():
+    provider = _Provider()
+    provider.token_responses.append(
+        httpx.Response(
+            400,
+            json={"error": SENTINEL_REFRESH, "error_description": SENTINEL_ACCESS},
+        )
+    )
+
+    with pytest.raises(oauth.OAuthProviderError) as excinfo:
+        _client(provider).refresh(SENTINEL_REFRESH_2)
+
+    assert excinfo.value.error_code is None
+    rendered = repr(excinfo.value) + str(excinfo.value)
+    assert SENTINEL_REFRESH not in rendered
+    assert SENTINEL_ACCESS not in rendered
+    assert SENTINEL_REFRESH_2 not in rendered
 
 
 def test_missing_client_credentials_fail_loud(monkeypatch):

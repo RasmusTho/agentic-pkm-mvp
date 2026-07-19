@@ -29,11 +29,12 @@ key degrades the binding and its dependent authenticated sources with a legible
 reason code, mutates no source cursor, and never records an auth failure as an
 empty-success. Connect, reconnect, refresh, and disconnect serialize each
 binding's credential lifecycle across service instances and processes that
-share its channel token store. An indeterminate binding-create result preserves
-the encrypted credential unless authoritative readback proves the row absent.
-Only a definitive non-408/non-429 4xx revoke rejection permits destructive
-local teardown; every other revoke failure preserves retry authority. Acquired
-artifacts are never deleted.
+share its channel token store. First-connect binding ids are deterministic per
+provider channel, and an indeterminate binding-create result always preserves
+the encrypted credential so a delayed commit or retry retains authority. Only
+Google's documented ``400 invalid_token`` revoke outcome permits destructive
+local teardown; every other revoke failure preserves retry authority. OAuth
+POSTs never follow redirects. Acquired artifacts are never deleted.
 """
 
 from __future__ import annotations
@@ -99,6 +100,29 @@ _SECRET_KEY_MARKERS = (
     "code_verifier",
 )
 _REDACTION_SAFE_KEYS = frozenset({"token_store", "token_type"})
+
+# Provider-controlled strings are not safe merely because they occupy an
+# ``error`` field: a proxy or malformed response could echo secret material
+# there. Admit only documented OAuth enums that local control flow understands
+# or may safely report.
+_SAFE_OAUTH_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "access_denied",
+        "authorization_pending",
+        "expired_token",
+        "invalid_client",
+        "invalid_grant",
+        "invalid_request",
+        "invalid_scope",
+        "invalid_token",
+        "slow_down",
+        "temporarily_unavailable",
+        "unauthorized_client",
+        "unsupported_grant_type",
+        "unsupported_response_type",
+        "unsupported_token_type",
+    }
+)
 
 
 # --- Errors ------------------------------------------------------------------
@@ -207,14 +231,26 @@ def _safe_error_code(response: httpx.Response) -> str | None:
         return None
     if isinstance(body, dict):
         error = body.get("error")
-        if isinstance(error, str):
+        if isinstance(error, str) and error in _SAFE_OAUTH_ERROR_CODES:
             return error
     return None
 
 
-def _permanent_revoke_rejection(error: OAuthProviderError) -> bool:
-    """Whether a provider response authoritatively permits local teardown."""
-    return 400 <= error.status < 500 and error.status not in {408, 429}
+def _provider_confirms_token_already_invalid(error: OAuthProviderError) -> bool:
+    """Whether Google authoritatively says the revoke objective already holds.
+
+    Google's revocation contract documents ``invalid_token`` for a token that
+    is already expired or revoked, and documents HTTP 400 for error outcomes.
+    Status alone is not authority: intermediary and malformed-request 4xx
+    responses preserve the encrypted credential for retry.
+    """
+    return error.status == 400 and error.error_code == "invalid_token"
+
+
+def _binding_candidate_id(provider_channel_id: str) -> str:
+    """Return the stable first-connect idempotency key for a YouTube channel."""
+    name = f"urn:agentic-pkm:youtube-account-binding:{provider_channel_id}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
 
 
 def _now_iso() -> str:
@@ -385,7 +421,11 @@ class OAuthClient:
         self._guard_host(url)
         try:
             response = self._http.post(
-                url, data=data, timeout=self._timeout, headers={"Accept": "application/json"}
+                url,
+                data=data,
+                timeout=self._timeout,
+                headers={"Accept": "application/json"},
+                follow_redirects=False,
             )
         except httpx.HTTPError as exc:
             # Sanitized: exception class only -- never a URL (may carry query
@@ -694,7 +734,11 @@ class YouTubeAccountBinder:
         identity_authority = reconnect_binding_id or f"channel:{identity.channel_id}"
         with self._store.binding_lifecycle_lock(identity_authority):
             binding = self._resolve_binding(identity, reconnect_binding_id)
-            binding_id = binding.account_binding_id if binding is not None else str(uuid.uuid4())
+            binding_id = (
+                binding.account_binding_id
+                if binding is not None
+                else _binding_candidate_id(identity.channel_id)
+            )
             lifecycle = (
                 self._store.binding_lifecycle_lock(binding_id)
                 if binding_id != identity_authority
@@ -730,48 +774,56 @@ class YouTubeAccountBinder:
                     account_binding_id=binding_id,
                 )
             except Exception as create_error:
-                # A Postgres INSERT can commit even when the client loses its
-                # acknowledgement. Reconcile through fresh authoritative reads
-                # before compensating the only encrypted revocation authority.
-                exact_read_ok = True
+                # A Postgres INSERT can commit after the client observes an
+                # exception, and negative snapshots cannot prove a delayed
+                # commit will not appear. Reconcile visible success/concurrent
+                # winners, but never compensate the only encrypted revocation
+                # authority while completion remains indeterminate.
                 try:
                     exact_binding = self._bindings.get(binding_id)
                 except Exception:
                     exact_binding = None
-                    exact_read_ok = False
-                channel_read_ok = True
                 try:
                     channel_binding = self._bindings.get_by_channel_id(identity.channel_id)
                 except Exception:
                     channel_binding = None
-                    channel_read_ok = False
 
-                committed_binding = next(
-                    (
-                        candidate
-                        for candidate in (exact_binding, channel_binding)
-                        if isinstance(candidate, AccountBinding)
-                        and candidate.account_binding_id == binding_id
-                        and candidate.provider_channel_id == identity.channel_id
-                    ),
-                    None,
+                committed_binding = (
+                    exact_binding
+                    if isinstance(exact_binding, AccountBinding)
+                    and exact_binding.account_binding_id == binding_id
+                    and exact_binding.provider_channel_id == identity.channel_id
+                    else None
                 )
                 if committed_binding is not None:
                     # Lost acknowledgement after commit: roll forward to the
                     # already-connected row and return the normal idempotent
                     # connect receipt.
                     binding = committed_binding
-                elif exact_read_ok and channel_read_ok:
-                    # Both fresh reads authoritatively exclude this candidate
-                    # id. A same-channel row with another id is a concurrent
-                    # winner, not evidence that this INSERT committed.
-                    self._store.delete(binding_id)
-                    raise create_error
+                elif (
+                    isinstance(channel_binding, AccountBinding)
+                    and channel_binding.provider_channel_id == identity.channel_id
+                ):
+                    # The provider/channel uniqueness constraint makes a
+                    # different visible row the canonical concurrent winner.
+                    # Move the new grant under that binding before removing the
+                    # deterministic candidate record.
+                    canonical_id = channel_binding.account_binding_id
+                    canonical_lifecycle = (
+                        self._store.binding_lifecycle_lock(canonical_id)
+                        if canonical_id != binding_id
+                        else nullcontext()
+                    )
+                    with canonical_lifecycle:
+                        self._store.put(canonical_id, token)
+                        if canonical_id != binding_id:
+                            self._store.delete(binding_id)
+                    binding = channel_binding
                 else:
-                    # Readback itself is indeterminate. Preserve the credential
-                    # under its deterministic candidate id so a retry/recovery
-                    # can reconcile it instead of making the remote grant
-                    # unrevokeable.
+                    # Even two successful negative reads are only snapshots: a
+                    # delayed commit can appear afterward. Preserve the grant
+                    # under the deterministic candidate id; a later retry will
+                    # resolve the row and converge without minting another id.
                     raise create_error from None
         if binding.state != "connected" or binding.reason_code is not None:
             binding = self._bindings.set_state(
@@ -844,13 +896,13 @@ class YouTubeAccountBinder:
     def disconnect(self, binding_id: str) -> dict[str, Any]:
         """Revoke at the provider, then tear down local authenticated state.
 
-        Only a definitive non-408/non-429 4xx provider rejection authorizes
-        destructive local teardown after a failed revoke. Transport failures,
-        1xx/3xx responses, 408, 429, 5xx, and unknown statuses leave the
-        encrypted token and connected source state intact for retry. Successful
-        revocation or a definitive permanent rejection deletes the token
-        record, disables dependent sources with ``auth_disconnected``, and
-        deletes no acquired artifacts. The whole transition is
+        Only Google's documented HTTP 400 ``invalid_token`` outcome (already
+        expired or revoked) authorizes destructive local teardown after a
+        failed revoke. Every other status/body combination leaves the encrypted
+        token and connected source state intact for retry. Successful revocation
+        or that provider-authoritative outcome deletes the token record,
+        disables dependent sources with ``auth_disconnected``, and deletes no
+        acquired artifacts. The whole transition is
         binding-serialized with connect/reconnect/refresh across service
         instances and processes.
         """
@@ -881,9 +933,9 @@ class YouTubeAccountBinder:
                         self._client.revoke(revocation_token)
                         revoked = True
                     except OAuthProviderError as error:
-                        if _permanent_revoke_rejection(error):
+                        if _provider_confirms_token_already_invalid(error):
                             _log.warning(
-                                "youtube oauth: provider permanently rejected revoke; "
+                                "youtube oauth: provider confirms token already invalid; "
                                 "continuing local disconnect (binding %s)",
                                 binding_id,
                             )
