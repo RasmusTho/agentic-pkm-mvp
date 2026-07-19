@@ -331,6 +331,8 @@ def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None
     )
     assert producer.count("docker ps --format") >= 2
     assert "pgrep -af" in producer
+    assert "native_pattern=" in producer
+    assert "controller_pid" in producer
     assert '"dev", "test", "prod", "native"' in producer
     assert producer.index(" stop api worker watcher") < producer.index("deployment-prove")
     assert producer.index("deployment-prove") < producer.index("deployment-finish")

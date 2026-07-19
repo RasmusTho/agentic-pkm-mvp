@@ -47,9 +47,13 @@ prepare_instance_state_deployment() {
   # Probe every Compose domain and native launchers twice after the local
   # project stops.  A changed snapshot or any surviving writer is unsafe: the
   # finalizer must never infer host-wide quiescence from this caller's channel.
-  local first_probe second_probe inventory_json
-  first_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af 'start_full_system|deploy_channel|uvicorn|celery|watch' || true)"
-  second_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af 'start_full_system|deploy_channel|uvicorn|celery|watch' || true)"
+  local first_probe second_probe inventory_json native_pattern controller_pid
+  # Match launcher scripts, rather than arbitrary command lines containing their
+  # names (for example a pytest node path), and never count this controller.
+  native_pattern='(^|/)(start_full_system|deploy_channel)\.sh([[:space:]]|$)|uvicorn|celery|watch'
+  controller_pid="$$"
+  first_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af "${native_pattern}" | awk -v controller_pid="${controller_pid}" '$1 != controller_pid' || true)"
+  second_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af "${native_pattern}" | awk -v controller_pid="${controller_pid}" '$1 != controller_pid' || true)"
   inventory_json="$(python3 - "${first_probe}" "${second_probe}" <<'PY'
 import json
 import sys
