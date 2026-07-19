@@ -8,9 +8,12 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+from types import FrameType
 
 from app.ops.host_secret_contract import HostSecretContract, load_host_secret_contract
 
@@ -27,6 +30,39 @@ CommandRunner = Callable[[list[str], dict[str, str]], int]
 
 class HostSecretBootstrapError(RuntimeError):
     """Redacted bootstrap failure that never carries resolved secret material."""
+
+
+class HostSecretBootstrapTerminated(HostSecretBootstrapError):
+    """Signal termination after the bootstrap has begun controlled cleanup."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__("host secret bootstrap terminated for declared consumer")
+        self.signum = signum
+
+
+SignalHandler = Callable[[int, FrameType | None], None]
+
+
+@contextmanager
+def _temporary_signal_handlers(handler: SignalHandler) -> Iterator[None]:
+    """Install cleanup-aware handlers when running on the main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    handled = tuple(
+        selected
+        for selected in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None))
+        if selected is not None
+    )
+    previous = {selected: signal.getsignal(selected) for selected in handled}
+    try:
+        for selected in handled:
+            signal.signal(selected, handler)
+        yield
+    finally:
+        for selected, prior in previous.items():
+            signal.signal(selected, prior)
 
 
 def _security_keychain_lookup(service: str, account: str) -> str:
@@ -148,21 +184,33 @@ def materialize_consumer_environment(
 
     file_path: Path | None = None
     fd: int | None = None
+
+    def cleanup_then_terminate(signum: int, _frame: FrameType | None) -> None:
+        if file_path is not None:
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise HostSecretBootstrapError(
+                    "host secret bootstrap failed for declared consumer"
+                ) from exc
+        raise HostSecretBootstrapTerminated(signum)
+
     try:
-        fd, raw_path = tempfile.mkstemp(
-            prefix="yggdrasil-host-secret-",
-            suffix=".env",
-            dir=directory,
-        )
-        file_path = Path(raw_path)
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", closefd=True) as handle:
-            fd = None
-            for name in sorted(values):
-                handle.write(f"{name}={values[name]}\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        yield file_path
+        with _temporary_signal_handlers(cleanup_then_terminate):
+            fd, raw_path = tempfile.mkstemp(
+                prefix="yggdrasil-host-secret-",
+                suffix=".env",
+                dir=directory,
+            )
+            file_path = Path(raw_path)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", closefd=True) as handle:
+                fd = None
+                for name in sorted(values):
+                    handle.write(f"{name}={values[name]}\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            yield file_path
     except HostSecretBootstrapError:
         raise
     except Exception as exc:
@@ -182,7 +230,24 @@ def materialize_consumer_environment(
 
 
 def _subprocess_runner(command: list[str], env: dict[str, str]) -> int:
-    return subprocess.run(command, env=env, check=False).returncode
+    process: subprocess.Popen[bytes] | None = None
+
+    def forward_then_terminate(signum: int, _frame: FrameType | None) -> None:
+        if process is not None and process.poll() is None:
+            process.send_signal(signum)
+        raise HostSecretBootstrapTerminated(signum)
+
+    with _temporary_signal_handlers(forward_then_terminate):
+        process = subprocess.Popen(command, env=env)
+        try:
+            return process.wait()
+        except HostSecretBootstrapTerminated:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            raise
 
 
 def run_with_host_secrets(
@@ -236,6 +301,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             consumer=args.consumer,
             command=command,
         )
+    except HostSecretBootstrapTerminated as exc:
+        print(
+            "host secret bootstrap terminated; temporary material removed",
+            file=sys.stderr,
+        )
+        return 128 + exc.signum
     except HostSecretBootstrapError:
         print(
             "host secret bootstrap failed for declared consumer; "

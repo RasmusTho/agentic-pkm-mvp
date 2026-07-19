@@ -22,7 +22,8 @@ may become a second source of truth.
 
 1. Resolve declared Keychain identifiers for an explicit `{channel, consumer}` pair.
 2. Materialize only that consumer's values in a temporary owner-only runtime surface, launch the
-   intended process, then remove the material on normal exit and failure.
+   intended process, then remove the material on normal exit, controlled failure, and catchable
+   termination after forwarding the signal to the consumer.
 3. Redact values from diagnostics, deploy receipts, and failure messages while retaining logical
    identifiers and remediation instructions.
 4. Add dev-channel integration for `heimdal-capture-watch`; do not touch test, prod, stable, or
@@ -36,8 +37,10 @@ may become a second source of truth.
 - [ ] Missing, malformed, or permission-denied Keychain entries fail before process startup and leak
       no value.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_or_malformed_secret_fails_closed`
-- [ ] Temporary material is owner-readable only and removed on success and controlled failure.
+- [ ] Temporary material is owner-readable only and removed on success, controlled failure, and
+      catchable process termination.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_runtime_secret_file_is_mode_0600_and_cleaned_up`
+      Verify: `tests/ops/test_host_secret_bootstrap.py::test_sigterm_forwards_to_consumer_and_cleans_runtime_secret_file`
 - [ ] `heimdal-capture-watch` receives `HEIMDAL_RAW_STORE_KEY` through this path without a repository
       secret or changed product code.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_capture_watch_uses_bootstrap_not_tracked_env`

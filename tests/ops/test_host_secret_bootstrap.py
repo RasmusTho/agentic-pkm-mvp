@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import signal
 import stat
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -119,6 +121,64 @@ def test_runtime_secret_file_is_mode_0600_and_cleaned_up(
     assert result == return_code
     assert observed_path is not None
     assert not observed_path.exists()
+
+
+def test_sigterm_forwards_to_consumer_and_cleans_runtime_secret_file(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "security",
+        f"""#!/usr/bin/env bash
+set -eu
+printf '%s\\n' '{_RAW_KEY}'
+""",
+    )
+    ready = tmp_path / "consumer-ready"
+    observed_path = tmp_path / "observed-path"
+    consumer = (
+        "import os, pathlib, time; "
+        f"pathlib.Path({str(observed_path)!r}).write_text("
+        "os.environ['HOST_SECRET_RUNTIME_ENV_FILE'], encoding='utf-8'); "
+        f"pathlib.Path({str(ready)!r}).touch(); "
+        "time.sleep(60)"
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "app.ops.host_secret_bootstrap",
+            "--channel",
+            "dev",
+            "--consumer",
+            "heimdal-capture-watch",
+            "--",
+            sys.executable,
+            "-c",
+            consumer,
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ready.exists(), process.communicate(timeout=5)
+    secret_file = Path(observed_path.read_text(encoding="utf-8"))
+    assert secret_file.is_file()
+
+    process.terminate()
+    _stdout, stderr = process.communicate(timeout=10)
+
+    assert process.returncode == 128 + signal.SIGTERM
+    assert not secret_file.exists()
+    assert _RAW_KEY not in stderr
 
 
 def _write_executable(path: Path, text: str) -> None:
