@@ -647,7 +647,6 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
-                canonical_object_id=canonical_object_id,
             )
             append_change(f"Skipped sync for active edit: {note_path}", vault_path=note_path)
             conn.commit()
@@ -676,6 +675,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
+                canonical_object_id=canonical_object_id,
             )
             conn.commit()
             return result
