@@ -7,10 +7,12 @@ import os
 import selectors
 import signal
 import subprocess
+import sys
 import tempfile
 import time
+from ctypes import CDLL, Structure, byref, c_char, c_int32, c_uint32, c_uint64, sizeof
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Never, Protocol
 
 import requests  # type: ignore[import-untyped]  # third-party lib ships no type stubs
 
@@ -20,6 +22,7 @@ from app.builderops.models import BuilderOpsValidationError
 ADAPTER_CONFIG_ENV = "BUILDEROPS_INQUIRY_ADAPTERS_JSON"
 ROLE_NAMES = ("fable", "gpt_codex")
 SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
+CLEANUP_TIMEOUT_SECONDS = 2.0
 ADAPTER_FAILURE_CLASSES = frozenset(
     {
         "command_exit_nonzero",
@@ -451,10 +454,11 @@ def _read_bounded_process_output(
     adapter_id: str,
 ) -> bytes:
     if process.stdout is None:
-        _kill_process_group(process, adapter_id=adapter_id)
-        raise AdapterExecutionError(
+        cleanup_denied = _kill_process_group(process)
+        _raise_local_command_failure(
             f"local command stdout unavailable: {adapter_id}",
             failure_class="stdout_unavailable",
+            cleanup_denied=cleanup_denied,
         )
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
@@ -465,10 +469,11 @@ def _read_bounded_process_output(
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _kill_process_group(process, adapter_id=adapter_id)
-                raise AdapterExecutionError(
+                cleanup_denied = _kill_process_group(process)
+                _raise_local_command_failure(
                     f"local command timed out: {adapter_id}",
                     failure_class="command_timeout",
+                    cleanup_denied=cleanup_denied,
                 )
             events = selector.select(min(remaining, 0.1))
             if not events and process.poll() is not None:
@@ -480,71 +485,191 @@ def _read_bounded_process_output(
                     continue
                 size += len(chunk)
                 if size > max_output_bytes:
-                    _kill_process_group(process, adapter_id=adapter_id)
-                    raise AdapterExecutionError(
+                    cleanup_denied = _kill_process_group(process)
+                    _raise_local_command_failure(
                         f"local command output exceeded limit: {adapter_id}",
                         failure_class="stdout_oversize",
+                        cleanup_denied=cleanup_denied,
                     )
                 chunks.append(chunk)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            _kill_process_group(process, adapter_id=adapter_id)
-            raise AdapterExecutionError(
+            cleanup_denied = _kill_process_group(process)
+            _raise_local_command_failure(
                 f"local command timed out: {adapter_id}",
                 failure_class="command_timeout",
+                cleanup_denied=cleanup_denied,
             )
         process.wait(timeout=remaining)
         return b"".join(chunks)
-    except subprocess.TimeoutExpired as exc:
-        _kill_process_group(process, adapter_id=adapter_id)
-        raise AdapterExecutionError(
+    except subprocess.TimeoutExpired:
+        cleanup_denied = _kill_process_group(process)
+        _raise_local_command_failure(
             f"local command timed out: {adapter_id}",
             failure_class="command_timeout",
-        ) from exc
+            cleanup_denied=cleanup_denied,
+        )
     finally:
         selector.close()
 
 
-def _kill_process_group(process: subprocess.Popen[bytes], *, adapter_id: str) -> None:
+def _raise_local_command_failure(
+    message: str,
+    *,
+    failure_class: str,
+    cleanup_denied: bool,
+) -> Never:
+    if cleanup_denied:
+        message += "; process-group cleanup denied"
+    raise AdapterExecutionError(message, failure_class=failure_class) from None
+
+
+def _kill_process_group(process: subprocess.Popen[bytes]) -> bool:
+    """Boundedly terminate a command tree; return whether group signaling was denied."""
     if process.poll() is not None:
-        return
+        return False
+    deadline = time.monotonic() + CLEANUP_TIMEOUT_SECONDS
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
-        return
+        return False
     except PermissionError:
+        descendants = _descendant_process_identities(process.pid, deadline=deadline)
+        for pid, identity in reversed(descendants):
+            if time.monotonic() >= deadline:
+                break
+            current_identity = _kernel_process_identity(pid)
+            if time.monotonic() >= deadline:
+                break
+            if current_identity != identity:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                pass
         try:
             process.kill()
-        except ProcessLookupError:
-            return
-        except PermissionError as exc:
-            raise AdapterExecutionError(
-                f"local command cleanup failed: {adapter_id}"
-            ) from exc
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired as exc:
-            raise AdapterExecutionError(
-                f"local command cleanup failed: {adapter_id}"
-            ) from exc
-        raise AdapterExecutionError(f"local command cleanup denied: {adapter_id}")
+        except (PermissionError, ProcessLookupError):
+            pass
+        _bounded_wait(process, deadline=deadline)
+        return True
+    _bounded_wait(process, deadline=deadline)
+    return False
+
+
+def _bounded_wait(process: subprocess.Popen[bytes], *, deadline: float) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return
     try:
-        process.wait(timeout=1)
+        process.wait(timeout=remaining)
     except subprocess.TimeoutExpired:
         try:
             process.kill()
-        except ProcessLookupError:
+        except (PermissionError, ProcessLookupError):
             return
-        except PermissionError as exc:
-            raise AdapterExecutionError(
-                f"local command cleanup failed: {adapter_id}"
-            ) from exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
         try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired as exc:
-            raise AdapterExecutionError(
-                f"local command cleanup failed: {adapter_id}"
-            ) from exc
+            process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            return
+
+
+def _descendant_process_identities(
+    root_pid: int,
+    *,
+    deadline: float,
+) -> list[tuple[int, tuple[int, int, int]]]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return []
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=remaining,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: dict[int, list[int]] = {}
+    for line in result.stdout.splitlines():
+        try:
+            pid_text, parent_text = line.split()
+            pid, parent = int(pid_text), int(parent_text)
+        except (ValueError, TypeError):
+            continue
+        children.setdefault(parent, []).append(pid)
+    descendant_candidates: list[tuple[int, int]] = []
+    pending = [(pid, root_pid) for pid in children.get(root_pid, ())]
+    while pending:
+        pid, captured_parent = pending.pop()
+        descendant_candidates.append((pid, captured_parent))
+        pending.extend((child, pid) for child in children.get(pid, ()))
+    descendants: list[tuple[int, tuple[int, int, int]]] = []
+    for pid, captured_parent in descendant_candidates:
+        if time.monotonic() >= deadline:
+            break
+        identity = _kernel_process_identity(pid)
+        if identity is not None and identity[0] == captured_parent:
+            descendants.append((pid, identity))
+    return descendants
+
+
+def _kernel_process_identity(pid: int) -> tuple[int, int, int] | None:
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as stat_file:
+                stat = stat_file.read()
+            fields = stat[stat.rfind(b")") + 2 :].split()
+            return (int(fields[1]), int(fields[19]), 0)
+        except (OSError, IndexError, ValueError):
+            return None
+    if sys.platform == "darwin":
+        return _darwin_process_identity(pid)
+    return None
+
+
+class _DarwinProcBSDInfo(Structure):
+    _fields_ = [
+        ("flags", c_uint32),
+        ("status", c_uint32),
+        ("xstatus", c_uint32),
+        ("pid", c_uint32),
+        ("ppid", c_uint32),
+        ("uid", c_uint32),
+        ("gid", c_uint32),
+        ("ruid", c_uint32),
+        ("rgid", c_uint32),
+        ("svuid", c_uint32),
+        ("svgid", c_uint32),
+        ("rfu_1", c_uint32),
+        ("comm", c_char * 16),
+        ("name", c_char * 32),
+        ("nfiles", c_uint32),
+        ("pgid", c_uint32),
+        ("pjobc", c_uint32),
+        ("tdev", c_uint32),
+        ("tpgid", c_uint32),
+        ("nice", c_int32),
+        ("start_tvsec", c_uint64),
+        ("start_tvusec", c_uint64),
+    ]
+
+
+def _darwin_process_identity(pid: int) -> tuple[int, int, int] | None:
+    try:
+        libproc = CDLL("/usr/lib/libproc.dylib")
+        info = _DarwinProcBSDInfo()
+        read_size = libproc.proc_pidinfo(pid, 3, 0, byref(info), sizeof(info))
+    except OSError:
+        return None
+    if read_size != sizeof(info):
+        return None
+    return (int(info.ppid), int(info.start_tvsec), int(info.start_tvusec))
 
 
 def adapter_request_id(request: Mapping[str, Any]) -> str:
