@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -82,6 +83,41 @@ def test_local_command_adapter_is_bounded_and_secret_safe(tmp_path: Path) -> Non
     )
     with pytest.raises(AdapterExecutionError, match="contained an allowed environment value"):
         echo_secret.execute({"request": True})
+
+
+def test_local_command_adapter_translates_process_group_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processes: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def track_process(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def deny_process_group_signal(*_args: object) -> None:
+        raise PermissionError("secret host path must not leak")
+
+    monkeypatch.setattr("app.builderops.model_inquiry_adapters.subprocess.Popen", track_process)
+    monkeypatch.setattr("app.builderops.model_inquiry_adapters.os.killpg", deny_process_group_signal)
+    adapter = LocalCommandAdapter(
+        adapter_id="permission-denied-cleanup",
+        provider="local",
+        model="fixture",
+        argv=(sys.executable, "-c", "import time; time.sleep(60)"),
+        timeout_seconds=0.01,
+        environment={"LOCAL_SECRET": "credential-sentinel"},
+    )
+
+    with pytest.raises(AdapterExecutionError, match="cleanup denied") as raised:
+        adapter.execute({"request": True})
+
+    assert raised.value.failure_class == "unexpected_adapter_error"
+    assert "credential-sentinel" not in str(raised.value)
+    assert "secret host path" not in str(raised.value)
+    assert len(processes) == 1
+    assert processes[0].poll() is not None
 
 
 def test_local_command_adapter_exposes_allowlisted_exit_diagnostic_without_stderr() -> None:

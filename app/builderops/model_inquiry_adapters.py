@@ -451,7 +451,7 @@ def _read_bounded_process_output(
     adapter_id: str,
 ) -> bytes:
     if process.stdout is None:
-        _kill_process_group(process)
+        _kill_process_group(process, adapter_id=adapter_id)
         raise AdapterExecutionError(
             f"local command stdout unavailable: {adapter_id}",
             failure_class="stdout_unavailable",
@@ -465,7 +465,7 @@ def _read_bounded_process_output(
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _kill_process_group(process)
+                _kill_process_group(process, adapter_id=adapter_id)
                 raise AdapterExecutionError(
                     f"local command timed out: {adapter_id}",
                     failure_class="command_timeout",
@@ -480,7 +480,7 @@ def _read_bounded_process_output(
                     continue
                 size += len(chunk)
                 if size > max_output_bytes:
-                    _kill_process_group(process)
+                    _kill_process_group(process, adapter_id=adapter_id)
                     raise AdapterExecutionError(
                         f"local command output exceeded limit: {adapter_id}",
                         failure_class="stdout_oversize",
@@ -488,7 +488,7 @@ def _read_bounded_process_output(
                 chunks.append(chunk)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            _kill_process_group(process)
+            _kill_process_group(process, adapter_id=adapter_id)
             raise AdapterExecutionError(
                 f"local command timed out: {adapter_id}",
                 failure_class="command_timeout",
@@ -496,7 +496,7 @@ def _read_bounded_process_output(
         process.wait(timeout=remaining)
         return b"".join(chunks)
     except subprocess.TimeoutExpired as exc:
-        _kill_process_group(process)
+        _kill_process_group(process, adapter_id=adapter_id)
         raise AdapterExecutionError(
             f"local command timed out: {adapter_id}",
             failure_class="command_timeout",
@@ -505,18 +505,46 @@ def _read_bounded_process_output(
         selector.close()
 
 
-def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+def _kill_process_group(process: subprocess.Popen[bytes], *, adapter_id: str) -> None:
     if process.poll() is not None:
         return
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
-        pass
-    finally:
+        return
+    except PermissionError:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        except PermissionError as exc:
+            raise AdapterExecutionError(
+                f"local command cleanup failed: {adapter_id}"
+            ) from exc
         try:
             process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            raise AdapterExecutionError(
+                f"local command cleanup failed: {adapter_id}"
+            ) from exc
+        raise AdapterExecutionError(f"local command cleanup denied: {adapter_id}")
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
             process.kill()
+        except ProcessLookupError:
+            return
+        except PermissionError as exc:
+            raise AdapterExecutionError(
+                f"local command cleanup failed: {adapter_id}"
+            ) from exc
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired as exc:
+            raise AdapterExecutionError(
+                f"local command cleanup failed: {adapter_id}"
+            ) from exc
 
 
 def adapter_request_id(request: Mapping[str, Any]) -> str:
