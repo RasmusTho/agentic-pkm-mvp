@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Barrier
 
 import psycopg
 import pytest
@@ -80,10 +82,34 @@ def test_pg_quota_counter_is_durable_atomic_and_forward_only(
     first.increment()
     first.increment()
 
+    workers = 8
+    increments_per_worker = 12
+    start = Barrier(workers)
+
+    def increment_concurrently() -> None:
+        quota = YouTubeQuotaStore.for_runtime(clock=clock)
+        start.wait()
+        for _ in range(increments_per_worker):
+            quota.increment()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(increment_concurrently) for _ in range(workers)]
+        for future in futures:
+            future.result()
+
+    expected_spent = 2 + workers * increments_per_worker
     second = YouTubeQuotaStore.for_runtime(clock=clock)
-    assert second.status(10) == {"spent_today": 2, "budget": 10, "exhausted": False}
+    assert second.status(1_000) == {
+        "spent_today": expected_spent,
+        "budget": 1_000,
+        "exhausted": False,
+    }
     second.mark_exhausted()
-    assert first.status(10) == {"spent_today": 2, "budget": 10, "exhausted": True}
+    assert first.status(1_000) == {
+        "spent_today": expected_spent,
+        "budget": 1_000,
+        "exhausted": True,
+    }
 
     with pytest.raises(RuntimeError, match="forward-only"):
         command.downgrade(migrated_quota_database, PRE_YSS03_HEAD)

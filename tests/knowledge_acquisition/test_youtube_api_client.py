@@ -10,6 +10,7 @@ headers never enter structured error details (INV-YSS-5).
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -67,6 +68,7 @@ def _client(
     budget: int = 10_000,
     max_response_bytes: int = 2 * 1024 * 1024,
     cookies: dict[str, str] | None = None,
+    quota: Any | None = None,
 ):
     from app.knowledge_acquisition.youtube_api_client import YouTubeApiClient
 
@@ -76,6 +78,7 @@ def _client(
         max_pages=max_pages,
         quota_budget=budget,
         max_response_bytes=max_response_bytes,
+        quota=quota,
     )
 
 
@@ -307,6 +310,60 @@ def test_error_taxonomy_mapping_secret_free() -> None:
     assert auth_api.requests == []
 
 
+@pytest.mark.parametrize(
+    ("status", "reason_code"),
+    ((401, "auth_expired"), (404, "source_gone"), (429, "quota_exhausted")),
+)
+@pytest.mark.parametrize("body", (b"not-json", b"x" * 256))
+def test_http_status_taxonomy_survives_non_json_and_oversized_bodies(
+    status: int,
+    reason_code: str,
+    body: bytes,
+) -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    api = _Api(
+        lambda request: httpx.Response(
+            status,
+            request=request,
+            content=body,
+        )
+    )
+    with pytest.raises(YouTubeApiError) as captured:
+        _client(api, max_response_bytes=64).get_my_channel()
+
+    assert captured.value.reason_code == reason_code
+    assert captured.value.status == status
+    if status == 429:
+        assert (
+            _client(_Api(lambda request: _response(request, {"items": []}))).quota_status()[
+                "exhausted"
+            ]
+            is True
+        )
+
+
+def test_malformed_content_encoding_is_normalized_without_raw_cause() -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    sentinel = b"SENTINEL-malformed-gzip-must-never-leak"
+    api = _Api(
+        lambda request: httpx.Response(
+            200,
+            request=request,
+            headers={"Content-Encoding": "gzip"},
+            stream=httpx.ByteStream(sentinel),
+        )
+    )
+    with pytest.raises(YouTubeApiError) as captured:
+        _client(api).get_my_channel()
+
+    assert captured.value.reason_code == "api_unavailable"
+    assert captured.value.status == 200
+    assert sentinel.decode() not in captured.value.detail
+    assert captured.value.__cause__ is None
+
+
 def test_quota_accounting_durable_and_exhaustion() -> None:
     from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
 
@@ -336,6 +393,28 @@ def test_quota_accounting_durable_and_exhaustion() -> None:
         "budget": 100,
         "exhausted": True,
     }
+
+
+def test_quota_exhaustion_latches_the_request_day_across_utc_rollover() -> None:
+    from app.knowledge_acquisition.youtube_api_client import (
+        YouTubeApiError,
+        YouTubeQuotaStore,
+    )
+
+    now = {"value": datetime(2026, 7, 19, 23, 59, tzinfo=timezone.utc)}
+    quota = YouTubeQuotaStore.for_runtime(clock=lambda: now["value"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        now["value"] = datetime(2026, 7, 20, 0, 0, tzinfo=timezone.utc)
+        return httpx.Response(429, request=request, content=b"not-json")
+
+    with pytest.raises(YouTubeApiError, match="quota_exhausted"):
+        _client(_Api(handler), quota=quota).get_my_channel()
+
+    now["value"] = datetime(2026, 7, 19, 23, 59, tzinfo=timezone.utc)
+    assert quota.status(100) == {"spent_today": 1, "budget": 100, "exhausted": True}
+    now["value"] = datetime(2026, 7, 20, 0, 0, tzinfo=timezone.utc)
+    assert quota.status(100) == {"spent_today": 0, "budget": 100, "exhausted": False}
 
 
 def test_resource_shapes_minimal_fields_and_response_bound() -> None:

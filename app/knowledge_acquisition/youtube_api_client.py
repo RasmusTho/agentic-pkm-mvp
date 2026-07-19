@@ -387,8 +387,8 @@ class YouTubeQuotaStore:
     def increment(self) -> _QuotaRow:
         return self._backend.increment(_utc_day(self._clock))
 
-    def mark_exhausted(self) -> _QuotaRow:
-        return self._backend.mark_exhausted(_utc_day(self._clock))
+    def mark_exhausted(self, quota_date: str | None = None) -> _QuotaRow:
+        return self._backend.mark_exhausted(quota_date or _utc_day(self._clock))
 
     def status(self, budget: int) -> dict[str, int | bool]:
         row = self._backend.get(_utc_day(self._clock))
@@ -554,7 +554,7 @@ class YouTubeApiClient:
         # is bearer-only, so strip cookies at the final production call site.
         request.headers.pop("cookie", None)
         _validate_absolute_data_url(str(request.url), require_path=True)
-        self._quota.increment()
+        quota_date = self._quota.increment().quota_date
         try:
             response = self._http.send(request, stream=True, follow_redirects=False)
         except httpx.TimeoutException:
@@ -577,6 +577,24 @@ class YouTubeApiClient:
                 )
             try:
                 raw = _read_bounded(response, self._max_response_bytes)
+            except httpx.DecodingError:
+                if response.status_code >= 400:
+                    error = _mapped_http_error(response.status_code, {})
+                    if error.reason_code == "quota_exhausted":
+                        self._quota.mark_exhausted(quota_date)
+                    raise error from None
+                raise YouTubeApiError(
+                    "api_unavailable",
+                    response.status_code,
+                    "Data API response decoding failed",
+                ) from None
+            except YouTubeApiError:
+                if response.status_code >= 400:
+                    error = _mapped_http_error(response.status_code, {})
+                    if error.reason_code == "quota_exhausted":
+                        self._quota.mark_exhausted(quota_date)
+                    raise error from None
+                raise
             except httpx.TimeoutException:
                 raise YouTubeApiError(
                     "api_unavailable", response.status_code, "Data API response timed out"
@@ -588,12 +606,13 @@ class YouTubeApiClient:
         finally:
             response.close()
 
-        payload = _decode_object(raw)
         if response.status_code >= 400:
+            payload = _decode_error_object(raw)
             error = _mapped_http_error(response.status_code, payload)
             if error.reason_code == "quota_exhausted":
-                self._quota.mark_exhausted()
+                self._quota.mark_exhausted(quota_date)
             raise error
+        payload = _decode_object(raw, status=response.status_code)
         return payload, response_etag
 
 
@@ -639,14 +658,25 @@ def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
     return b"".join(chunks)
 
 
-def _decode_object(raw: bytes) -> dict[str, Any]:
+def _decode_object(raw: bytes, *, status: int | None = None) -> dict[str, Any]:
     try:
         value = json.loads(raw or b"{}")
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise YouTubeApiError("api_unavailable", None, "Data API returned invalid JSON") from None
+        raise YouTubeApiError("api_unavailable", status, "Data API returned invalid JSON") from None
     if not isinstance(value, dict):
-        raise YouTubeApiError("api_unavailable", None, "Data API returned an invalid object shape")
+        raise YouTubeApiError(
+            "api_unavailable", status, "Data API returned an invalid object shape"
+        )
     return value
+
+
+def _decode_error_object(raw: bytes) -> dict[str, Any]:
+    """Best-effort provider error parsing after HTTP status classification."""
+    try:
+        value = json.loads(raw or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _provider_reasons(payload: Mapping[str, Any]) -> frozenset[str]:
