@@ -156,9 +156,11 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   a successful sync. Connect never records `connected` before encrypted token persistence.
   Connect, reconnect, refresh, and disconnect serialize each binding's credential lifecycle across
   actors sharing its channel token store; portable store-wide serialization prevents distinct
-  bindings from losing aggregate token-file updates. Retryable revoke failures (transport, 408, 429, or 5xx)
-  preserve the encrypted credential and source state for retry; permanent 4xx rejection completes
-  local teardown with `revoked=false`. Disconnect deletes no acquired Mimer artifacts.
+  bindings from losing aggregate token-file updates. Binding-create exceptions reconcile through
+  authoritative binding/channel readback; indeterminate readback preserves the credential. Only an
+  applicable non-408/non-429 4xx revoke response permits destructive local teardown. Transport,
+  1xx/3xx, 408, 429, 5xx, and unknown revoke outcomes preserve the encrypted credential and source
+  state for retry/reconciliation. Disconnect deletes no acquired Mimer artifacts.
 - **INV-YSS-5 — secrets never leave the private boundary.** OAuth client identifiers, refresh/access
   tokens, and token-store key material never appear in the repo, vault files, settings values,
   candidate notes, events, receipts, logs, or exception text. Settings and receipts may carry only

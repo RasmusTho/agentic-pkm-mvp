@@ -315,6 +315,77 @@ def test_connect_token_store_failure_does_not_create_connected_binding(
     assert store.binding_ids() == ()
 
 
+def test_connect_post_commit_exception_reconciles_without_deleting_token(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    original_create = bindings.create
+    committed_ids: list[str] = []
+
+    def create_then_lose_acknowledgement(**kwargs):
+        committed = original_create(**kwargs)
+        committed_ids.append(committed.account_binding_id)
+        raise RuntimeError("synthetic lost insert acknowledgement")
+
+    monkeypatch.setattr(bindings, "create", create_then_lose_acknowledgement)
+
+    first = _connect_device(binder)
+    binding_id = first["account"]["binding_id"]
+
+    assert first["status"] == "connected"
+    assert committed_ids == [binding_id]
+    assert bindings.get(binding_id).state == "connected"
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
+
+    # A retry converges through the same channel row instead of creating a
+    # second binding or credential record.
+    second = _connect_device(binder)
+    assert second["account"]["binding_id"] == binding_id
+    assert len(bindings.list_all()) == 1
+    assert store.binding_ids() == (binding_id,)
+
+
+def test_connect_precommit_binding_failure_compensates_after_authoritative_absence(
+    store, bindings, registry, monkeypatch
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+
+    def fail_before_insert(**_kwargs):
+        raise RuntimeError("synthetic pre-insert failure")
+
+    monkeypatch.setattr(bindings, "create", fail_before_insert)
+
+    with pytest.raises(RuntimeError, match="synthetic pre-insert failure"):
+        _connect_device(binder)
+
+    assert bindings.list_all() == ()
+    assert store.binding_ids() == ()
+
+
+def test_connect_indeterminate_create_readback_preserves_token(
+    store, bindings, registry, monkeypatch
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+
+    def fail_create(**_kwargs):
+        raise RuntimeError("synthetic indeterminate create")
+
+    def fail_readback(_binding_id):
+        raise RuntimeError("synthetic readback outage")
+
+    monkeypatch.setattr(bindings, "create", fail_create)
+    monkeypatch.setattr(bindings, "get", fail_readback)
+
+    with pytest.raises(RuntimeError, match="synthetic indeterminate create"):
+        _connect_device(binder)
+
+    # The only encrypted authority for revoking the just-issued remote grant
+    # survives until authoritative binding readback is available.
+    assert len(store.binding_ids()) == 1
+    assert store.get(store.binding_ids()[0]).refresh_token == SENTINEL_REFRESH
+
+
 def test_failed_first_connect_status_is_not_connected_without_token_record(
     store, bindings, registry
 ):
@@ -518,6 +589,39 @@ def test_disconnect_preserves_token_when_provider_revoke_fails(store, bindings, 
     assert registry.get(source.binding_id).enabled is False
 
 
+@pytest.mark.parametrize("status", [0, 100, 199, 300, 302, 399, 408, 429, 500, 599, 600])
+def test_disconnect_indeterminate_revoke_status_preserves_retry_authority(
+    store, bindings, registry, monkeypatch, status
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+
+    def fail_revoke(_token):
+        raise oauth.OAuthProviderError(status=status, error_code="synthetic_revoke_failure")
+
+    monkeypatch.setattr(binder._client, "revoke", fail_revoke)
+
+    disc = binder.disconnect(binding_id)
+
+    assert disc == {
+        "status": "disconnect_failed",
+        "revoked": False,
+        "retryable": True,
+        "sources_disabled": 0,
+    }
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
+    assert bindings.get(binding_id).state == "connected"
+    assert bindings.get(binding_id).reason_code is None
+    assert registry.get(source.binding_id).enabled is True
+
+
 def test_disconnect_and_reconnect_are_serialized_across_service_instances(
     store, bindings, registry
 ):
@@ -707,8 +811,9 @@ def test_portable_lock_uses_windows_backend_when_fcntl_unavailable(store, monkey
     assert calls == [(FakeMsvcrt.LK_LOCK, 1), (FakeMsvcrt.LK_UNLCK, 1)]
 
 
+@pytest.mark.parametrize("status", [400, 407, 409, 499])
 def test_disconnect_permanent_revoke_error_tears_down_local_state(
-    store, bindings, registry
+    store, bindings, registry, status
 ):
     provider = _Provider()
     binder = _binder(provider, store, bindings, registry)
@@ -722,7 +827,7 @@ def test_disconnect_permanent_revoke_error_tears_down_local_state(
     )
     provider.revoke_responses.append(
         httpx.Response(
-            400,
+            status,
             json={"error": "invalid_token", "error_description": SENTINEL_REFRESH},
         )
     )

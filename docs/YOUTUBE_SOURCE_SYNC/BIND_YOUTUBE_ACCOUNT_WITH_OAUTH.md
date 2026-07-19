@@ -46,11 +46,13 @@ touch the repo, vault, settings values, logs, events, or receipts.
    store. The app-local lock filename is a digest of the binding id and the private lock file
    contains no account identifier or secret. A portable store-wide lock serializes aggregate-file
    mutations across distinct bindings on POSIX and Windows, while concurrent first connects
-   re-resolve provider identity under shared authority. `disconnect()` revokes at
-   `oauth2.googleapis.com/revoke` before local teardown. Retryable failures (transport, 408, 429,
-   or 5xx) preserve the encrypted token and dependent-source state for retry; a permanent 4xx
-   rejection completes local teardown with `revoked=false` because the old grant supplies no
-   useful retry authority. Teardown deletes the token record, disables dependent sources with
+   re-resolve provider identity under shared authority. A create exception after database commit
+   rolls forward through authoritative binding/channel readback; indeterminate readback preserves
+   the encrypted credential. `disconnect()` revokes at `oauth2.googleapis.com/revoke` before local
+   teardown. Only an applicable non-408/non-429 4xx response is an authoritative permanent
+   rejection and permits local teardown with `revoked=false`. Transport failures, 1xx/3xx, 408,
+   429, 5xx, and unknown statuses preserve the encrypted token and dependent-source state for
+   retry/reconciliation. Teardown deletes the token record, disables dependent sources with
    `auth_disconnected`, and deletes no acquired artifacts. `reconnect()` re-runs consent onto the
    same binding when the provider channel id matches.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + error
