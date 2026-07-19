@@ -46,10 +46,11 @@ Retrieval subsystem      capabilities: 4    distinct artifacts: 37    shared evi
 Linkage masthead: 612 distinct artifacts across 31 capabilities (global)
 ```
 
-Because counting is by distinct `artifact_id`, the 22 capabilities that share the seed path
-`docs/SYSTEM_BREAKDOWN_STRUCTURE.md` no longer show identical inflated totals — the shared-evidence
-indicator makes the fan-out visible at ~79% graph-wide. `CKM_SCHEMA_VERSION` is unchanged; no schema
-change is made.
+Counting by distinct `artifact_id` removes duplicate edges *within* a capability, but the same shared
+artifact bundle can still produce identical totals across the 22 capabilities that share the seed
+path `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. The primary figure is therefore never interpreted alone:
+the shared-evidence indicator exposes that cross-capability fan-out at ~79% graph-wide.
+`CKM_SCHEMA_VERSION` is unchanged; no schema change is made.
 
 ## Why This Matters
 
@@ -73,10 +74,11 @@ workstream, out of scope here).
 - [ ] Render stays pure, deterministic, read-only, and self-contained.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_pure_render_over_fixture_graph`; `::test_cli_rejects_missing_database_without_creating_it`; `::test_no_scripts_or_external_references`.
 - [ ] Shared real-store validation gate (INV-EP-6), extended: on the operator's real 31-capability
-  store the counts view does **not** show near-identical evidence numbers for the 22 seed-path-sharing
-  capabilities — distinct-artifact counting demonstrably breaks that symmetry — and the counts match
-  reality on the 5 capabilities the owner knows cold.
-  Verify: real-store replay receipt on the coordinator-filed parent feature issue explicitly comparing the 22 seed-path-sharing capabilities' distinct-artifact counts.
+  store every seed-path-sharing capability exposes the shared-evidence indicator alongside its
+  distinct-artifact total; near-identical totals are explicitly labeled as shared fan-out rather
+  than presented as independent coverage, and the counts match reality on the 5 capabilities the
+  owner knows cold.
+  Verify: real-store replay receipt on the coordinator-filed parent feature issue explicitly comparing the 22 seed-path-sharing capabilities' distinct-artifact counts and shared-evidence indicators.
 
 ## How to Verify (Pre-Merge)
 
@@ -86,8 +88,8 @@ workstream, out of scope here).
 - `mypy app`
 - Build a fixture where one artifact fans out across several capabilities and confirm the distinct-
   artifact count and shared-evidence indicator both reflect the duplication.
-- Real-store replay (mac mini): confirm the 22 seed-path-sharing capabilities no longer show identical
-  totals; attach the receipt to the parent feature issue.
+- Real-store replay (authorized runtime host): confirm all 22 seed-path-sharing capabilities expose
+  the shared-evidence indicator beside their totals; attach the receipt to the parent feature issue.
 
 ## Out of Scope
 

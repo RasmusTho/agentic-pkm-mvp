@@ -95,7 +95,7 @@ schema epoch, which Phase 1 explicitly forbids (INV-EP-1).
 - `mypy app`
 - Regenerate the overview against a fixture store and confirm by inspection that no capability carries
   a band class or `min` chip.
-- Real-store replay (mac mini, where real DB access exists): run the pipeline against the operator's
+- Real-store replay (authorized runtime host, where real DB access exists): run the pipeline against the operator's
   31-capability store and attach the Retrieval-not-red receipt to the parent feature issue.
 
 ## Out of Scope

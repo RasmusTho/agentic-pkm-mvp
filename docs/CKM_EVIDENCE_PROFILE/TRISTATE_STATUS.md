@@ -17,8 +17,8 @@ Today a dimension with zero score and no citations ("evidence-starved") is indis
 from a dimension that was never assessed; the render only reaches an `unassessed` state when the whole
 assessment is `None`. This task makes per-dimension `unassessed` a first-class, additively-persisted
 state and fixes the documentation scorer, which currently returns a hard `0.0` on an empty
-documentation-evidence set — rendering "starved" when the honest answer is "unassessed". It stays
-zero-DDL.
+documentation-evidence set — rendering "starved" when the honest answer is "unassessed". It adds
+DDL through the governed additive-column path without a schema-version bump or epoch change.
 
 ## What This Task Does
 
@@ -103,7 +103,7 @@ version-mismatch refusal, so the column must be additive.
 - `mypy app`
 - Open a pre-task fixture database and confirm the migration adds `dimension_status` idempotently
   (re-run leaves it unchanged) and the schema version is still `5`.
-- Real-store replay (mac mini): confirm genuinely-absent dimensions render `unassessed`, and attach
+- Real-store replay (authorized runtime host): confirm genuinely-absent dimensions render `unassessed`, and attach
   the receipt to the parent feature issue.
 
 ## Out of Scope

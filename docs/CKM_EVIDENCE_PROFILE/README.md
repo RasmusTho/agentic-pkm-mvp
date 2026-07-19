@@ -36,7 +36,7 @@ Phase 1 is exactly three bounded implementation tasks plus a shared real-store v
 
 | task_id | Task file | Work package | Outcome |
 | --- | --- | --- | --- |
-| CKM-EP-01 | [SCALAR_RETIREMENT.md](SCALAR_RETIREMENT.md) | WP0 | Retire the cross-dimension aggregate/band from every render surface (HTML overview + Markdown twin). The per-dimension vector becomes the display. `compute_aggregate` keeps writing its NOT-NULL column (dead data) so Phase 1 stays zero-DDL. This — not the counts view — is what kills the 31 red boxes. |
+| CKM-EP-01 | [SCALAR_RETIREMENT.md](SCALAR_RETIREMENT.md) | WP0 | Retire the cross-dimension aggregate/band from every render surface (HTML overview + Markdown twin). The per-dimension vector becomes the display. `compute_aggregate` keeps writing its NOT-NULL column (dead data), so this task itself is zero-DDL. This — not the counts view — is what kills the 31 red boxes. |
 | CKM-EP-02 | [TRISTATE_STATUS.md](TRISTATE_STATUS.md) | WP1 | Additive JSON `dimension_status` column (4-place additive pattern, no schema-version bump) adopting the `contracts.py` `SUPPORTED_VALUE_STATES` vocabulary; make per-dimension `unassessed` render distinctly from evidence-starved zero; fix `_documentation` empty-set → `unassessed` and bump its formula id `current-doc-evidence-v1` → `-v2`. |
 | CKM-EP-03 | [SUBSYSTEM_COUNTS_VIEW.md](SUBSYSTEM_COUNTS_VIEW.md) | WP3 | New per-subsystem counts section in the overview (and optional Markdown twin) reusing `_forest` unmodified; **distinct-artifact counts** plus a **shared-evidence indicator** so the ~79% seed-path fan-out duplication is visible, not laundered; static-contract-compliant; purity tests preserved; global-linkage masthead denominator. |
 
@@ -125,7 +125,7 @@ issues are execution artifacts.
 
 These invariants hold *across* the three tasks. Each task names the ones it must preserve.
 
-- **INV-EP-1 (zero-DDL constraint).** No task in Phase 1 bumps `CKM_SCHEMA_VERSION` (currently `5` in
+- **INV-EP-1 (no schema-version bump / no epoch).** No task in Phase 1 bumps `CKM_SCHEMA_VERSION` (currently `5` in
   `app/builderops/ckm/schema.py`). CKM-EP-02's `dimension_status` column is added through the
   additive pattern (register in `CKM_REQUIRED_COLUMNS` **and** `CKM_LEGACY_ADDED_COLUMNS`, add to the
   `CREATE TABLE ckm_assessment` DDL, and back-fill existing rows via an idempotent
@@ -170,11 +170,11 @@ These invariants hold *across* the three tasks. Each task names the ones it must
   shared acceptance gate: replay `seed → ingest → link → assess → overview` against the operator's
   real 31-capability store and confirm (a) the Retrieval capability no longer renders falsely red /
   `critical`, (b) the counts view matches reality on the 5 capabilities the owner knows cold, and
-  (c) the counts view does **not** show near-identical evidence numbers for the 22 seed-path-sharing
-  capabilities — distinct-artifact counting must demonstrably break that symmetry (see
-  [Known substrate defects](#known-substrate-defects)). This is the Gate-A failure replayed as a
-  validation receipt. The real-store replay runs where real DB/runtime access exists (mac mini), not
-  on the laptop; the merge is gated on that receipt.
+  (c) each of the 22 seed-path-sharing capabilities exposes the shared-evidence indicator, so any
+  near-identical distinct-artifact totals are visibly classified as fan-out contamination rather
+  than independent coverage (see [Known substrate defects](#known-substrate-defects)). This is the
+  Gate-A failure replayed as a validation receipt. The real-store replay runs where authorized
+  runtime DB access exists rather than on the laptop; the merge is gated on that receipt.
 
 ### Partial-failure paths
 

@@ -1327,16 +1327,33 @@ class GhCliVerificationSource:
                 )
             except ValueError as exc:
                 raise RuntimeError("malformed GraphQL issue closedAt") from exc
+            closure_timestamp_skew = (
+                abs(closed_instant - latest_instant)
+                if closed_instant is not None
+                and closed_instant.tzinfo is not None
+                and latest_instant is not None
+                and latest_instant.tzinfo is not None
+                else None
+            )
             if state == "CLOSED" and (
                 closed_instant is None
                 or closed_instant.tzinfo is None
-                or closed_instant != latest_instant
+                or closure_timestamp_skew is None
+                or closure_timestamp_skew > timedelta(seconds=1)
             ):
                 raise RuntimeError("GraphQL issue closure timestamp mismatch")
 
             repository_close = repository_closing_issues.get(number)
             if repository_close is not None and latest_instant != repository_close:
                 raise RuntimeError("GraphQL ClosedEvent does not match REST closure")
+            if (
+                state == "CLOSED"
+                and closure_timestamp_skew
+                and repository_close is None
+            ):
+                raise RuntimeError(
+                    "GraphQL closure timestamp skew lacks matching REST closure"
+                )
 
             closer = latest.get("closer") if latest else None
             exact_pr_closer = False
