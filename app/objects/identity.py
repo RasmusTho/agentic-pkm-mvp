@@ -77,7 +77,10 @@ def vault_uuid_to_canonical_id_map_with_connection(conn: Any) -> dict[str, str]:
             "AS match_count, "
             "CASE WHEN legacy.uuid IS NULL THEN false ELSE EXISTS ("
             "SELECT 1 FROM store_objects alias WHERE alias.object_id = legacy.uuid) END "
-            "AS canonical_alias_exists "
+            "AS canonical_alias_exists, "
+            "EXISTS (SELECT 1 FROM objects requested_alias "
+            "WHERE requested_alias.uuid = canonical.object_id "
+            "AND requested_alias.id <> canonical.object_id) AS requested_alias_exists "
             + _CANONICAL_RETAINED_IDENTITY_FROM_SQL
         )
         rows = cur.fetchall()
@@ -117,6 +120,14 @@ def retained_vault_uuid_with_connection(conn: Any, object_id: str) -> str | None
     if not row:
         return None
     value = row["vault_uuid"] if isinstance(row, dict) else row[0]
+    requested_alias_exists = (
+        row["requested_alias_exists"] if isinstance(row, dict) else row[3]
+    )
+    if requested_alias_exists:
+        raise RuntimeError(
+            "retained vault UUID already names a different canonical object; reconcile the "
+            "cross-key identity collision before retrying"
+        )
     if value is None:
         return None
     match_count = row["match_count"] if isinstance(row, dict) else row[1]

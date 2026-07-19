@@ -100,6 +100,19 @@ fi
 exec /bin/cp "$@"
 """,
     )
+    real_git = shutil.which("git")
+    assert real_git is not None
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -eu
+if [ -n "${{FAKE_GIT_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_GIT_FAIL_MATCH}}"* ]]; then
+  echo 'fake git materialization failure' >&2
+  exit "${{FAKE_GIT_FAIL_RC:-87}}"
+fi
+exec {real_git!s} "$@"
+""",
+    )
     python_wrapper = bin_dir / "python"
     _write_executable(
         python_wrapper,
@@ -606,6 +619,36 @@ def test_target_commit_migration_is_classified_when_target_is_not_checked_out(
     assert result.returncode == 42
     assert "forward-only migrations require" in result.stderr
     assert "migration gate blocked before recreate" in result.stderr
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_migration_materialization_failure_blocks_before_pin_or_compose(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/materialization_failure.py"
+    migration.write_text(
+        'revision = "materialization_failure"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add failing materialization"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    subprocess.run(["git", "checkout", "-q", previous_sha], cwd=root, check=True)
+    env["FAKE_GIT_FAIL_MATCH"] = f"show {target_sha}:app/alembic/versions/"
+
+    result = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert result.returncode == 87
+    assert "fake git materialization failure" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     assert not (tmp_path / "docker-called").exists()
 
 

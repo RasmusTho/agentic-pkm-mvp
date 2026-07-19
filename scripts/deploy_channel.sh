@@ -203,12 +203,17 @@ list_changed_migrations() {
 }
 
 migration_gate() {
-  local from_sha="$1" to_sha="$2" receipt_json forward_count
+  local from_sha="$1" to_sha="$2" receipt_json forward_count migration_output rc
   local -a migration_paths
   migration_paths=()
+  set +e
+  migration_output="$(list_changed_migrations "${from_sha}" "${to_sha}")"
+  rc=$?
+  set -e
+  [ "${rc}" -eq 0 ] || return "${rc}"
   while IFS= read -r path; do
     [ -n "${path}" ] && migration_paths+=("${path}")
-  done < <(list_changed_migrations "${from_sha}" "${to_sha}")
+  done <<<"${migration_output}"
   if [ "${#migration_paths[@]}" -gt 0 ]; then
     receipt_json="$("${PYTHON}" - "$ack_forward_only" "${migration_paths[@]}" <<'PY'
 import json

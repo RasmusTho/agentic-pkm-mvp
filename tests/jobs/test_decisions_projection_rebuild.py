@@ -246,6 +246,8 @@ def test_receipt_and_projection_fail_loud_on_post_cutover_cross_key_collision(
 
     with pytest.raises(RuntimeError, match="cross-key identity collision"):
         receipt_log.resolve_vault_uuid(canonical_id)
+    with pytest.raises(RuntimeError, match="cross-key identity collision"):
+        receipt_log.resolve_vault_uuid(retained_uuid)
 
     append_decision_receipt(
         object_id="old-object-id",

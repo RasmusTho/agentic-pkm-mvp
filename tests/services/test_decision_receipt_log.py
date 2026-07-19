@@ -158,7 +158,7 @@ def test_resolve_vault_uuid_never_invents_canonical_id(monkeypatch: pytest.Monke
     """A canonical-only row has no proven frontmatter continuity identity."""
     conn = MagicMock()
     cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
-    cur.fetchone.return_value = (None,)
+    cur.fetchone.return_value = (None, 0, False, False)
     monkeypatch.setattr(receipt_log, "conn_rw", lambda: conn)
 
     assert receipt_log.resolve_vault_uuid("canonical-id") is None
