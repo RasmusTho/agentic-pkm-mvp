@@ -177,3 +177,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The Issue named deploy/start wrapper behavior, but all 19 `Verify:` targets passed while final export/import, backup/restore, and host-global legacy-owner bootstrap remained helper-only with no production call sites.
 **Upstream artifact:** `.codex/skills/_shared/ISSUE_CONTRACT.md` — require a production producer/call-site test when an acceptance criterion names deployment, startup, migration, or another concrete producer boundary.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused and neither `BUILDEROPS_DB_PATH` nor `BUILDEROPS_STATE_DIR` is configured; convert this entry when the acknowledged host store is reachable.
+
+## 2026-07-19 — #3854 (Bash command-substitution PID inheritance)
+**Source:** gh-fix-ci
+**Diverged:** Repair attempt 1 assumed `$$` identified the command-substitution probe, but Bash preserves the parent `$$` while `BASHPID` identifies the probe shell, so CI counted the probe as an independent deployment launcher.
+**Upstream artifact:** `tests/ops/test_instance_state_volume_contract.py` — production deployment-wrapper probe tests must exercise controller, command-substitution, independent-live, and racing process rows behaviorally under CI-shaped argv.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because no valid host-store cutover acknowledgement or explicit BuilderOps state path is configured; convert this entry when the acknowledged host store is reachable.

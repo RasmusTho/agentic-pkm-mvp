@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 
+# Print independently running native instance-state writers. The controller
+# PID belongs to the outer deploy/start wrapper; BASHPID is the actual probe
+# shell created by command substitution (unlike $$, which remains the parent).
+_instance_state_native_writers() {
+  local controller_pid="$1"
+  local probe_pid="${BASHPID}"
+  local native_pattern
+  native_pattern='(^|/)(start_full_system|deploy_channel)\.sh([[:space:]]|$)|uvicorn|celery|watch'
+  pgrep -af "${native_pattern}" \
+    | awk -v controller_pid="${controller_pid}" -v probe_pid="${probe_pid}" \
+        '$1 != controller_pid && $1 != probe_pid'
+}
+
 # MVR-01B deploy/start producer. The caller supplies its channel-aware compose
 # function so the same fenced sequence is used by pinned deploys and local
 # full-system starts.
@@ -47,13 +60,12 @@ prepare_instance_state_deployment() {
   # Probe every Compose domain and native launchers twice after the local
   # project stops.  A changed snapshot or any surviving writer is unsafe: the
   # finalizer must never infer host-wide quiescence from this caller's channel.
-  local first_probe second_probe inventory_json native_pattern controller_pid
+  local first_probe second_probe inventory_json controller_pid
   # Match launcher scripts, rather than arbitrary command lines containing their
   # names (for example a pytest node path), and never count this controller.
-  native_pattern='(^|/)(start_full_system|deploy_channel)\.sh([[:space:]]|$)|uvicorn|celery|watch'
   controller_pid="$$"
-  first_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af "${native_pattern}" | awk -v controller_pid="${controller_pid}" '$1 != controller_pid' || true)"
-  second_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; pgrep -af "${native_pattern}" | awk -v controller_pid="${controller_pid}" '$1 != controller_pid' || true)"
+  first_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; _instance_state_native_writers "${controller_pid}" || true)"
+  second_probe="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'; _instance_state_native_writers "${controller_pid}" || true)"
   inventory_json="$(python3 - "${first_probe}" "${second_probe}" <<'PY'
 import json
 import sys

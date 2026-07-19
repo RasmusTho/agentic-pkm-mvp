@@ -338,6 +338,131 @@ def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None
     assert producer.index("deployment-prove") < producer.index("deployment-finish")
 
 
+def _run_native_writer_probe(tmp_path: Path, *, independent: bool) -> subprocess.CompletedProcess[str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_pgrep = fake_bin / "pgrep"
+    independent_row = "printf '424242 /opt/pkm/scripts/start_full_system.sh\\n'" if independent else ":"
+    fake_pgrep.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"${FAKE_CONTROLLER_PID:?}\"\n"
+        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"$PPID\"\n"
+        f"{independent_row}\n",
+        encoding="utf-8",
+    )
+    fake_pgrep.chmod(0o755)
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_docker.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh"
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; export FAKE_CONTROLLER_PID="$$"; _instance_state_native_writers "$$"',
+            "tests/deploy/test_deploy_channel.py::test_ci_shaped_explicit_path",
+            str(script),
+        ],
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_native_probe_excludes_controller_and_command_substitution_pid(tmp_path) -> None:
+    result = _run_native_writer_probe(tmp_path, independent=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+def test_native_probe_preserves_truly_independent_launcher(tmp_path) -> None:
+    result = _run_native_writer_probe(tmp_path, independent=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "424242 /opt/pkm/scripts/start_full_system.sh\n"
+
+
+def test_independent_launcher_blocks_the_real_two_pass_inventory_path(tmp_path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "docker": "#!/usr/bin/env bash\nexit 0\n",
+        "pgrep": (
+            "#!/usr/bin/env bash\n"
+            "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"${FAKE_CONTROLLER_PID:?}\"\n"
+            "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"$PPID\"\n"
+            "printf '424242 /opt/pkm/scripts/start_full_system.sh\\n'\n"
+        ),
+    }.items():
+        executable = fake_bin / name
+        executable.write_text(body, encoding="utf-8")
+        executable.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                'source "$1"; export FAKE_CONTROLLER_PID="$$"; '
+                'compose_stub() { return 0; }; '
+                'prepare_instance_state_deployment compose_stub dev'
+            ),
+            "tests/deploy/test_deploy_channel.py::test_ci_shaped_explicit_path",
+            str(script),
+        ],
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert result.stderr == "host-wide writer inventory is live or racing\n"
+
+
+def test_racing_launcher_blocks_the_real_two_pass_inventory_path(tmp_path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    counter = tmp_path / "pgrep-count"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_docker.chmod(0o755)
+    fake_pgrep = fake_bin / "pgrep"
+    fake_pgrep.write_text(
+        "#!/usr/bin/env bash\n"
+        "count=0; [ ! -f \"${FAKE_PGREP_COUNTER:?}\" ] || count=$(cat \"$FAKE_PGREP_COUNTER\")\n"
+        "count=$((count + 1)); printf '%s' \"$count\" > \"$FAKE_PGREP_COUNTER\"\n"
+        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"${FAKE_CONTROLLER_PID:?}\"\n"
+        "printf '%s /repo/scripts/deploy_channel.sh deploy dev deadbeef\\n' \"$PPID\"\n"
+        "[ \"$count\" -lt 2 ] || printf '424242 /opt/pkm/scripts/start_full_system.sh\\n'\n",
+        encoding="utf-8",
+    )
+    fake_pgrep.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / "scripts/lib/instance_state_deployment.sh"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                'source "$1"; export FAKE_CONTROLLER_PID="$$"; '
+                'compose_stub() { return 0; }; '
+                'prepare_instance_state_deployment compose_stub dev'
+            ),
+            "tests/deploy/test_deploy_channel.py::test_ci_shaped_explicit_path",
+            str(script),
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_PGREP_COUNTER": str(counter),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert result.stderr == "host-wide writer inventory is live or racing\n"
+
+
 def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
     layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "dev")
     layout.ensure()
