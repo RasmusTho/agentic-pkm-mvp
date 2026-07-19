@@ -113,10 +113,10 @@ def test_pin_write_preserves_channel_runtime_env() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     write_pin = text.split("write_pin() {", 1)[1].split("\n}\n", 1)[0]
 
-    assert 'APP_IMAGE_REPOSITORY=%s\\nAPP_IMAGE_TAG=%s\\n' in write_pin
+    assert "APP_IMAGE_REPOSITORY=%s\\nAPP_IMAGE_TAG=%s\\n" in write_pin
     assert '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG"' in write_pin
-    assert ">>\"${tmp_file}\"" in write_pin
-    assert "mv \"${tmp_file}\" \"${file}\"" in write_pin
+    assert '>>"${tmp_file}"' in write_pin
+    assert 'mv "${tmp_file}" "${file}"' in write_pin
 
 
 def test_health_gate_blocks_and_triggers_rollback() -> None:
@@ -154,7 +154,10 @@ def test_rollback_dry_run_without_sha_parses_flag_and_skips_writes(tmp_path: Pat
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"target={current_sha}" in result.stdout
-    assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
+    assert (
+        "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
+        in result.stdout
+    )
     assert pin_path.read_text(encoding="utf-8") == original_pin
     assert not docker_marker.exists()
     assert not curl_marker.exists()
@@ -171,7 +174,10 @@ def test_rollback_with_explicit_sha_still_allows_flags(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"target={explicit_sha}" in result.stdout
-    assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
+    assert (
+        "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
+        in result.stdout
+    )
     assert pin_path.read_text(encoding="utf-8") == original_pin
     assert not docker_marker.exists()
     assert not curl_marker.exists()
@@ -204,10 +210,10 @@ def test_version_gate_accepts_health_version_string_or_object() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     version_gate = text.split("version_gate() {", 1)[1].split("\n}\n", 1)[0]
 
-    assert "value=data.get(\"version\")" in version_gate
+    assert 'value=data.get("version")' in version_gate
     assert "isinstance(value, dict)" in version_gate
     assert "isinstance(value, str)" in version_gate
-    assert "value.get(\"git_sha\", \"\")" in version_gate
+    assert 'value.get("git_sha", "")' in version_gate
 
 
 def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
@@ -224,13 +230,10 @@ def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     assert run_block.index("fleet_model_fitness_gate") < run_block.index("record_receipt")
 
 
-def _seed_previous_pin(
-    root: Path, previous_sha: str, *, channel: str = "dev"
-) -> Path:
+def _seed_previous_pin(root: Path, previous_sha: str, *, channel: str = "dev") -> Path:
     pin_path = root / f"config/deploy/{channel}.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     return pin_path
@@ -264,10 +267,7 @@ def test_postdeploy_smoke_failure_rolls_back_previous_pin_and_services(
     assert "fake postdeploy smoke diagnostic" in result.stderr
     assert "companion UI post-deploy smoke failed" in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 2
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
@@ -346,13 +346,9 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
     assert result.returncode == expected_status
     assert diagnostic in result.stderr
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert (
-        sum(event.endswith(recreate) for event in _deploy_events(env))
-        == expected_recreate_attempts
+        sum(event.endswith(recreate) for event in _deploy_events(env)) == expected_recreate_attempts
     )
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
@@ -365,6 +361,10 @@ def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
     pin_path = _seed_previous_pin(root, previous_sha)
     migration = root / "app/alembic/versions/999_forward_only.py"
     migration.write_text('reversibility = "forward-only"\n', encoding="utf-8")
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add forward-only migration"], cwd=root, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = sha
     env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
 
     result = _run_deploy(root, env, sha, "--ack-forward-only")
@@ -390,13 +390,8 @@ def test_failed_manual_rollback_retains_the_known_good_rollback_target(
     assert "manual rollback gate failed" in result.stderr
     assert "retaining rollback target" in result.stderr
     assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
-    assert f"APP_IMAGE_TAG={pre_rollback_sha}" not in pin_path.read_text(
-        encoding="utf-8"
-    )
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    assert f"APP_IMAGE_TAG={pre_rollback_sha}" not in pin_path.read_text(encoding="utf-8")
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
 
 
@@ -436,10 +431,7 @@ def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(
     assert "failed before target services were established" in result.stderr
     assert f"APP_IMAGE_TAG={pre_rollback_sha}" in pin_path.read_text(encoding="utf-8")
     assert f"APP_IMAGE_TAG={rollback_sha}" not in pin_path.read_text(encoding="utf-8")
-    recreate = (
-        "up -d --force-recreate api worker watcher "
-        "heimdal-capture-watch companion-ui"
-    )
+    recreate = "up -d --force-recreate api worker watcher " "heimdal-capture-watch companion-ui"
     assert sum(event.endswith(recreate) for event in _deploy_events(env)) == 1
 
 

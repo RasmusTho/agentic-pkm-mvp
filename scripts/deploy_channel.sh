@@ -99,6 +99,7 @@ esac
 
 pin_file="${ROOT}/config/deploy/${channel}.env"
 previous_pin_file="${ROOT}/config/deploy/${channel}.previous.env"
+migration_pending_file="${ROOT}/config/deploy/${channel}.migration-pending.env"
 receipt_dir="${ROOT}/ops/deployments"
 promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
@@ -150,17 +151,55 @@ MIGRATIONS_CHECKED=0
 FORWARD_ONLY_COUNT=0
 FORWARD_ONLY_MIGRATION_STARTED=0
 FORWARD_ONLY_MIGRATION_APPLIED=0
+MIGRATION_EXECUTION_STARTED=0
+MIGRATION_EXECUTION_APPLIED=0
+migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
+trap 'rm -rf "${migration_materialize_dir}"' EXIT
+
+read_pending_migration_field() {
+  local field="$1"
+  [ -f "${migration_pending_file}" ] || return 1
+  awk -F= -v field="${field}" '$1 == field { print $2; exit }' "${migration_pending_file}"
+}
+
+write_pending_migration() {
+  local from_sha="$1" to_sha="$2" tmp_file
+  tmp_file="$(mktemp "${migration_pending_file}.tmp.XXXXXX")"
+  printf 'FROM_SHA=%s\nTARGET_SHA=%s\nACK_FORWARD_ONLY=%s\n' \
+    "${from_sha}" "${to_sha}" "${ack_forward_only}" >"${tmp_file}"
+  mv "${tmp_file}" "${migration_pending_file}"
+}
 
 list_changed_migrations() {
   local from_sha="$1" to_sha="$2"
+  local path destination git_paths rc
   if [ -z "${from_sha}" ] || ! git -C "${ROOT}" rev-parse --verify "${from_sha}^{commit}" >/dev/null 2>&1; then
-    find "${ROOT}/app/alembic/versions" -type f -name '*.py' -print 2>/dev/null || true
-    return 0
+    set +e
+    git_paths="$(git -C "${ROOT}" ls-tree -r --name-only "${to_sha}" -- app/alembic/versions)"
+    rc=$?
+    set -e
+    [ "${rc}" -eq 0 ] || return "${rc}"
+    while IFS= read -r path; do
+      [ -n "${path}" ] && [[ "${path}" = *.py ]] || continue
+      destination="${migration_materialize_dir}/${path}"
+      mkdir -p "$(dirname "${destination}")"
+      git -C "${ROOT}" show "${to_sha}:${path}" >"${destination}"
+      printf '%s\n' "${destination}"
+    done <<<"${git_paths}"
+    return
   fi
-  git -C "${ROOT}" diff --name-only "${from_sha}..${to_sha}" -- app/alembic/versions \
-    | while IFS= read -r path; do
-        [ -n "${path}" ] && [ -f "${ROOT}/${path}" ] && printf '%s\n' "${ROOT}/${path}"
-      done
+  set +e
+  git_paths="$(git -C "${ROOT}" diff --diff-filter=AMCR --name-only "${from_sha}..${to_sha}" -- app/alembic/versions)"
+  rc=$?
+  set -e
+  [ "${rc}" -eq 0 ] || return "${rc}"
+  while IFS= read -r path; do
+    [ -n "${path}" ] || continue
+    destination="${migration_materialize_dir}/${path}"
+    mkdir -p "$(dirname "${destination}")"
+    git -C "${ROOT}" show "${to_sha}:${path}" >"${destination}"
+    printf '%s\n' "${destination}"
+  done <<<"${git_paths}"
 }
 
 migration_gate() {
@@ -284,6 +323,7 @@ apply_changed_migrations() {
   # runtime writer before Alembic takes its snapshot, then run the one-shot
   # migration authority explicitly before any target runtime is recreated.
   compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
+  MIGRATION_EXECUTION_STARTED=1
   if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
     # From this point a nonzero Docker result is ambiguous: Alembic may have
     # committed before the client lost the container result. Fail closed by
@@ -292,9 +332,11 @@ apply_changed_migrations() {
     FORWARD_ONLY_MIGRATION_STARTED=1
   fi
   compose up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate || return $?
+  MIGRATION_EXECUTION_APPLIED=1
   if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
     FORWARD_ONLY_MIGRATION_APPLIED=1
   fi
+  rm -f "${migration_pending_file}"
 }
 
 rollback_failed_startup() {
@@ -302,7 +344,15 @@ rollback_failed_startup() {
   if [ -n "${MIGRATION_RECEIPT_JSON:-}" ]; then
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
-  if [ "${forward_only_count}" != "0" ] && [ "${FORWARD_ONLY_MIGRATION_STARTED}" = "1" ]; then
+  if [ "${MIGRATION_EXECUTION_STARTED}" = "1" ]; then
+    if [ "${forward_only_count}" = "0" ]; then
+      if [ "${MIGRATION_EXECUTION_APPLIED}" = "1" ]; then
+        echo "${reason} (status ${original_status}); reversible migration(s) were applied but are not reversed by the deploy hot path; the target pin is retained until rollback-promotion proves and executes the governed reversal" >&2
+      else
+        echo "${reason} (status ${original_status}); reversible migration execution started and its commit state is ambiguous; the target pin is retained until database revision is reconciled" >&2
+      fi
+      return 0
+    fi
     if [ "${FORWARD_ONLY_MIGRATION_APPLIED}" = "1" ]; then
       echo "${reason} (status ${original_status}); forward-only migration(s) are not auto-reversed; they were applied, so the target pin is retained for a compatible forward fix instead of restoring a potentially schema-incompatible previous image" >&2
     else
@@ -310,6 +360,7 @@ rollback_failed_startup() {
     fi
     return 0
   fi
+  rm -f "${migration_pending_file}"
   echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
   if [ -n "${current_sha}" ]; then
     if ! write_pin "${pin_file}" "${current_sha}"; then
@@ -590,7 +641,26 @@ if [ "${action}" = "rollback" ] && [ "${dry_run}" = "1" ]; then
   echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
   exit 0
 fi
-migration_gate "${current_sha:-}" "${target_sha}"
+migration_from_sha="${current_sha:-}"
+if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
+  pending_target="$(read_pending_migration_field TARGET_SHA || true)"
+  pending_from="$(read_pending_migration_field FROM_SHA || true)"
+  pending_ack="$(read_pending_migration_field ACK_FORWARD_ONLY || true)"
+  if [ -z "${pending_target}" ] || [ -z "${pending_from}" ]; then
+    echo "migration retry blocked: pending migration marker is incomplete: ${migration_pending_file}" >&2
+    exit 88
+  fi
+  if [ "${pending_target}" != "${target_sha}" ]; then
+    echo "migration retry blocked: pending target ${pending_target} must be reconciled before deploying ${target_sha}" >&2
+    exit 88
+  fi
+  migration_from_sha="${pending_from}"
+  if [ "${pending_ack}" = "1" ]; then
+    ack_forward_only=1
+  fi
+  echo "migration retry: revalidating ${migration_from_sha}..${target_sha} from durable pending marker"
+fi
+migration_gate "${migration_from_sha}" "${target_sha}"
 
 if [ "${dry_run}" = "1" ]; then
   echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
@@ -612,6 +682,9 @@ DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
 mkdir -p "$(dirname "${pin_file}")"
+if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ]; then
+  write_pending_migration "${migration_from_sha}" "${target_sha}"
+fi
 if [ -n "${current_sha}" ]; then
   write_pin "${previous_pin_file}" "${current_sha}"
 fi

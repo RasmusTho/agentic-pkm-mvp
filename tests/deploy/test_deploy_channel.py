@@ -310,9 +310,7 @@ def _configure_prod_retry_preflight(
     )
     if compose_files_present:
         shutil.copy2(REPO_ROOT / "docker-compose.yaml", root / "docker-compose.yaml")
-        shutil.copy2(
-            REPO_ROOT / "docker-compose.prod.yml", root / "docker-compose.prod.yml"
-        )
+        shutil.copy2(REPO_ROOT / "docker-compose.prod.yml", root / "docker-compose.prod.yml")
     if pin_file_dsn_override is not None:
         pin_dir = root / "config" / "deploy"
         pin_dir.mkdir(parents=True, exist_ok=True)
@@ -430,9 +428,7 @@ def test_acknowledged_embedding_cutover_stages_compose_before_transition_smoke(
     runtime_up = next(
         index
         for index, event in enumerate(events)
-        if event.endswith(
-            "up -d --force-recreate api worker watcher heimdal-capture-watch"
-        )
+        if event.endswith("up -d --force-recreate api worker watcher heimdal-capture-watch")
     )
     api_liveness = next(
         index
@@ -476,8 +472,7 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
     previous_sha = "1" * 40
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     env["FAKE_API_LIVENESS"] = "fail"
@@ -489,9 +484,7 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
     events = _deploy_events(env)
     assert any(
-        event.endswith(
-            "up -d --force-recreate api worker watcher heimdal-capture-watch"
-        )
+        event.endswith("up -d --force-recreate api worker watcher heimdal-capture-watch")
         for event in events
     )
     assert any(
@@ -509,13 +502,10 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
     previous_sha = "2" * 40
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
-    env["FAKE_DOCKER_FAIL_MATCH"] = (
-        "up -d --force-recreate --no-deps companion-ui"
-    )
+    env["FAKE_DOCKER_FAIL_MATCH"] = "up -d --force-recreate --no-deps companion-ui"
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
@@ -536,8 +526,7 @@ def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path
     root, env, previous_sha = _deploy_harness(tmp_path)
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     migration = root / "app/alembic/versions/forward_only_test.py"
@@ -571,8 +560,7 @@ def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_pa
     root, env, previous_sha = _deploy_harness(tmp_path)
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     migration = root / "app/alembic/versions/forward_only_test.py"
@@ -597,12 +585,35 @@ def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_pa
     assert not any("exit-code-from migrate" in event for event in events)
 
 
+def test_target_commit_migration_is_classified_when_target_is_not_checked_out(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    migration = root / "app/alembic/versions/target_only.py"
+    migration.write_text(
+        'revision = "target_only"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add target-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    subprocess.run(["git", "checkout", "-q", previous_sha], cwd=root, check=True)
+
+    result = _run_deploy(root, env, target_sha)
+
+    assert result.returncode == 42
+    assert "forward-only migrations require" in result.stderr
+    assert "migration gate blocked before recreate" in result.stderr
+    assert not (tmp_path / "docker-called").exists()
+
+
 def test_ambiguous_forward_only_migration_exit_retains_target_pin(tmp_path: Path) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     migration = root / "app/alembic/versions/forward_only_test.py"
@@ -632,12 +643,91 @@ def test_ambiguous_forward_only_migration_exit_retains_target_pin(tmp_path: Path
     )
 
 
-def test_changed_migration_drains_writers_before_cutover_and_runtime_restart(tmp_path: Path) -> None:
+def test_same_sha_retry_replays_durable_pending_migration_epoch(tmp_path: Path) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
-        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
-        f"APP_IMAGE_TAG={previous_sha}\n",
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_retry.py"
+    migration.write_text(
+        'revision = "forward_only_retry"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add retry migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = "exit-code-from migrate"
+
+    first = _run_deploy(root, env, target_sha, "--ack-forward-only")
+
+    assert first.returncode == 24
+    pending = root / "config/deploy/dev.migration-pending.env"
+    assert pending.exists()
+    assert f"FROM_SHA={previous_sha}" in pending.read_text(encoding="utf-8")
+    assert f"TARGET_SHA={target_sha}" in pending.read_text(encoding="utf-8")
+
+    env.pop("FAKE_DOCKER_FAIL_MATCH")
+    second = _run_deploy(root, env, target_sha)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating" in second.stdout
+    assert not pending.exists()
+    migrate_events = [event for event in _deploy_events(env) if "exit-code-from migrate" in event]
+    assert len(migrate_events) == 2
+
+
+def test_applied_reversible_migration_retains_target_for_governed_reversal(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/reversible_test.py"
+    migration.write_text(
+        'revision = "reversible_test"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "reversible"\n'
+        "def downgrade():\n    pass\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add reversible migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env["FAKE_SHA"] = target_sha
+    env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
+
+    result = _run_deploy(root, env, target_sha)
+
+    assert result.returncode == 73
+    assert "reversible migration(s) were applied" in result.stderr
+    assert "rollback-promotion" in result.stderr
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={previous_sha}" not in pin_path.read_text(encoding="utf-8")
+    strict_recreates = [
+        event
+        for event in _deploy_events(env)
+        if event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+    ]
+    assert len(strict_recreates) == 1
+
+
+def test_changed_migration_drains_writers_before_cutover_and_runtime_restart(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
         encoding="utf-8",
     )
     migration = root / "app/alembic/versions/forward_only_test.py"
@@ -779,9 +869,7 @@ def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
     )
 
     ambient_env_file = tmp_path / "ambient-foreign-runtime.env"
-    ambient_env_file.write_text(
-        f"DATABASE_URL={_ENV_FILE_POISON_DSN}\n", encoding="utf-8"
-    )
+    ambient_env_file.write_text(f"DATABASE_URL={_ENV_FILE_POISON_DSN}\n", encoding="utf-8")
     env["WATCHER_RUNTIME_ENV_FILE"] = str(ambient_env_file)
     env["FAKE_OUTBOX_POISON_DSN"] = _ENV_FILE_POISON_DSN
 
@@ -960,9 +1048,7 @@ def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
     # No compose files at all: resolution is impossible (not merely "a file
     # was empty"), so the preflight must skip visibly rather than block or
     # crash.
-    _configure_prod_retry_preflight(
-        root, env, tmp_path, compose_files_present=False
-    )
+    _configure_prod_retry_preflight(root, env, tmp_path, compose_files_present=False)
 
     result = _run_deploy(root, env, sha, channel="prod")
 
