@@ -269,6 +269,62 @@ def test_signal_during_child_spawn_is_forwarded_after_assignment(
     assert process.poll() == -signal.SIGTERM
 
 
+def test_signal_during_tempfile_creation_defers_until_cleanup_state_is_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_mkstemp = host_secret_bootstrap.tempfile.mkstemp
+
+    def interrupted_mkstemp(*args: object, **kwargs: object) -> tuple[int, str]:
+        fd, path = real_mkstemp(*args, **kwargs)
+        signal.raise_signal(signal.SIGTERM)
+        return fd, path
+
+    monkeypatch.setattr(
+        host_secret_bootstrap.tempfile,
+        "mkstemp",
+        interrupted_mkstemp,
+    )
+
+    with pytest.raises(HostSecretBootstrapTerminated) as error:
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            keychain_lookup=_lookup(),
+            directory=tmp_path,
+        ):
+            pytest.fail("consumer must not launch after deferred termination")
+
+    assert error.value.signum == signal.SIGTERM
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_signal_during_fdopen_transfer_unlinks_and_closes_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_fdopen = host_secret_bootstrap.os.fdopen
+
+    def interrupted_fdopen(*args: object, **kwargs: object) -> object:
+        handle = real_fdopen(*args, **kwargs)
+        signal.raise_signal(signal.SIGTERM)
+        return handle
+
+    monkeypatch.setattr(host_secret_bootstrap.os, "fdopen", interrupted_fdopen)
+
+    with pytest.raises(HostSecretBootstrapTerminated) as error:
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            keychain_lookup=_lookup(),
+            directory=tmp_path,
+        ):
+            pytest.fail("consumer must not launch after deferred termination")
+
+    assert error.value.signum == signal.SIGTERM
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_repeated_sigterm_kills_and_reaps_ignoring_consumer(
     tmp_path: Path,
 ) -> None:

@@ -189,12 +189,20 @@ def materialize_consumer_environment(
     fd: int | None = None
     termination_signal: int | None = None
     cleanup_in_progress = False
+    materialization_ready = False
 
     def cleanup_then_terminate(signum: int, _frame: FrameType | None) -> None:
         nonlocal termination_signal
         if termination_signal is None:
             termination_signal = signum
-        if cleanup_in_progress:
+        if file_path is not None:
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise HostSecretBootstrapError(
+                    "host secret bootstrap failed for declared consumer"
+                ) from exc
+        if cleanup_in_progress or not materialization_ready:
             return
         raise HostSecretBootstrapTerminated(termination_signal)
 
@@ -219,6 +227,9 @@ def materialize_consumer_environment(
     try:
         with _temporary_signal_handlers(cleanup_then_terminate):
             try:
+                # Defer catchable termination until the descriptor/path pair has
+                # reached a cleanup-safe state. A handler may run after mkstemp
+                # returns but before Python assigns either value.
                 fd, raw_path = tempfile.mkstemp(
                     prefix="yggdrasil-host-secret-",
                     suffix=".env",
@@ -232,6 +243,9 @@ def materialize_consumer_environment(
                         handle.write(f"{name}={values[name]}\n")
                     handle.flush()
                     os.fsync(handle.fileno())
+                materialization_ready = True
+                if termination_signal is not None:
+                    raise HostSecretBootstrapTerminated(termination_signal)
                 yield file_path
             finally:
                 cleanup_materialized_file()
