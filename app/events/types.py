@@ -110,13 +110,16 @@ SETTINGS_WRITE_RECEIPT = "settings.write.receipt"
 KNOWLEDGE_ACQUISITION_STAGE_COMPLETED = "knowledge_acquisition.stage.completed"
 KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_lettered"
 
-# YSS-04 (#3919): YouTube Source Sync acquisition-queue lineage topics
+# YSS-04/YSS-05 (#3919/#3920): YouTube Source Sync queue/discovery lineage topics
 # (docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Event topics). Emitted by
-# app/knowledge_acquisition/acquisition_requests.py on the canonical DB outbox
-# with KERNEL-08 registered schemas. Lineage/receipt posture, NOT dispatched
-# commands — no `outbox_worker._dispatch_topic` branch; a future consumer
-# follows the KA-07 route pattern.
+# app/knowledge_acquisition/acquisition_requests.py and playlist_discovery.py
+# on the canonical DB outbox with KERNEL-08 registered schemas.
+# Lineage/receipt posture, NOT dispatched commands — no
+# `outbox_worker._dispatch_topic` branch; a future consumer follows the KA-07
+# route pattern.
 YOUTUBE_SOURCE_DISCOVERED = "youtube.source.discovered"
+YOUTUBE_SYNC_COMPLETED = "youtube.sync.completed"
+YOUTUBE_SYNC_DEGRADED = "youtube.sync.degraded"
 ACQUISITION_REQUESTED = "acquisition.requested"
 ACQUISITION_STARTED = "acquisition.started"
 ACQUISITION_COMPLETED = "acquisition.completed"
@@ -237,6 +240,8 @@ __all__ = [
     "KNOWLEDGE_ACQUISITION_STAGE_COMPLETED",
     "KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED",
     "YOUTUBE_SOURCE_DISCOVERED",
+    "YOUTUBE_SYNC_COMPLETED",
+    "YOUTUBE_SYNC_DEGRADED",
     "ACQUISITION_REQUESTED",
     "ACQUISITION_STARTED",
     "ACQUISITION_COMPLETED",

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/youtube.sync.degraded.v1.schema.json",
+  "title": "youtube.sync.degraded payload (v1)",
+  "description": "Degraded per-source YouTube poll receipt. Idempotency key basis: (topic, binding_id, run_id).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["binding_id", "run_id", "reason_code", "detail"],
+  "properties": {
+    "binding_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "reason_code": { "type": "string", "minLength": 1 },
+    "detail": { "type": "string", "minLength": 1 }
+  }
+}
