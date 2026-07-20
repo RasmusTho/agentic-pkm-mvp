@@ -21,7 +21,8 @@ GOVERNANCE_PREFIXES = (
     "tests/fixtures/",
 )
 DOCS_GOVERNANCE_LANES = {"docs", "docs-authoring", "governance", "direct-repair"}
-RISK_REVIEW_LANES = {"implementation", "direct-repair"}
+CANONICAL_LANES = DOCS_GOVERNANCE_LANES | {"implementation"}
+RISK_REVIEW_LANES = {"implementation", "governance", "direct-repair"}
 RISK_SURFACES = {
     "auth",
     "concurrency",
@@ -67,6 +68,10 @@ def evaluate_review_before_ci_gate(
     normalized_lane = lane.strip().lower()
     if not normalized_lane:
         raise ReviewBeforeCiGateError("lane is required")
+    if normalized_lane not in CANONICAL_LANES:
+        raise ReviewBeforeCiGateError(
+            f"unknown lane: {normalized_lane}; allowed: {', '.join(sorted(CANONICAL_LANES))}"
+        )
     files = [_normalize_path(path) for path in changed_files]
     if not files:
         raise ReviewBeforeCiGateError("at least one changed file is required")
@@ -74,11 +79,11 @@ def evaluate_review_before_ci_gate(
     risks = _normalize_risk_surfaces(risk_surfaces)
     if risks and normalized_lane not in RISK_REVIEW_LANES:
         raise ReviewBeforeCiGateError(
-            "risk_surfaces are valid only for implementation or direct-repair lanes"
+            "risk_surfaces are valid only for implementation, governance, or direct-repair lanes"
         )
     if normalized_lane in RISK_REVIEW_LANES and not risk_assessment_complete:
         raise ReviewBeforeCiGateError(
-            "implementation and direct-repair lanes require an explicit completed risk assessment, "
+            "implementation, governance, and direct-repair lanes require an explicit completed risk assessment, "
             "including when no high-risk surface applies"
         )
     matched = _matched_surfaces(normalized_lane, files, risks)

@@ -230,10 +230,11 @@ stops remain blocked while their bounded recovery path proceeds autonomously.
 
 ## Mechanism Convergence Gate
 
-The implementation and direct-repair lanes must explicitly record that TCD risk classification was
-completed even when no high-risk surface applies. Omitting the risk-surface argument is not evidence
-of a low-risk classification. Once any high-risk surface is declared, neither implementation nor
-direct-repair may bypass this gate; only a clean convergence review permits expensive proof to begin.
+The implementation, governance, and direct-repair lanes must explicitly record that TCD risk
+classification was completed even when no high-risk surface applies. Omitting the risk-surface
+argument is not evidence of a low-risk classification. Governance that changes executable stateful
+or concurrency enforcement is not exempt. Once any high-risk surface is declared, no lane may bypass
+this gate; only a clean convergence review permits expensive proof to begin.
 
 This is the cheap design/correctness gate that precedes expensive proof for high-risk stateful work.
 It applies to auth, security, data, migrations, concurrency, external APIs, credential durability,

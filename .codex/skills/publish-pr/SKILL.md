@@ -175,7 +175,7 @@ For docs-authoring, governance, and direct-repair PRs, run the cheap local revie
 the push creates or updates an expensive GitHub CI head. For implementation or direct-repair work
 touching auth, security, data, migrations, concurrency, external APIs, credential durability, or an
 explicit state machine, run the same gate before the first expensive full suite as well as before
-push. Every implementation lane must explicitly attest that its TCD risk assessment is complete,
+push. Every implementation, governance, and direct-repair lane must explicitly attest that its TCD risk assessment is complete,
 including when the resulting risk-surface set is empty; supply every applicable risk surface. This local ordering gate does
 not replace required GitHub checks, branch protection, or final review triage.
 
@@ -192,7 +192,7 @@ TCD_RISK_SURFACES="<space-separated applicable surfaces, or empty>"
 if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
   # Portable read loop, not `mapfile`/`readarray` (bash 4+ only) — macOS ships bash 3.2.
   review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
-  if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "direct-repair" ]; then
+  if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
     review_gate_args+=(--risk-assessment-complete)
   fi
   while IFS= read -r file; do

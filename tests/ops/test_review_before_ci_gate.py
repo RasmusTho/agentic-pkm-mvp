@@ -31,6 +31,7 @@ def test_docs_governance_changes_require_pre_ci_review_gate() -> None:
             "docs/development/PR_HOT_PATH.md",
             ".github/workflows/issue-pr-governance.yml",
         ],
+        risk_assessment_complete=True,
     )
 
     assert gate.requires_review_gate is True
@@ -80,6 +81,28 @@ def test_standard_implementation_keeps_existing_hot_path() -> None:
 
     assert gate.status == "not_required"
     assert gate.may_handoff_to_ci is True
+
+
+def test_unknown_lane_is_rejected_instead_of_failing_open() -> None:
+    with pytest.raises(ReviewBeforeCiGateError, match="unknown lane: implmentation"):
+        evaluate_review_before_ci_gate(
+            lane="implmentation",
+            changed_files=["app/oauth/service.py"],
+        )
+
+
+def test_governance_concurrency_requires_convergence_review() -> None:
+    gate = evaluate_review_before_ci_gate(
+        lane="governance",
+        changed_files=["scripts/run_with_host_lease.py"],
+        risk_surfaces=["concurrency"],
+        risk_assessment_complete=True,
+    )
+
+    assert gate.status == "required"
+    assert gate.may_handoff_to_ci is False
+    assert "risk:concurrency" in gate.matched_surfaces
+    assert any("convergence packet" in check for check in gate.required_local_checks)
 
 
 def test_bypass_requires_explicit_reason() -> None:
@@ -163,6 +186,7 @@ def test_cli_fails_until_review_gate_is_complete() -> None:
             "governance",
             "--changed-file",
             "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
         ],
         cwd=REPO_ROOT,
         capture_output=True,
@@ -177,6 +201,7 @@ def test_cli_fails_until_review_gate_is_complete() -> None:
             "governance",
             "--changed-file",
             "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
             "--review-gate-complete",
         ],
         cwd=REPO_ROOT,

@@ -84,7 +84,7 @@ distinct open governing parent.
 
 ## Review-Before-CI
 
-For every implementation and direct-repair PR, explicitly complete the TCD risk assessment before
+For every implementation, governance, and direct-repair PR, explicitly complete the TCD risk assessment before
 the cheap local review gate, even when no high-risk surface applies. Supply every applicable
 `--risk-surface`; omitting the option is not evidence that the change is low risk. High-risk work runs
 the gate before its first expensive full suite as well as before push:
@@ -105,6 +105,7 @@ new PR head to expensive GitHub CI:
 python3 scripts/review_before_ci_gate.py \
   --lane governance \
   --changed-file docs/development/PR_HOT_PATH.md \
+  --risk-assessment-complete \
   --review-gate-complete
 ```
 
