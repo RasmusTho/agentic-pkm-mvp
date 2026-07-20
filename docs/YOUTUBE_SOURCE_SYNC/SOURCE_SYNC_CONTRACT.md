@@ -227,8 +227,9 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   provider strings or response bodies that may echo tokens).
 - Before polling the device-token endpoint, connect resolves the encryption key and proves the
   aggregate store's locked atomic write/read path without writing secret probe material. Each POSIX
-  write syncs the staged file before atomic replacement and confirms the parent-directory barrier
-  afterward; Windows uses a write-through replacement. A visible record after a failed barrier is
+  write syncs the staged file before atomic replacement and confirms the complete parent-directory
+  chain through the filesystem root, including fresh first-use nested directories. Windows uses a
+  write-through replacement. A visible record after a failed barrier is
   not crash-durable authority until a fresh barrier succeeds. Once
   the provider returns a grant, connect immediately journals it encrypted under an opaque digest
   id; no identity probe or binding mutation occurs first. Exact encrypted-record readback treats a

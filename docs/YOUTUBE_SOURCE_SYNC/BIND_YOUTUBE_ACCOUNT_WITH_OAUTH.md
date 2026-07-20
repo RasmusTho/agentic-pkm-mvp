@@ -25,8 +25,10 @@ touch the repo, vault, settings values, logs, events, or receipts.
      verification_url_complete, user_code, interval}`; `poll_device_flow()` until
      granted/denied/expired. Headless-friendly; the complete-URL variant means the user clicks a
      link or scans a QR — no typing required.
-   - **Loopback installed-app flow (secondary):** authorization-code + PKCE against a
-     `127.0.0.1:<ephemeral>` redirect for same-host setups. OAuth `state` validated; tokens never
+   - **Loopback installed-app flow (secondary):** authorization-code + PKCE against an exact
+     `http://127.0.0.1:<ephemeral>` redirect for same-host setups. Start and completion both reject
+     any other scheme/host, missing or invalid port, userinfo, query, or fragment. OAuth `state`
+     validated; tokens never
      appear in URLs beyond the provider's own redirect params.
    - Scope: exactly `https://www.googleapis.com/auth/youtube.readonly`. Refresh, expiry-aware
      access-token provider `TokenProvider.get_access_token()` with single-flight refresh.
@@ -45,7 +47,8 @@ touch the repo, vault, settings values, logs, events, or receipts.
    while rotated-refresh recovery maps to `auth_refresh_pending`, `auth_refresh_conflict`, or
    `auth_refresh_durability`, on both the binding and dependent sources (INV-YSS-4). Before each
    device-token poll, connect proves encryption-key and locked atomic-store readiness. POSIX store
-   writes sync the staged file before atomic replacement and confirm the parent-directory barrier afterward;
+   writes sync the staged file before atomic replacement and confirm the complete parent-directory
+   chain through the filesystem root afterward, including first-use nested directories;
    Windows uses write-through replacement. Visible readback after a failed barrier is not accepted
    as crash-durable until a fresh barrier succeeds. A returned grant is
    immediately encrypted under an opaque pending-journal id before the fallible identity probe or
@@ -71,8 +74,11 @@ touch the repo, vault, settings values, logs, events, or receipts.
    renews the access token and retains the stored refresh credential. Defense in depth still treats
    an unexpected different `refresh_token` as rotation: preflight precedes `/token`, the response is
    journaled encrypted before canonical promotion, and a write failure recovers on the next access
-   only over the proven predecessor generation. Pending/conflicting refresh authority degrades
-   status and blocks reconnect/disconnect provider actions until safely resolved.
+   only over the proven predecessor generation. Pending/conflicting refresh authority durably
+   degrades the account binding and every dependent source, without cursor mutation, and blocks
+   reconnect/disconnect provider actions until safely resolved. A reconnect never cleans its
+   pending journal merely because canonical ciphertext is visible: the binding row must also be
+   durably `connected` before cleanup.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file

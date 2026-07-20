@@ -406,18 +406,25 @@ class YouTubeTokenStore:
         return True
 
     def _sync_parent_directory(self) -> None:
-        """Confirm the directory-entry barrier on POSIX.
+        """Confirm the complete directory-entry chain on POSIX.
 
         Windows takes the separate ``MoveFileExW(..., WRITE_THROUGH)`` path in
         :meth:`_replace_with_barrier`; opening/fsyncing a directory is not a
-        portable Windows operation.
+        portable Windows operation. On POSIX, syncing only the immediate parent
+        is insufficient when first use created multiple nested parents: the
+        file can be visible while a new directory link is absent after crash.
         """
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        directory_fd = os.open(self._path.parent, flags)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        parent = self._path.parent.resolve(strict=False)
+        while True:
+            directory_fd = os.open(parent, flags)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            if parent.parent == parent:
+                break
+            parent = parent.parent
 
     def _replace_with_barrier(self, source: Path) -> None:
         if os.name != "nt":

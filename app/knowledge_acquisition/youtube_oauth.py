@@ -142,6 +142,10 @@ class OAuthStateMismatchError(RuntimeError):
     """Loopback ``state`` did not match -- refuse to exchange the code."""
 
 
+class InvalidLoopbackRedirectURIError(ValueError):
+    """Loopback redirect is outside the exact installed-app boundary."""
+
+
 class DisallowedOAuthHostError(RuntimeError):
     """Refused OAuth egress to a non-allowlisted host (SSRF guard)."""
 
@@ -607,6 +611,36 @@ def _pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
+def _validate_loopback_redirect_uri(redirect_uri: str) -> None:
+    """Admit only ``http://127.0.0.1:<ephemeral-port>/<path>``.
+
+    Flow handles can cross a serialization boundary, so creation and
+    completion both validate. The error excludes the rejected URI because its
+    userinfo/query text is untrusted and may contain credential material.
+    """
+    valid = isinstance(redirect_uri, str) and redirect_uri == redirect_uri.strip()
+    try:
+        parsed = urlsplit(redirect_uri) if valid else None
+        port = parsed.port if parsed is not None else None
+    except ValueError:
+        parsed = None
+        port = None
+    if (
+        parsed is None
+        or parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is None
+        or not 1 <= port <= 65535
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise InvalidLoopbackRedirectURIError(
+            "OAuth loopback redirect must use exact http 127.0.0.1 with an explicit valid port and no userinfo, query, or fragment"
+        )
+
+
 def start_loopback_flow(client: OAuthClient, *, redirect_uri: str) -> LoopbackFlow:
     """Build the loopback authorization request: URL + ``state`` + PKCE verifier.
 
@@ -614,6 +648,7 @@ def start_loopback_flow(client: OAuthClient, *, redirect_uri: str) -> LoopbackFl
     (BIND spec); the caller opens ``authorization_url`` and later hands the
     redirect back to :func:`complete_loopback_flow`.
     """
+    _validate_loopback_redirect_uri(redirect_uri)
     state = secrets.token_urlsafe(32)
     verifier, challenge = _pkce_pair()
     url = client.build_authorization_url(redirect_uri=redirect_uri, state=state, code_challenge=challenge)
@@ -628,6 +663,7 @@ def complete_loopback_flow(
     A tampered/mismatched ``state`` is refused with :class:`OAuthStateMismatchError`
     before any token exchange happens.
     """
+    _validate_loopback_redirect_uri(flow.redirect_uri)
     if not hmac.compare_digest(returned_state, flow.state):
         raise OAuthStateMismatchError(
             "OAuth state mismatch: refusing to exchange the authorization code (possible CSRF/tamper)"
@@ -935,6 +971,39 @@ class YouTubeAccountBinder:
             raise KeyError(f"no such account binding: {binding_id}")
         return DeviceConnection(handle=self._client.start_device_flow(), reconnect_binding_id=binding_id)
 
+    @staticmethod
+    def _refresh_degradation_reason(reason_code: str) -> str:
+        return {
+            "refresh_pending": "auth_refresh_pending",
+            "refresh_conflict": "auth_refresh_conflict",
+        }.get(reason_code, "auth_refresh_durability")
+
+    def _degrade_refresh_authority(
+        self,
+        binding_id: str,
+        *,
+        reason_code: str,
+        pending_grant_id: str | None,
+    ) -> None:
+        """Persist fail-closed refresh state on binding and dependent sources."""
+        failed = False
+        try:
+            self._bindings.set_state(
+                binding_id, state="degraded", reason_code=reason_code
+            )
+            if self._registry is not None:
+                for source in self._registry.list_for_account(binding_id):
+                    self._registry.record_source_degradation(
+                        source.binding_id, reason_code=reason_code
+                    )
+        except Exception:
+            failed = True
+        if failed:
+            raise OAuthGrantDurabilityError(
+                "refresh_durability_unavailable",
+                pending_grant_id=pending_grant_id,
+            ) from None
+
     def retry_pending_grant_compensation(self, pending_grant_id: str) -> dict[str, Any]:
         """Retry revocation for one encrypted pre-binding grant journal."""
         if not pending_grant_id.startswith("pending-youtube-grant-"):
@@ -1015,6 +1084,22 @@ class YouTubeAccountBinder:
                                     ),
                                 }
                             canonical_binding = recovered_binding
+                        if (
+                            canonical_binding.state != "connected"
+                            or canonical_binding.reason_code is not None
+                        ):
+                            try:
+                                canonical_binding = self._bindings.set_state(
+                                    canonical_id,
+                                    state="connected",
+                                    reason_code=None,
+                                )
+                            except Exception:
+                                return {
+                                    "status": "binding_pending",
+                                    "pending_grant_id": pending_grant_id,
+                                    "binding_id": canonical_id,
+                                }
                         try:
                             self._store.delete(pending_grant_id)
                         except Exception:
@@ -1077,12 +1162,32 @@ class YouTubeAccountBinder:
                 # Resolve an interrupted refresh before asking Google for a
                 # second standing grant. Lock order remains pending grant ->
                 # binding -> aggregate token file.
+                refresh_failure: tuple[str, str | None] | None = None
                 with self._store.binding_lifecycle_lock(
                     connection.reconnect_binding_id
                 ):
-                    self._recover_pending_refresh_authority(
-                        connection.reconnect_binding_id
+                    try:
+                        self._recover_pending_refresh_authority(
+                            connection.reconnect_binding_id
+                        )
+                    except OAuthGrantDurabilityError as error:
+                        refresh_failure = (
+                            error.reason_code,
+                            error.pending_grant_id,
+                        )
+                if refresh_failure is not None:
+                    refresh_reason, refresh_pending_id = refresh_failure
+                    self._degrade_refresh_authority(
+                        connection.reconnect_binding_id,
+                        reason_code=self._refresh_degradation_reason(
+                            refresh_reason
+                        ),
+                        pending_grant_id=refresh_pending_id,
                     )
+                    raise OAuthGrantDurabilityError(
+                        refresh_reason,
+                        pending_grant_id=refresh_pending_id,
+                    ) from None
             # A standing grant must not be requested until the encryption key,
             # aggregate file, lock directory, and atomic replace path are ready.
             self._store.preflight_write_ready()
@@ -1653,23 +1758,11 @@ class YouTubeAccountBinder:
                     # This code intentionally runs outside the exception
                     # handler: any later sanitized durability error must not
                     # retain a hidden ``__context__`` reference to a
-                    # secret-bearing backend error. Once the target/candidate
-                    # token is itself durable, the earlier pending journal is
-                    # redundant only after binding-row completion is proven.
-                    # An indeterminate first-connect create must retain its
-                    # per-attempt handle even though the deterministic candidate
-                    # ciphertext is visible.
-                    if binding is not None:
-                        target_is_durable = self._stored_token_matches(
-                            binding_id, token, write_error=commit_error
-                        )
-                        if target_is_durable and not isinstance(
-                            commit_error, TokenStoreDurabilityError
-                        ):
-                            try:
-                                self._store.delete(pending_id)
-                            except Exception:
-                                pass
+                    # secret-bearing backend error. Canonical ciphertext alone
+                    # is not a completed reconnect: the binding row must also
+                    # durably converge to connected. Preserve the per-attempt
+                    # pending journal on every commit failure so retry can
+                    # prove and finish both halves before cleanup.
                     raise commit_error
                 assert result is not None
                 # Promotion and pending cleanup remain inside channel/binding
@@ -1887,13 +1980,16 @@ class YouTubeAccountBinder:
                 # Never revoke an older canonical credential while a rotated
                 # refresh response remains pending or conflicts with a proven
                 # newer generation.
+                reason_code = self._refresh_degradation_reason(error.reason_code)
+                self._degrade_refresh_authority(
+                    binding_id,
+                    reason_code=reason_code,
+                    pending_grant_id=error.pending_grant_id,
+                )
                 return redact(
                     {
                         "status": "disconnect_failed",
-                        "reason_code": {
-                            "refresh_pending": "auth_refresh_pending",
-                            "refresh_conflict": "auth_refresh_conflict",
-                        }.get(error.reason_code, "auth_refresh_durability"),
+                        "reason_code": reason_code,
                         "revoked": False,
                         "retryable": True,
                         "sources_disabled": 0,
@@ -1964,6 +2060,7 @@ __all__ = [
     "DeviceFlowHandle",
     "DisallowedOAuthHostError",
     "IdentityProbe",
+    "InvalidLoopbackRedirectURIError",
     "LoopbackFlow",
     "OAuthClient",
     "OAuthClientCredentialsMissingError",

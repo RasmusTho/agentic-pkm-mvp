@@ -285,6 +285,50 @@ def test_loopback_flow_rejects_tampered_state(store, bindings, registry):
     assert body["grant_type"] == "authorization_code"
 
 
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "https://127.0.0.1:8765/callback",
+        "http://localhost:8765/callback",
+        "http://127.0.0.1/callback",
+        "http://127.0.0.1:0/callback",
+        "http://user@127.0.0.1:8765/callback",
+        "http://127.0.0.1:8765/callback?code=secret",
+        "http://127.0.0.1:8765/callback#fragment",
+    ],
+)
+def test_loopback_flow_rejects_non_exact_loopback_redirect_uri(redirect_uri):
+    provider = _Provider()
+
+    with pytest.raises(oauth.InvalidLoopbackRedirectURIError) as excinfo:
+        oauth.start_loopback_flow(_client(provider), redirect_uri=redirect_uri)
+
+    assert redirect_uri not in str(excinfo.value)
+    assert provider.requests == []
+
+
+def test_loopback_completion_revalidates_redirect_uri_before_code_exchange():
+    provider = _Provider()
+    client = _client(provider)
+    flow = oauth.start_loopback_flow(
+        client, redirect_uri="http://127.0.0.1:8765/callback"
+    )
+    forged = replace(flow, redirect_uri="https://evil.example/callback")
+
+    with pytest.raises(oauth.InvalidLoopbackRedirectURIError):
+        oauth.complete_loopback_flow(
+            client,
+            forged,
+            returned_state=forged.state,
+            returned_code="auth-code-xyz",
+        )
+
+    assert not any(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+
+
 # --- AC3 --------------------------------------------------------------------
 
 
@@ -544,17 +588,29 @@ def test_pending_parent_directory_fsync_lost_ack_keeps_retry_authority(
 ):
     provider = _Provider()
     binder = _binder(provider, store, bindings, registry)
+    opened_paths: dict[int, Path] = {}
+    original_open = tokstore.os.open
     original_fsync = tokstore.os.fsync
     directory_fsyncs = 0
+    store_parent = store.path.parent.resolve()
+
+    def record_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        opened_paths[descriptor] = Path(path).resolve()
+        return descriptor
 
     def lose_second_directory_fsync_ack(descriptor):
         nonlocal directory_fsyncs
-        if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
+        if (
+            stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode)
+            and opened_paths[descriptor] == store_parent
+        ):
             directory_fsyncs += 1
             if directory_fsyncs == 2:
                 raise OSError(SENTINEL_REFRESH)
         original_fsync(descriptor)
 
+    monkeypatch.setattr(tokstore.os, "open", record_open)
     monkeypatch.setattr(tokstore.os, "fsync", lose_second_directory_fsync_ack)
 
     with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
@@ -574,22 +630,116 @@ def test_pending_parent_directory_fsync_lost_ack_keeps_retry_authority(
     _assert_no_exception_chain(excinfo.value)
 
 
+def test_first_connect_fsyncs_complete_fresh_parent_chain_before_token_poll(
+    tmp_path, bindings, registry, monkeypatch
+):
+    store = tokstore.YouTubeTokenStore(
+        path=tmp_path / "fresh" / "nested" / "channel" / "youtube_token_store.enc"
+    )
+    provider = _Provider()
+    opened_paths: dict[int, Path] = {}
+    synced_directories: list[Path] = []
+    original_open = tokstore.os.open
+    original_fsync = tokstore.os.fsync
+    required = {
+        store.path.parent.resolve(),
+        store.path.parent.parent.resolve(),
+        store.path.parent.parent.parent.resolve(),
+    }
+
+    def record_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        opened_paths[descriptor] = Path(path).resolve()
+        return descriptor
+
+    def record_fsync(descriptor):
+        if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
+            synced_directories.append(opened_paths[descriptor])
+        original_fsync(descriptor)
+
+    original_handler = provider.handler
+
+    def require_full_barrier_before_grant(request):
+        if urlsplit(str(request.url)).path.endswith("/token"):
+            assert required.issubset(set(synced_directories))
+        return original_handler(request)
+
+    monkeypatch.setattr(tokstore.os, "open", record_open)
+    monkeypatch.setattr(tokstore.os, "fsync", record_fsync)
+    provider.handler = require_full_barrier_before_grant
+
+    result = _connect_device(_binder(provider, store, bindings, registry))
+
+    assert result["status"] == "connected"
+    assert required.issubset(set(synced_directories))
+
+
+def test_first_connect_parent_chain_barrier_failure_prevents_provider_grant(
+    tmp_path, bindings, registry, monkeypatch
+):
+    store = tokstore.YouTubeTokenStore(
+        path=tmp_path / "fresh" / "nested" / "channel" / "youtube_token_store.enc"
+    )
+    provider = _Provider()
+    opened_paths: dict[int, Path] = {}
+    original_open = tokstore.os.open
+    original_fsync = tokstore.os.fsync
+    failed_ancestor = store.path.parent.parent.resolve()
+
+    def record_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        opened_paths[descriptor] = Path(path).resolve()
+        return descriptor
+
+    def fail_ancestor_barrier(descriptor):
+        if (
+            stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode)
+            and opened_paths[descriptor] == failed_ancestor
+        ):
+            raise OSError("synthetic ancestor barrier failure")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(tokstore.os, "open", record_open)
+    monkeypatch.setattr(tokstore.os, "fsync", fail_ancestor_barrier)
+
+    with pytest.raises(tokstore.TokenStoreDurabilityError):
+        _connect_device(_binder(provider, store, bindings, registry))
+
+    assert not any(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+    assert bindings.list_all() == ()
+
+
 def test_repeated_pending_directory_fsync_failure_compensates_visible_record(
     store, bindings, registry, monkeypatch
 ):
     provider = _Provider()
     binder = _binder(provider, store, bindings, registry)
+    opened_paths: dict[int, Path] = {}
+    original_open = tokstore.os.open
     original_fsync = tokstore.os.fsync
     directory_fsyncs = 0
+    store_parent = store.path.parent.resolve()
+
+    def record_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        opened_paths[descriptor] = Path(path).resolve()
+        return descriptor
 
     def fail_pending_directory_barriers(descriptor):
         nonlocal directory_fsyncs
-        if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
+        if (
+            stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode)
+            and opened_paths[descriptor] == store_parent
+        ):
             directory_fsyncs += 1
             if directory_fsyncs >= 2:
                 raise OSError(SENTINEL_REFRESH)
         original_fsync(descriptor)
 
+    monkeypatch.setattr(tokstore.os, "open", record_open)
     monkeypatch.setattr(tokstore.os, "fsync", fail_pending_directory_barriers)
 
     with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
@@ -817,17 +967,29 @@ def test_reconnect_canonical_directory_barrier_recovery_preserves_pending_handle
     )
     reconnect = binder.start_reconnect(binding_id)
     pending_id = oauth._pending_grant_id(reconnect.handle.device_code, binding_id)
+    opened_paths: dict[int, Path] = {}
+    original_open = tokstore.os.open
     original_fsync = tokstore.os.fsync
     directory_fsyncs = 0
+    store_parent = store.path.parent.resolve()
+
+    def record_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        opened_paths[descriptor] = Path(path).resolve()
+        return descriptor
 
     def fail_canonical_barrier_and_first_confirmation(descriptor):
         nonlocal directory_fsyncs
-        if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
+        if (
+            stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode)
+            and opened_paths[descriptor] == store_parent
+        ):
             directory_fsyncs += 1
             if directory_fsyncs in {5, 6}:
                 raise OSError(SENTINEL_REFRESH_2)
         original_fsync(descriptor)
 
+    monkeypatch.setattr(tokstore.os, "open", record_open)
     monkeypatch.setattr(
         tokstore.os, "fsync", fail_canonical_barrier_and_first_confirmation
     )
@@ -835,7 +997,7 @@ def test_reconnect_canonical_directory_barrier_recovery_preserves_pending_handle
     with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
         binder.finish_device_connection(reconnect)
 
-    assert directory_fsyncs == 7
+    assert directory_fsyncs == 6
     assert excinfo.value.reason_code == "grant_pending"
     assert excinfo.value.pending_grant_id == pending_id
     assert set(store.binding_ids()) == {binding_id, pending_id}
@@ -974,6 +1136,51 @@ def test_connect_post_commit_exception_reconciles_without_deleting_token(
     assert second["account"]["binding_id"] == binding_id
     assert len(bindings.list_all()) == 1
     assert store.binding_ids() == (binding_id,)
+
+
+def test_reconnect_postcanonical_state_failure_preserves_pending_until_state_converges(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    bindings.set_state(binding_id, state="degraded", reason_code="auth_expired")
+    reconnect = binder.start_reconnect(binding_id)
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    original_set_state = bindings.set_state
+    failed_once = False
+
+    def fail_connected_state_once(target_binding_id, *, state, reason_code):
+        nonlocal failed_once
+        if state == "connected" and not failed_once:
+            failed_once = True
+            raise RuntimeError("synthetic binding-state persistence failure")
+        return original_set_state(
+            target_binding_id, state=state, reason_code=reason_code
+        )
+
+    monkeypatch.setattr(bindings, "set_state", fail_connected_state_once)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        binder.finish_device_connection(reconnect)
+
+    pending_id = excinfo.value.pending_grant_id
+    assert excinfo.value.reason_code == "grant_pending"
+    assert pending_id is not None
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH_2
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
+    assert bindings.get(binding_id).state == "degraded"
+    _assert_no_exception_chain(excinfo.value)
+
+    recovered = binder.retry_pending_grant_compensation(pending_id)
+
+    assert recovered["status"] == "canonical"
+    assert bindings.get(binding_id).state == "connected"
+    assert bindings.get(binding_id).reason_code is None
+    assert store.get(pending_id) is None
 
 
 def test_connect_precommit_binding_failure_preserves_deterministic_retry_authority(
@@ -1688,6 +1895,13 @@ def test_reconnect_stops_before_token_poll_on_conflicting_refresh_generation(
     )
     store.put(binding_id, canonical)
     store.put(pending_id, pending)
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    cursor_before = dict(source.cursor)
     reconnect = binder.start_reconnect(binding_id)
     token_calls_before = sum(
         urlsplit(str(request.url)).path.endswith("/token")
@@ -1703,6 +1917,12 @@ def test_reconnect_stops_before_token_poll_on_conflicting_refresh_generation(
     assert store.get(binding_id) == canonical
     assert store.get(pending_id) == pending
     assert provider.revoked == []
+    assert bindings.get(binding_id).state == "degraded"
+    assert bindings.get(binding_id).reason_code == "auth_refresh_conflict"
+    degraded_source = registry.get(source.binding_id)
+    assert degraded_source.last_error["reason_code"] == "auth_refresh_conflict"
+    assert degraded_source.cursor == cursor_before
+    assert degraded_source.enabled is True
     assert (
         sum(
             urlsplit(str(request.url)).path.endswith("/token")
@@ -1710,6 +1930,65 @@ def test_reconnect_stops_before_token_poll_on_conflicting_refresh_generation(
         )
         == token_calls_before
     )
+
+
+def test_disconnect_pending_refresh_outcome_degrades_without_cursor_or_artifact_mutation(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    cursor_before = dict(source.cursor)
+    pending_id = oauth._pending_refresh_id(binding_id)
+    pending = replace(
+        canonical,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token="different-predecessor",
+        promotion_predecessor_generation=canonical.authority_generation,
+    )
+    store.put(pending_id, pending)
+
+    result = binder.disconnect(binding_id)
+
+    assert result["status"] == "disconnect_failed"
+    assert result["reason_code"] == "auth_refresh_conflict"
+    assert result["sources_disabled"] == 0
+    assert provider.revoked == []
+    assert store.get(binding_id) == canonical
+    assert store.get(pending_id) == pending
+    assert bindings.get(binding_id).state == "degraded"
+    assert bindings.get(binding_id).reason_code == "auth_refresh_conflict"
+    degraded_source = registry.get(source.binding_id)
+    assert degraded_source.enabled is True
+    assert degraded_source.cursor == cursor_before
+    assert degraded_source.last_error["reason_code"] == "auth_refresh_conflict"
+
+
+def test_refresh_degradation_reason_codes_are_registered_and_redacted():
+    assert {
+        "auth_refresh_pending",
+        "auth_refresh_conflict",
+        "auth_refresh_durability",
+    }.issubset(yab.VALID_BINDING_REASON_CODES)
+    for reason_code in (
+        "auth_refresh_pending",
+        "auth_refresh_conflict",
+        "auth_refresh_durability",
+    ):
+        assert oauth.redact({"reason_code": reason_code}) == {
+            "reason_code": reason_code
+        }
 
 
 def test_revoked_auth_degrades_without_cursor_mutation(store, bindings, registry):
@@ -2285,7 +2564,9 @@ def test_token_store_syncs_staged_file_before_replace_and_parent_after(
 
     store.put("b-durable", token)
 
-    assert events == ["fsync:file", "replace", "fsync:directory"]
+    assert events[:2] == ["fsync:file", "replace"]
+    assert events[2:]
+    assert set(events[2:]) == {"fsync:directory"}
     assert store.get("b-durable") == token
 
 
