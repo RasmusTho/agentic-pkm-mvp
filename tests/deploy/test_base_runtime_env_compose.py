@@ -47,13 +47,20 @@ def _environment(service: dict[str, object]) -> dict[str, str]:
     return normalized
 
 
-def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]:
+def _render_channel_with_synthetic_runtime_env(
+    tmp_path: Path,
+    *,
+    channel: str,
+) -> dict[str, object]:
+    assert channel in {"prod", "test"}
+    runtime_dir = "tmp-test" if channel == "test" else "tmp"
+    compose_overlay = f"docker-compose.{channel}.yml"
     synthetic_root = tmp_path / "synthetic-repo"
     (synthetic_root / "config").mkdir(parents=True)
-    (synthetic_root / "tmp").mkdir()
+    (synthetic_root / runtime_dir).mkdir()
     for relative_path in (
         "docker-compose.yaml",
-        "docker-compose.prod.yml",
+        compose_overlay,
         "config/runtime.defaults.env",
     ):
         source = REPO_ROOT / relative_path
@@ -61,15 +68,17 @@ def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
 
-    runtime_env = synthetic_root / "tmp" / "runtime.env"
+    runtime_env = synthetic_root / runtime_dir / "runtime.env"
+    runtime_lines = [
+        "LLM_PROVIDER=synthetic-provider",
+        "HEIMDAL_CAPTURE_WATCH_DIR=/synthetic/capture/inbox",
+        "HEIMDAL_CAPTURE_INTERVAL_SECONDS=17",
+        f"HEIMDAL_RAW_STORE_KEY={'a' * 64}",
+    ]
     runtime_env.write_text(
-        "LLM_PROVIDER=synthetic-provider\n"
-        "HEIMDAL_CAPTURE_WATCH_DIR=/synthetic/capture/inbox\n"
-        "HEIMDAL_CAPTURE_INTERVAL_SECONDS=17\n"
-        f"HEIMDAL_RAW_STORE_KEY={'a' * 64}\n",
-        encoding="utf-8",
+        "\n".join(runtime_lines) + "\n", encoding="utf-8"
     )
-    channel_env = tmp_path / "prod.env"
+    channel_env = tmp_path / f"{channel}.env"
     channel_env.write_text(
         "APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\n"
         f"APP_IMAGE_TAG={IMAGE_SHA}\n",
@@ -81,8 +90,8 @@ def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]
             "set -euo pipefail",
             f"source {shlex.quote(str(COMPOSE_HELPER))}",
             "deploy_channel_compose "
-            f"{shlex.quote(str(synthetic_root))} prod docker-compose.prod.yml "
-            f"pkm-prod-issue-3885 {shlex.quote(str(channel_env))} "
+            f"{shlex.quote(str(synthetic_root))} {channel} {compose_overlay} "
+            f"pkm-{channel}-issue-3885 {shlex.quote(str(channel_env))} "
             "config --format json",
         )
     )
@@ -146,7 +155,9 @@ def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
 def test_prod_watcher_effective_render_preserves_runtime_env_and_defaults(
     tmp_path: Path,
 ) -> None:
-    rendered = _render_prod_with_synthetic_runtime_env(tmp_path)
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="prod"
+    )
     services = rendered["services"]
     assert isinstance(services, dict)
     watcher = _environment(services["watcher"])
@@ -160,11 +171,31 @@ def test_prod_watcher_effective_render_preserves_runtime_env_and_defaults(
 def test_prod_capture_watch_effective_render_preserves_runtime_env_values(
     tmp_path: Path,
 ) -> None:
-    rendered = _render_prod_with_synthetic_runtime_env(tmp_path)
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="prod"
+    )
     services = rendered["services"]
     assert isinstance(services, dict)
     capture = _environment(services["heimdal-capture-watch"])
 
+    assert capture["HEIMDAL_CAPTURE_WATCH_DIR"] == "/synthetic/capture/inbox"
+    assert capture["HEIMDAL_CAPTURE_INTERVAL_SECONDS"] == "17"
+    assert capture["HEIMDAL_RAW_STORE_KEY"] == "a" * 64
+
+
+@requires_docker
+def test_test_deploy_render_uses_channel_runtime_env_default(
+    tmp_path: Path,
+) -> None:
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="test"
+    )
+    services = rendered["services"]
+    assert isinstance(services, dict)
+    watcher = _environment(services["watcher"])
+    capture = _environment(services["heimdal-capture-watch"])
+
+    assert watcher["LLM_PROVIDER"] == "mock"
     assert capture["HEIMDAL_CAPTURE_WATCH_DIR"] == "/synthetic/capture/inbox"
     assert capture["HEIMDAL_CAPTURE_INTERVAL_SECONDS"] == "17"
     assert capture["HEIMDAL_RAW_STORE_KEY"] == "a" * 64
