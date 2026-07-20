@@ -219,6 +219,10 @@ def run_runtime_start(
                     stderr=stderr_file.read(),
                 )
 
+        # The leader's return code is authoritative, but a terminal leader does
+        # not prove that descendants in its private session also exited.
+        # Quiesce that process group before exposing the successful result.
+        _stop_process(process)
         stdout_file.seek(0)
         stderr_file.seek(0)
         return subprocess.CompletedProcess(

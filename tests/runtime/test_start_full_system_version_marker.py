@@ -274,6 +274,60 @@ time.sleep(30)
         os.kill(child_pid, 0)
 
 
+def test_runtime_start_harness_cleans_descendant_after_successful_parent_exit(
+    tmp_path: Path,
+) -> None:
+    progress_file = tmp_path / "progress.log"
+    ready_file = tmp_path / "descendant-ready"
+    script = """
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+child = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        "import os, signal, time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "Path(os.environ['DESCENDANT_READY_PATH']).write_text('ready', encoding='utf-8'); "
+        "time.sleep(30)",
+    ]
+)
+ready = Path(os.environ["DESCENDANT_READY_PATH"])
+deadline = time.monotonic() + 2
+while not ready.exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+if not ready.exists():
+    raise SystemExit(97)
+Path(os.environ["STARTUP_HARNESS_PROGRESS_PATH"]).write_text(
+    f"child-pid={child.pid}\\n", encoding="utf-8"
+)
+"""
+    env = {
+        **os.environ,
+        "DESCENDANT_READY_PATH": str(ready_file),
+        "STARTUP_HARNESS_PROGRESS_PATH": str(progress_file),
+    }
+
+    result = run_runtime_start(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        progress_path=progress_file,
+        initial_progress_timeout=2,
+        stall_timeout=2,
+        total_timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    child_pid = int(progress_file.read_text(encoding="utf-8").strip().split("=", 1)[1])
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
 def test_runtime_start_harness_fails_loud_when_progress_stalls(tmp_path: Path) -> None:
     progress_file = tmp_path / "progress.log"
     script = """
