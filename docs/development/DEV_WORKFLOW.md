@@ -160,9 +160,13 @@ Use this lane only when:
   - `.github/workflows/issue-pr-governance.yml`
   - `scripts/docs_guard.py`
   - `scripts/await_pr_checks.sh`
+  - `scripts/review_before_ci_gate.py`
+  - `scripts/run_with_host_lease.py`
   - `companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`
   - `tests/architecture/test_agent_skill_entrypoints.py`
   - `tests/governance/test_codex_agents_contract.py`
+  - `tests/ops/test_review_before_ci_gate.py`
+  - `tests/ops/test_host_global_lease.py`
 - the PR is limited to repo governance, agent workflow, or lightweight enforcement
 - the PR does not change product/runtime implementation or shipped feature behavior
 

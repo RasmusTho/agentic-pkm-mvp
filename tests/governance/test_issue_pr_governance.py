@@ -720,3 +720,10 @@ def test_review_before_ci_gate_is_governance_lane_allowed() -> None:
 
     assert '"scripts/review_before_ci_gate.py"' in text
     assert '"tests/ops/test_review_before_ci_gate.py"' in text
+
+
+def test_host_global_lease_is_governance_lane_allowed() -> None:
+    text = _read_workflow()
+
+    assert '"scripts/run_with_host_lease.py"' in text
+    assert '"tests/ops/test_host_global_lease.py"' in text

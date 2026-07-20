@@ -468,6 +468,7 @@ jobs:
               "scripts/reconcile_project_status.py",
               "scripts/pr_body_generator.py",
               "scripts/review_before_ci_gate.py",
+              "scripts/run_with_host_lease.py",
               "scripts/validate_source_anchors.py",
               "scripts/validate_issue_readiness.py",
               "scripts/await_pr_checks.sh",
@@ -479,6 +480,7 @@ jobs:
               "tests/governance/test_issue_pr_governance.py",
               "tests/ops/test_project_status_reconcile.py",
               "tests/ops/test_review_before_ci_gate.py",
+              "tests/ops/test_host_global_lease.py",
               "tests/scripts/test_validate_issue_readiness.py",
               "tests/scripts/test_pr_body_generator.py",
             ]);
