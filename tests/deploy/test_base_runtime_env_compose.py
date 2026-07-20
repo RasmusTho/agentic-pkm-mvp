@@ -59,6 +59,7 @@ def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]
     channel_env = tmp_path / "prod.env"
     channel_env.write_text(
         f"WATCHER_RUNTIME_ENV_FILE={runtime_env}\n"
+        "LLM_PROVIDER=synthetic-channel-provider\n"
         "APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\n"
         f"APP_IMAGE_TAG={IMAGE_SHA}\n",
         encoding="utf-8",
