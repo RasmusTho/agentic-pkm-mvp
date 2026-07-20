@@ -731,7 +731,7 @@ def _decode_object(raw: bytes, *, status: int | None = None) -> dict[str, Any]:
     decode_error: YouTubeApiError | None = None
     try:
         value = json.loads(raw or b"{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         decode_error = YouTubeApiError("api_unavailable", status, "Data API returned invalid JSON")
     if decode_error is not None:
         _raise_detached(decode_error)
@@ -746,7 +746,7 @@ def _decode_error_object(raw: bytes) -> dict[str, Any]:
     """Best-effort provider error parsing after HTTP status classification."""
     try:
         value = json.loads(raw or b"{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return {}
     return value if isinstance(value, dict) else {}
 

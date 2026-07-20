@@ -442,6 +442,82 @@ def test_malformed_content_encoding_is_normalized_without_raw_cause() -> None:
     _assert_exception_graph_secret_free(captured.value, sentinel.decode())
 
 
+def test_recursive_provider_json_uses_status_taxonomy_and_quota_latch() -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    sentinel = "SENTINEL-recursive-provider-json-must-never-leak"
+    body = b'{"' + sentinel.encode() + b'":' + b'{"x":' * 10_000 + b"0" + b"}" * 10_000 + b"}"
+    response_holder: list[httpx.Response] = []
+
+    class _TrackedResponse(httpx.Response):
+        close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            super().close()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = _TrackedResponse(
+            429,
+            request=request,
+            stream=httpx.ByteStream(body),
+        )
+        response_holder.append(response)
+        return response
+
+    client = _client(_Api(handler), budget=100)
+    with pytest.raises(YouTubeApiError) as captured:
+        client.get_my_channel()
+
+    error = captured.value
+    assert error.reason_code == "quota_exhausted"
+    assert error.status == 429
+    assert client.quota_status() == {
+        "spent_today": 1,
+        "budget": 100,
+        "exhausted": True,
+    }
+    assert response_holder[0].close_calls == 2
+    assert sentinel not in error.detail
+    assert sentinel not in "".join(traceback.format_exception(error))
+    _assert_exception_graph_secret_free(error, sentinel)
+
+
+def test_recursive_provider_json_on_success_is_safely_normalized() -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    sentinel = "SENTINEL-recursive-provider-json-must-never-leak"
+    body = b'{"' + sentinel.encode() + b'":' + b'{"x":' * 10_000 + b"0" + b"}" * 10_000 + b"}"
+    response_holder: list[httpx.Response] = []
+
+    class _TrackedResponse(httpx.Response):
+        close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            super().close()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = _TrackedResponse(
+            200,
+            request=request,
+            stream=httpx.ByteStream(body),
+        )
+        response_holder.append(response)
+        return response
+
+    with pytest.raises(YouTubeApiError) as captured:
+        _client(_Api(handler)).get_my_channel()
+
+    error = captured.value
+    assert error.reason_code == "api_unavailable"
+    assert error.status == 200
+    assert response_holder[0].close_calls == 2
+    assert sentinel not in error.detail
+    assert sentinel not in "".join(traceback.format_exception(error))
+    _assert_exception_graph_secret_free(error, sentinel)
+
+
 @pytest.mark.parametrize(
     ("status", "reason_code"),
     ((401, "auth_expired"), (404, "source_gone"), (429, "quota_exhausted")),
