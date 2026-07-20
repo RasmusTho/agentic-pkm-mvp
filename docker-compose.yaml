@@ -256,6 +256,9 @@ services:
       - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
       - VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-}
       - VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL:-}
+      # Bare base-stack startup gets this non-secret selector from .env/the
+      # shell. deploy_channel_compose pins it from governed channel/runtime env.
+      - LLM_PROVIDER=${LLM_PROVIDER}
       - WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC-1}
     extra_hosts:
       - "host.docker.internal:host-gateway"

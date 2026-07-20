@@ -20,7 +20,6 @@ COMPOSE_HELPER = REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
 IMAGE_SHA = "f" * 40
 
 WATCHER_GOVERNED_KEYS = {
-    "LLM_PROVIDER",
     "WATCHER_STATE_DIR",
     "WATCHER_MAX_SCANNED_FILES_PER_TICK",
 }
@@ -77,6 +76,7 @@ def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]
     )
     env = os.environ.copy()
     env["WATCHER_RUNTIME_ENV_FILE"] = str(tmp_path / "hostile-runtime.env")
+    env["LLM_PROVIDER"] = "hostile-parent-provider"
     for key in WATCHER_GOVERNED_KEYS | CAPTURE_GOVERNED_KEYS:
         env[key] = f"hostile-parent-{key.lower()}"
     result = subprocess.run(
@@ -97,6 +97,12 @@ def test_base_services_do_not_shadow_governed_runtime_env_keys() -> None:
 
     assert WATCHER_GOVERNED_KEYS.isdisjoint(watcher_environment)
     assert CAPTURE_GOVERNED_KEYS.isdisjoint(capture_environment)
+
+
+def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
+    watcher = _load_compose(BASE_COMPOSE)["services"]["watcher"]
+
+    assert _environment(watcher)["LLM_PROVIDER"] == "${LLM_PROVIDER}"
 
 
 @requires_docker

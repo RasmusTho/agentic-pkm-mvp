@@ -98,11 +98,11 @@ def _deploy_subshell_environment(
 ) -> dict[str, str]:
     """Mirror deploy_channel_compose's governed env pinning for the subshell.
 
-    The wrapper exports WATCHER_RUNTIME_ENV_FILE and VAULT_HOST_ROOT from the
-    governed channel/runtime env files (or unsets them) so a stale parent
-    shell cannot swap the selected runtime env or vault host root. It never
-    passes the runtime env file as a Compose CLI --env-file (that would expose
-    its DSNs to interpolation).
+    The wrapper exports WATCHER_RUNTIME_ENV_FILE, the non-secret LLM_PROVIDER
+    selector, and VAULT_HOST_ROOT from the governed channel/runtime env files
+    (or unsets them) so a stale parent shell cannot swap those selectors. It
+    never passes the runtime env file as a Compose CLI --env-file (that would
+    expose its DSNs to interpolation).
     """
     env = dict(parent_shell_env)
 
@@ -118,6 +118,18 @@ def _deploy_subshell_environment(
         env["WATCHER_RUNTIME_ENV_FILE"] = runtime_env_ref
     else:
         env.pop("WATCHER_RUNTIME_ENV_FILE", None)
+
+    llm_provider = _read_channel_env_value(channel_env_file, "LLM_PROVIDER")
+    if runtime_env_file is not None and runtime_env_file.is_file():
+        runtime_llm_provider = _read_channel_env_value(
+            runtime_env_file, "LLM_PROVIDER"
+        )
+        if runtime_llm_provider:
+            llm_provider = runtime_llm_provider
+    if llm_provider:
+        env["LLM_PROVIDER"] = llm_provider
+    else:
+        env.pop("LLM_PROVIDER", None)
 
     vault_host_root = _read_channel_env_value(channel_env_file, "VAULT_HOST_ROOT")
     if (
