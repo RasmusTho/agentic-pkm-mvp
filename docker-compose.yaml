@@ -431,17 +431,6 @@ services:
     environment:
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
-      # No `:?required` guard here (unlike docker-compose.watcher.yml's
-      # standalone VAULT_ROOT) -- this is the shared base file every service
-      # loads, so a hard-required var here would break `docker compose up`
-      # for the whole stack on any host that hasn't set it. Missing values
-      # fail loud instead inside the container: `CaptureRuntimeConfig.from_env()`
-      # raises `CaptureRuntimeConfigError`, and `resolve_raw_store_key()`
-      # raises `RawStoreKeyMissingError` -- both surface via this service's
-      # own healthcheck/restart loop, not by blocking unrelated services.
-      HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
-      HEIMDAL_CAPTURE_INTERVAL_SECONDS: ${HEIMDAL_CAPTURE_INTERVAL_SECONDS:-}
-      HEIMDAL_RAW_STORE_KEY: ${HEIMDAL_RAW_STORE_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

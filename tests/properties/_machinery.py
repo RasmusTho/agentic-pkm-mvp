@@ -476,15 +476,6 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
     ),
-    ("app/vault/settings_service.py", 567): (
-        "guarded: _scaffold_missing_settings_file asserts "
-        "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) "
-        "before writing every missing static vault-shared settings seed, including "
-        "legacy non-gating paths.md and settings/youtube.md. Line drifted 558 -> 567 "
-        "when the scaffold gained its own WriteGuard action name (YSS-01 #3916 "
-        "round-B review: scaffolds must not be conflated with runtime-gating "
-        "writes in guard errors/audits)."
-    ),
     ("app/instance/vault_registry.py", 1373): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
