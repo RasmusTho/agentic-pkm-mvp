@@ -163,12 +163,115 @@ for phase in range(4):
         progress_path=progress_file,
         initial_progress_timeout=5,
         stall_timeout=0.6,
+        total_timeout=2,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
     # A fixed total timeout of 0.6s would expire even though every phase makes
     # progress inside that same bounded stall budget.
     assert time.monotonic() - started > 0.6
+
+
+def test_runtime_start_harness_fails_on_total_timeout_despite_progress(
+    tmp_path: Path,
+) -> None:
+    progress_file = tmp_path / "progress.log"
+    script = """
+import os
+import time
+from pathlib import Path
+
+progress = Path(os.environ["STARTUP_HARNESS_PROGRESS_PATH"])
+while True:
+    with progress.open("a", encoding="utf-8") as handle:
+        handle.write("still-running\\n")
+    time.sleep(0.02)
+"""
+    env = {
+        **os.environ,
+        "STARTUP_HARNESS_PROGRESS_PATH": str(progress_file),
+    }
+
+    with pytest.raises(RuntimeStartHarnessTimeout) as exc_info:
+        run_runtime_start(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            env=env,
+            progress_path=progress_file,
+            initial_progress_timeout=1,
+            stall_timeout=1,
+            total_timeout=0.25,
+        )
+
+    assert exc_info.value.stage == "total_timeout"
+    assert exc_info.value.timeout_seconds == 0.25
+    assert exc_info.value.elapsed_seconds >= 0.25
+    assert "still-running" in exc_info.value.progress_tail
+
+
+def test_runtime_start_harness_classifies_missing_initial_progress(
+    tmp_path: Path,
+) -> None:
+    progress_file = tmp_path / "progress.log"
+
+    with pytest.raises(RuntimeStartHarnessTimeout) as exc_info:
+        run_runtime_start(
+            [sys.executable, "-c", "import time; time.sleep(5)"],
+            cwd=REPO_ROOT,
+            env=os.environ,
+            progress_path=progress_file,
+            initial_progress_timeout=0.1,
+            stall_timeout=1,
+            total_timeout=2,
+        )
+
+    assert exc_info.value.stage == "initial_progress_timeout"
+    assert exc_info.value.progress_tail == ""
+
+
+def test_runtime_start_harness_kills_term_resistant_descendant(
+    tmp_path: Path,
+) -> None:
+    progress_file = tmp_path / "progress.log"
+    script = """
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+child = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+    ]
+)
+Path(os.environ["STARTUP_HARNESS_PROGRESS_PATH"]).write_text(
+    f"child-pid={child.pid}\\n", encoding="utf-8"
+)
+time.sleep(30)
+"""
+    env = {
+        **os.environ,
+        "STARTUP_HARNESS_PROGRESS_PATH": str(progress_file),
+    }
+
+    with pytest.raises(RuntimeStartHarnessTimeout) as exc_info:
+        run_runtime_start(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            env=env,
+            progress_path=progress_file,
+            initial_progress_timeout=1,
+            stall_timeout=0.15,
+            total_timeout=2,
+        )
+
+    assert exc_info.value.stage == "progress_stall_timeout"
+    child_pid = int(exc_info.value.progress_tail.strip().split("=", 1)[1])
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
 
 
 def test_runtime_start_harness_fails_loud_when_progress_stalls(tmp_path: Path) -> None:
@@ -196,6 +299,7 @@ time.sleep(5)
             progress_path=progress_file,
             initial_progress_timeout=5,
             stall_timeout=0.2,
+            total_timeout=2,
         )
 
     assert exc_info.value.stage == "progress_stall_timeout"
