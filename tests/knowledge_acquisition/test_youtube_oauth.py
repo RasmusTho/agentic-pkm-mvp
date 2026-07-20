@@ -392,6 +392,119 @@ def test_missing_store_key_fails_closed(store, bindings, registry, monkeypatch):
         store.get(binding_id)
 
 
+def test_restored_exact_key_recovers_only_nonterminal_key_degradation(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    provider.requests.clear()
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+
+    monkeypatch.delenv(tokstore.KEY_ENV_VAR, raising=False)
+    with pytest.raises(oauth.AuthDegradedError) as missing_key:
+        token_provider.get_access_token()
+    assert missing_key.value.reason_code == "auth_key_missing"
+    assert bindings.get(binding_id).reason_code == "auth_key_missing"
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_key_missing"
+
+    # Re-provisioning the exact key proves the canonical ciphertext again and
+    # recovers the non-terminal binding/source projection under the lifecycle
+    # lock without another provider grant or refresh.
+    monkeypatch.setenv(tokstore.KEY_ENV_VAR, TEST_STORE_KEY)
+    assert token_provider.get_access_token() == SENTINEL_ACCESS
+    recovered = bindings.get(binding_id)
+    assert recovered is not None
+    assert recovered.state == "connected"
+    assert recovered.reason_code is None
+    assert registry.get(source.binding_id).last_error is None
+    assert provider.requests == []
+
+    # The same readable canonical credential is never sufficient to bypass a
+    # later terminal authority transition.
+    bindings.set_state(binding_id, state="degraded", reason_code="auth_revoked")
+    with pytest.raises(oauth.AuthDegradedError) as terminal:
+        token_provider.get_access_token()
+    assert terminal.value.reason_code == "auth_revoked"
+    assert bindings.get(binding_id).reason_code == "auth_revoked"
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_revoked"
+    assert provider.requests == []
+
+
+def test_restored_key_recovery_cas_cannot_overwrite_concurrent_terminal_state(
+    store, bindings, registry, monkeypatch
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(_Provider()),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    monkeypatch.delenv(tokstore.KEY_ENV_VAR, raising=False)
+    with pytest.raises(oauth.AuthDegradedError):
+        token_provider.get_access_token()
+    degraded = bindings.get(binding_id)
+    assert degraded is not None
+    assert degraded.reason_code == "auth_key_missing"
+
+    monkeypatch.setenv(tokstore.KEY_ENV_VAR, TEST_STORE_KEY)
+    original_set_state = bindings.set_state
+    terminal_injected = False
+
+    def inject_terminal_before_recovery(
+        target_binding_id,
+        *,
+        state,
+        reason_code=None,
+        expected_binding_generation=None,
+    ):
+        nonlocal terminal_injected
+        if state == "connected" and not terminal_injected:
+            terminal_injected = True
+            original_set_state(
+                target_binding_id,
+                state="degraded",
+                reason_code="auth_revoked",
+            )
+        return original_set_state(
+            target_binding_id,
+            state=state,
+            reason_code=reason_code,
+            expected_binding_generation=expected_binding_generation,
+        )
+
+    monkeypatch.setattr(bindings, "set_state", inject_terminal_before_recovery)
+    with pytest.raises(oauth.AuthDegradedError) as terminal:
+        token_provider.get_access_token()
+
+    assert terminal.value.reason_code == "auth_revoked"
+    assert bindings.get(binding_id).reason_code == "auth_revoked"
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_revoked"
+
+
 @pytest.mark.parametrize("configured_key", [None, "not-valid-hex"])
 def test_connect_token_store_failure_does_not_create_connected_binding(
     store, bindings, registry, monkeypatch, configured_key
@@ -1894,6 +2007,195 @@ def test_rotated_refresh_store_failure_preserves_journal_and_recovers_without_pr
     )
 
 
+def test_refresh_recovery_retains_journal_until_binding_and_source_converge(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    store.put(binding_id, canonical.with_expired_access())
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    pending_id = oauth._pending_refresh_id(binding_id)
+    original_put = store.put
+
+    def fail_canonical_write(target_id, token):
+        if target_id == binding_id:
+            raise OSError("synthetic canonical write failure")
+        return original_put(target_id, token)
+
+    monkeypatch.setattr(store, "put", fail_canonical_write)
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as first_error:
+        token_provider.get_access_token()
+    assert first_error.value.reason_code == "refresh_pending"
+    assert store.has_record(pending_id) is True
+    assert bindings.get(binding_id).reason_code == "auth_refresh_pending"
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_refresh_pending"
+    token_calls_after_provider_refresh = sum(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+
+    monkeypatch.setattr(store, "put", original_put)
+    original_binding_set_state = bindings.set_state
+    binding_clear_attempts = 0
+
+    def fail_binding_convergence_once(
+        target_binding_id,
+        *,
+        state,
+        reason_code=None,
+        expected_binding_generation=None,
+    ):
+        nonlocal binding_clear_attempts
+        if state == "connected":
+            binding_clear_attempts += 1
+            if binding_clear_attempts == 1:
+                raise OSError("synthetic connected-binding convergence failure")
+        return original_binding_set_state(
+            target_binding_id,
+            state=state,
+            reason_code=reason_code,
+            expected_binding_generation=expected_binding_generation,
+        )
+
+    monkeypatch.setattr(bindings, "set_state", fail_binding_convergence_once)
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as binding_error:
+        token_provider.get_access_token()
+    assert binding_error.value.reason_code == "refresh_durability_unavailable"
+    assert binding_error.value.pending_grant_id == pending_id
+    assert bindings.get(binding_id).reason_code == "auth_refresh_pending"
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_refresh_pending"
+    assert store.has_record(pending_id) is True
+
+    monkeypatch.setattr(bindings, "set_state", original_binding_set_state)
+    clear_attempts = 0
+    original_clear = getattr(registry, "clear_source_degradation", None)
+
+    def fail_source_convergence_once(target_binding_id, *, expected_reason_codes):
+        nonlocal clear_attempts
+        clear_attempts += 1
+        if clear_attempts == 1:
+            raise OSError("synthetic connected-source convergence failure")
+        assert original_clear is not None
+        return original_clear(
+            target_binding_id,
+            expected_reason_codes=expected_reason_codes,
+        )
+
+    monkeypatch.setattr(
+        registry,
+        "clear_source_degradation",
+        fail_source_convergence_once,
+        raising=False,
+    )
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as convergence_error:
+        token_provider.get_access_token()
+    assert convergence_error.value.reason_code == "refresh_durability_unavailable"
+    assert convergence_error.value.pending_grant_id == pending_id
+    assert bindings.get(binding_id).state == "connected"
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_refresh_pending"
+    assert store.has_record(pending_id) is True
+
+    assert token_provider.get_access_token() == SENTINEL_ACCESS_2
+    assert binding_clear_attempts == 1
+    assert clear_attempts == 2
+    assert store.has_record(pending_id) is False
+    assert bindings.get(binding_id).state == "connected"
+    assert bindings.get(binding_id).reason_code is None
+    assert registry.get(source.binding_id).last_error is None
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/token")
+            for request in provider.requests
+        )
+        == token_calls_after_provider_refresh
+    )
+
+
+def test_incomplete_rotated_refresh_is_journaled_and_recovers_without_credential_loss(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    store.put(binding_id, canonical.with_expired_access())
+    provider.token_responses.append(
+        httpx.Response(
+            200,
+            json={
+                "refresh_token": SENTINEL_REFRESH_2,
+                "expires_in": 3600,
+                "scope": oauth.SCOPE,
+                "token_type": "Bearer",
+            },
+        )
+    )
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    pending_id = oauth._pending_refresh_id(binding_id)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as incomplete:
+        token_provider.get_access_token()
+
+    assert incomplete.value.reason_code == "refresh_pending"
+    assert incomplete.value.pending_grant_id == pending_id
+    _assert_no_exception_chain(incomplete.value)
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
+    pending = store.get(pending_id)
+    assert pending is not None
+    assert pending.refresh_token == SENTINEL_REFRESH_2
+    assert pending.access_token == ""
+    assert bindings.get(binding_id).reason_code == "auth_refresh_pending"
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_refresh_pending"
+    assert provider.revoked == []
+
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    assert token_provider.get_access_token() == SENTINEL_ACCESS_2
+    recovered = store.get(binding_id)
+    assert recovered is not None
+    assert recovered.refresh_token == SENTINEL_REFRESH_2
+    assert recovered.access_token == SENTINEL_ACCESS_2
+    assert store.has_record(pending_id) is False
+    assert bindings.get(binding_id).state == "connected"
+    assert bindings.get(binding_id).reason_code is None
+    assert registry.get(source.binding_id).last_error is None
+    assert provider.revoked == []
+
+
 def test_token_provider_refresh_conflict_degrades_binding_and_sources_without_secret_leak(
     store, bindings, registry
 ):
@@ -3370,6 +3672,33 @@ def test_provider_error_enum_is_allowlisted_before_exception_rendering():
     assert SENTINEL_REFRESH not in rendered
     assert SENTINEL_ACCESS not in rendered
     assert SENTINEL_REFRESH_2 not in rendered
+
+
+def test_transport_exception_is_detached_from_credential_bearing_httpx_request():
+    captured_requests: list[httpx.Request] = []
+
+    def fail_transport(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        raise httpx.ReadError("synthetic transport failure", request=request)
+
+    http = httpx.Client(transport=httpx.MockTransport(fail_transport))
+    client = oauth.OAuthClient(
+        client_id=TEST_CLIENT_ID,
+        client_secret=SENTINEL_CLIENT_SECRET,
+        http=http,
+    )
+
+    with pytest.raises(oauth.OAuthProviderError) as excinfo:
+        client.refresh(SENTINEL_REFRESH)
+
+    assert excinfo.value.status == 0
+    assert excinfo.value.error_code == "ReadError"
+    _assert_no_exception_chain(excinfo.value)
+    assert len(captured_requests) == 1
+    request_content = captured_requests[0].content.decode()
+    assert SENTINEL_CLIENT_SECRET in request_content
+    assert SENTINEL_REFRESH in request_content
+    assert all(secret not in str(excinfo.value) for secret in _ALL_SENTINELS)
 
 
 def test_compensated_refresh_cleanup_keeps_repeated_consumers_fail_closed(

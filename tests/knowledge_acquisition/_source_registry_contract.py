@@ -582,6 +582,46 @@ def assert_provenance_is_strict_portable_json(make_registry: RegistryFactory) ->
     assert zulu.provenance["at"] == "2026-07-18T08:00:00+00:00"
 
 
+def assert_source_degradation_clear_is_reason_compared(
+    make_registry: RegistryFactory,
+) -> None:
+    """OAuth recovery clears only the exact degradation it owns."""
+    reg = make_registry()
+    binding = reg.register(
+        collection_kind="owned_playlist",
+        collection_ref="PLfixtureAUTHRECOVERY",
+        account_binding_id=_acct(),
+        title="Auth recovery",
+    )
+    degraded = reg.record_source_degradation(
+        binding.binding_id,
+        reason_code="auth_key_missing",
+    )
+    assert degraded.last_error is not None
+    assert degraded.last_error["reason_code"] == "auth_key_missing"
+
+    unrelated = reg.clear_source_degradation(
+        binding.binding_id,
+        expected_reason_codes={"auth_refresh_pending"},
+    )
+    assert unrelated.last_error is not None
+    assert unrelated.last_error["reason_code"] == "auth_key_missing"
+
+    cleared = reg.clear_source_degradation(
+        binding.binding_id,
+        expected_reason_codes={"auth_key_missing"},
+    )
+    assert cleared.last_error is None
+    assert cleared.enabled is binding.enabled
+    assert cleared.cursor == binding.cursor
+
+    with pytest.raises(SourceRegistryValidationError, match="expected_reason_codes"):
+        reg.clear_source_degradation(
+            binding.binding_id,
+            expected_reason_codes="auth_key_missing",  # type: ignore[arg-type]
+        )
+
+
 ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
@@ -593,4 +633,5 @@ ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_invalid_interval_and_policy_fail_loud,
     assert_provenance_is_strict_portable_json,
     assert_memory_json_isolation,
+    assert_source_degradation_clear_is_reason_compared,
 )

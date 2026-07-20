@@ -82,7 +82,12 @@ touch the repo, vault, settings values, logs, events, or receipts.
    renews the access token and retains the stored refresh credential. Defense in depth still treats
    an unexpected different `refresh_token` as rotation: preflight precedes `/token`, the response is
    journaled encrypted before canonical promotion, and a write failure recovers on the next access
-   only over the proven predecessor generation. Before provider compensation, the encrypted
+   only over the proven predecessor generation. A 2xx response that rotates the refresh credential
+   but omits the access token is incomplete, yet the returned standing authority still follows this
+   journal-or-authoritative-compensation path and is never discarded. Canonical promotion does not
+   remove the journal until the binding is durably `connected` and dependent-source auth errors are
+   cleared; partial state convergence keeps the journal so retry can finish without another grant.
+   Before provider compensation, the encrypted
    journal is durably marked non-promotable; authoritative revocation advances that marker to
    compensated, and that encrypted marker must be confirmed durable before binding/source truth
    becomes `auth_revoked` or best-effort cleanup starts. An unconfirmed marker retains `pending`
@@ -96,7 +101,10 @@ touch the repo, vault, settings values, logs, events, or receipts.
    matching binding/source degradation remain inside the same per-binding lifecycle lock, so a
    stale actor cannot overwrite another service instance's completed recovery. A reconnect never cleans its
    pending journal merely because canonical ciphertext is visible: the binding row must also be
-   durably `connected` before cleanup.
+   durably `connected` and dependent-source auth degradation must be converged before cleanup.
+   Restoring the exact key that authenticates canonical ciphertext clears specifically non-terminal
+   `auth_key_missing` through binding-generation compare-and-set under that lock; terminal
+   `auth_disconnected` and `auth_revoked` remain authoritative and cannot be cleared by key recovery.
    An operator disconnect durably marks the binding/source truth `auth_disconnected` before the
    provider revoke. That marker is terminal for queued token consumers even while encrypted
    ciphertext remains solely as retry authority after a crash or indeterminate provider response;
@@ -133,6 +141,8 @@ touch the repo, vault, settings values, logs, events, or receipts.
    failure.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + an
    allowlisted OAuth error enum only); no token, code, or client secret in any emitted string.
+   Transport failures are raised only after leaving the `httpx` handler, so the sanitized exception
+   retains no hidden request-bearing `__context__` or `__cause__` chain.
 
 ## Concretely
 

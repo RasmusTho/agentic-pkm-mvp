@@ -27,6 +27,7 @@ from tests.knowledge_acquisition._source_registry_contract import (
     assert_provenance_is_strict_portable_json,
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
+    assert_source_degradation_clear_is_reason_compared,
     assert_title_rename_preserves_binding,
     assert_watch_later_and_history_refused,
 )
@@ -87,3 +88,7 @@ def test_memory_json_isolation_matches_postgres_contract() -> None:
 
 def test_provenance_is_strict_portable_json_memory() -> None:
     assert_provenance_is_strict_portable_json(_make_registry)
+
+
+def test_source_degradation_clear_is_reason_compared_memory() -> None:
+    assert_source_degradation_clear_is_reason_compared(_make_registry)

@@ -228,7 +228,9 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
 - Redaction: all sync surfaces route through redaction-aware serialization; field names carry
   `token`/`secret`/`credential` tokens so existing key-name redactors match. Exception text from
   the OAuth/HTTP layer is sanitized (status + an allowlisted OAuth error enum, never arbitrary
-  provider strings or response bodies that may echo tokens).
+  provider strings or response bodies that may echo tokens). A sanitized transport exception is
+  raised outside the `httpx` handler and retains neither a request-bearing `__context__` nor
+  `__cause__`.
 - Before polling the device-token endpoint, connect resolves the encryption key and proves the
   aggregate store's locked atomic write/read path without writing secret probe material. Each POSIX
   write syncs the staged file before atomic replacement and confirms the complete parent-directory
@@ -287,11 +289,19 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   token remains the long-lived credential. The implementation nevertheless treats any unexpected,
   non-empty different `refresh_token` in that response as a rotation: it proves store readiness
   before `/token`, durably journals the returned authority with its exact predecessor/generation,
-  and only then promotes canonical state. A canonical-write failure leaves
+  and only then promotes canonical state. This includes an incomplete 2xx response that carries the
+  rotated refresh credential but omits the access token: the response is rejected as incomplete,
+  while its standing authority is journaled or authoritatively compensated rather than discarded.
+  A canonical-write failure leaves
   `auth_refresh_pending`; the next access promotes without another provider request only if the
   predecessor is unchanged. A newer/different canonical generation yields
-  `auth_refresh_conflict` and preserves both encrypted authorities. Status never reports either
-  state as connected. If local journaling cannot be confirmed, a durable encrypted compensation
+  `auth_refresh_conflict` and preserves both encrypted authorities. Canonical promotion is not
+  cleanup authority: the journal remains until the binding is durably `connected` and every
+  dependent source has cleared the matching auth degradation; a partial state write is retried
+  idempotently from that journal. Re-provisioning the exact authenticating key likewise recovers
+  specifically non-terminal `auth_key_missing` under the binding lock and generation compare-and-set;
+  it cannot clear `auth_disconnected` or `auth_revoked`. Status never reports a pending state as
+  connected. If local journaling cannot be confirmed, a durable encrypted compensation
   marker makes the rotated authority non-promotable before provider revocation; authoritative
   compensation must durably advance that marker before `auth_revoked` binding/source truth or
   cleanup may follow. If the marker write or its acknowledgement cannot be confirmed, the durable

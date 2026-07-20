@@ -181,10 +181,15 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   binding authority additionally uses generation compare-and-set on direct reconnect and
   candidate-row recovery, so a same-timestamp or concurrent terminal write defeats stale pending
   promotion while exact matching-generation disconnected recovery remains possible. Exact same
-  refresh authority permits redundant cleanup. Refresh proves store
+  refresh authority permits redundant cleanup only after the binding is durably `connected` and
+  dependent-source auth degradation has converged; a partial state-write failure keeps the refresh
+  journal for idempotent retry. Re-provisioning the exact authenticating key may clear specifically
+  non-terminal `auth_key_missing` through the same binding-generation compare-and-set, but never
+  clears `auth_disconnected` or `auth_revoked`. Refresh proves store
   readiness before provider egress and journals any
-  unexpected rotated refresh credential before canonical write, so store failure recovers without
-  another provider request and a newer canonical generation is never overwritten. Provider
+  unexpected rotated refresh credential before canonical write, including an incomplete 2xx that
+  carries a new refresh credential without an access token, so store failure recovers without
+  credential loss and a newer canonical generation is never overwritten. Provider
   compensation must durably advance its encrypted marker before `auth_revoked` or cleanup; an
   unconfirmed marker remains retryable `auth_refresh_durability`, while compensated cleanup residue
   converges idempotently after restart. Connect never records `connected` before encrypted token
@@ -200,7 +205,9 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   possible. Only Google's documented HTTP 400 `invalid_token` revoke outcome (already expired or
   revoked) permits destructive local teardown; every other status/body combination preserves the
   encrypted credential and source state for retry/reconciliation. Credential-bearing OAuth POSTs
-  never follow redirects. Disconnect deletes no acquired Mimer artifacts.
+  never follow redirects, and sanitized transport failures retain neither `__context__` nor
+  `__cause__` references to request-bearing `httpx` exceptions. Disconnect deletes no acquired
+  Mimer artifacts.
 - **INV-YSS-5 — secrets never leave the private boundary.** OAuth client identifiers, refresh/access
   tokens, and token-store key material never appear in the repo, vault files, settings values,
   candidate notes, events, receipts, logs, or exception text. Settings and receipts may carry only

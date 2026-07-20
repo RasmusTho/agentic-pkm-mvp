@@ -94,7 +94,17 @@ DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _ACCESS_TOKEN_SKEW_SECONDS = 60
-
+_TERMINAL_AUTH_REASON_CODES = frozenset({"auth_disconnected", "auth_revoked"})
+_RECOVERABLE_AUTH_REASON_CODES = frozenset(
+    {
+        "auth_missing",
+        "auth_key_missing",
+        "auth_expired",
+        "auth_refresh_pending",
+        "auth_refresh_conflict",
+        "auth_refresh_durability",
+    }
+)
 # Defense-in-depth redaction: a value is redacted when its key name carries a
 # secret marker, EXCEPT for these documented non-secret mode fields whose names
 # merely contain such a substring.
@@ -565,6 +575,8 @@ class OAuthClient:
 
     def _post(self, url: str, data: dict[str, str]) -> dict[str, Any]:
         self._guard_host(url)
+        response: httpx.Response | None = None
+        transport_error_code: str | None = None
         try:
             response = self._http.post(
                 url,
@@ -575,8 +587,15 @@ class OAuthClient:
             )
         except httpx.HTTPError as exc:
             # Sanitized: exception class only -- never a URL (may carry query
-            # secrets) or response body (INV-YSS-5).
-            raise OAuthProviderError(status=0, error_code=type(exc).__name__) from None
+            # secrets) or response body (INV-YSS-5). Raise only after leaving
+            # this handler: ``from None`` suppresses display but would retain
+            # the request-bearing exception in ``__context__`` here.
+            transport_error_code = type(exc).__name__
+        if transport_error_code is not None:
+            raise OAuthProviderError(
+                status=0, error_code=transport_error_code
+            ) from None
+        assert response is not None
         if response.status_code // 100 != 2:
             raise OAuthProviderError(status=response.status_code, error_code=_safe_error_code(response))
         if not response.content:
@@ -667,7 +686,9 @@ class OAuthClient:
             if exc.error_code == "invalid_grant":
                 raise AuthDegradedError("auth_revoked", "refresh token rejected (invalid_grant)") from None
             raise
-        return _bundle_from_response(data)
+        return _bundle_from_response(
+            data, preserve_refresh_on_incomplete_access=True
+        )
 
     def revoke(self, token: str) -> None:
         self._post(REVOKE_URL, {"token": token})
@@ -796,6 +817,7 @@ class TokenProvider:
                 token = self._read_token()
                 self._reconcile_terminal_binding()
                 token = self._recover_pending_refresh(token)
+                self._recover_restored_key_degradation()
                 self._require_connected_binding()
                 if self._is_fresh(token):
                     return token.access_token  # type: ignore[return-value]
@@ -826,10 +848,10 @@ class TokenProvider:
 
     def _terminal_binding_reason(self) -> str | None:
         binding = self._bindings.get(self._binding_id)
-        if binding is not None and binding.reason_code in {
-            "auth_disconnected",
-            "auth_revoked",
-        }:
+        if (
+            binding is not None
+            and binding.reason_code in _TERMINAL_AUTH_REASON_CODES
+        ):
             return binding.reason_code
         return None
 
@@ -992,6 +1014,23 @@ class TokenProvider:
                     "refresh_durability_unavailable"
                 ) from None
 
+            if not bundle.access_token:
+                # A malformed 2xx response can still rotate the standing
+                # revocation authority. The encrypted journal now owns
+                # recovery; never overwrite canonical state with an unusable
+                # access token or discard the rotated credential.
+                self._degrade("auth_refresh_pending")
+                raise OAuthGrantDurabilityError(
+                    "refresh_pending", pending_grant_id=pending_id
+                ) from None
+
+        if not bundle.access_token:
+            # No new standing authority exists, so preserve the unchanged
+            # canonical credential and reject the incomplete response.
+            raise OAuthProviderError(
+                status=200, error_code="missing_access_token"
+            ) from None
+
         write_error: Exception | None = None
         try:
             self._store.put(self._binding_id, refreshed)
@@ -1007,9 +1046,12 @@ class TokenProvider:
                 ) from None
             self._degrade("auth_refresh_durability")
             raise OAuthGrantDurabilityError("refresh_durability_unavailable") from None
+        self._clear_degradation(
+            pending_grant_id=pending_id,
+            expected_reason_codes=_RECOVERABLE_AUTH_REASON_CODES,
+        )
         if pending_id is not None:
             self._delete_refresh_journal(pending_id)
-        self._clear_degradation()
         return bundle.access_token
 
     def _recover_pending_refresh(self, canonical: StoredToken) -> StoredToken:
@@ -1061,8 +1103,11 @@ class TokenProvider:
         if _same_refresh_authority(pending, canonical):
             # Canonical promotion already landed (possibly with a lost ack), or
             # a later access-only refresh retained the same standing grant.
+            self._clear_degradation(
+                pending_grant_id=pending_id,
+                expected_reason_codes=_RECOVERABLE_AUTH_REASON_CODES,
+            )
             self._delete_refresh_journal(pending_id)
-            self._clear_degradation()
             return canonical
 
         predecessor_matches = (
@@ -1095,8 +1140,11 @@ class TokenProvider:
             raise OAuthGrantDurabilityError(
                 "refresh_pending", pending_grant_id=pending_id
             ) from None
+        self._clear_degradation(
+            pending_grant_id=pending_id,
+            expected_reason_codes=_RECOVERABLE_AUTH_REASON_CODES,
+        )
         self._delete_refresh_journal(pending_id)
-        self._clear_degradation()
         return promoted
 
     def _write_refresh_journal(self, pending_id: str, pending: StoredToken) -> bool:
@@ -1170,7 +1218,7 @@ class TokenProvider:
             binding = self._bindings.get(self._binding_id)
             effective_reason = reason_code
             if binding is not None:
-                if binding.reason_code in {"auth_disconnected", "auth_revoked"}:
+                if binding.reason_code in _TERMINAL_AUTH_REASON_CODES:
                     effective_reason = binding.reason_code
                 elif binding.state != "degraded" or binding.reason_code != reason_code:
                     self._bindings.set_state(
@@ -1190,14 +1238,107 @@ class TokenProvider:
                 "refresh_durability_unavailable"
             ) from None
 
-    def _clear_degradation(self) -> None:
+    def _recover_restored_key_degradation(self) -> None:
+        """Recover only exact-key, non-terminal degradation under the lock."""
         binding = self._bindings.get(self._binding_id)
+        if binding is None:
+            return
+        source_recovery_pending = False
         if (
-            binding is not None
-            and binding.state != "connected"
-            and binding.reason_code not in {"auth_disconnected", "auth_revoked"}
+            binding.state == "connected"
+            and binding.reason_code is None
+            and self._registry is not None
         ):
-            self._bindings.set_state(self._binding_id, state="connected", reason_code=None)
+            source_recovery_pending = any(
+                isinstance(source.last_error, dict)
+                and source.last_error.get("reason_code") == "auth_key_missing"
+                for source in self._registry.list_for_account(self._binding_id)
+            )
+        if binding.reason_code == "auth_key_missing" or source_recovery_pending:
+            self._clear_degradation(
+                pending_grant_id=None,
+                expected_reason_codes=frozenset({"auth_key_missing"}),
+            )
+
+    def _clear_degradation(
+        self,
+        *,
+        pending_grant_id: str | None,
+        expected_reason_codes: frozenset[str],
+    ) -> None:
+        """Durably converge binding and source truth before journal cleanup."""
+        binding = self._bindings.get(self._binding_id)
+        if binding is None:
+            raise OAuthGrantDurabilityError(
+                "refresh_durability_unavailable",
+                pending_grant_id=pending_grant_id,
+            ) from None
+        if binding.reason_code in _TERMINAL_AUTH_REASON_CODES:
+            self._degrade(binding.reason_code)
+            raise AuthDegradedError(
+                binding.reason_code,
+                "terminal account binding authority cannot be recovered",
+            ) from None
+
+        state_write_failed = False
+        generation_conflict = False
+        if binding.state != "connected" or binding.reason_code is not None:
+            if binding.reason_code not in expected_reason_codes:
+                raise OAuthGrantDurabilityError(
+                    "refresh_durability_unavailable",
+                    pending_grant_id=pending_grant_id,
+                ) from None
+            try:
+                self._bindings.set_state(
+                    self._binding_id,
+                    state="connected",
+                    reason_code=None,
+                    expected_binding_generation=binding.binding_generation,
+                )
+            except AccountBindingGenerationConflictError:
+                generation_conflict = True
+            except Exception:
+                state_write_failed = True
+
+        if generation_conflict:
+            current = self._bindings.get(self._binding_id)
+            if (
+                current is not None
+                and current.reason_code in _TERMINAL_AUTH_REASON_CODES
+            ):
+                self._degrade(current.reason_code)
+                raise AuthDegradedError(
+                    current.reason_code,
+                    "terminal account binding authority won recovery",
+                ) from None
+            if (
+                current is None
+                or current.state != "connected"
+                or current.reason_code is not None
+            ):
+                state_write_failed = True
+
+        if state_write_failed:
+            raise OAuthGrantDurabilityError(
+                "refresh_durability_unavailable",
+                pending_grant_id=pending_grant_id,
+            ) from None
+
+        source_write_failed = False
+        if self._registry is not None:
+            try:
+                for source in self._registry.list_for_account(self._binding_id):
+                    self._registry.clear_source_degradation(
+                        source.binding_id,
+                        expected_reason_codes=expected_reason_codes,
+                    )
+            except Exception:
+                source_write_failed = True
+        if source_write_failed:
+            raise OAuthGrantDurabilityError(
+                "refresh_durability_unavailable",
+                pending_grant_id=pending_grant_id,
+            ) from None
 
 
 # --- Account binding manager -------------------------------------------------

@@ -66,6 +66,7 @@ import math
 import os
 import threading
 import uuid
+from collections.abc import Collection
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -583,6 +584,28 @@ class _MemorySourceRegistryBackend:
             self._rows[binding_id] = updated
             return _copy_binding(updated)
 
+    def clear_degradation(
+        self,
+        binding_id: str,
+        *,
+        expected_reason_codes: frozenset[str],
+    ) -> SourceBinding:
+        """Clear only the degradation state owned by the recovering actor."""
+        with self._lock:
+            row = self._rows.get(binding_id)
+            if row is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            reason_code = (
+                row.last_error.get("reason_code")
+                if isinstance(row.last_error, dict)
+                else None
+            )
+            if reason_code not in expected_reason_codes:
+                return _copy_binding(row)
+            updated = replace(row, last_error=None, updated_at=_now_iso())
+            self._rows[binding_id] = updated
+            return _copy_binding(updated)
+
     def clear(self) -> None:
         with self._lock:
             self._rows.clear()
@@ -999,6 +1022,33 @@ class _PgSourceRegistryBackend:
         assert result is not None  # just wrote it
         return result
 
+    def clear_degradation(
+        self,
+        binding_id: str,
+        *,
+        expected_reason_codes: frozenset[str],
+    ) -> SourceBinding:
+        """Atomically clear a still-matching error without clobbering a peer."""
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE {_TABLE} SET last_error = NULL, updated_at = %s::timestamptz "
+                "WHERE binding_id = %s AND last_error->>'reason_code' = ANY(%s) "
+                f"RETURNING {_COLUMNS_SQL}",
+                (_now_iso(), binding_id, list(expected_reason_codes)),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return _row_to_binding(tuple(row))
+        finally:
+            conn.close()
+        result = self.get(binding_id)
+        if result is None:
+            raise KeyError(f"no such binding: {binding_id}")
+        return result
+
 
 # --- Service layer -------------------------------------------------------
 
@@ -1161,6 +1211,30 @@ class SourceRegistry:
         """
         return self._backend.update_state(
             binding_id, enabled=None, last_error=_build_last_error(reason_code, detail)
+        )
+
+    def clear_source_degradation(
+        self,
+        binding_id: str,
+        *,
+        expected_reason_codes: Collection[str],
+    ) -> SourceBinding:
+        """Clear one recoverable error without erasing a newer unrelated one."""
+        if isinstance(expected_reason_codes, (str, bytes)):
+            raise SourceRegistryValidationError(
+                "expected_reason_codes must be a collection of reason-code strings"
+            )
+        resolved = frozenset(expected_reason_codes)
+        if not resolved or any(
+            not isinstance(reason_code, str) or not reason_code.strip()
+            for reason_code in resolved
+        ):
+            raise SourceRegistryValidationError(
+                "expected_reason_codes must contain non-empty strings"
+            )
+        return self._backend.clear_degradation(
+            binding_id,
+            expected_reason_codes=resolved,
         )
 
     def disable_source_for_auth(
