@@ -1483,9 +1483,9 @@ def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
     """Regression test for #3903 round 3: an earlier revision fell back to an
     exported shell WATCHER_RUNTIME_ENV_FILE when the pin file lacked the key.
     The real deploy path never does this -- scripts/lib's compose helper
-    resolves that variable ONLY from the pin file and explicitly `unset`s it
-    before invoking Compose whenever the pin file lacks the key. Round 4
-    removed the whole file-reading mechanism this bug lived in, but an
+    resolves that variable from the pin file or its governed channel default
+    (`./tmp/runtime.env` for PROD), never from the ambient shell. Round 4
+    removed the whole DSN file-reading mechanism this bug lived in, but an
     ambient WATCHER_RUNTIME_ENV_FILE pointing at a poisoned DSN must still
     have no effect -- the current resolution path does not consult that
     variable at all (docker-compose.prod.yml's explicit `environment:`
