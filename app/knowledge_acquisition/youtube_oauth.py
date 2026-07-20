@@ -719,6 +719,12 @@ class TokenProvider:
             with self._store.binding_lifecycle_lock(self._binding_id):
                 token = self._read_token()
                 token = self._recover_pending_refresh(token)
+                terminal_reason = self._terminal_binding_reason()
+                if terminal_reason is not None:
+                    raise AuthDegradedError(
+                        terminal_reason,
+                        "account binding authority is locally disabled",
+                    ) from None
                 if self._is_fresh(token):
                     return token.access_token  # type: ignore[return-value]
                 return self._refresh(token)
@@ -748,8 +754,11 @@ class TokenProvider:
         if self._bindings is None:
             return None
         binding = self._bindings.get(self._binding_id)
-        if binding is not None and binding.reason_code == "auth_disconnected":
-            return "auth_disconnected"
+        if binding is not None and binding.reason_code in {
+            "auth_disconnected",
+            "auth_revoked",
+        }:
+            return binding.reason_code
         return None
 
     def _is_fresh(self, token: StoredToken) -> bool:
@@ -988,7 +997,7 @@ class TokenProvider:
         if self._bindings is not None:
             binding = self._bindings.get(self._binding_id)
             if binding is not None:
-                if binding.reason_code == "auth_disconnected":
+                if binding.reason_code in {"auth_disconnected", "auth_revoked"}:
                     return
                 self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
         if self._registry is not None:
@@ -999,7 +1008,11 @@ class TokenProvider:
         if self._bindings is None:
             return
         binding = self._bindings.get(self._binding_id)
-        if binding is not None and binding.state != "connected":
+        if (
+            binding is not None
+            and binding.state != "connected"
+            and binding.reason_code not in {"auth_disconnected", "auth_revoked"}
+        ):
             self._bindings.set_state(self._binding_id, state="connected", reason_code=None)
 
 
@@ -1135,7 +1148,6 @@ class YouTubeAccountBinder:
                             canonical_binding is None
                             or canonical_binding.provider_channel_id
                             != token.provider_channel_id
-                            or canonical_binding.reason_code == "auth_disconnected"
                         ):
                             recovery, recovered_binding = (
                                 self._recover_candidate_binding_row(
@@ -1663,6 +1675,14 @@ class YouTubeAccountBinder:
         if pending is None:
             return canonical
         if pending.promotion_compensation_state == "compensated":
+            # The provider-compensated authority is terminal. Persist that
+            # fail-closed truth before removing the only crash-recovery marker;
+            # a crash after cleanup must never make the binding look connected.
+            self._degrade_refresh_authority(
+                binding_id,
+                reason_code="auth_revoked",
+                pending_grant_id=pending_id,
+            )
             try:
                 self._store.delete(pending_id)
             except Exception:
@@ -2084,6 +2104,15 @@ class YouTubeAccountBinder:
                     }
                 )
             if token is not None:
+                # Persist local non-consumability before crossing the provider
+                # revocation boundary. If the process dies after Google accepts
+                # the revoke, restart truth remains fail-closed while the
+                # encrypted record is retained solely as retry authority.
+                self._degrade_refresh_authority(
+                    binding_id,
+                    reason_code="auth_disconnected",
+                    pending_grant_id=None,
+                )
                 revocation_token = token.refresh_token or token.access_token or ""
                 if revocation_token:
                     try:

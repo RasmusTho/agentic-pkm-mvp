@@ -287,14 +287,17 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   must be `http`, use exact host `127.0.0.1` with an explicit valid port, contain no ASCII controls,
   and contain neither a query/fragment delimiter nor query/fragment content. Creation and code
   exchange both apply the same validation.
-- Once disconnect has durably set `auth_disconnected`, a queued or stale token consumer cannot
-  replace that terminal operator state with `auth_missing` or another transient reason. Dependent
-  sources remain disabled with their cursors and acquired artifacts unchanged.
-- Disconnect first revokes at the provider (`oauth2.googleapis.com/revoke`). Only Google's
+- Disconnect durably sets `auth_disconnected` before calling the provider. A queued or stale token
+  consumer cannot consume retained ciphertext or replace that terminal operator state with
+  `auth_missing` or another transient reason. Before confirmed teardown, dependent sources remain
+  enabled but degraded for retry; cursors and acquired artifacts remain unchanged. After confirmed
+  teardown they are disabled with the same reason.
+- Disconnect then revokes at the provider (`oauth2.googleapis.com/revoke`). Only Google's
   documented HTTP 400 `invalid_token` outcome — meaning already expired or revoked — permits local
   teardown with `revoked=false`. `invalid_request`, intermediary/unknown 4xx responses, redirects,
-  transport failures, and every other unproven outcome preserve the encrypted token and source state
-  for retry/reconciliation. Credential-bearing OAuth requests set redirect following off at the
+  transport failures, and every other unproven outcome preserve the encrypted token solely as
+  revocation-retry authority while terminal local state blocks consumption. Credential-bearing
+  OAuth requests set redirect following off at the
   request site, independent of injected-client defaults. Teardown deletes the token record and
   disables dependent sources with `auth_disconnected` — acquired artifacts, raw records, and
   receipts are never deleted.

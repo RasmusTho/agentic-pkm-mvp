@@ -85,10 +85,13 @@ touch the repo, vault, settings values, logs, events, or receipts.
    stale actor cannot overwrite another service instance's completed recovery. A reconnect never cleans its
    pending journal merely because canonical ciphertext is visible: the binding row must also be
    durably `connected` before cleanup.
-   A completed operator disconnect is terminal for queued token consumers: missing ciphertext after
-   disconnect preserves `auth_disconnected` on the binding and disabled sources instead of being
-   rewritten as `auth_missing`. Compensated refresh residue reports `auth_revoked`; disconnect may
-   clean it and finish teardown, while reconnect can replace it only through new consent.
+   An operator disconnect durably marks the binding/source truth `auth_disconnected` before the
+   provider revoke. That marker is terminal for queued token consumers even while encrypted
+   ciphertext remains solely as retry authority after a crash or indeterminate provider response;
+   it cannot be rewritten as `auth_missing` or consumed as a fresh cached token. Compensated refresh
+   residue reports `auth_revoked`; its cleanup persists that terminal truth before deleting the
+   journal. Disconnect may then finish teardown, while reconnect can replace terminal authority only
+   through new consent whose canonical ciphertext and binding state both converge.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file
@@ -97,11 +100,13 @@ touch the repo, vault, settings values, logs, events, or receipts.
    re-resolve provider identity under shared authority. First-connect binding ids are deterministic
    per provider channel. A create exception rolls forward when the row is visible; negative read
    snapshots preserve the encrypted credential because a delayed commit may still appear, and retry
-   converges on the same candidate id. `disconnect()` revokes at `oauth2.googleapis.com/revoke`
-   before local teardown. Only Google's documented HTTP 400 `invalid_token` outcome (already expired
+   converges on the same candidate id. `disconnect()` first makes local token consumption fail
+   closed, then revokes at `oauth2.googleapis.com/revoke` before destructive local teardown. Only
+   Google's documented HTTP 400 `invalid_token` outcome (already expired
    or revoked) permits teardown with `revoked=false`; `invalid_request`, intermediary/unknown 4xx,
-   redirects, transport failures, and every other unproven outcome preserve the encrypted token and
-   dependent-source state for retry/reconciliation. Every credential-bearing OAuth POST disables
+   redirects, transport failures, and every other unproven outcome preserve the encrypted token as
+   revocation-retry authority and keep dependent sources enabled but degraded and non-consumable.
+   Every credential-bearing OAuth POST disables
    redirect following at the request site. Teardown deletes the token record, disables dependent
    sources with `auth_disconnected`, and deletes no acquired artifacts. `reconnect()` re-runs consent
    onto the same binding when the provider channel id matches.
