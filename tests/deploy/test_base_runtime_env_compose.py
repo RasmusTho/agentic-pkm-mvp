@@ -48,7 +48,20 @@ def _environment(service: dict[str, object]) -> dict[str, str]:
 
 
 def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]:
-    runtime_env = tmp_path / "prod-runtime.env"
+    synthetic_root = tmp_path / "synthetic-repo"
+    (synthetic_root / "config").mkdir(parents=True)
+    (synthetic_root / "tmp").mkdir()
+    for relative_path in (
+        "docker-compose.yaml",
+        "docker-compose.prod.yml",
+        "config/runtime.defaults.env",
+    ):
+        source = REPO_ROOT / relative_path
+        destination = synthetic_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    runtime_env = synthetic_root / "tmp" / "runtime.env"
     runtime_env.write_text(
         "LLM_PROVIDER=synthetic-provider\n"
         "HEIMDAL_CAPTURE_WATCH_DIR=/synthetic/capture/inbox\n"
@@ -58,8 +71,6 @@ def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]
     )
     channel_env = tmp_path / "prod.env"
     channel_env.write_text(
-        f"WATCHER_RUNTIME_ENV_FILE={runtime_env}\n"
-        "LLM_PROVIDER=synthetic-channel-provider\n"
         "APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\n"
         f"APP_IMAGE_TAG={IMAGE_SHA}\n",
         encoding="utf-8",
@@ -70,7 +81,7 @@ def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]
             "set -euo pipefail",
             f"source {shlex.quote(str(COMPOSE_HELPER))}",
             "deploy_channel_compose "
-            f"{shlex.quote(str(REPO_ROOT))} prod docker-compose.prod.yml "
+            f"{shlex.quote(str(synthetic_root))} prod docker-compose.prod.yml "
             f"pkm-prod-issue-3885 {shlex.quote(str(channel_env))} "
             "config --format json",
         )
@@ -82,7 +93,7 @@ def _render_prod_with_synthetic_runtime_env(tmp_path: Path) -> dict[str, object]
         env[key] = f"hostile-parent-{key.lower()}"
     result = subprocess.run(
         ["bash", "-c", command],
-        cwd=REPO_ROOT,
+        cwd=synthetic_root,
         env=env,
         check=True,
         capture_output=True,

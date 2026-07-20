@@ -73,14 +73,18 @@ deploy_channel_compose() {
   # — a previous dead `env_args` block here looked like it did exactly that; do
   # not reintroduce it).
   runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
-  runtime_env_file=""
-  if [ -n "${runtime_env_ref}" ]; then
-    case "${runtime_env_ref}" in
-      /*) runtime_env_file="${runtime_env_ref}" ;;
-      ./*) runtime_env_file="${root}/${runtime_env_ref#./}" ;;
-      *) runtime_env_file="${root}/${runtime_env_ref}" ;;
+  if [ -z "${runtime_env_ref}" ]; then
+    case "${channel}" in
+      test) runtime_env_ref="./tmp-test/runtime.env" ;;
+      *) runtime_env_ref="./tmp/runtime.env" ;;
     esac
   fi
+  runtime_env_file=""
+  case "${runtime_env_ref}" in
+    /*) runtime_env_file="${runtime_env_ref}" ;;
+    ./*) runtime_env_file="${root}/${runtime_env_ref#./}" ;;
+    *) runtime_env_file="${root}/${runtime_env_ref}" ;;
+  esac
 
   llm_provider="$(_deploy_channel_env_value "${channel_env_file}" LLM_PROVIDER)"
   runtime_llm_provider=""
@@ -118,11 +122,7 @@ deploy_channel_compose() {
     # runtime env, provider selector, or vault after the decisions above. The
     # runtime env itself stays a service env_file; passing it as a CLI --env-file
     # would expose its DSNs and other values to Compose interpolation.
-    if [ -n "${runtime_env_ref}" ]; then
-      export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
-    else
-      unset WATCHER_RUNTIME_ENV_FILE
-    fi
+    export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
     if [ -n "${llm_provider}" ]; then
       export LLM_PROVIDER="${llm_provider}"
     else
