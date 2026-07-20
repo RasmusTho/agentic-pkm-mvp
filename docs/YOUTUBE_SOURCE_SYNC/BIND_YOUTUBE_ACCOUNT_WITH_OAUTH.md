@@ -32,24 +32,30 @@ touch the repo, vault, settings values, logs, events, or receipts.
      access-token provider `TokenProvider.get_access_token()` with single-flight refresh.
 2. **Encrypted token store** `app/knowledge_acquisition/youtube_token_store.py`: AES-256-GCM
    (existing `cryptography` dependency, mirroring `app/heimdal/raw_store.py` key discipline), key
-   from `YOUTUBE_TOKEN_STORE_KEY` (32 bytes; absent key ⇒ `TokenStoreKeyMissingError`, fail
-   closed, never plaintext). Store file path is an app-local binding defaulting under the channel
-   runtime dir; never inside a vault, never tracked.
+   from `YOUTUBE_TOKEN_STORE_KEY` (32 bytes; absent or valid-but-wrong key ⇒
+   `TokenStoreKeyMissingError`, fail closed, never plaintext). An authenticated encrypted canary
+   binds the key to the aggregate; legacy no-canary files authenticate every existing record before
+   upgrade, so a wrong key cannot create a mixed-key store. Store file path is an app-local binding
+   defaulting under the channel runtime dir; never inside a vault, never tracked.
 3. **Account binding record** (non-secret) in the registry substrate: binding id, provider channel
    id, display label, connected/degraded state, scopes, obtained_at. Client credentials resolve
    from `YOUTUBE_OAUTH_CLIENT_ID`/`YOUTUBE_OAUTH_CLIENT_SECRET` env (host secret-provisioning
    boundary); their *values* are never persisted or printed.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
    reason codes on the binding and dependent sources (INV-YSS-4). Before each device-token poll,
-   connect proves encryption-key and locked atomic-store readiness. Store writes sync the staged
-   file before atomic replacement and the parent directory afterward. A returned grant is
+   connect proves encryption-key and locked atomic-store readiness. POSIX store writes sync the
+   staged file before atomic replacement and confirm the parent-directory barrier afterward;
+   Windows uses write-through replacement. Visible readback after a failed barrier is not accepted
+   as crash-durable until a fresh barrier succeeds. A returned grant is
    immediately encrypted under an opaque pending-journal id before the fallible identity probe or
    binding work. Exact encrypted-record readback treats a lost write acknowledgement as durable
    success, so a landed pending journal or canonical reconnect token is never revoked as though its
    write failed. Identity/journal failure is provider-compensated when revocation is authoritative;
    otherwise the pending authority remains encrypted and locally retryable. Canonical binding
    persistence precedes the `connected` claim; later pending cleanup may leave only a redundant
-   encrypted copy on crash.
+   encrypted copy on crash. Promotion and cleanup stay within pending/channel/binding lifecycle
+   authority; retry recognizes a live canonical grant (even after later token rotation) and cleans
+   the duplicate without revoking it.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file
@@ -125,8 +131,9 @@ Keychain-bootstrap boundary.
 ## Restart / Durability Posture
 
 Bindings and encrypted tokens survive restart on disk (app-local, per channel). A restart with a
-missing key degrades to `auth_key_missing` — visible, fail-closed, recoverable by re-provisioning
-the key; consent is not silently re-requested. In-flight device-flow sessions do not survive
+missing key, wrong key, or unauthenticatable encrypted aggregate degrades to `auth_key_missing` —
+visible, fail-closed, recoverable by re-provisioning the correct key; consent is not silently
+re-requested. In-flight device-flow sessions do not survive
 restart; the user simply restarts the connect step (the UI/CLI says so).
 
 ## Related Docs

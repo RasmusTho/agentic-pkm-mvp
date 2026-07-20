@@ -154,14 +154,20 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   `reason_code`; logged-out capabilities (RSS, backfill, explicit URLs) continue. No cursor is
   mutated by an auth failure; no empty poll result caused by auth/API failure is ever recorded as
   a successful sync. Before a device-token poll can issue a standing grant, connect proves the
-  encryption key and atomic token-store write/read path. Each aggregate write syncs its staged file,
-  atomically replaces the live path, and syncs the parent directory. A returned grant is immediately
+  encryption key and atomic token-store write/read path. An authenticated encrypted canary binds the
+  configured key to the existing aggregate; a valid-but-wrong key blocks before polling and cannot
+  create mixed-key records. Each POSIX aggregate write syncs its staged file, atomically replaces the
+  live path, and confirms the parent-directory barrier (Windows uses write-through replacement).
+  Visible readback after a failed barrier is not crash-durable authority until a retry barrier
+  succeeds. A returned grant is immediately
   written under an opaque encrypted pending-journal id before identity probing or binding work.
   Exact encrypted-record readback treats a lost write acknowledgement as durable success, so neither
   a pending journal nor a canonical reconnect token is revoked after it actually landed. Identity or
   first-journal failure is provider-compensated when revocation is authoritative; otherwise the
-  encrypted pending authority remains locally recoverable and compensation can be retried. Connect
-  never records `connected` before encrypted token persistence.
+  encrypted pending authority remains locally recoverable and compensation can be retried. Pending
+  cleanup/retry shares the promotion lock order and never revokes a grant represented by live
+  canonical authority, including after token rotation. Connect never records `connected` before
+  encrypted token persistence; status never reports an undecryptable record as connected.
   Connect, reconnect, refresh, and disconnect serialize each binding's credential lifecycle across
   actors sharing its channel token store; portable store-wide serialization prevents distinct
   bindings from losing aggregate token-file updates. First-connect binding ids are deterministic

@@ -12,6 +12,7 @@ Secrets and private bindings`` and INV-YSS-4 / INV-YSS-5 in that dir's README.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import secrets
@@ -558,13 +559,44 @@ def test_pending_parent_directory_fsync_lost_ack_keeps_retry_authority(
     with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
         _connect_device(binder)
 
-    assert directory_fsyncs == 2  # readiness, then pending-grant journal
+    # A visible post-replace record is not crash-durable authority by itself.
+    # The failed pending-journal barrier must be retried successfully before
+    # the pending handle can be returned without provider compensation.
+    assert directory_fsyncs == 3  # readiness, failed journal barrier, confirmation barrier
     assert excinfo.value.reason_code == "grant_pending"
     pending_id = excinfo.value.pending_grant_id
     assert pending_id is not None
     assert store.binding_ids() == (pending_id,)
     assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
     assert provider.revoked == []
+    assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
+    _assert_no_exception_chain(excinfo.value)
+
+
+def test_repeated_pending_directory_fsync_failure_compensates_visible_record(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    original_fsync = tokstore.os.fsync
+    directory_fsyncs = 0
+
+    def fail_pending_directory_barriers(descriptor):
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
+            directory_fsyncs += 1
+            if directory_fsyncs >= 2:
+                raise OSError(SENTINEL_REFRESH)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(tokstore.os, "fsync", fail_pending_directory_barriers)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_compensated"
+    assert provider.revoked == [{"token": SENTINEL_REFRESH}]
+    assert bindings.list_all() == ()
     assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
     _assert_no_exception_chain(excinfo.value)
 
@@ -616,7 +648,7 @@ def test_reconnect_write_failure_does_not_mistake_old_token_for_new_grant_durabi
 
     def fail_reconnect_canonical_write(target_id, token):
         writes.append(target_id)
-        if len(writes) == 2:
+        if target_id == binding_id:
             raise OSError(SENTINEL_REFRESH_2)
         original_put(target_id, token)
 
@@ -629,7 +661,7 @@ def test_reconnect_write_failure_does_not_mistake_old_token_for_new_grant_durabi
     pending_id = excinfo.value.pending_grant_id
     assert pending_id == writes[0]
     assert pending_id.startswith("pending-youtube-grant-")
-    assert writes[1] == binding_id
+    assert writes == [pending_id, pending_id, binding_id]
     assert set(store.binding_ids()) == {binding_id, pending_id}
     assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
     assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
@@ -672,6 +704,134 @@ def test_reconnect_canonical_write_lost_ack_rolls_forward_without_revoking_new_g
     # canonical grant whose exact readback already proved lost-ack success.
     retried = binder.retry_pending_grant_compensation(pending_id)
     assert retried == {"status": "absent", "pending_grant_id": pending_id}
+    assert provider.revoked == []
+
+
+def test_reconnect_pending_cleanup_retry_never_revokes_canonical_grant(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    reconnect = binder.start_reconnect(binding_id)
+    pending_id = oauth._pending_grant_id(reconnect.handle.device_code, binding_id)
+    original_delete = store.delete
+    cleanup_attempts = 0
+
+    def fail_first_pending_cleanup(target_id):
+        nonlocal cleanup_attempts
+        if target_id == pending_id:
+            cleanup_attempts += 1
+            if cleanup_attempts == 1:
+                raise OSError(SENTINEL_REFRESH_2)
+        return original_delete(target_id)
+
+    monkeypatch.setattr(store, "delete", fail_first_pending_cleanup)
+
+    result = binder.finish_device_connection(reconnect)
+
+    assert result["status"] == "connected"
+    assert set(store.binding_ids()) == {binding_id, pending_id}
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH_2
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
+
+    retried = binder.retry_pending_grant_compensation(pending_id)
+
+    assert retried == {
+        "status": "canonical",
+        "pending_grant_id": pending_id,
+        "binding_id": binding_id,
+    }
+    assert store.binding_ids() == (binding_id,)
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH_2
+    assert provider.revoked == []
+
+
+def test_reconnect_canonical_directory_barrier_recovery_preserves_pending_handle(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    reconnect = binder.start_reconnect(binding_id)
+    pending_id = oauth._pending_grant_id(reconnect.handle.device_code, binding_id)
+    original_fsync = tokstore.os.fsync
+    directory_fsyncs = 0
+
+    def fail_canonical_barrier_and_first_confirmation(descriptor):
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
+            directory_fsyncs += 1
+            if directory_fsyncs in {4, 5}:
+                raise OSError(SENTINEL_REFRESH_2)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(
+        tokstore.os, "fsync", fail_canonical_barrier_and_first_confirmation
+    )
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        binder.finish_device_connection(reconnect)
+
+    assert directory_fsyncs == 6
+    assert excinfo.value.reason_code == "grant_pending"
+    assert excinfo.value.pending_grant_id == pending_id
+    assert set(store.binding_ids()) == {binding_id, pending_id}
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH_2
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
+    assert provider.revoked == []
+    _assert_no_exception_chain(excinfo.value)
+
+    retried = binder.retry_pending_grant_compensation(pending_id)
+    assert retried["status"] == "canonical"
+    assert store.binding_ids() == (binding_id,)
+    assert provider.revoked == []
+
+
+def test_pending_retry_never_revokes_rotated_canonical_channel_grant(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    pending_id = "pending-youtube-grant-rotated-canonical-test"
+    stale_pending = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-18T00:00:00+00:00",
+        provider_channel_id=SYNTH_CHANNEL_ID,
+    )
+    rotated_canonical = tokstore.StoredToken(
+        refresh_token="sentinel-REFRESH3-must-never-leak",
+        access_token="sentinel-ACCESS3-must-never-leak",
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-19T00:00:00+00:00",
+        provider_channel_id=SYNTH_CHANNEL_ID,
+    )
+    store.put(pending_id, stale_pending)
+    store.put(binding_id, rotated_canonical)
+
+    retried = binder.retry_pending_grant_compensation(pending_id)
+
+    assert retried == {
+        "status": "canonical",
+        "pending_grant_id": pending_id,
+        "binding_id": binding_id,
+    }
+    assert store.get(binding_id) == rotated_canonical
+    assert store.has_record(pending_id) is False
     assert provider.revoked == []
 
 
@@ -823,6 +983,78 @@ def test_failed_first_connect_status_is_not_connected_without_token_record(
 
     assert status["status"] == "degraded"
     assert status["reason_code"] == "auth_missing"
+
+
+def test_valid_wrong_store_key_blocks_before_token_poll_and_status_fails_closed(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    raw_before = store.path.read_bytes()
+    provider.requests.clear()
+    monkeypatch.setenv(tokstore.KEY_ENV_VAR, secrets.token_hex(32))
+
+    reconnect = binder.start_reconnect(binding_id)
+    with pytest.raises(tokstore.TokenStoreKeyMismatchError) as excinfo:
+        binder.finish_device_connection(reconnect)
+
+    assert not any(urlsplit(str(r.url)).path.endswith("/token") for r in provider.requests)
+    assert store.path.read_bytes() == raw_before
+    assert binder.status(binding_id) == {
+        "status": "degraded",
+        "reason_code": "auth_key_missing",
+        "scopes": [oauth.SCOPE],
+        "token_store": "encrypted",
+    }
+    assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
+    _assert_no_exception_chain(excinfo.value)
+
+
+def test_valid_wrong_store_key_cannot_create_mixed_key_aggregate(store, monkeypatch):
+    token = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH,
+        access_token=SENTINEL_ACCESS,
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-18T00:00:00+00:00",
+        provider_channel_id=SYNTH_CHANNEL_ID,
+    )
+    store.put("canonical", token)
+    raw_before = store.path.read_bytes()
+    monkeypatch.setenv(tokstore.KEY_ENV_VAR, secrets.token_hex(32))
+
+    with pytest.raises(tokstore.TokenStoreKeyMismatchError):
+        store.put("wrong-key-record", token)
+
+    assert store.path.read_bytes() == raw_before
+    monkeypatch.setenv(tokstore.KEY_ENV_VAR, TEST_STORE_KEY)
+    assert store.get("canonical") == token
+    assert store.has_record("wrong-key-record") is False
+
+
+def test_status_never_reports_tampered_encrypted_record_as_connected(
+    store, bindings, registry
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    aggregate = json.loads(store.path.read_text(encoding="utf-8"))
+    encrypted = base64.b64decode(
+        aggregate["records"][binding_id]["ciphertext"], validate=True
+    )
+    aggregate["records"][binding_id]["ciphertext"] = base64.b64encode(
+        bytes([encrypted[0] ^ 0x01]) + encrypted[1:]
+    ).decode("ascii")
+    store.path.write_text(json.dumps(aggregate), encoding="utf-8")
+
+    assert binder.status(binding_id) == {
+        "status": "degraded",
+        "reason_code": "auth_key_missing",
+        "scopes": [oauth.SCOPE],
+        "token_store": "encrypted",
+    }
 
 
 # --- AC4 --------------------------------------------------------------------
@@ -1232,6 +1464,36 @@ def test_portable_lock_uses_windows_backend_when_fcntl_unavailable(store, monkey
     monkeypatch.setattr(tokstore, "_msvcrt", FakeMsvcrt)
     assert store.has_record("missing") is False
     assert calls == [(FakeMsvcrt.LK_LOCK, 1), (FakeMsvcrt.LK_UNLCK, 1)]
+
+
+def test_windows_store_replacement_uses_write_through(store, tmp_path, monkeypatch):
+    source = tmp_path / "windows-staged-token-store"
+    source.write_bytes(b"encrypted-aggregate")
+    calls: list[tuple[str, str, int]] = []
+    original_replace = tokstore.os.replace
+
+    class FakeMoveFileEx:
+        argtypes = None
+        restype = None
+
+        def __call__(self, staged, target, flags):
+            calls.append((staged, target, flags))
+            original_replace(staged, target)
+            return 1
+
+    class FakeKernel32:
+        MoveFileExW = FakeMoveFileEx()
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(tokstore.os, "name", "nt")
+    monkeypatch.setattr(tokstore.ctypes, "windll", FakeWindll(), raising=False)
+
+    store._replace_with_barrier(source)
+
+    assert calls == [(str(source), str(store.path), 0x1 | 0x8)]
+    assert store.path.read_bytes() == b"encrypted-aggregate"
 
 
 def test_disconnect_documented_invalid_token_tears_down_local_state(

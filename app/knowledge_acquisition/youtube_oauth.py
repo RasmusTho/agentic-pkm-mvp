@@ -30,11 +30,14 @@ reason code, mutates no source cursor, and never records an auth failure as an
 empty-success. Connect, reconnect, refresh, and disconnect serialize each
 binding's credential lifecycle across service instances and processes that
 share its channel token store. Key and atomic-store readiness are proven before
-device polling; an issued grant is encrypted in a pending journal before the
-identity probe or binding work, and an unproven compensation preserves that
-recoverable authority. First-connect binding ids are deterministic per provider
-channel, and an indeterminate binding-create result always preserves the
-encrypted credential so a delayed commit or retry retains authority. Only
+device polling, including cryptographic key/aggregate binding; an issued grant
+is encrypted in a pending journal before the identity probe or binding work,
+and an unproven compensation preserves that recoverable authority. Pending
+promotion/cleanup and retry share one lifecycle-lock order, and retry never
+revokes a grant represented by canonical encrypted authority. First-connect
+binding ids are deterministic per provider channel, and an indeterminate
+binding-create result always preserves the encrypted credential so a delayed
+commit or retry retains authority. Only
 Google's documented ``400 invalid_token`` revoke outcome permits destructive
 local teardown; every other revoke failure preserves retry authority. OAuth
 POSTs never follow redirects. Acquired artifacts are never deleted.
@@ -50,8 +53,8 @@ import os
 import secrets
 import threading
 import uuid
-from contextlib import nullcontext
-from dataclasses import dataclass
+from contextlib import ExitStack, nullcontext
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, NoReturn
 from urllib.parse import urlencode, urlsplit
@@ -62,9 +65,9 @@ from app.knowledge_acquisition.source_registry import SourceRegistry
 from app.knowledge_acquisition.youtube_account_binding import AccountBinding, AccountBindingStore
 from app.knowledge_acquisition.youtube_token_store import (
     StoredToken,
+    TokenStoreDurabilityError,
     TokenStoreKeyMissingError,
     YouTubeTokenStore,
-    resolve_token_store_key,
 )
 
 _log = logging.getLogger(__name__)
@@ -751,16 +754,78 @@ class YouTubeAccountBinder:
             token = self._store.get(pending_grant_id)
             if token is None:
                 return {"status": "absent", "pending_grant_id": pending_grant_id}
-            if not self._compensate_grant(token):
-                return {"status": "pending", "pending_grant_id": pending_grant_id}
-            try:
-                self._store.delete(pending_grant_id)
-            except Exception:
-                return {
-                    "status": "compensated_pending_cleanup",
-                    "pending_grant_id": pending_grant_id,
+            # A cleanup failure after canonical success leaves two encrypted
+            # copies of one grant. Retry must never revoke the provider grant
+            # while a canonical binding still depends on it. Compose the same
+            # pending -> channel -> binding lock order as promotion, re-read
+            # both sides under those authorities, then clean or compensate.
+            channel_authority = (
+                f"channel:{token.provider_channel_id}"
+                if token.provider_channel_id is not None
+                else None
+            )
+            channel_lifecycle = (
+                self._store.binding_lifecycle_lock(channel_authority)
+                if channel_authority is not None
+                else nullcontext()
+            )
+            with channel_lifecycle:
+                canonical_ids = {
+                    binding_id
+                    for binding_id in self._store.binding_ids()
+                    if binding_id != pending_grant_id
+                    and not binding_id.startswith("pending-youtube-grant-")
                 }
-            return {"status": "compensated", "pending_grant_id": pending_grant_id}
+                if token.provider_channel_id is not None:
+                    canonical_ids.add(_binding_candidate_id(token.provider_channel_id))
+                    visible = self._bindings.get_by_channel_id(token.provider_channel_id)
+                    if visible is not None:
+                        canonical_ids.add(visible.account_binding_id)
+
+                with ExitStack() as lifecycle_stack:
+                    for binding_id in sorted(canonical_ids):
+                        lifecycle_stack.enter_context(
+                            self._store.binding_lifecycle_lock(binding_id)
+                        )
+                    token = self._store.get(pending_grant_id)
+                    if token is None:
+                        return {
+                            "status": "absent",
+                            "pending_grant_id": pending_grant_id,
+                        }
+                    canonical_id = self._canonical_binding_for_pending(
+                        token, canonical_ids
+                    )
+                    if canonical_id is not None:
+                        try:
+                            self._store.delete(pending_grant_id)
+                        except Exception:
+                            return {
+                                "status": "canonical_pending_cleanup",
+                                "pending_grant_id": pending_grant_id,
+                                "binding_id": canonical_id,
+                            }
+                        return {
+                            "status": "canonical",
+                            "pending_grant_id": pending_grant_id,
+                            "binding_id": canonical_id,
+                        }
+                    if not self._compensate_grant(token):
+                        return {
+                            "status": "pending",
+                            "pending_grant_id": pending_grant_id,
+                        }
+                    try:
+                        self._store.delete(pending_grant_id)
+                    except Exception:
+                        return {
+                            "status": "compensated_pending_cleanup",
+                            "pending_grant_id": pending_grant_id,
+                        }
+                    return {
+                        "status": "compensated",
+                        "pending_grant_id": pending_grant_id,
+                    }
 
     def finish_device_connection(self, connection: DeviceConnection) -> dict[str, Any]:
         """Complete one device poll, persist tokens encrypted, bind the account.
@@ -805,6 +870,10 @@ class YouTubeAccountBinder:
                 self._abort_journaled_grant(pending_id, pending_token)
 
             assert identity is not None
+            pending_token = replace(
+                pending_token, provider_channel_id=identity.channel_id
+            )
+            self._bind_pending_grant_identity(pending_id, pending_token)
             binding_error: Exception | None = None
             try:
                 result = self._bind_from_bundle(
@@ -829,48 +898,44 @@ class YouTubeAccountBinder:
                         "grant_pending", pending_grant_id=pending_id
                     )
                 raise binding_error
-            try:
-                self._store.delete(pending_id)
-            except Exception:
-                # The canonical binding token is already durable. A crash or
-                # cleanup failure may leave a duplicate encrypted pending copy,
-                # but cannot remove revocation authority or falsify success.
-                _log.warning(
-                    "youtube oauth: connected binding retained redundant pending grant journal"
-                )
             return result
 
     def _journal_issued_grant(self, pending_id: str, token: StoredToken) -> None:
         """Durably journal a fresh grant or compensate it at the provider."""
-        first_write_failed = False
+        first_write_error: Exception | None = None
         try:
             self._store.put(pending_id, token)
-        except Exception:
-            first_write_failed = True
-        if not first_write_failed:
+        except Exception as error:
+            first_write_error = error
+        if first_write_error is None:
             return
 
         # A store write can durably replace the aggregate and then lose its
         # acknowledgement (including a parent-directory fsync error). Exact
         # encrypted-record readback is success authority: never revoke it.
-        if self._stored_token_matches(pending_id, token):
+        if self._stored_token_matches(
+            pending_id, token, write_error=first_write_error
+        ):
             raise OAuthGrantDurabilityError(
                 "grant_pending", pending_grant_id=pending_id
             )
 
         if self._compensate_grant(token):
+            self._delete_redundant_pending(pending_id)
             raise OAuthGrantDurabilityError("grant_compensated")
 
         # A transient write can fail after the successful readiness probe. If
         # provider compensation is also indeterminate, retry the encrypted
         # journal before returning control so retry authority remains local.
-        retry_write_failed = False
+        retry_write_error: Exception | None = None
         try:
             self._store.put(pending_id, token)
-        except Exception:
-            retry_write_failed = True
-        if retry_write_failed:
-            if self._stored_token_matches(pending_id, token):
+        except Exception as error:
+            retry_write_error = error
+        if retry_write_error is not None:
+            if self._stored_token_matches(
+                pending_id, token, write_error=retry_write_error
+            ):
                 raise OAuthGrantDurabilityError(
                     "grant_pending", pending_grant_id=pending_id
                 )
@@ -878,6 +943,7 @@ class YouTubeAccountBinder:
             # the first. Re-check provider authority once more before declaring
             # the physically unsatisfiable store+provider double outage.
             if self._compensate_grant(token):
+                self._delete_redundant_pending(pending_id)
                 raise OAuthGrantDurabilityError("grant_compensated")
             raise OAuthGrantDurabilityError("grant_durability_unavailable")
         raise OAuthGrantDurabilityError(
@@ -898,13 +964,73 @@ class YouTubeAccountBinder:
             "grant_pending", pending_grant_id=pending_id
         )
 
-    def _stored_token_matches(self, binding_id: str, expected: StoredToken) -> bool:
+    def _bind_pending_grant_identity(
+        self, pending_id: str, token: StoredToken
+    ) -> None:
+        """Durably attach provider identity before canonical promotion.
+
+        If a later canonical cleanup fails, recovery can still recognize the
+        provider/channel relationship even after a subsequent reconnect rotates
+        the refresh token. Failure leaves the earlier unannotated journal as
+        durable revocation authority and stops before canonical mutation.
+        """
+        write_error: Exception | None = None
+        try:
+            self._store.put(pending_id, token)
+        except Exception as error:
+            write_error = error
+        if write_error is None or self._stored_token_matches(
+            pending_id, token, write_error=write_error
+        ):
+            return
+        raise OAuthGrantDurabilityError(
+            "grant_pending", pending_grant_id=pending_id
+        )
+
+    def _stored_token_matches(
+        self,
+        binding_id: str,
+        expected: StoredToken,
+        *,
+        write_error: Exception | None = None,
+    ) -> bool:
         """Exact encrypted-record readback authority for a lost write ack."""
+        if isinstance(write_error, TokenStoreDurabilityError):
+            # Post-replace visibility is not crash durability. Require a new,
+            # successful directory barrier before accepting exact readback.
+            return self._store.confirm_record_durable(binding_id, expected)
         try:
             stored = self._store.get(binding_id)
         except Exception:
             return False
         return stored == expected
+
+    def _delete_redundant_pending(self, pending_id: str) -> None:
+        try:
+            self._store.delete(pending_id)
+        except Exception:
+            _log.warning(
+                "youtube oauth: compensated grant retained redundant encrypted journal"
+            )
+
+    def _canonical_binding_for_pending(
+        self, pending: StoredToken, canonical_ids: set[str]
+    ) -> str | None:
+        """Return canonical local authority that makes revocation unsafe."""
+        for binding_id in sorted(canonical_ids):
+            canonical = self._store.get(binding_id)
+            if canonical is None:
+                continue
+            same_refresh = bool(pending.refresh_token) and hmac.compare_digest(
+                pending.refresh_token, canonical.refresh_token
+            )
+            same_channel = (
+                pending.provider_channel_id is not None
+                and canonical.provider_channel_id == pending.provider_channel_id
+            )
+            if same_refresh or same_channel:
+                return binding_id
+        return None
 
     def _compensate_grant(self, token: StoredToken) -> bool:
         """Return true only when provider revocation is authoritative."""
@@ -951,25 +1077,43 @@ class YouTubeAccountBinder:
             )
             with lifecycle:
                 commit_error: Exception | None = None
+                result: dict[str, Any] | None = None
                 try:
-                    return self._commit_binding(binding, binding_id, identity, token)
+                    result = self._commit_binding(
+                        binding, binding_id, identity, token
+                    )
                 except Exception as error:
                     commit_error = error
-                assert commit_error is not None
-                # This code intentionally runs outside the exception handler:
-                # any later sanitized durability error must not retain a hidden
-                # ``__context__`` reference to a secret-bearing backend error.
-                # Once the target/candidate token is itself durable, the
-                # earlier pending journal is redundant even if binding-row
-                # completion remains indeterminate. If the target write did
-                # not land, retain pending authority for recovery.
-                target_is_durable = self._stored_token_matches(binding_id, token)
-                if target_is_durable:
-                    try:
-                        self._store.delete(pending_id)
-                    except Exception:
-                        pass
-                raise commit_error
+                if commit_error is not None:
+                    # This code intentionally runs outside the exception
+                    # handler: any later sanitized durability error must not
+                    # retain a hidden ``__context__`` reference to a
+                    # secret-bearing backend error. Once the target/candidate
+                    # token is itself durable, the earlier pending journal is
+                    # redundant even if binding-row completion is indeterminate.
+                    target_is_durable = self._stored_token_matches(
+                        binding_id, token, write_error=commit_error
+                    )
+                    if target_is_durable and not isinstance(
+                        commit_error, TokenStoreDurabilityError
+                    ):
+                        try:
+                            self._store.delete(pending_id)
+                        except Exception:
+                            pass
+                    raise commit_error
+                assert result is not None
+                # Promotion and pending cleanup remain inside channel/binding
+                # lifecycle authority. A cleanup failure can leave only a
+                # redundant journal, and the retry path rechecks canonical
+                # authority under the same lock order before any revocation.
+                try:
+                    self._store.delete(pending_id)
+                except Exception:
+                    _log.warning(
+                        "youtube oauth: connected binding retained redundant pending grant journal"
+                    )
+                return result
 
     def _commit_binding(
         self,
@@ -993,7 +1137,9 @@ class YouTubeAccountBinder:
             self._store.put(binding_id, token)
         except Exception as error:
             token_write_error = error
-        if token_write_error is not None and not self._stored_token_matches(binding_id, token):
+        if token_write_error is not None and not self._stored_token_matches(
+            binding_id, token, write_error=token_write_error
+        ):
             raise token_write_error
         if binding is None:
             try:
@@ -1102,13 +1248,12 @@ class YouTubeAccountBinder:
                 {"status": "absent", "reason_code": "auth_missing", "scopes": [], "token_store": "encrypted"}
             )
         state, reason_code = binding.state, binding.reason_code
-        has_token = self._store.has_record(binding_id)
-        if has_token:
-            try:
-                resolve_token_store_key()
-            except TokenStoreKeyMissingError:
-                state, reason_code = "degraded", "auth_key_missing"
-        elif state == "connected":
+        try:
+            token = self._store.get(binding_id)
+        except TokenStoreKeyMissingError:
+            token = None
+            state, reason_code = "degraded", "auth_key_missing"
+        if token is None and state == "connected":
             # Fail closed for any historical/partial connected row that lacks
             # the encrypted authority needed by authenticated operations.
             state, reason_code = "degraded", "auth_missing"

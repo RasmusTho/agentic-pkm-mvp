@@ -35,15 +35,21 @@ Boundary (INV-YSS-5 / INV-YSS-7):
   backend is guarded and portable across POSIX ``flock`` and Windows
   ``msvcrt.locking``; unsupported platforms fail closed.
 - Device-flow completion proves key plus locked atomic write/read readiness
-  before polling can issue a grant. Each aggregate write syncs the staged file,
-  atomically replaces the live path, then syncs its parent directory. Fresh
-  grants can therefore be journaled immediately under an opaque pending id
-  before identity/binding work.
+  before polling can issue a grant. An encrypted canary binds the configured
+  key to the aggregate, and legacy aggregates authenticate every record before
+  gaining that canary. Each POSIX aggregate write syncs the staged file,
+  atomically replaces the live path, then syncs its parent directory; Windows
+  uses write-through replacement. Visible readback after a failed barrier is
+  not durable authority until a fresh barrier succeeds. Fresh grants can
+  therefore be journaled immediately under an opaque pending id before
+  identity/binding work.
 """
 
 from __future__ import annotations
 
 import base64
+import binascii
+import ctypes
 import hashlib
 import json
 import os
@@ -54,6 +60,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 try:  # POSIX
@@ -72,6 +79,7 @@ PATH_ENV_VAR = "YOUTUBE_TOKEN_STORE_PATH"
 _AES_KEY_BYTES = 32  # AES-256
 _NONCE_BYTES = 12  # standard AES-GCM nonce size
 _SCHEMA = "youtube-token-store.v1"
+_KEY_CHECK_PLAINTEXT = b"youtube-token-store-key-check.v1"
 _DEFAULT_REL_PATH = Path("runtime/knowledge_acquisition/youtube_token_store.enc")
 
 _LIFECYCLE_LOCKS_GUARD = threading.Lock()
@@ -127,6 +135,19 @@ class TokenStoreKeyMissingError(RuntimeError):
     """
 
 
+class TokenStoreKeyMismatchError(TokenStoreKeyMissingError):
+    """The configured key cannot authenticate the existing aggregate.
+
+    This is deliberately a subtype of :class:`TokenStoreKeyMissingError` so
+    callers keep the existing fail-closed ``auth_key_missing`` reason-code
+    contract for both absent and unusable key material.
+    """
+
+
+class TokenStoreDurabilityError(OSError):
+    """An aggregate replacement lacks a confirmed persistence barrier."""
+
+
 def resolve_token_store_key() -> bytes:
     """Resolve the AES-256-GCM key, fail-loud (mirrors ``resolve_raw_store_key``).
 
@@ -142,10 +163,16 @@ def resolve_token_store_key() -> bytes:
             "store refuses to read or write plaintext or use a fixed default key. Set "
             f"{KEY_ENV_VAR} to a 64-char hex string (32 bytes)."
         )
+    invalid_hex = False
     try:
         key = bytes.fromhex(raw.strip())
-    except ValueError as exc:
-        raise TokenStoreKeyMissingError(f"{KEY_ENV_VAR} is not valid hex: {exc}") from exc
+    except ValueError:
+        invalid_hex = True
+        key = b""
+    if invalid_hex:
+        # Raised outside the secret-bearing parse handler so recursive
+        # exception inspection cannot reach the rejected environment value.
+        raise TokenStoreKeyMissingError(f"{KEY_ENV_VAR} is not valid hex")
     if len(key) != _AES_KEY_BYTES:
         raise TokenStoreKeyMissingError(
             f"{KEY_ENV_VAR} must decode to {_AES_KEY_BYTES} bytes (AES-256), got {len(key)}"
@@ -277,9 +304,106 @@ class YouTubeTokenStore:
         except FileNotFoundError:
             return {"schema": _SCHEMA, "records": {}}
         data = json.loads(raw)
-        if not isinstance(data, dict) or "records" not in data:
+        if (
+            not isinstance(data, dict)
+            or data.get("schema") != _SCHEMA
+            or not isinstance(data.get("records"), dict)
+        ):
             raise ValueError(f"corrupt token store file at {self._path}")
         return data
+
+    @staticmethod
+    def _encrypted_record(key: bytes, plaintext: bytes) -> dict[str, str]:
+        nonce = os.urandom(_NONCE_BYTES)
+        ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
+        return {
+            "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+        }
+
+    @staticmethod
+    def _decrypt_record(record: Any, key: bytes) -> bytes:
+        failed = False
+        plaintext = b""
+        try:
+            if not isinstance(record, dict):
+                raise TypeError
+            ciphertext = base64.b64decode(record["ciphertext"], validate=True)
+            nonce = base64.b64decode(record["nonce"], validate=True)
+            plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
+        except (InvalidTag, binascii.Error, KeyError, TypeError, ValueError):
+            failed = True
+        if failed:
+            # Never chain the cryptography/base64 failure: even defensive error
+            # walkers must not gain another route into credential-bearing data.
+            raise TokenStoreKeyMismatchError(
+                "configured YouTube token-store key cannot authenticate the encrypted aggregate"
+            )
+        return plaintext
+
+    def _bind_or_verify_aggregate_key(
+        self,
+        data: dict[str, Any],
+        key: bytes,
+        *,
+        initialize: bool,
+    ) -> bool:
+        """Cryptographically bind ``key`` to the whole existing aggregate.
+
+        New/current aggregates carry an encrypted fixed canary. Legacy
+        aggregates without a canary are admitted only after *every* encrypted
+        record authenticates under the configured key; the next write then
+        installs the canary. This prevents a valid-but-wrong key from appending
+        a mixed-key record to an existing file.
+        """
+        key_check = data.get("key_check")
+        if key_check is not None:
+            if self._decrypt_record(key_check, key) != _KEY_CHECK_PLAINTEXT:
+                raise TokenStoreKeyMismatchError(
+                    "configured YouTube token-store key cannot authenticate the encrypted aggregate"
+                )
+            # The canary binds the configured key, while authenticating every
+            # record rejects a pre-existing partial/mixed-key aggregate rather
+            # than carrying it forward under an otherwise valid canary.
+            for record in data["records"].values():
+                self._decrypt_record(record, key)
+            return False
+
+        for record in data["records"].values():
+            self._decrypt_record(record, key)
+        if not initialize:
+            return False
+        data["key_check"] = self._encrypted_record(key, _KEY_CHECK_PLAINTEXT)
+        return True
+
+    def _sync_parent_directory(self) -> None:
+        """Confirm the directory-entry barrier on POSIX.
+
+        Windows takes the separate ``MoveFileExW(..., WRITE_THROUGH)`` path in
+        :meth:`_replace_with_barrier`; opening/fsyncing a directory is not a
+        portable Windows operation.
+        """
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(self._path.parent, flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    def _replace_with_barrier(self, source: Path) -> None:
+        if os.name != "nt":
+            os.replace(source, self._path)
+            self._sync_parent_directory()
+            return
+
+        # MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH. The latter is
+        # Windows' supported persistence barrier for the rename itself; a
+        # directory fsync emulation would be both unreliable and unportable.
+        move_file_ex = getattr(ctypes, "windll").kernel32.MoveFileExW
+        move_file_ex.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32)
+        move_file_ex.restype = ctypes.c_int
+        if not move_file_ex(str(source), str(self._path), 0x1 | 0x8):
+            raise OSError("Windows write-through token-store replacement failed")
 
     def _write_file(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -290,14 +414,19 @@ class YouTubeTokenStore:
             # The staged ciphertext/index must reach stable storage before its
             # name can replace the last durable aggregate.
             os.fsync(staged.fileno())
-        os.replace(tmp, self._path)
-        # Persist the directory-entry replacement itself. Without this fsync a
-        # crash can lose the newly renamed token journal despite a synced file.
-        directory_fd = os.open(self._path.parent, os.O_RDONLY)
+        barrier_failed = False
         try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+            self._replace_with_barrier(tmp)
+        except OSError:
+            barrier_failed = True
+        if barrier_failed:
+            # A visible replacement is intentionally not treated as durable
+            # authority. OAuth callers may retry the barrier explicitly before
+            # accepting exact readback; otherwise they compensate or preserve
+            # the prior pending journal.
+            raise TokenStoreDurabilityError(
+                "YouTube token-store replacement lacks a confirmed persistence barrier"
+            )
 
     def has_record(self, binding_id: str) -> bool:
         """True if a token record exists for ``binding_id`` (no key required)."""
@@ -339,24 +468,45 @@ class YouTubeTokenStore:
         AESGCM(key).encrypt(os.urandom(_NONCE_BYTES), b"youtube-token-store-readiness", None)
         with self._lock, self._aggregate_file_lock():
             data = self._load_file()
+            self._bind_or_verify_aggregate_key(data, key, initialize=True)
             self._write_file(data)
             verified = self._load_file()
             if verified != data:
                 raise RuntimeError("YouTube token store readiness verification failed")
+            self._bind_or_verify_aggregate_key(verified, key, initialize=False)
 
     def put(self, binding_id: str, token: StoredToken) -> None:
         """Encrypt and persist ``token`` for ``binding_id`` (requires the key)."""
         key = resolve_token_store_key()
         plaintext = json.dumps(token._to_plain(), sort_keys=True).encode("utf-8")
-        nonce = os.urandom(_NONCE_BYTES)
-        ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
         with self._lock, self._aggregate_file_lock():
             data = self._load_file()
-            data["records"][binding_id] = {
-                "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
-                "nonce": base64.b64encode(nonce).decode("ascii"),
-            }
+            self._bind_or_verify_aggregate_key(data, key, initialize=True)
+            data["records"][binding_id] = self._encrypted_record(key, plaintext)
             self._write_file(data)
+
+    def confirm_record_durable(self, binding_id: str, expected: StoredToken) -> bool:
+        """Retry the parent barrier, then authenticate exact record authority.
+
+        Used only after :class:`TokenStoreDurabilityError`. Readback happens
+        *after* the successful retry barrier; visibility alone never proves
+        crash durability.
+        """
+        confirmed = False
+        try:
+            with self._lock, self._aggregate_file_lock():
+                self._sync_parent_directory()
+                data = self._load_file()
+                record = data["records"].get(binding_id)
+                if record is None:
+                    return False
+                key = resolve_token_store_key()
+                self._bind_or_verify_aggregate_key(data, key, initialize=False)
+                plaintext = self._decrypt_record(record, key)
+                confirmed = StoredToken._from_plain(json.loads(plaintext.decode("utf-8"))) == expected
+        except Exception:
+            confirmed = False
+        return confirmed
 
     def get(self, binding_id: str) -> StoredToken | None:
         """Return the decrypted token for ``binding_id``, or None if absent.
@@ -367,21 +517,36 @@ class YouTubeTokenStore:
         path (fail closed, INV-YSS-4).
         """
         with self._lock, self._aggregate_file_lock():
-            record = self._load_file()["records"].get(binding_id)
-        if record is None:
-            return None
-        key = resolve_token_store_key()
-        ciphertext = base64.b64decode(record["ciphertext"])
-        nonce = base64.b64decode(record["nonce"])
-        plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
-        return StoredToken._from_plain(json.loads(plaintext.decode("utf-8")))
+            data = self._load_file()
+            record = data["records"].get(binding_id)
+            if record is None:
+                return None
+            key = resolve_token_store_key()
+            self._bind_or_verify_aggregate_key(data, key, initialize=False)
+            plaintext = self._decrypt_record(record, key)
+        malformed = False
+        try:
+            decoded = json.loads(plaintext.decode("utf-8"))
+            if not isinstance(decoded, dict):
+                raise TypeError
+            token = StoredToken._from_plain(decoded)
+        except (KeyError, TypeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            malformed = True
+            token = None
+        if malformed:
+            raise TokenStoreKeyMismatchError(
+                "configured YouTube token-store key cannot authenticate the encrypted aggregate"
+            )
+        return token
 
 
 __all__ = [
     "KEY_ENV_VAR",
     "PATH_ENV_VAR",
     "StoredToken",
+    "TokenStoreDurabilityError",
     "TokenStoreKeyMissingError",
+    "TokenStoreKeyMismatchError",
     "YouTubeTokenStore",
     "default_token_store_path",
     "resolve_token_store_key",
