@@ -92,12 +92,14 @@ def run_with_lease(
 
     started = time.monotonic()
     lock_path = repo_common_lock_path(resource)
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
     if child_pid == 0:
         os.close(read_fd)
         _acquire_and_exec(
             lock_path=lock_path,
+            lock_fd=lock_fd,
             resource=resource,
             execution_id=execution_id,
             command=command,
@@ -119,20 +121,29 @@ def run_with_lease(
 
     for signum in (signal.SIGINT, signal.SIGTERM):
         previous_handlers[signum] = signal.signal(signum, forward_signal)
-    terminal_status: dict[str, object] | None = None
+    command_status: dict[str, object] | None = None
+    command_complete: dict[str, object] | None = None
     try:
         with os.fdopen(read_fd, encoding="utf-8") as status_stream:
             raw_status = status_stream.readline()
-            status = json.loads(raw_status) if raw_status else {
-                "event": "host_lease_command_error",
-                "execution_id": execution_id,
-                "resource": resource,
-                "error": "lease child exited before reporting status",
-            }
+            status = (
+                json.loads(raw_status)
+                if raw_status
+                else {
+                    "event": "host_lease_command_error",
+                    "execution_id": execution_id,
+                    "resource": resource,
+                    "error": "lease child exited before reporting status",
+                }
+            )
             _emit(status)
-            raw_terminal_status = status_stream.readline()
-            if raw_terminal_status:
-                terminal_status = json.loads(raw_terminal_status)
+            for raw_child_status in status_stream:
+                child_status = json.loads(raw_child_status)
+                if child_status.get("event") == "host_lease_command_started":
+                    command_status = child_status
+                    _emit(child_status)
+                elif child_status.get("event") == "host_lease_command_complete":
+                    command_complete = child_status
         _, wait_status = os.waitpid(child_pid, 0)
     finally:
         for signum, previous_handler in previous_handlers.items():
@@ -141,23 +152,68 @@ def run_with_lease(
     if return_code < 0:
         return_code = 128 + abs(return_code)
     if status.get("event") != "host_lease_acquired":
+        os.close(lock_fd)
         return return_code
-    if terminal_status is None:
-        terminal_status = {
-            "acquired_at": status["acquired_at"],
-            "duration_seconds": round(time.monotonic() - started, 3),
-            "event": "host_lease_release_unconfirmed",
-            "execution_id": execution_id,
-            "resource": resource,
-            "return_code": return_code,
+
+    if command_complete is None:
+        command_group_terminated = True
+        if command_status is not None:
+            command_group_terminated = _terminate_process_group(int(command_status["command_pgid"]))
+        os.close(lock_fd)
+        _emit(
+            {
+                "acquired_at": status["acquired_at"],
+                "duration_seconds": round(time.monotonic() - started, 3),
+                "event": "host_lease_recovered_after_supervisor_exit",
+                "execution_id": execution_id,
+                "command_group_terminated": command_group_terminated,
+                "released_at": _utc_now(),
+                "resource": resource,
+                "return_code": return_code,
+            }
+        )
+        return return_code
+
+    os.close(lock_fd)
+    _emit(
+        {
+            **command_complete,
+            "event": "host_lease_released",
+            "released_at": _utc_now(),
         }
-    _emit(terminal_status)
+    )
     return return_code
 
 
-def _report_to_parent(
-    status_fd: int, receipt: dict[str, object], *, close: bool = False
-) -> None:
+def _process_group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_process_group(pgid: int) -> bool:
+    """Fail closed until a crashed supervisor's command group is gone."""
+
+    for signum, grace_seconds in ((signal.SIGTERM, 1.0), (signal.SIGKILL, 1.0)):
+        try:
+            os.killpg(pgid, signum)
+        except ProcessLookupError:
+            return True
+        deadline = time.monotonic() + grace_seconds
+        while time.monotonic() < deadline:
+            if not _process_group_exists(pgid):
+                return True
+            time.sleep(0.02)
+    while _process_group_exists(pgid):
+        time.sleep(0.1)
+    return True
+
+
+def _report_to_parent(status_fd: int, receipt: dict[str, object], *, close: bool = False) -> None:
     payload = (json.dumps(receipt, sort_keys=True) + "\n").encode()
     try:
         os.write(status_fd, payload)
@@ -171,6 +227,7 @@ def _report_to_parent(
 def _acquire_and_exec(
     *,
     lock_path: Path,
+    lock_fd: int,
     resource: str,
     execution_id: str,
     command: Sequence[str],
@@ -179,10 +236,9 @@ def _acquire_and_exec(
     started: float,
     status_fd: int,
 ) -> None:
-    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     while True:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             break
         except BlockingIOError:
             elapsed = time.monotonic() - started
@@ -197,7 +253,7 @@ def _acquire_and_exec(
                         "waited_seconds": round(elapsed, 3),
                     },
                 )
-                os.close(fd)
+                os.close(lock_fd)
                 os._exit(_TEMPFAIL)
             time.sleep(min(poll_seconds, wait_seconds - elapsed))
 
@@ -211,56 +267,105 @@ def _acquire_and_exec(
         "resource": resource,
         "worktree": str(_git_path("--show-toplevel")),
     }
-    _write_receipt(fd, held_receipt)
+    _write_receipt(lock_fd, held_receipt)
     _report_to_parent(status_fd, held_receipt)
 
-    command_process: subprocess.Popen[bytes] | None = None
+    command_pid: int | None = None
     pending_signals: list[int] = []
 
     def forward_signal(signum: int, _frame: object) -> None:
-        if command_process is None:
+        if command_pid is None:
             pending_signals.append(signum)
             return
         try:
-            os.killpg(command_process.pid, signum)
+            os.killpg(command_pid, signum)
         except ProcessLookupError:
             pass
 
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, forward_signal)
+    command_pid, start_fd = _spawn_gated_command(
+        command=command,
+        lock_fd=lock_fd,
+        status_fd=status_fd,
+    )
+    _report_to_parent(
+        status_fd,
+        {
+            "event": "host_lease_command_started",
+            "execution_id": execution_id,
+            "command_pgid": command_pid,
+            "resource": resource,
+        },
+    )
+    for pending_signal in pending_signals:
+        try:
+            os.killpg(command_pid, pending_signal)
+        except ProcessLookupError:
+            break
     try:
-        command_process = subprocess.Popen(
-            list(command),
-            close_fds=True,
-            start_new_session=True,
-        )
-        for pending_signal in pending_signals:
-            try:
-                os.killpg(command_process.pid, pending_signal)
-            except ProcessLookupError:
-                break
-        command_return_code = command_process.wait()
-    except FileNotFoundError:
-        command_return_code = 127
+        os.write(start_fd, b"1")
+    except BrokenPipeError:
+        pass
+    finally:
+        os.close(start_fd)
+    _, command_wait_status = os.waitpid(command_pid, 0)
+    command_return_code = os.waitstatus_to_exitcode(command_wait_status)
 
     if command_return_code < 0:
         command_return_code = 128 + abs(command_return_code)
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    os.close(fd)
+    os.close(lock_fd)
     _report_to_parent(
         status_fd,
         {
             "acquired_at": acquired_at,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "event": "host_lease_released",
+            "event": "host_lease_command_complete",
             "execution_id": execution_id,
-            "released_at": _utc_now(),
             "resource": resource,
             "return_code": command_return_code,
         },
         close=True,
     )
     os._exit(command_return_code)
+
+
+def _spawn_gated_command(
+    *, command: Sequence[str], lock_fd: int, status_fd: int
+) -> tuple[int, int]:
+    """Create a stopped command group and return only after its PGID is stable."""
+
+    ready_read_fd, ready_write_fd = os.pipe()
+    start_read_fd, start_write_fd = os.pipe()
+    command_pid = os.fork()
+    if command_pid == 0:
+        os.close(ready_read_fd)
+        os.close(start_write_fd)
+        os.close(lock_fd)
+        os.close(status_fd)
+        os.setsid()
+        os.write(ready_write_fd, b"1")
+        os.close(ready_write_fd)
+        start_token = os.read(start_read_fd, 1)
+        os.close(start_read_fd)
+        if start_token != b"1":
+            os._exit(125)
+        try:
+            os.execvp(command[0], list(command))
+        except FileNotFoundError:
+            os._exit(127)
+        except OSError:
+            os._exit(126)
+
+    os.close(ready_write_fd)
+    os.close(start_read_fd)
+    ready = os.read(ready_read_fd, 1)
+    os.close(ready_read_fd)
+    if ready != b"1":
+        os.close(start_write_fd)
+        os.waitpid(command_pid, 0)
+        raise RuntimeError("command child exited before establishing its process group")
+    return command_pid, start_write_fd
 
 
 def _parser() -> argparse.ArgumentParser:

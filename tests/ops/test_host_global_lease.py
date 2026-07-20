@@ -5,13 +5,12 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from scripts.run_with_host_lease import repo_common_lock_path, run_with_lease
+from scripts.run_with_host_lease import repo_common_lock_path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -209,51 +208,55 @@ def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
     assert successor.returncode == 0
 
 
-def test_signal_arriving_during_command_spawn_is_replayed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_outer_owner_keeps_lease_until_command_dies_if_supervisor_is_killed(
+    tmp_path: Path,
 ) -> None:
-    resource = f"test-host-lease-spawn-signal-{time.time_ns()}"
-    spawn_started = tmp_path / "spawn-started"
-    command = [sys.executable, "-c", "import time; time.sleep(30)"]
-    real_popen = subprocess.Popen
-    real_fork = os.fork
-    senders: list[threading.Thread] = []
-
-    def delayed_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        if args and args[0] == command:
-            spawn_started.touch()
-            time.sleep(0.4)
-        return real_popen(*args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(subprocess, "Popen", delayed_popen)
-
-    def terminate_during_spawn() -> None:
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and not spawn_started.exists():
-            time.sleep(0.01)
-        if spawn_started.exists():
-            os.kill(os.getpid(), signal.SIGTERM)
-
-    def fork_then_schedule_signal() -> int:
-        child_pid = real_fork()
-        if child_pid > 0:
-            sender = threading.Thread(target=terminate_during_spawn)
-            sender.start()
-            senders.append(sender)
-        return child_pid
-
-    monkeypatch.setattr(os, "fork", fork_then_schedule_signal)
-    return_code = run_with_lease(
-        resource=resource,
-        execution_id="spawn-signal-holder",
-        command=command,
+    resource = f"test-host-lease-supervisor-crash-{time.time_ns()}"
+    command_pid_path = tmp_path / "command.pid"
+    child = (
+        "import os, signal, time; from pathlib import Path; "
+        f"Path({str(command_pid_path)!r}).write_text(str(os.getpid())); "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
     )
-    for sender in senders:
-        sender.join(timeout=1)
+    holder = subprocess.Popen(
+        _lease_command(resource, "supervisor-crash-holder", child),
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    lock_path = repo_common_lock_path(resource)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if command_pid_path.exists():
+            break
+        time.sleep(0.02)
+    else:
+        holder.kill()
+        holder.wait()
+        pytest.fail("wrapped command did not start")
 
-    assert return_code == 143
+    supervisor_pid = int(json.loads(lock_path.read_text())["pid"])
+    command_pid = int(command_pid_path.read_text())
+    os.kill(supervisor_pid, signal.SIGKILL)
+
+    contender = subprocess.run(
+        _lease_command(resource, "recovery-contender", "pass"),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert contender.returncode == 75
+
+    holder_stdout, holder_stderr = holder.communicate(timeout=5)
+    assert holder.returncode == 137, (holder_stdout, holder_stderr)
+    assert '"event": "host_lease_recovered_after_supervisor_exit"' in holder_stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(command_pid, 0)
+
     successor = subprocess.run(
-        _lease_command(resource, "spawn-signal-successor", "pass"),
+        _lease_command(resource, "recovery-successor", "pass"),
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
