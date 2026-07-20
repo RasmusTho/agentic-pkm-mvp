@@ -292,6 +292,14 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   `auth_missing` or another transient reason. Before confirmed teardown, dependent sources remain
   enabled but degraded for retry; cursors and acquired artifacts remain unchanged. After confirmed
   teardown they are disabled with the same reason.
+- Authenticated token consumption requires positive durable binding authority (`connected` with no
+  reason code), not merely readable/fresh ciphertext. A postcanonical reconnect failure therefore
+  remains blocked until retry converges the binding row. Pending-grant cleanup may clear a terminal
+  state only when the grant's durable predecessor-version evidence matches that exact terminal
+  transition; stale residue is cleanup-only. Terminal binding/source degradation is an
+  idempotent producer, so a retry repairs dependent-source truth after a partial write before any
+  compensation journal is removed. Status preserves persisted `auth_disconnected`/`auth_revoked`
+  over transient key/read failures.
 - Disconnect then revokes at the provider (`oauth2.googleapis.com/revoke`). Only Google's
   documented HTTP 400 `invalid_token` outcome — meaning already expired or revoked — permits local
   teardown with `revoked=false`. `invalid_request`, intermediary/unknown 4xx responses, redirects,

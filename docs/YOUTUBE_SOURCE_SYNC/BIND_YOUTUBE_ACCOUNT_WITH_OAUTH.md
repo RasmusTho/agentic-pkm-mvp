@@ -90,8 +90,11 @@ touch the repo, vault, settings values, logs, events, or receipts.
    ciphertext remains solely as retry authority after a crash or indeterminate provider response;
    it cannot be rewritten as `auth_missing` or consumed as a fresh cached token. Compensated refresh
    residue reports `auth_revoked`; its cleanup persists that terminal truth before deleting the
-   journal. Disconnect may then finish teardown, while reconnect can replace terminal authority only
-   through new consent whose canonical ciphertext and binding state both converge.
+   journal, retrying dependent-source degradation idempotently after any partial write. Disconnect
+   may then finish teardown, while reconnect can replace terminal authority only through new consent
+   whose pending grant names the exact predecessor binding version and whose canonical
+   ciphertext and binding state both converge. Redundant/stale pending cleanup never clears
+   `auth_disconnected` or `auth_revoked`.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file
@@ -110,6 +113,9 @@ touch the repo, vault, settings values, logs, events, or receipts.
    redirect following at the request site. Teardown deletes the token record, disables dependent
    sources with `auth_disconnected`, and deletes no acquired artifacts. `reconnect()` re-runs consent
    onto the same binding when the provider channel id matches.
+   Token consumption requires the non-optional binding authority dependency and a positively durable
+   `connected` row with no reason code; ciphertext alone is never access authority. Status likewise
+   gives persisted `auth_disconnected`/`auth_revoked` precedence over transient token-read failures.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + an
    allowlisted OAuth error enum only); no token, code, or client secret in any emitted string.
 

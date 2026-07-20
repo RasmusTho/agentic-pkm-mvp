@@ -215,6 +215,7 @@ class StoredToken:
     promotion_target_binding_id: str | None = None
     promotion_predecessor_refresh_token: str | None = None
     promotion_predecessor_generation: int | None = None
+    promotion_predecessor_binding_updated_at: str | None = None
     promotion_display_label: str | None = None
     # A rotated refresh journal must become non-promotable before provider
     # compensation. ``pending`` means revocation must be retried; ``compensated``
@@ -241,6 +242,9 @@ class StoredToken:
             promotion_target_binding_id=self.promotion_target_binding_id,
             promotion_predecessor_refresh_token=self.promotion_predecessor_refresh_token,
             promotion_predecessor_generation=self.promotion_predecessor_generation,
+            promotion_predecessor_binding_updated_at=(
+                self.promotion_predecessor_binding_updated_at
+            ),
             promotion_display_label=self.promotion_display_label,
             promotion_compensation_state=self.promotion_compensation_state,
         )
@@ -257,6 +261,9 @@ class StoredToken:
             "promotion_target_binding_id": self.promotion_target_binding_id,
             "promotion_predecessor_refresh_token": self.promotion_predecessor_refresh_token,
             "promotion_predecessor_generation": self.promotion_predecessor_generation,
+            "promotion_predecessor_binding_updated_at": (
+                self.promotion_predecessor_binding_updated_at
+            ),
             "promotion_display_label": self.promotion_display_label,
             "promotion_compensation_state": self.promotion_compensation_state,
         }
@@ -279,6 +286,9 @@ class StoredToken:
                 int(data["promotion_predecessor_generation"])
                 if data.get("promotion_predecessor_generation") is not None
                 else None
+            ),
+            promotion_predecessor_binding_updated_at=data.get(
+                "promotion_predecessor_binding_updated_at"
             ),
             promotion_display_label=data.get("promotion_display_label"),
             promotion_compensation_state=data.get("promotion_compensation_state"),

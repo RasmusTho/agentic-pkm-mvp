@@ -699,7 +699,7 @@ class TokenProvider:
         binding_id: str,
         token_store: YouTubeTokenStore,
         oauth_client: OAuthClient,
-        binding_store: AccountBindingStore | None = None,
+        binding_store: AccountBindingStore,
         source_registry: SourceRegistry | None = None,
         skew_seconds: int = _ACCESS_TOKEN_SKEW_SECONDS,
     ) -> None:
@@ -719,12 +719,7 @@ class TokenProvider:
             with self._store.binding_lifecycle_lock(self._binding_id):
                 token = self._read_token()
                 token = self._recover_pending_refresh(token)
-                terminal_reason = self._terminal_binding_reason()
-                if terminal_reason is not None:
-                    raise AuthDegradedError(
-                        terminal_reason,
-                        "account binding authority is locally disabled",
-                    ) from None
+                self._require_connected_binding()
                 if self._is_fresh(token):
                     return token.access_token  # type: ignore[return-value]
                 return self._refresh(token)
@@ -735,6 +730,7 @@ class TokenProvider:
         except TokenStoreKeyMissingError:
             terminal_reason = self._terminal_binding_reason()
             if terminal_reason is not None:
+                self._degrade(terminal_reason)
                 raise AuthDegradedError(
                     terminal_reason, "account binding is disconnected"
                 ) from None
@@ -743,6 +739,7 @@ class TokenProvider:
         if token is None:
             terminal_reason = self._terminal_binding_reason()
             if terminal_reason is not None:
+                self._degrade(terminal_reason)
                 raise AuthDegradedError(
                     terminal_reason, "account binding is disconnected"
                 ) from None
@@ -751,8 +748,6 @@ class TokenProvider:
         return token
 
     def _terminal_binding_reason(self) -> str | None:
-        if self._bindings is None:
-            return None
         binding = self._bindings.get(self._binding_id)
         if binding is not None and binding.reason_code in {
             "auth_disconnected",
@@ -760,6 +755,28 @@ class TokenProvider:
         }:
             return binding.reason_code
         return None
+
+    def _require_connected_binding(self) -> None:
+        """Require positive durable binding authority before token release."""
+        binding = self._bindings.get(self._binding_id)
+        if (
+            binding is not None
+            and binding.state == "connected"
+            and binding.reason_code is None
+        ):
+            return
+        reason_code = (
+            binding.reason_code
+            if binding is not None and binding.reason_code is not None
+            else "auth_missing"
+        )
+        # A prior crash can persist the binding before dependent-source truth.
+        # Retrying this idempotent producer repairs that split before failing.
+        self._degrade(reason_code)
+        raise AuthDegradedError(
+            reason_code,
+            "account binding lacks connected authority",
+        ) from None
 
     def _is_fresh(self, token: StoredToken) -> bool:
         if not token.access_token or not token.expires_at:
@@ -994,19 +1011,20 @@ class TokenProvider:
 
     def _degrade(self, reason_code: str) -> None:
         """Stamp the reason on the binding + dependent sources; no cursor touched."""
-        if self._bindings is not None:
-            binding = self._bindings.get(self._binding_id)
-            if binding is not None:
-                if binding.reason_code in {"auth_disconnected", "auth_revoked"}:
-                    return
+        binding = self._bindings.get(self._binding_id)
+        effective_reason = reason_code
+        if binding is not None:
+            if binding.reason_code in {"auth_disconnected", "auth_revoked"}:
+                effective_reason = binding.reason_code
+            else:
                 self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
         if self._registry is not None:
             for source in self._registry.list_for_account(self._binding_id):
-                self._registry.record_source_degradation(source.binding_id, reason_code=reason_code)
+                self._registry.record_source_degradation(
+                    source.binding_id, reason_code=effective_reason
+                )
 
     def _clear_degradation(self) -> None:
-        if self._bindings is None:
-            return
         binding = self._bindings.get(self._binding_id)
         if (
             binding is not None
@@ -1169,6 +1187,26 @@ class YouTubeAccountBinder:
                             canonical_binding.state != "connected"
                             or canonical_binding.reason_code is not None
                         ):
+                            if (
+                                canonical_binding.reason_code
+                                in {"auth_disconnected", "auth_revoked"}
+                                and not self._pending_supersedes_binding_state(
+                                    token, canonical_binding
+                                )
+                            ):
+                                try:
+                                    self._store.delete(pending_grant_id)
+                                except Exception:
+                                    return {
+                                        "status": "canonical_pending_cleanup",
+                                        "pending_grant_id": pending_grant_id,
+                                        "binding_id": canonical_id,
+                                    }
+                                return {
+                                    "status": "canonical_terminal",
+                                    "pending_grant_id": pending_grant_id,
+                                    "binding_id": canonical_id,
+                                }
                             try:
                                 canonical_binding = self._bindings.set_state(
                                     canonical_id,
@@ -1224,6 +1262,17 @@ class YouTubeAccountBinder:
                         "status": "compensated",
                         "pending_grant_id": pending_grant_id,
                     }
+
+    @staticmethod
+    def _pending_supersedes_binding_state(
+        pending: StoredToken, binding: AccountBinding
+    ) -> bool:
+        """Prove new consent was issued against this exact binding version."""
+        predecessor_version = pending.promotion_predecessor_binding_updated_at
+        return (
+            predecessor_version is not None
+            and hmac.compare_digest(predecessor_version, binding.updated_at)
+        )
 
     def finish_device_connection(self, connection: DeviceConnection) -> dict[str, Any]:
         """Complete one device poll, persist tokens encrypted, bind the account.
@@ -1822,6 +1871,9 @@ class YouTubeAccountBinder:
                         else None
                     ),
                     promotion_predecessor_generation=predecessor_generation,
+                    promotion_predecessor_binding_updated_at=(
+                        binding.updated_at if binding is not None else None
+                    ),
                     promotion_display_label=identity.channel_title,
                 )
                 self._bind_pending_grant_identity(
@@ -2019,14 +2071,22 @@ class YouTubeAccountBinder:
                 {"status": "absent", "reason_code": "auth_missing", "scopes": [], "token_store": "encrypted"}
             )
         state, reason_code = binding.state, binding.reason_code
+        terminal_reason = (
+            reason_code
+            if reason_code in {"auth_disconnected", "auth_revoked"}
+            else None
+        )
         try:
             token = self._store.get(binding_id)
             pending_refresh = self._store.get(_pending_refresh_id(binding_id))
         except TokenStoreKeyMissingError:
             token = None
             pending_refresh = None
-            state, reason_code = "degraded", "auth_key_missing"
-        if pending_refresh is not None:
+            if terminal_reason is None:
+                state, reason_code = "degraded", "auth_key_missing"
+        if terminal_reason is not None:
+            state, reason_code = "degraded", terminal_reason
+        elif pending_refresh is not None:
             # A provider response may have rotated the standing credential
             # while canonical promotion is incomplete. The old canonical row
             # is not sufficient authority for a connected status.

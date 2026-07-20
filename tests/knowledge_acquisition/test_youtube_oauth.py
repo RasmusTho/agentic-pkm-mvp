@@ -1192,6 +1192,16 @@ def test_reconnect_postcanonical_state_failure_preserves_pending_until_state_con
     assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
     assert bindings.get(binding_id).state == "degraded"
     _assert_no_exception_chain(excinfo.value)
+    queued_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(_Provider()),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    with pytest.raises(oauth.AuthDegradedError) as queued_error:
+        queued_provider.get_access_token()
+    assert queued_error.value.reason_code == "auth_expired"
 
     recovered = binder.retry_pending_grant_compensation(pending_id)
 
@@ -3250,6 +3260,126 @@ def test_disconnected_reconnect_postcanonical_failure_blocks_until_retry(
     assert bindings.get(binding_id).state == "connected"
     assert bindings.get(binding_id).reason_code is None
     assert store.get(pending_id) is None
+
+
+@pytest.mark.parametrize("terminal_reason", ["auth_disconnected", "auth_revoked"])
+def test_stale_pending_cleanup_cannot_resurrect_terminal_binding(
+    store, bindings, registry, terminal_reason
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    pending_id = oauth._pending_grant_id("stale-cleanup", binding_id)
+    store.put(
+        pending_id,
+        replace(
+            canonical,
+            promotion_target_binding_id=binding_id,
+            promotion_predecessor_refresh_token=canonical.refresh_token,
+            promotion_predecessor_generation=canonical.authority_generation,
+        ),
+    )
+    bindings.set_state(
+        binding_id, state="degraded", reason_code=terminal_reason
+    )
+
+    result = binder.retry_pending_grant_compensation(pending_id)
+
+    assert result["status"] == "canonical_terminal"
+    assert store.has_record(pending_id) is False
+    assert bindings.get(binding_id).state == "degraded"
+    assert bindings.get(binding_id).reason_code == terminal_reason
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(_Provider()),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    with pytest.raises(oauth.AuthDegradedError) as excinfo:
+        token_provider.get_access_token()
+    assert excinfo.value.reason_code == terminal_reason
+
+
+def test_repeated_consumer_converges_partial_terminal_source_degradation(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    cursor_before = dict(source.cursor)
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    store.put(binding_id, canonical.with_expired_access())
+    provider.token_responses.append(_invalid_grant())
+    original_record = registry.record_source_degradation
+    failed_once = False
+
+    def fail_source_once(target_binding_id, *, reason_code):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            raise OSError("synthetic source degradation crash")
+        return original_record(target_binding_id, reason_code=reason_code)
+
+    monkeypatch.setattr(registry, "record_source_degradation", fail_source_once)
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    with pytest.raises(OSError, match="synthetic source degradation crash"):
+        token_provider.get_access_token()
+
+    assert bindings.get(binding_id).reason_code == "auth_revoked"
+    assert registry.get(source.binding_id).last_error is None
+    with pytest.raises(oauth.AuthDegradedError) as retry_error:
+        token_provider.get_access_token()
+
+    assert retry_error.value.reason_code == "auth_revoked"
+    repaired_source = registry.get(source.binding_id)
+    assert repaired_source.last_error["reason_code"] == "auth_revoked"
+    assert repaired_source.cursor == cursor_before
+    assert repaired_source.enabled is True
+
+
+def test_terminal_status_precedes_missing_key_for_disconnect_retry_authority(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    provider.revoke_responses.append(
+        httpx.Response(503, json={"error": "temporarily_unavailable"})
+    )
+
+    result = binder.disconnect(binding_id)
+    assert result["status"] == "disconnect_failed"
+    assert bindings.get(binding_id).reason_code == "auth_disconnected"
+    monkeypatch.delenv(tokstore.KEY_ENV_VAR, raising=False)
+
+    assert binder.status(binding_id)["reason_code"] == "auth_disconnected"
+
+
+def test_token_provider_requires_binding_authority_dependency(store):
+    with pytest.raises(TypeError, match="binding_store"):
+        oauth.TokenProvider(  # type: ignore[call-arg]
+            binding_id="missing-binding-authority",
+            token_store=store,
+            oauth_client=_client(_Provider()),
+        )
 
 
 def test_missing_client_credentials_fail_loud(monkeypatch):
