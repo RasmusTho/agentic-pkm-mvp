@@ -8,6 +8,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+from tests.helpers.runtime_start_harness import run_runtime_start
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # This full-start fixture exercises later health/deferred-index behavior. The
@@ -74,6 +76,7 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
         f"""
         #!/usr/bin/env python3
         import json
+        import os
         import sys
 
         HEALTH = {health_json!r}
@@ -92,6 +95,10 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
                 print(f"pkm-dev-{{service}}-1    {{service}}   running")
 
         args = sys.argv[1:]
+        progress_path = os.environ.get("STARTUP_HARNESS_PROGRESS_PATH")
+        if progress_path:
+            with open(progress_path, "a", encoding="utf-8") as handle:
+                handle.write(f"docker {{' '.join(args)}}\\n")
         if not args:
             raise SystemExit(0)
         if args[0] == "info":
@@ -180,9 +187,14 @@ def _fake_curl_bin(bin_dir: Path, health: dict[str, object]) -> None:
         bin_dir / "curl",
         f"""
         #!/usr/bin/env python3
+        import os
         import sys
 
         HEALTH = {health_json!r}
+        progress_path = os.environ.get("STARTUP_HARNESS_PROGRESS_PATH")
+        if progress_path:
+            with open(progress_path, "a", encoding="utf-8") as handle:
+                handle.write(f"curl {{' '.join(sys.argv[1:])}}\\n")
         url = next((arg for arg in reversed(sys.argv[1:]) if arg.startswith("http")), "")
         if "/api/health" in url:
             print(HEALTH)
@@ -302,6 +314,7 @@ def _runtime_env(tmp_path: Path, health: dict[str, object]) -> dict[str, str]:
             "WORKER_HEARTBEAT_TIMEOUT": "1",
             "VERIFY_RUNTIME_SERVICE_WAIT_SECONDS": "1",
             "VERIFY_RUNTIME_SERVICE_WAIT_SLEEP_SECONDS": "1",
+            "STARTUP_HARNESS_PROGRESS_PATH": str(tmp_path / "startup-progress.log"),
         }
     )
     return env
@@ -328,14 +341,12 @@ def test_runtime_verify_tolerates_deferred_index_rebuild(tmp_path: Path) -> None
 def test_dev_start_full_returns_zero_with_deferred_index_rebuild(tmp_path: Path) -> None:
     env = _runtime_env(tmp_path, _deferred_index_health())
 
-    result = subprocess.run(
+    result = run_runtime_start(
         ["make", "dev-start-full"],
         cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
+        progress_path=Path(env["STARTUP_HARNESS_PROGRESS_PATH"]),
+        total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
@@ -347,14 +358,12 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
     env = _runtime_env(tmp_path, _deferred_index_health())
     env["ENVIRONMENT"] = "dev"
 
-    result = subprocess.run(
+    result = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
         cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
+        progress_path=Path(env["STARTUP_HARNESS_PROGRESS_PATH"]),
+        total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
@@ -368,14 +377,12 @@ def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:
     env["COMPOSE_PROJECT_NAME"] = "pkm-prod"
     env["PKM_ENVIRONMENT"] = "prod"
 
-    result = subprocess.run(
+    result = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
         cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
+        progress_path=Path(env["STARTUP_HARNESS_PROGRESS_PATH"]),
+        total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 1
