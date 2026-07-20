@@ -90,6 +90,8 @@ def run_with_lease(
     if poll_seconds <= 0:
         raise ValueError("poll_seconds must be > 0")
 
+    forwarded_signals = {signal.SIGINT, signal.SIGTERM}
+    previous_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
     started = time.monotonic()
     lock_path = repo_common_lock_path(resource)
     lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -107,6 +109,7 @@ def run_with_lease(
             poll_seconds=poll_seconds,
             started=started,
             status_fd=write_fd,
+            inherited_signal_mask=previous_signal_mask,
         )
         os._exit(127)
 
@@ -121,6 +124,7 @@ def run_with_lease(
 
     for signum in (signal.SIGINT, signal.SIGTERM):
         previous_handlers[signum] = signal.signal(signum, forward_signal)
+    signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
     command_status: dict[str, object] | None = None
     command_complete: dict[str, object] | None = None
     try:
@@ -235,7 +239,24 @@ def _acquire_and_exec(
     poll_seconds: float,
     started: float,
     status_fd: int,
+    inherited_signal_mask: set[signal.Signals],
 ) -> None:
+    command_pid: int | None = None
+    pending_signals: list[int] = []
+
+    def forward_signal(signum: int, _frame: object) -> None:
+        if command_pid is None:
+            pending_signals.append(signum)
+            return
+        try:
+            os.killpg(command_pid, signum)
+        except ProcessLookupError:
+            pass
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, forward_signal)
+    signal.pthread_sigmask(signal.SIG_SETMASK, inherited_signal_mask)
+
     while True:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -270,20 +291,6 @@ def _acquire_and_exec(
     _write_receipt(lock_fd, held_receipt)
     _report_to_parent(status_fd, held_receipt)
 
-    command_pid: int | None = None
-    pending_signals: list[int] = []
-
-    def forward_signal(signum: int, _frame: object) -> None:
-        if command_pid is None:
-            pending_signals.append(signum)
-            return
-        try:
-            os.killpg(command_pid, signum)
-        except ProcessLookupError:
-            pass
-
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(signum, forward_signal)
     command_pid, start_fd = _spawn_gated_command(
         command=command,
         lock_fd=lock_fd,
