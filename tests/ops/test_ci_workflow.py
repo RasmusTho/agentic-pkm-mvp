@@ -58,6 +58,9 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     assert "app/agents/panel/**" in job
     assert "tests/index/test_provenance_stamp.py" in job
     assert "tests/indexer/test_outbox_roundtrip_pg.py" in job
+    assert "app/knowledge_acquisition/youtube_api_client.py" in job
+    assert "app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py" in job
+    assert "tests/knowledge_acquisition/test_youtube_api_quota_pg.py" in job
     assert '-m "pg"' in job
 
 

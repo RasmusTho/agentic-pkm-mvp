@@ -687,8 +687,11 @@ jobs:
               - 'app/agents/panel/**'
               - 'app/index/**'
               - 'app/stores/pg.py'
+              - 'app/knowledge_acquisition/youtube_api_client.py'
+              - 'app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py'
               - 'tests/index/test_provenance_stamp.py'
               - 'tests/indexer/test_outbox_roundtrip_pg.py'
+              - 'tests/knowledge_acquisition/test_youtube_api_quota_pg.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -708,7 +711,7 @@ jobs:
         if: steps.changes.outputs.index_pg == 'true'
         run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
-      - name: Run exact index PG acceptance surface
+      - name: Run exact index and YouTube quota PG acceptance surface
         if: steps.changes.outputs.index_pg == 'true'
         shell: bash
         run: |
@@ -716,6 +719,7 @@ jobs:
           pytest -q -m "pg" \
             tests/index/test_provenance_stamp.py \
             tests/indexer/test_outbox_roundtrip_pg.py \
+            tests/knowledge_acquisition/test_youtube_api_quota_pg.py \
             --tb=short \
             | tee pytest-index-pg.log
 
