@@ -156,7 +156,11 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   a successful sync. Before a device-token poll can issue a standing grant, connect proves the
   encryption key and atomic token-store write/read path. An authenticated encrypted canary binds the
   configured key to the existing aggregate; a valid-but-wrong key blocks before polling and cannot
-  create mixed-key records. Each POSIX aggregate write syncs its staged file, atomically replaces the
+  create mixed-key records. Each current ciphertext also authenticates its exact outer record id and
+  carries that id inside its encrypted envelope, rejecting cross-binding substitution. Legacy
+  pre-AAD records upgrade together only after their binding/channel or pending-target associations
+  are proven; unprovable or pre-swapped authority fails closed without rewriting the aggregate.
+  Each POSIX aggregate write syncs its staged file, atomically replaces the
   live path, and confirms the parent-directory barrier (Windows uses write-through replacement).
   Visible readback after a failed barrier is not crash-durable authority until a retry barrier
   succeeds. A returned grant is immediately
@@ -174,9 +178,10 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   lock order. Encrypted target/predecessor/credential-generation evidence plus the binding row's
   durable monotonic generation allows promotion only over the exact unchanged predecessor;
   same-channel token mismatch is preserved as a conflict without delete/revoke. Clearing terminal
-  binding authority additionally uses generation compare-and-set, so a same-timestamp terminal
-  write defeats stale pending promotion while exact matching-generation reconnect remains
-  recoverable. Exact same refresh authority permits redundant cleanup. Refresh proves store
+  binding authority additionally uses generation compare-and-set on direct reconnect and
+  candidate-row recovery, so a same-timestamp or concurrent terminal write defeats stale pending
+  promotion while exact matching-generation disconnected recovery remains possible. Exact same
+  refresh authority permits redundant cleanup. Refresh proves store
   readiness before provider egress and journals any
   unexpected rotated refresh credential before canonical write, so store failure recovers without
   another provider request and a newer canonical generation is never overwritten. Provider

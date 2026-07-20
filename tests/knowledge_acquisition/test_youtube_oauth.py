@@ -219,6 +219,18 @@ def _connect_device(binder: oauth.YouTubeAccountBinder) -> dict:
     return binder.finish_device_connection(connection)
 
 
+def _legacy_encrypted_record(token: tokstore.StoredToken) -> dict[str, str]:
+    """Produce the pre-binding-AAD record shape for migration regressions."""
+    key = bytes.fromhex(TEST_STORE_KEY)
+    nonce = secrets.token_bytes(12)
+    plaintext = json.dumps(token._to_plain(), sort_keys=True).encode("utf-8")
+    ciphertext = tokstore.AESGCM(key).encrypt(nonce, plaintext, None)
+    return {
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+        "nonce": base64.b64encode(nonce).decode("ascii"),
+    }
+
+
 # --- AC1 --------------------------------------------------------------------
 
 
@@ -1618,6 +1630,155 @@ def test_valid_wrong_store_key_cannot_create_mixed_key_aggregate(store, monkeypa
     monkeypatch.setenv(tokstore.KEY_ENV_VAR, TEST_STORE_KEY)
     assert store.get("canonical") == token
     assert store.has_record("wrong-key-record") is False
+
+
+def test_ciphertext_record_swap_cannot_cross_binding_authority(store):
+    token_a = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH,
+        access_token=SENTINEL_ACCESS,
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-20T00:00:00+00:00",
+        provider_channel_id="UC__test__aad_channel_a",
+    )
+    token_b = replace(
+        token_a,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        provider_channel_id="UC__test__aad_channel_b",
+    )
+    store.put("binding-a", token_a)
+    store.put("binding-b", token_b)
+    aggregate = json.loads(store.path.read_text(encoding="utf-8"))
+    aggregate["records"]["binding-a"], aggregate["records"]["binding-b"] = (
+        aggregate["records"]["binding-b"],
+        aggregate["records"]["binding-a"],
+    )
+    store.path.write_text(json.dumps(aggregate, sort_keys=True), encoding="utf-8")
+    swapped_bytes = store.path.read_bytes()
+
+    with pytest.raises(tokstore.TokenStoreKeyMismatchError) as excinfo:
+        store.get("binding-a")
+
+    assert store.path.read_bytes() == swapped_bytes
+    assert all(secret not in str(excinfo.value) for secret in _ALL_SENTINELS)
+    _assert_no_exception_chain(excinfo.value)
+
+
+def test_validated_legacy_store_upgrades_every_record_to_binding_aad(
+    store, bindings, registry
+):
+    channel_a = "UC__test__legacy_channel_a"
+    channel_b = "UC__test__legacy_channel_b"
+    binding_a = bindings.create(
+        provider_channel_id=channel_a,
+        display_label="Legacy A",
+        scopes=[oauth.SCOPE],
+        account_binding_id="legacy-binding-a",
+    )
+    binding_b = bindings.create(
+        provider_channel_id=channel_b,
+        display_label="Legacy B",
+        scopes=[oauth.SCOPE],
+        account_binding_id="legacy-binding-b",
+    )
+    token_a = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH,
+        access_token=SENTINEL_ACCESS,
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-20T00:00:00+00:00",
+        provider_channel_id=channel_a,
+    )
+    token_b = replace(
+        token_a,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        provider_channel_id=channel_b,
+    )
+    store.path.write_text(
+        json.dumps(
+            {
+                "schema": "youtube-token-store.v1",
+                "key_check": tokstore.YouTubeTokenStore._encrypted_record(
+                    bytes.fromhex(TEST_STORE_KEY), tokstore._KEY_CHECK_PLAINTEXT
+                ),
+                "records": {
+                    binding_a.account_binding_id: _legacy_encrypted_record(token_a),
+                    binding_b.account_binding_id: _legacy_encrypted_record(token_b),
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    _binder(_Provider(), store, bindings, registry)
+
+    assert store.get(binding_a.account_binding_id) == token_a
+    upgraded = json.loads(store.path.read_text(encoding="utf-8"))
+    assert upgraded["key_check"]
+    assert {
+        record["aad_version"] for record in upgraded["records"].values()
+    } == {"binding-id.v1"}
+    assert store.get(binding_b.account_binding_id) == token_b
+
+
+def test_pre_migration_legacy_cross_binding_swap_fails_closed_without_rebind(
+    store, bindings, registry
+):
+    channel_a = "UC__test__legacy_swap_channel_a"
+    channel_b = "UC__test__legacy_swap_channel_b"
+    binding_a = bindings.create(
+        provider_channel_id=channel_a,
+        display_label="Legacy Swap A",
+        scopes=[oauth.SCOPE],
+        account_binding_id="legacy-swap-binding-a",
+    )
+    binding_b = bindings.create(
+        provider_channel_id=channel_b,
+        display_label="Legacy Swap B",
+        scopes=[oauth.SCOPE],
+        account_binding_id="legacy-swap-binding-b",
+    )
+    token_a = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH,
+        access_token=SENTINEL_ACCESS,
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-20T00:00:00+00:00",
+        provider_channel_id=channel_a,
+    )
+    token_b = replace(
+        token_a,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        provider_channel_id=channel_b,
+    )
+    store.path.write_text(
+        json.dumps(
+            {
+                "schema": "youtube-token-store.v1",
+                "key_check": tokstore.YouTubeTokenStore._encrypted_record(
+                    bytes.fromhex(TEST_STORE_KEY), tokstore._KEY_CHECK_PLAINTEXT
+                ),
+                "records": {
+                    binding_a.account_binding_id: _legacy_encrypted_record(token_b),
+                    binding_b.account_binding_id: _legacy_encrypted_record(token_a),
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    swapped_bytes = store.path.read_bytes()
+    _binder(_Provider(), store, bindings, registry)
+
+    with pytest.raises(tokstore.TokenStoreKeyMismatchError) as excinfo:
+        store.get(binding_a.account_binding_id)
+
+    assert store.path.read_bytes() == swapped_bytes
+    assert all(secret not in str(excinfo.value) for secret in _ALL_SENTINELS)
+    _assert_no_exception_chain(excinfo.value)
 
 
 def test_status_never_reports_tampered_encrypted_record_as_connected(
@@ -3388,6 +3549,172 @@ def test_disconnected_reconnect_postcanonical_failure_blocks_until_retry(
     assert bindings.get(binding_id).state == "connected"
     assert bindings.get(binding_id).reason_code is None
     assert store.get(pending_id) is None
+
+
+def test_direct_reconnect_concurrent_terminal_generation_wins_cas(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    disconnected = bindings.set_state(
+        binding_id, state="degraded", reason_code="auth_disconnected"
+    )
+    reconnect = binder.start_reconnect(binding_id)
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    original_set_state = bindings.set_state
+    injected_terminal = False
+
+    def revoke_before_reconnect_cas(
+        target_binding_id,
+        *,
+        state,
+        reason_code,
+        expected_binding_generation=None,
+    ):
+        nonlocal injected_terminal
+        if state == "connected" and not injected_terminal:
+            injected_terminal = True
+            original_set_state(
+                target_binding_id,
+                state="degraded",
+                reason_code="auth_revoked",
+                expected_binding_generation=disconnected.binding_generation,
+            )
+        return original_set_state(
+            target_binding_id,
+            state=state,
+            reason_code=reason_code,
+            expected_binding_generation=expected_binding_generation,
+        )
+
+    monkeypatch.setattr(bindings, "set_state", revoke_before_reconnect_cas)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        binder.finish_device_connection(reconnect)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id is not None
+    terminal = bindings.get(binding_id)
+    assert terminal is not None
+    assert terminal.reason_code == "auth_revoked"
+    assert terminal.binding_generation == disconnected.binding_generation + 1
+    assert store.has_record(pending_id) is True
+    pending = store.get(pending_id)
+    assert pending is not None
+    assert oauth._pending_binding_generation(pending) == disconnected.binding_generation
+
+    result = binder.retry_pending_grant_compensation(pending_id)
+    assert result["status"] == "canonical_terminal"
+    assert bindings.get(binding_id).reason_code == "auth_revoked"
+
+
+def test_candidate_recovery_transient_negative_read_promotes_exact_disconnected_generation(
+    store, bindings, registry, monkeypatch
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    disconnected = bindings.set_state(
+        binding_id, state="degraded", reason_code="auth_disconnected"
+    )
+    pending_id = oauth._pending_grant_id("candidate-transient-negative", binding_id)
+    pending = replace(
+        canonical,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=canonical.refresh_token,
+        promotion_predecessor_generation=canonical.authority_generation,
+        promotion_predecessor_binding_updated_at=oauth._binding_generation_evidence(
+            disconnected.binding_generation
+        ),
+        promotion_display_label=SYNTH_CHANNEL_TITLE,
+    )
+    store.put(pending_id, pending)
+    original_get = bindings.get
+    transient_negative = True
+
+    def miss_once(target_binding_id):
+        nonlocal transient_negative
+        if target_binding_id == binding_id and transient_negative:
+            transient_negative = False
+            return None
+        return original_get(target_binding_id)
+
+    monkeypatch.setattr(bindings, "get", miss_once)
+
+    result = binder.retry_pending_grant_compensation(pending_id)
+
+    assert result["status"] == "promoted"
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH_2
+    assert store.has_record(pending_id) is False
+    recovered = original_get(binding_id)
+    assert recovered is not None
+    assert recovered.state == "connected"
+    assert recovered.binding_generation == disconnected.binding_generation + 1
+
+
+def test_candidate_recovery_transient_negative_read_rejects_stale_revoked_generation(
+    store, bindings, registry, monkeypatch
+):
+    binder = _binder(_Provider(), store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    predecessor_binding = bindings.get(binding_id)
+    assert canonical is not None
+    assert predecessor_binding is not None
+    pending_id = oauth._pending_grant_id("candidate-stale-revoked", binding_id)
+    stale_pending = replace(
+        canonical,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=canonical.refresh_token,
+        promotion_predecessor_generation=canonical.authority_generation,
+        promotion_predecessor_binding_updated_at=oauth._binding_generation_evidence(
+            predecessor_binding.binding_generation
+        ),
+        promotion_display_label=SYNTH_CHANNEL_TITLE,
+    )
+    store.put(pending_id, stale_pending)
+    revoked = bindings.set_state(
+        binding_id, state="degraded", reason_code="auth_revoked"
+    )
+    original_get = bindings.get
+    transient_negative = True
+
+    def miss_once(target_binding_id):
+        nonlocal transient_negative
+        if target_binding_id == binding_id and transient_negative:
+            transient_negative = False
+            return None
+        return original_get(target_binding_id)
+
+    monkeypatch.setattr(bindings, "get", miss_once)
+
+    result = binder.retry_pending_grant_compensation(pending_id)
+
+    assert result == {
+        "status": "pending_conflict",
+        "pending_grant_id": pending_id,
+        "binding_id": binding_id,
+    }
+    assert store.get(binding_id) == canonical
+    assert store.get(pending_id) == stale_pending
+    terminal = original_get(binding_id)
+    assert terminal is not None
+    assert terminal.reason_code == "auth_revoked"
+    assert terminal.binding_generation == revoked.binding_generation
 
 
 @pytest.mark.parametrize("terminal_reason", ["auth_disconnected", "auth_revoked"])

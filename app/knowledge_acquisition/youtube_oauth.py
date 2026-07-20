@@ -309,6 +309,23 @@ def _binding_generation_evidence(binding_generation: int) -> str:
     return f"binding-generation:{binding_generation}"
 
 
+def _pending_binding_generation(pending: StoredToken) -> int | None:
+    """Return exact durable binding-generation evidence, never wall-clock data."""
+    evidence = pending.promotion_predecessor_binding_updated_at
+    prefix = "binding-generation:"
+    if evidence is None or not evidence.startswith(prefix):
+        return None
+    try:
+        generation = int(evidence.removeprefix(prefix))
+    except ValueError:
+        return None
+    if generation < 1 or not hmac.compare_digest(
+        evidence, _binding_generation_evidence(generation)
+    ):
+        return None
+    return generation
+
+
 def _same_refresh_authority(left: StoredToken, right: StoredToken) -> bool:
     """Constant-time equality for the standing provider credential."""
     return bool(left.refresh_token) and hmac.compare_digest(
@@ -327,6 +344,45 @@ def _canonical_token_from_pending(pending: StoredToken) -> StoredToken:
         promotion_display_label=None,
         promotion_compensation_state=None,
     )
+
+
+def _legacy_record_matches_binding_authority(
+    binding_store: AccountBindingStore,
+    record_id: str,
+    token: StoredToken,
+) -> bool:
+    """Prove a pre-AAD record's authority identity before store migration.
+
+    Canonical records are checked against durable binding metadata, with the
+    deterministic candidate id as the only row-absent case. Pending refresh
+    ids derive from their encrypted target. Pending grant handles are not
+    promotion authority by themselves: their encrypted target/channel must be
+    coherent with a durable row or deterministic candidate before rebinding.
+    """
+    channel_id = token.provider_channel_id
+    target_id = token.promotion_target_binding_id
+    if record_id.startswith("pending-youtube-refresh-"):
+        if target_id is None or record_id != _pending_refresh_id(target_id):
+            return False
+        target = binding_store.get(target_id)
+        return (
+            target is not None
+            and channel_id is not None
+            and target.provider_channel_id == channel_id
+        )
+    if record_id.startswith("pending-youtube-grant-"):
+        if target_id is None or channel_id is None:
+            return False
+        target = binding_store.get(target_id)
+        if target is not None:
+            return target.provider_channel_id == channel_id
+        return target_id == _binding_candidate_id(channel_id)
+    if channel_id is None:
+        return False
+    binding = binding_store.get(record_id)
+    if binding is not None:
+        return binding.provider_channel_id == channel_id
+    return record_id == _binding_candidate_id(channel_id)
 
 
 def _now_iso() -> str:
@@ -725,6 +781,11 @@ class TokenProvider:
         self._registry = source_registry
         self._skew = skew_seconds
         self._lock = threading.Lock()
+        self._store.set_legacy_record_validator(
+            lambda record_id, token: _legacy_record_matches_binding_authority(
+                self._bindings, record_id, token
+            )
+        )
 
     def get_access_token(self) -> str:
         with self._lock:
@@ -1111,7 +1172,7 @@ class TokenProvider:
             if binding is not None:
                 if binding.reason_code in {"auth_disconnected", "auth_revoked"}:
                     effective_reason = binding.reason_code
-                else:
+                elif binding.state != "degraded" or binding.reason_code != reason_code:
                     self._bindings.set_state(
                         self._binding_id,
                         state="degraded",
@@ -1164,6 +1225,11 @@ class YouTubeAccountBinder:
         self._bindings = binding_store
         self._identity = identity_probe
         self._registry = source_registry
+        self._store.set_legacy_record_validator(
+            lambda record_id, token: _legacy_record_matches_binding_authority(
+                self._bindings, record_id, token
+            )
+        )
 
     # -- connect (device flow) ------------------------------------------------
 
@@ -1293,18 +1359,15 @@ class YouTubeAccountBinder:
                             canonical_binding.state != "connected"
                             or canonical_binding.reason_code is not None
                         ):
-                            expected_generation: int | None = None
+                            expected_generation = _pending_binding_generation(token)
                             if (
-                                canonical_binding.reason_code
-                                in {"auth_disconnected", "auth_revoked"}
+                                expected_generation
+                                != canonical_binding.binding_generation
                             ):
-                                if self._pending_supersedes_binding_state(
-                                    token, canonical_binding
-                                ):
-                                    expected_generation = (
-                                        canonical_binding.binding_generation
-                                    )
-                                else:
+                                if canonical_binding.reason_code in {
+                                    "auth_disconnected",
+                                    "auth_revoked",
+                                }:
                                     try:
                                         self._store.delete(pending_grant_id)
                                     except Exception:
@@ -1318,6 +1381,11 @@ class YouTubeAccountBinder:
                                         "pending_grant_id": pending_grant_id,
                                         "binding_id": canonical_id,
                                     }
+                                return {
+                                    "status": "binding_pending",
+                                    "pending_grant_id": pending_grant_id,
+                                    "binding_id": canonical_id,
+                                }
                             try:
                                 canonical_binding = self._bindings.set_state(
                                     canonical_id,
@@ -1326,10 +1394,26 @@ class YouTubeAccountBinder:
                                     expected_binding_generation=expected_generation,
                                 )
                             except AccountBindingGenerationConflictError:
+                                try:
+                                    concurrent_binding = self._bindings.get(
+                                        canonical_id
+                                    )
+                                except Exception:
+                                    concurrent_binding = None
+                                if (
+                                    concurrent_binding is None
+                                    or concurrent_binding.reason_code
+                                    not in {"auth_disconnected", "auth_revoked"}
+                                ):
+                                    return {
+                                        "status": "binding_pending",
+                                        "pending_grant_id": pending_grant_id,
+                                        "binding_id": canonical_id,
+                                    }
                                 # A newer terminal transition won the durable
-                                # CAS after this journal was created. The same
-                                # canonical credential makes the journal
-                                # redundant, so cleanup cannot lose authority.
+                                # CAS. The same canonical credential makes this
+                                # journal redundant, so cleanup cannot lose
+                                # provider-revocation authority.
                                 try:
                                     self._store.delete(pending_grant_id)
                                 except Exception:
@@ -1398,14 +1482,7 @@ class YouTubeAccountBinder:
         pending: StoredToken, binding: AccountBinding
     ) -> bool:
         """Prove new consent was issued against this exact binding generation."""
-        predecessor_generation = pending.promotion_predecessor_binding_updated_at
-        return (
-            predecessor_generation is not None
-            and hmac.compare_digest(
-                predecessor_generation,
-                _binding_generation_evidence(binding.binding_generation),
-            )
-        )
+        return _pending_binding_generation(pending) == binding.binding_generation
 
     def finish_device_connection(self, connection: DeviceConnection) -> dict[str, Any]:
         """Complete one device poll, persist tokens encrypted, bind the account.
@@ -1722,6 +1799,17 @@ class YouTubeAccountBinder:
                     ),
                 }
 
+        if (
+            binding is not None
+            and (binding.state != "connected" or binding.reason_code is not None)
+            and _pending_binding_generation(pending) != binding.binding_generation
+        ):
+            return {
+                "status": "pending_conflict",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
+
         # Canonical encrypted authority must be crash-durable before recovery
         # creates a binding row whose default state claims ``connected``. A
         # pending-only restart followed by a failed canonical write therefore
@@ -1776,12 +1864,13 @@ class YouTubeAccountBinder:
             }
         try:
             if binding.state != "connected" or binding.reason_code is not None:
-                expected_generation = (
-                    binding.binding_generation
-                    if binding.reason_code
-                    in {"auth_disconnected", "auth_revoked"}
-                    else None
-                )
+                expected_generation = _pending_binding_generation(pending)
+                if expected_generation != binding.binding_generation:
+                    return {
+                        "status": "pending_conflict",
+                        "pending_grant_id": pending_id,
+                        "binding_id": binding_id,
+                    }
                 self._bindings.set_state(
                     binding_id,
                     state="connected",
@@ -1851,7 +1940,10 @@ class YouTubeAccountBinder:
             isinstance(exact, AccountBinding)
             and exact.account_binding_id == binding_id
             and exact.provider_channel_id == channel_id
-            and exact.reason_code != "auth_disconnected"
+            and (
+                exact.reason_code not in {"auth_disconnected", "auth_revoked"}
+                or self._pending_supersedes_binding_state(pending, exact)
+            )
         ):
             return "recovered", exact
         try:
@@ -2092,7 +2184,11 @@ class YouTubeAccountBinder:
                 result: dict[str, Any] | None = None
                 try:
                     result = self._commit_binding(
-                        binding, binding_id, identity, token
+                        binding,
+                        binding_id,
+                        identity,
+                        token,
+                        pending=pending_with_promotion,
                     )
                 except Exception as error:
                     commit_error = error
@@ -2125,7 +2221,10 @@ class YouTubeAccountBinder:
         binding_id: str,
         identity: ChannelIdentity,
         token: StoredToken,
+        *,
+        pending: StoredToken,
     ) -> dict[str, Any]:
+        expected_binding_generation: int | None = None
         if binding is not None:
             # Re-read inside shared authority so a completed disconnect cannot
             # leave reconnect acting on stale ``connected`` state.
@@ -2133,6 +2232,14 @@ class YouTubeAccountBinder:
             if current_binding is None:
                 raise KeyError(f"no such account binding: {binding_id}")
             binding = current_binding
+            expected_binding_generation = _pending_binding_generation(pending)
+            if (
+                expected_binding_generation is None
+                or binding.binding_generation != expected_binding_generation
+            ):
+                raise AccountBindingGenerationConflictError(
+                    "account binding generation changed before reconnect persistence"
+                )
             # Persist the encrypted credential before creating a row whose durable
             # state claims the account is connected. A missing/invalid key therefore
             # cannot leave a connected binding without a token record (#3990).
@@ -2211,9 +2318,19 @@ class YouTubeAccountBinder:
                     # under the deterministic candidate id; a later retry will
                     # resolve the row and converge without minting another id.
                     raise create_error from None
-        if binding.state != "connected" or binding.reason_code is not None:
+        if expected_binding_generation is not None:
             binding = self._bindings.set_state(
-                binding.account_binding_id, state="connected", reason_code=None
+                binding.account_binding_id,
+                state="connected",
+                reason_code=None,
+                expected_binding_generation=expected_binding_generation,
+            )
+        elif binding.state != "connected" or binding.reason_code is not None:
+            # A binding discovered only after a transient negative read carries
+            # no durable generation evidence. Never clear terminal authority by
+            # deriving a fresh expectation after the grant was issued.
+            raise AccountBindingGenerationConflictError(
+                "pending grant lacks binding generation authority"
             )
         _log.info("youtube oauth: account connected (binding %s)", binding.account_binding_id)
         return redact(

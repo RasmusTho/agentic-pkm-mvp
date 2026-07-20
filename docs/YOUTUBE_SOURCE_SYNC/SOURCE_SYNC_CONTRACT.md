@@ -217,10 +217,14 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   existing `cryptography` dependency, mirroring `app/heimdal/raw_store.py`): path is an app-local
   binding (default under the channel runtime dir; never the vault, never the repo), key from
   `YOUTUBE_TOKEN_STORE_KEY` (32 bytes, same provisioning boundary). An authenticated encrypted
-  canary binds that configured key to the whole aggregate; a legacy aggregate without the canary is
-  admitted only after every existing record authenticates under the key. A missing or valid-but-
-  wrong key with an existing binding ⇒ `auth_key_missing` degraded state before any grant poll or
-  aggregate mutation — never a plaintext fallback or mixed-key file (fail closed).
+  canary binds that configured key to the whole aggregate. Every current record also authenticates
+  its exact outer binding/record id as domain-separated AEAD associated data and repeats that id in
+  its encrypted versioned envelope, so moving valid ciphertext to another index key is rejected.
+  A pre-AAD aggregate is upgraded as one locked atomic write only after the OAuth authority layer
+  proves every decrypted canonical binding/channel association and pending target relation; an
+  unprovable or already cross-swapped legacy association fails closed without mutation. A missing
+  or valid-but-wrong key with an existing binding ⇒ `auth_key_missing` degraded state before any
+  grant poll or aggregate mutation — never a plaintext fallback or mixed-key file (fail closed).
 - Redaction: all sync surfaces route through redaction-aware serialization; field names carry
   `token`/`secret`/`credential` tokens so existing key-name redactors match. Exception text from
   the OAuth/HTTP layer is sanitized (status + an allowlisted OAuth error enum, never arbitrary
@@ -253,6 +257,11 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   encrypted pending record gains its exact target, predecessor refresh authority, next credential
   generation, and the binding row's durable monotonic generation. The latter is compare-and-set
   authority; `updated_at` remains observational wall-clock data and is never lifecycle authority.
+  Direct reconnect derives its expected generation from that already-durable pending evidence and
+  performs terminal-to-connected convergence only through the atomic generation compare-and-set;
+  it never derives a fresh expectation after canonical write. Candidate-row recovery applies the
+  same evidence after a transient negative read: an exact matching-generation disconnected row is
+  recoverable, while a concurrently advanced or stale revoked generation wins and remains terminal.
   Retry removes it only
   when canonical has the same refresh authority, or promotes it only while canonical still exactly
   matches that predecessor generation. Clearing persisted `auth_disconnected`/`auth_revoked`

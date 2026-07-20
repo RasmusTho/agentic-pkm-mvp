@@ -21,7 +21,9 @@ Boundary (INV-YSS-5 / INV-YSS-7):
   plaintext fallback -- this module raises :class:`TokenStoreKeyMissingError`
   and the OAuth layer maps it to the reason code.
 - The on-disk structure carries only non-secret keys (binding ids) mapping to
-  ``{ciphertext, nonce}``; no token, code, or client secret is ever written in
+  ``{ciphertext, nonce, aad_version}``; every current ciphertext authenticates
+  that exact outer id as AEAD associated data and repeats it inside the
+  encrypted envelope. No token, code, or client secret is ever written in
   clear. The record index (which binding ids have tokens) is readable without
   the key so upstream can detect "a binding exists" and fail closed; decrypting
   a record's bytes always requires the key.
@@ -36,8 +38,10 @@ Boundary (INV-YSS-5 / INV-YSS-7):
   ``msvcrt.locking``; unsupported platforms fail closed.
 - Device-flow completion proves key plus locked atomic write/read readiness
   before polling can issue a grant. An encrypted canary binds the configured
-  key to the aggregate, and legacy aggregates authenticate every record before
-  gaining that canary. Each POSIX aggregate write syncs the staged file,
+  key to the aggregate. Pre-AAD aggregates upgrade atomically only after the
+  OAuth layer proves each decrypted record's binding/channel or pending-target
+  identity; an unprovable or pre-swapped legacy association fails closed without
+  mutation. Each POSIX aggregate write syncs the staged file,
   atomically replaces the live path, then syncs its parent directory; Windows
   uses write-through replacement. Visible readback after a failed barrier is
   not durable authority until a fresh barrier succeeds. Fresh grants can
@@ -58,7 +62,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -80,6 +84,9 @@ _AES_KEY_BYTES = 32  # AES-256
 _NONCE_BYTES = 12  # standard AES-GCM nonce size
 _SCHEMA = "youtube-token-store.v1"
 _KEY_CHECK_PLAINTEXT = b"youtube-token-store-key-check.v1"
+_RECORD_AAD_VERSION = "binding-id.v1"
+_RECORD_ENVELOPE_VERSION = "youtube-token-record.v2"
+_RECORD_AAD_PREFIX = b"agentic-pkm:youtube-token-store:binding-id:v1\0"
 _DEFAULT_REL_PATH = Path("runtime/knowledge_acquisition/youtube_token_store.enc")
 
 _LIFECYCLE_LOCKS_GUARD = threading.Lock()
@@ -307,6 +314,7 @@ class YouTubeTokenStore:
     def __init__(self, path: Path | str | None = None) -> None:
         self._path = Path(path) if path is not None else default_token_store_path()
         self._lock = threading.Lock()
+        self._legacy_record_validator: Callable[[str, StoredToken], bool] | None = None
 
     def __repr__(self) -> str:
         return f"YouTubeTokenStore(path={str(self._path)!r})"
@@ -314,6 +322,21 @@ class YouTubeTokenStore:
     @property
     def path(self) -> Path:
         return self._path
+
+    def set_legacy_record_validator(
+        self, validator: Callable[[str, StoredToken], bool]
+    ) -> None:
+        """Install the authority check required before rebinding legacy records.
+
+        Pre-AAD ciphertext does not authenticate its outer record id. It may be
+        upgraded only when the OAuth authority layer proves that the decrypted
+        token belongs to that id. Merely decrypting with the configured key is
+        intentionally insufficient because two valid legacy records could have
+        been exchanged before migration.
+        """
+        if not callable(validator):
+            raise TypeError("legacy record validator must be callable")
+        self._legacy_record_validator = validator
 
     @contextmanager
     def binding_lifecycle_lock(self, binding_id: str) -> Iterator[None]:
@@ -359,24 +382,60 @@ class YouTubeTokenStore:
         return data
 
     @staticmethod
-    def _encrypted_record(key: bytes, plaintext: bytes) -> dict[str, str]:
+    def _record_aad(binding_id: str) -> bytes:
+        if not isinstance(binding_id, str) or not binding_id:
+            raise ValueError("binding_id must be a non-empty string")
+        return _RECORD_AAD_PREFIX + binding_id.encode("utf-8")
+
+    @classmethod
+    def _encrypted_record(
+        cls,
+        key: bytes,
+        plaintext: bytes,
+        *,
+        binding_id: str | None = None,
+    ) -> dict[str, str]:
         nonce = os.urandom(_NONCE_BYTES)
-        ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
-        return {
+        aad = cls._record_aad(binding_id) if binding_id is not None else None
+        ciphertext = AESGCM(key).encrypt(nonce, plaintext, aad)
+        record = {
             "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
             "nonce": base64.b64encode(nonce).decode("ascii"),
         }
+        if binding_id is not None:
+            record["aad_version"] = _RECORD_AAD_VERSION
+        return record
 
-    @staticmethod
-    def _decrypt_record(record: Any, key: bytes) -> bytes:
+    @classmethod
+    def _decrypt_record(
+        cls,
+        record: Any,
+        key: bytes,
+        *,
+        binding_id: str | None = None,
+        allow_legacy: bool = False,
+    ) -> tuple[bytes, bool]:
         failed = False
         plaintext = b""
+        legacy = False
         try:
             if not isinstance(record, dict):
                 raise TypeError
+            aad_version = record.get("aad_version")
+            if binding_id is None:
+                if aad_version is not None:
+                    raise ValueError
+                aad = None
+            elif aad_version == _RECORD_AAD_VERSION:
+                aad = cls._record_aad(binding_id)
+            elif aad_version is None and allow_legacy:
+                aad = None
+                legacy = True
+            else:
+                raise ValueError
             ciphertext = base64.b64decode(record["ciphertext"], validate=True)
             nonce = base64.b64decode(record["nonce"], validate=True)
-            plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
+            plaintext = AESGCM(key).decrypt(nonce, ciphertext, aad)
         except (InvalidTag, binascii.Error, KeyError, TypeError, ValueError):
             failed = True
         if failed:
@@ -385,7 +444,75 @@ class YouTubeTokenStore:
             raise TokenStoreKeyMismatchError(
                 "configured YouTube token-store key cannot authenticate the encrypted aggregate"
             )
-        return plaintext
+        return plaintext, legacy
+
+    @staticmethod
+    def _token_plaintext(binding_id: str, token: StoredToken) -> bytes:
+        return json.dumps(
+            {
+                "envelope": _RECORD_ENVELOPE_VERSION,
+                "record_binding_id": binding_id,
+                "token": token._to_plain(),
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+
+    @classmethod
+    def _decode_token_plaintext(
+        cls,
+        binding_id: str,
+        plaintext: bytes,
+        *,
+        legacy: bool,
+    ) -> StoredToken:
+        malformed = False
+        token: StoredToken | None = None
+        try:
+            decoded = json.loads(plaintext.decode("utf-8"))
+            if not isinstance(decoded, dict):
+                raise TypeError
+            if legacy:
+                token_data = decoded
+            else:
+                if (
+                    decoded.get("envelope") != _RECORD_ENVELOPE_VERSION
+                    or decoded.get("record_binding_id") != binding_id
+                    or not isinstance(decoded.get("token"), dict)
+                ):
+                    raise ValueError
+                token_data = decoded["token"]
+            token = StoredToken._from_plain(token_data)
+        except (KeyError, TypeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            malformed = True
+        if malformed or token is None:
+            raise TokenStoreKeyMismatchError(
+                "configured YouTube token-store key cannot authenticate the encrypted aggregate"
+            )
+        return token
+
+    @classmethod
+    def _decode_token_record(
+        cls,
+        binding_id: str,
+        record: Any,
+        key: bytes,
+        *,
+        allow_legacy: bool,
+    ) -> tuple[StoredToken, bool]:
+        plaintext, legacy = cls._decrypt_record(
+            record,
+            key,
+            binding_id=binding_id,
+            allow_legacy=allow_legacy,
+        )
+        return (
+            cls._decode_token_plaintext(
+                binding_id,
+                plaintext,
+                legacy=legacy,
+            ),
+            legacy,
+        )
 
     def _bind_or_verify_aggregate_key(
         self,
@@ -396,31 +523,67 @@ class YouTubeTokenStore:
     ) -> bool:
         """Cryptographically bind ``key`` to the whole existing aggregate.
 
-        New/current aggregates carry an encrypted fixed canary. Legacy
-        aggregates without a canary are admitted only after *every* encrypted
-        record authenticates under the configured key; the next write then
-        installs the canary. This prevents a valid-but-wrong key from appending
-        a mixed-key record to an existing file.
+        New/current aggregates carry an encrypted fixed canary and record-id
+        bound envelopes. A legacy record is admitted only after both its
+        ciphertext and its authority identity validate; initialization upgrades
+        every admitted legacy record together and installs a missing canary.
         """
         key_check = data.get("key_check")
         if key_check is not None:
-            if self._decrypt_record(key_check, key) != _KEY_CHECK_PLAINTEXT:
+            key_check_plaintext, _ = self._decrypt_record(key_check, key)
+            if key_check_plaintext != _KEY_CHECK_PLAINTEXT:
                 raise TokenStoreKeyMismatchError(
                     "configured YouTube token-store key cannot authenticate the encrypted aggregate"
                 )
-            # The canary binds the configured key, while authenticating every
-            # record rejects a pre-existing partial/mixed-key aggregate rather
-            # than carrying it forward under an otherwise valid canary.
-            for record in data["records"].values():
-                self._decrypt_record(record, key)
-            return False
 
-        for record in data["records"].values():
-            self._decrypt_record(record, key)
-        if not initialize:
-            return False
-        data["key_check"] = self._encrypted_record(key, _KEY_CHECK_PLAINTEXT)
-        return True
+        decoded_records: dict[str, StoredToken] = {}
+        legacy_ids: list[str] = []
+        for binding_id, record in data["records"].items():
+            token, legacy = self._decode_token_record(
+                binding_id,
+                record,
+                key,
+                allow_legacy=True,
+            )
+            decoded_records[binding_id] = token
+            if legacy:
+                legacy_ids.append(binding_id)
+
+        legacy_invalid = False
+        if legacy_ids:
+            validator = self._legacy_record_validator
+            if validator is None:
+                legacy_invalid = True
+            else:
+                try:
+                    legacy_invalid = any(
+                        not validator(binding_id, decoded_records[binding_id])
+                        for binding_id in legacy_ids
+                    )
+                except Exception:
+                    legacy_invalid = True
+        if legacy_invalid:
+            # Never retain a validator exception as hidden context: backend
+            # detail and token material stay outside the public error chain.
+            raise TokenStoreKeyMismatchError(
+                "legacy YouTube token-store record identity cannot be authenticated"
+            )
+
+        changed = False
+        if initialize:
+            for binding_id in legacy_ids:
+                data["records"][binding_id] = self._encrypted_record(
+                    key,
+                    self._token_plaintext(binding_id, decoded_records[binding_id]),
+                    binding_id=binding_id,
+                )
+                changed = True
+            if key_check is None:
+                data["key_check"] = self._encrypted_record(
+                    key, _KEY_CHECK_PLAINTEXT
+                )
+                changed = True
+        return changed
 
     def _sync_parent_directory(self) -> None:
         """Confirm the complete directory-entry chain on POSIX.
@@ -531,11 +694,14 @@ class YouTubeTokenStore:
     def put(self, binding_id: str, token: StoredToken) -> None:
         """Encrypt and persist ``token`` for ``binding_id`` (requires the key)."""
         key = resolve_token_store_key()
-        plaintext = json.dumps(token._to_plain(), sort_keys=True).encode("utf-8")
         with self._lock, self._aggregate_file_lock():
             data = self._load_file()
             self._bind_or_verify_aggregate_key(data, key, initialize=True)
-            data["records"][binding_id] = self._encrypted_record(key, plaintext)
+            data["records"][binding_id] = self._encrypted_record(
+                key,
+                self._token_plaintext(binding_id, token),
+                binding_id=binding_id,
+            )
             self._write_file(data)
 
     def confirm_record_durable(self, binding_id: str, expected: StoredToken) -> bool:
@@ -555,8 +721,13 @@ class YouTubeTokenStore:
                     return False
                 key = resolve_token_store_key()
                 self._bind_or_verify_aggregate_key(data, key, initialize=False)
-                plaintext = self._decrypt_record(record, key)
-                confirmed = StoredToken._from_plain(json.loads(plaintext.decode("utf-8"))) == expected
+                token, _ = self._decode_token_record(
+                    binding_id,
+                    record,
+                    key,
+                    allow_legacy=False,
+                )
+                confirmed = token == expected
         except Exception:
             confirmed = False
         return confirmed
@@ -575,22 +746,22 @@ class YouTubeTokenStore:
             if record is None:
                 return None
             key = resolve_token_store_key()
-            self._bind_or_verify_aggregate_key(data, key, initialize=False)
-            plaintext = self._decrypt_record(record, key)
-        malformed = False
-        try:
-            decoded = json.loads(plaintext.decode("utf-8"))
-            if not isinstance(decoded, dict):
-                raise TypeError
-            token = StoredToken._from_plain(decoded)
-        except (KeyError, TypeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
-            malformed = True
-            token = None
-        if malformed:
-            raise TokenStoreKeyMismatchError(
-                "configured YouTube token-store key cannot authenticate the encrypted aggregate"
+            changed = self._bind_or_verify_aggregate_key(
+                data, key, initialize=True
             )
-        return token
+            if changed:
+                self._write_file(data)
+                data = self._load_file()
+                self._bind_or_verify_aggregate_key(
+                    data, key, initialize=False
+                )
+            token, _ = self._decode_token_record(
+                binding_id,
+                data["records"][binding_id],
+                key,
+                allow_legacy=False,
+            )
+            return token
 
 
 __all__ = [

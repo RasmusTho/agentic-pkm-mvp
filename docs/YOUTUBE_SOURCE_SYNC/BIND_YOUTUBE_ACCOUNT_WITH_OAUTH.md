@@ -36,9 +36,12 @@ touch the repo, vault, settings values, logs, events, or receipts.
    (existing `cryptography` dependency, mirroring `app/heimdal/raw_store.py` key discipline), key
    from `YOUTUBE_TOKEN_STORE_KEY` (32 bytes; absent or valid-but-wrong key ⇒
    `TokenStoreKeyMissingError`, fail closed, never plaintext). An authenticated encrypted canary
-   binds the key to the aggregate; legacy no-canary files authenticate every existing record before
-   upgrade, so a wrong key cannot create a mixed-key store. Store file path is an app-local binding
-   defaulting under the channel runtime dir; never inside a vault, never tracked.
+   binds the key to the aggregate. Each current record authenticates its exact outer id as
+   domain-separated AEAD associated data and repeats the id inside its encrypted versioned envelope.
+   Legacy pre-AAD files upgrade atomically only after binding/channel and pending-target authority is
+   proven for every decrypted record; a pre-swapped or otherwise unprovable association fails closed
+   without mutation. A wrong key cannot create a mixed-key store. Store file path is an app-local
+   binding defaulting under the channel runtime dir; never inside a vault, never tracked.
 3. **Account binding record** (non-secret) in the registry substrate: binding id, provider channel
    id, display label, connected/degraded state, scopes, obtained_at, and a durable monotonic binding
    generation. Each state write advances the generation; terminal-state recovery compares it
@@ -68,7 +71,10 @@ touch the repo, vault, settings values, logs, events, or receipts.
    winner remains a non-destructive conflict. Later cleanup may leave only a redundant encrypted
    copy on crash. Promotion and cleanup stay within pending/channel/binding lifecycle authority. The
    pending ciphertext records its exact target, predecessor refresh authority, and
-   next generation before canonical write. Retry cleans only the same refresh authority, promotes
+   next credential and binding generation before canonical write. Direct reconnect and candidate-row
+   recovery clear terminal state only through compare-and-set against that durable pending evidence:
+   an exact matching disconnected generation can converge, while a concurrent or stale revoked
+   generation wins. Retry cleans only the same refresh authority, promotes
    only over that unchanged predecessor, and preserves a same-channel token mismatch as
    `pending_conflict` without deletion or provider revocation; channel identity alone is not grant
    identity.
