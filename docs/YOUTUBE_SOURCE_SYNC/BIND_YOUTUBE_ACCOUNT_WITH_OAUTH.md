@@ -74,9 +74,14 @@ touch the repo, vault, settings values, logs, events, or receipts.
    renews the access token and retains the stored refresh credential. Defense in depth still treats
    an unexpected different `refresh_token` as rotation: preflight precedes `/token`, the response is
    journaled encrypted before canonical promotion, and a write failure recovers on the next access
-   only over the proven predecessor generation. Pending/conflicting refresh authority durably
+   only over the proven predecessor generation. Before provider compensation, the encrypted
+   journal is durably marked non-promotable; authoritative revocation advances that marker to
+   compensated before best-effort cleanup, so crash residue can never restore revoked authority.
+   Pending/conflicting refresh authority durably
    degrades the account binding and every dependent source, without cursor mutation, and blocks
-   reconnect/disconnect provider actions until safely resolved. A reconnect never cleans its
+   reconnect/disconnect provider actions until safely resolved. Failure classification and the
+   matching binding/source degradation remain inside the same per-binding lifecycle lock, so a
+   stale actor cannot overwrite another service instance's completed recovery. A reconnect never cleans its
    pending journal merely because canonical ciphertext is visible: the binding row must also be
    durably `connected` before cleanup.
    Connect, reconnect, refresh, and disconnect are

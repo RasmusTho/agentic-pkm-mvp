@@ -310,6 +310,7 @@ def _canonical_token_from_pending(pending: StoredToken) -> StoredToken:
         promotion_predecessor_refresh_token=None,
         promotion_predecessor_generation=None,
         promotion_display_label=None,
+        promotion_compensation_state=None,
     )
 
 
@@ -618,7 +619,13 @@ def _validate_loopback_redirect_uri(redirect_uri: str) -> None:
     completion both validate. The error excludes the rejected URI because its
     userinfo/query text is untrusted and may contain credential material.
     """
-    valid = isinstance(redirect_uri, str) and redirect_uri == redirect_uri.strip()
+    valid = (
+        isinstance(redirect_uri, str)
+        and redirect_uri == redirect_uri.strip()
+        and "?" not in redirect_uri
+        and "#" not in redirect_uri
+        and not any(ord(character) < 0x20 or ord(character) == 0x7F for character in redirect_uri)
+    )
     try:
         parsed = urlsplit(redirect_uri) if valid else None
         port = parsed.port if parsed is not None else None
@@ -783,7 +790,22 @@ class TokenProvider:
                 # credential and local journaling still fails after preflight,
                 # revoke that returned authority when the provider can confirm
                 # it.  An indeterminate double failure remains fail-closed.
-                if self._compensate_refresh_rotation(pending):
+                compensation_pending = replace(
+                    pending, promotion_compensation_state="pending"
+                )
+                if not self._write_refresh_journal(
+                    pending_id, compensation_pending
+                ):
+                    self._degrade("auth_refresh_durability")
+                    raise OAuthGrantDurabilityError(
+                        "refresh_durability_unavailable"
+                    ) from None
+                if self._compensate_refresh_rotation(compensation_pending):
+                    compensated = replace(
+                        compensation_pending,
+                        promotion_compensation_state="compensated",
+                    )
+                    self._write_refresh_journal(pending_id, compensated)
                     self._delete_refresh_journal(pending_id)
                     self._degrade("auth_revoked")
                     raise AuthDegradedError(
@@ -821,6 +843,32 @@ class TokenProvider:
         pending = self._store.get(pending_id)
         if pending is None:
             return canonical
+        compensation_state = pending.promotion_compensation_state
+        if compensation_state is not None:
+            if compensation_state == "pending":
+                if not self._compensate_refresh_rotation(pending):
+                    self._degrade("auth_refresh_durability")
+                    raise OAuthGrantDurabilityError(
+                        "refresh_durability_unavailable",
+                        pending_grant_id=pending_id,
+                    ) from None
+                compensated = replace(
+                    pending, promotion_compensation_state="compensated"
+                )
+                self._write_refresh_journal(pending_id, compensated)
+                pending = compensated
+            elif compensation_state != "compensated":
+                self._degrade("auth_refresh_durability")
+                raise OAuthGrantDurabilityError(
+                    "refresh_durability_unavailable",
+                    pending_grant_id=pending_id,
+                ) from None
+            self._delete_refresh_journal(pending_id)
+            self._degrade("auth_revoked")
+            raise AuthDegradedError(
+                "auth_revoked",
+                "rotated refresh authority was already provider-compensated",
+            ) from None
         if (
             pending.promotion_target_binding_id != self._binding_id
             or pending.promotion_predecessor_refresh_token is None
@@ -1162,10 +1210,10 @@ class YouTubeAccountBinder:
                 # Resolve an interrupted refresh before asking Google for a
                 # second standing grant. Lock order remains pending grant ->
                 # binding -> aggregate token file.
-                refresh_failure: tuple[str, str | None] | None = None
                 with self._store.binding_lifecycle_lock(
                     connection.reconnect_binding_id
                 ):
+                    refresh_failure: tuple[str, str | None] | None = None
                     try:
                         self._recover_pending_refresh_authority(
                             connection.reconnect_binding_id
@@ -1175,19 +1223,19 @@ class YouTubeAccountBinder:
                             error.reason_code,
                             error.pending_grant_id,
                         )
-                if refresh_failure is not None:
-                    refresh_reason, refresh_pending_id = refresh_failure
-                    self._degrade_refresh_authority(
-                        connection.reconnect_binding_id,
-                        reason_code=self._refresh_degradation_reason(
-                            refresh_reason
-                        ),
-                        pending_grant_id=refresh_pending_id,
-                    )
-                    raise OAuthGrantDurabilityError(
-                        refresh_reason,
-                        pending_grant_id=refresh_pending_id,
-                    ) from None
+                    if refresh_failure is not None:
+                        refresh_reason, refresh_pending_id = refresh_failure
+                        self._degrade_refresh_authority(
+                            connection.reconnect_binding_id,
+                            reason_code=self._refresh_degradation_reason(
+                                refresh_reason
+                            ),
+                            pending_grant_id=refresh_pending_id,
+                        )
+                        raise OAuthGrantDurabilityError(
+                            refresh_reason,
+                            pending_grant_id=refresh_pending_id,
+                        ) from None
             # A standing grant must not be requested until the encryption key,
             # aggregate file, lock directory, and atomic replace path are ready.
             self._store.preflight_write_ready()
@@ -1593,6 +1641,11 @@ class YouTubeAccountBinder:
         pending = self._store.get(pending_id)
         if pending is None:
             return canonical
+        if pending.promotion_compensation_state is not None:
+            raise OAuthGrantDurabilityError(
+                "refresh_durability_unavailable",
+                pending_grant_id=pending_id,
+            ) from None
         if canonical is None or (
             pending.promotion_target_binding_id != binding_id
             or pending.promotion_predecessor_refresh_token is None

@@ -216,6 +216,10 @@ class StoredToken:
     promotion_predecessor_refresh_token: str | None = None
     promotion_predecessor_generation: int | None = None
     promotion_display_label: str | None = None
+    # A rotated refresh journal must become non-promotable before provider
+    # compensation. ``pending`` means revocation must be retried; ``compensated``
+    # means provider authority is already gone and only encrypted cleanup remains.
+    promotion_compensation_state: str | None = None
 
     def __repr__(self) -> str:  # redaction-aware (INV-YSS-5)
         return (
@@ -238,6 +242,7 @@ class StoredToken:
             promotion_predecessor_refresh_token=self.promotion_predecessor_refresh_token,
             promotion_predecessor_generation=self.promotion_predecessor_generation,
             promotion_display_label=self.promotion_display_label,
+            promotion_compensation_state=self.promotion_compensation_state,
         )
 
     def _to_plain(self) -> dict[str, Any]:
@@ -253,6 +258,7 @@ class StoredToken:
             "promotion_predecessor_refresh_token": self.promotion_predecessor_refresh_token,
             "promotion_predecessor_generation": self.promotion_predecessor_generation,
             "promotion_display_label": self.promotion_display_label,
+            "promotion_compensation_state": self.promotion_compensation_state,
         }
 
     @classmethod
@@ -275,6 +281,7 @@ class StoredToken:
                 else None
             ),
             promotion_display_label=data.get("promotion_display_label"),
+            promotion_compensation_state=data.get("promotion_compensation_state"),
         )
 
 

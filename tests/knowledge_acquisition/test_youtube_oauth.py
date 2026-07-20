@@ -295,6 +295,11 @@ def test_loopback_flow_rejects_tampered_state(store, bindings, registry):
         "http://user@127.0.0.1:8765/callback",
         "http://127.0.0.1:8765/callback?code=secret",
         "http://127.0.0.1:8765/callback#fragment",
+        "http://127.0.0.1:8765/callback?",
+        "http://127.0.0.1:8765/callback#",
+        "http://127.0.0.1:8765/call\nback",
+        "http://127.0.0.1:\t8765/callback",
+        "http://127.0.0.1:8765/call\rback",
     ],
 )
 def test_loopback_flow_rejects_non_exact_loopback_redirect_uri(redirect_uri):
@@ -307,13 +312,26 @@ def test_loopback_flow_rejects_non_exact_loopback_redirect_uri(redirect_uri):
     assert provider.requests == []
 
 
-def test_loopback_completion_revalidates_redirect_uri_before_code_exchange():
+@pytest.mark.parametrize(
+    "forged_redirect_uri",
+    [
+        "https://evil.example/callback",
+        "http://127.0.0.1:8765/callback?",
+        "http://127.0.0.1:8765/callback#",
+        "http://127.0.0.1:8765/call\nback",
+        "http://127.0.0.1:\t8765/callback",
+        "http://127.0.0.1:8765/call\rback",
+    ],
+)
+def test_loopback_completion_revalidates_redirect_uri_before_code_exchange(
+    forged_redirect_uri,
+):
     provider = _Provider()
     client = _client(provider)
     flow = oauth.start_loopback_flow(
         client, redirect_uri="http://127.0.0.1:8765/callback"
     )
-    forged = replace(flow, redirect_uri="https://evil.example/callback")
+    forged = replace(flow, redirect_uri=forged_redirect_uri)
 
     with pytest.raises(oauth.InvalidLoopbackRedirectURIError):
         oauth.complete_loopback_flow(
@@ -1828,6 +1846,118 @@ def test_token_provider_refresh_durability_degrades_binding_and_sources_without_
     assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
 
 
+def test_compensated_refresh_cleanup_residue_is_never_promoted(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    store.put(binding_id, canonical.with_expired_access())
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    pending_id = oauth._pending_refresh_id(binding_id)
+    original_put = store.put
+    original_confirm = store.confirm_record_durable
+    original_delete = store.delete
+    calls = {"journal_put": 0, "confirm": 0, "cleanup": 0}
+
+    def land_unconfirmed_refresh_journal(target_id, token):
+        if (
+            target_id == pending_id
+            and token.promotion_compensation_state is None
+        ):
+            calls["journal_put"] += 1
+            original_put(target_id, token)
+            raise tokstore.TokenStoreDurabilityError("unconfirmed refresh journal")
+        original_put(target_id, token)
+
+    def refuse_unconfirmed_refresh_journal(target_id, token):
+        if (
+            target_id == pending_id
+            and token.promotion_compensation_state is None
+        ):
+            calls["confirm"] += 1
+            return False
+        return original_confirm(target_id, token)
+
+    def fail_first_compensated_cleanup(target_id):
+        if target_id == pending_id and calls["cleanup"] == 0:
+            calls["cleanup"] += 1
+            raise OSError("cleanup acknowledgement lost")
+        return original_delete(target_id)
+
+    monkeypatch.setattr(store, "put", land_unconfirmed_refresh_journal)
+    monkeypatch.setattr(
+        store, "confirm_record_durable", refuse_unconfirmed_refresh_journal
+    )
+    monkeypatch.setattr(store, "delete", fail_first_compensated_cleanup)
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+
+    with pytest.raises(oauth.AuthDegradedError) as first_error:
+        token_provider.get_access_token()
+
+    assert first_error.value.reason_code == "auth_revoked"
+    _assert_no_exception_chain(first_error.value)
+    assert calls == {"journal_put": 2, "confirm": 2, "cleanup": 1}
+    assert provider.revoked[-1] == {"token": SENTINEL_REFRESH_2}
+    compensated = store.get(pending_id)
+    assert compensated is not None
+    assert compensated.promotion_compensation_state == "compensated"
+    binding = bindings.get(binding_id)
+    assert binding is not None
+    assert binding.state == "degraded"
+    assert binding.reason_code == "auth_revoked"
+    token_calls = sum(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+    revoke_calls = sum(
+        urlsplit(str(request.url)).path.endswith("/revoke")
+        for request in provider.requests
+    )
+
+    monkeypatch.setattr(store, "put", original_put)
+    monkeypatch.setattr(store, "confirm_record_durable", original_confirm)
+    monkeypatch.setattr(store, "delete", original_delete)
+    with pytest.raises(oauth.AuthDegradedError) as retry_error:
+        token_provider.get_access_token()
+
+    assert retry_error.value.reason_code == "auth_revoked"
+    _assert_no_exception_chain(retry_error.value)
+    assert store.has_record(pending_id) is False
+    recovered_canonical = store.get(binding_id)
+    assert recovered_canonical is not None
+    assert recovered_canonical.refresh_token == SENTINEL_REFRESH
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/token")
+            for request in provider.requests
+        )
+        == token_calls
+    )
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/revoke")
+            for request in provider.requests
+        )
+        == revoke_calls
+    )
+    binding = bindings.get(binding_id)
+    assert binding is not None
+    assert binding.state == "degraded"
+    assert binding.reason_code == "auth_revoked"
+
+
 def test_disconnect_promotes_pending_refresh_before_provider_revocation(
     store, bindings, registry
 ):
@@ -1930,6 +2060,103 @@ def test_reconnect_stops_before_token_poll_on_conflicting_refresh_generation(
         )
         == token_calls_before
     )
+
+
+def test_reconnect_degradation_lock_prevents_stale_overwrite_after_peer_recovery(
+    store, bindings, registry, monkeypatch
+):
+    provider_a = _Provider()
+    provider_b = _Provider()
+    binder_a = _binder(provider_a, store, bindings, registry)
+    connected = _connect_device(binder_a)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    pending_id = oauth._pending_refresh_id(binding_id)
+    pending = replace(
+        canonical,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        expires_at="2999-01-01T00:00:00+00:00",
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=canonical.refresh_token,
+        promotion_predecessor_generation=canonical.authority_generation,
+    )
+    store.put(pending_id, pending)
+    reconnect = binder_a.start_reconnect(binding_id)
+    original_put = store.put
+    original_degrade = binder_a._degrade_refresh_authority
+    reached_degrade = threading.Event()
+    allow_degrade = threading.Event()
+    peer_finished = threading.Event()
+    actor_a_errors: list[BaseException] = []
+    actor_b_results: list[str] = []
+
+    def fail_only_stale_actor_promotion(target_id, token):
+        if target_id == binding_id and threading.current_thread().name == "stale-reconnect":
+            raise OSError("transient canonical promotion failure")
+        return original_put(target_id, token)
+
+    def pause_before_degradation(
+        target_id, *, reason_code, pending_grant_id
+    ):
+        reached_degrade.set()
+        assert allow_degrade.wait(timeout=5)
+        return original_degrade(
+            target_id,
+            reason_code=reason_code,
+            pending_grant_id=pending_grant_id,
+        )
+
+    monkeypatch.setattr(store, "put", fail_only_stale_actor_promotion)
+    monkeypatch.setattr(binder_a, "_degrade_refresh_authority", pause_before_degradation)
+    token_provider_b = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider_b),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+
+    def stale_reconnect() -> None:
+        try:
+            binder_a.finish_device_connection(reconnect)
+        except BaseException as error:
+            actor_a_errors.append(error)
+
+    def peer_recovery() -> None:
+        try:
+            actor_b_results.append(token_provider_b.get_access_token())
+        finally:
+            peer_finished.set()
+
+    actor_a = threading.Thread(target=stale_reconnect, name="stale-reconnect")
+    actor_a.start()
+    assert reached_degrade.wait(timeout=5)
+    actor_b = threading.Thread(target=peer_recovery, name="peer-recovery")
+    actor_b.start()
+    try:
+        assert peer_finished.wait(timeout=0.2) is False
+    finally:
+        allow_degrade.set()
+    actor_a.join(timeout=5)
+    actor_b.join(timeout=5)
+
+    assert actor_a.is_alive() is False
+    assert actor_b.is_alive() is False
+    assert len(actor_a_errors) == 1
+    assert isinstance(actor_a_errors[0], oauth.OAuthGrantDurabilityError)
+    assert actor_a_errors[0].reason_code == "refresh_pending"
+    assert actor_b_results == [SENTINEL_ACCESS_2]
+    assert store.has_record(pending_id) is False
+    promoted = store.get(binding_id)
+    assert promoted is not None
+    assert promoted.refresh_token == SENTINEL_REFRESH_2
+    binding = bindings.get(binding_id)
+    assert binding is not None
+    assert binding.state == "connected"
+    assert binding.reason_code is None
 
 
 def test_disconnect_pending_refresh_outcome_degrades_without_cursor_or_artifact_mutation(

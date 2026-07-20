@@ -276,9 +276,16 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   `auth_refresh_pending`; the next access promotes without another provider request only if the
   predecessor is unchanged. A newer/different canonical generation yields
   `auth_refresh_conflict` and preserves both encrypted authorities. Status never reports either
-  state as connected; pending, conflict, and durability failures stamp the same registered reason
-  code on the binding and dependent sources, and reconnect/disconnect must resolve the journal or
+  state as connected. If local journaling cannot be confirmed, a durable encrypted compensation
+  marker makes the rotated authority non-promotable before provider revocation; authoritative
+  compensation advances that marker before cleanup, and retained crash residue can only be cleaned
+  or re-compensated, never promoted. Pending, conflict, and durability failures stamp the same registered reason
+  code on the binding and dependent sources while the per-binding lifecycle lock is still held, and reconnect/disconnect must resolve the journal or
   fail closed before polling/revoking.
+- Loopback redirect admission runs on the raw string before URI parsing can normalize it: the URI
+  must be `http`, use exact host `127.0.0.1` with an explicit valid port, contain no ASCII controls,
+  and contain neither a query/fragment delimiter nor query/fragment content. Creation and code
+  exchange both apply the same validation.
 - Disconnect first revokes at the provider (`oauth2.googleapis.com/revoke`). Only Google's
   documented HTTP 400 `invalid_token` outcome — meaning already expired or revoked — permits local
   teardown with `revoked=false`. `invalid_request`, intermediary/unknown 4xx responses, redirects,
