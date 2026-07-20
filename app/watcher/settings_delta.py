@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
 from typing import Any, Mapping
@@ -9,7 +9,12 @@ from typing import Any, Mapping
 from app.vault.manager import VaultContext, VaultManager
 from app.receipts.settings_write import settings_receipt_old_value
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
-from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
+from app.vault.markdown_settings import (
+    MarkdownSettingsDocument,
+    MarkdownSettingsError,
+    MarkdownSettingsStore,
+    split_markdown_settings,
+)
 from app.vault.settings_service import (
     RUNTIME_GATING_SETTINGS,
     SETTING_DEFINITIONS,
@@ -79,6 +84,82 @@ class SettingsDeltaResult:
 class _ObservedSettingsSnapshot:
     exists: bool
     digest: str | None
+    payload: bytes | None = field(default=None, compare=False, repr=False)
+
+
+class _SnapshotBoundMarkdownSettingsStore(MarkdownSettingsStore):
+    """Read one owner document from the exact watcher-observed snapshot."""
+
+    def __init__(
+        self,
+        *,
+        delegate: MarkdownSettingsStore,
+        path: Path,
+        snapshot: _ObservedSettingsSnapshot,
+    ) -> None:
+        self._delegate = delegate
+        self._path = path
+        self._document: MarkdownSettingsDocument | None = None
+        if snapshot.exists:
+            if snapshot.payload is None:
+                raise MarkdownSettingsError(
+                    f"settings snapshot payload is unavailable: {path}"
+                )
+            try:
+                text = snapshot.payload.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise MarkdownSettingsError(
+                    f"settings file is not valid UTF-8: {path}"
+                ) from exc
+            frontmatter, body = split_markdown_settings(text, path=path)
+            self._document = MarkdownSettingsDocument(
+                path=path,
+                frontmatter=frontmatter,
+                body=body,
+            )
+
+    def read(self, path: Path) -> MarkdownSettingsDocument:
+        if path != self._path:
+            return self._delegate.read(path)
+        if self._document is None:
+            raise FileNotFoundError(path)
+        return self._document
+
+    def write_missing(
+        self,
+        path: Path,
+        frontmatter: Mapping[str, Any],
+        body: str,
+    ) -> bool:
+        raise OSError(
+            f"snapshot-bound settings processing cannot create settings file: {path}"
+        )
+
+    def write_frontmatter(
+        self,
+        path: Path,
+        frontmatter: Mapping[str, Any],
+        *,
+        body: str | None = None,
+    ) -> None:
+        if path != self._path:
+            raise OSError(
+                f"snapshot-bound settings processing cannot write settings file: {path}"
+            )
+        if self._document is None:
+            raise OSError(
+                f"snapshot-bound settings processing cannot rewrite deleted owner file: {path}"
+            )
+        expected_body = self._document.body if body is None else body
+        if (
+            dict(frontmatter) != self._document.frontmatter
+            or expected_body != self._document.body
+        ):
+            raise OSError(
+                f"snapshot-bound settings processing cannot rewrite owner file: {path}"
+            )
+        # Watcher processing accepts already-authored bytes. Rewriting them is
+        # unnecessary and could clobber a local edit that arrived after capture.
 
 
 @dataclass(frozen=True)
@@ -240,6 +321,7 @@ def handle_settings_local_delta(
     markdown_store: MarkdownSettingsStore | None = None,
     surface: str = "file",
     actor: str = "human",
+    _verified_snapshot: _ObservedSettingsSnapshot | None = None,
 ) -> SettingsDeltaResult:
     """Route watcher-detected runtime-gating file deltas through the governed seam.
 
@@ -270,6 +352,35 @@ def handle_settings_local_delta(
 
     store = markdown_store or MarkdownSettingsStore()
     path = vault_root / rel_path
+    if _verified_snapshot is not None:
+        try:
+            processing_snapshot = _capture_settings_snapshot(path)
+        except OSError as exc:
+            return SettingsDeltaResult(
+                values=dict(previous_runtime_values or {}),
+                errors=(str(exc),),
+                deferred=True,
+                vault_id=retained_vault_id,
+                local_instance_id=retained_local_instance_id,
+            )
+        if processing_snapshot != _verified_snapshot:
+            return SettingsDeltaResult(
+                values=dict(previous_runtime_values or {}),
+                errors=(
+                    f"{rel_path.as_posix()} changed before governed processing",
+                ),
+                deferred=True,
+                vault_id=retained_vault_id,
+                local_instance_id=retained_local_instance_id,
+            )
+        try:
+            store = _SnapshotBoundMarkdownSettingsStore(
+                delegate=store,
+                path=path,
+                snapshot=processing_snapshot,
+            )
+        except MarkdownSettingsError as exc:
+            return SettingsDeltaResult(values=None, errors=(str(exc),))
     try:
         document = store.read(path)
     except FileNotFoundError:
@@ -288,7 +399,20 @@ def handle_settings_local_delta(
     }
     service = settings_service or SettingsService(markdown_store=store)
     manager = VaultManager(markdown_store=store)
-    context = manager.validate_vault(vault_root)
+    if (
+        _verified_snapshot is not None
+        and not _verified_snapshot.exists
+        and rel_path == SETTINGS_LOCAL_REL
+    ):
+        context = VaultContext(
+            status="uninitialized",
+            active_vault_name=vault_root.name,
+            active_vault_path=str(vault_root),
+            settings_path=str(vault_root / "settings"),
+            validation_error="missing required settings: local.md",
+        )
+    else:
+        context = manager.validate_vault(vault_root)
     retained_context = _retained_context_for_local_owner_deletion(
         vault_root=vault_root,
         rel_path=rel_path,
@@ -416,6 +540,7 @@ def handle_settings_sync_arrival(
     previous_values: Mapping[str, Any] | None,
     settings_service: SettingsService | None = None,
     markdown_store: MarkdownSettingsStore | None = None,
+    _verified_snapshot: _ObservedSettingsSnapshot | None = None,
 ) -> SettingsDeltaResult:
     """Replay a git-synced settings arrival without misattributing its actor.
 
@@ -432,6 +557,7 @@ def handle_settings_sync_arrival(
         markdown_store=markdown_store,
         surface="sync",
         actor="sync",
+        _verified_snapshot=_verified_snapshot,
     )
 
 
@@ -443,6 +569,7 @@ def _capture_settings_snapshot(path: Path) -> _ObservedSettingsSnapshot:
     return _ObservedSettingsSnapshot(
         exists=True,
         digest=hashlib.sha256(payload).hexdigest(),
+        payload=payload,
     )
 
 
@@ -610,11 +737,13 @@ def handle_settings_detected_delta(
             vault_root=vault_root,
             rel_path=rel_path,
             previous_values=previous_values,
+            _verified_snapshot=after,
         )
     return handle_settings_local_delta(
         vault_root=vault_root,
         rel_path=rel_path,
         previous_values=previous_values,
+        _verified_snapshot=after,
     )
 
 

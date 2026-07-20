@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 import app.watcher.registry as registry
+import app.watcher.settings_delta as settings_delta_module
 import app.watcher.watcher as legacy_watcher
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsStore
@@ -785,6 +786,113 @@ def test_sync_arrival_revalidates_exact_bytes_after_git_provenance_probe(
     assert result.receipts == ()
     assert result.errors and "changed during provenance inspection" in result.errors[0]
     assert not query_settings_receipts(outbox_path=outbox_path).rows
+
+
+def test_sync_arrival_defers_edit_after_final_provenance_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    subprocess.run(["git", "init", "-q"], cwd=vault_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Sync Test"], cwd=vault_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync-test@example.invalid"],
+        cwd=vault_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "settings"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=vault_root, check=True)
+    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    subprocess.run(["git", "add", "settings/youtube.md"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "sync arrival"], cwd=vault_root, check=True)
+
+    real_capture = settings_delta_module._capture_settings_snapshot
+    captures = 0
+
+    def _capture_then_edit(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal captures
+        snapshot = real_capture(path)
+        captures += 1
+        if captures == 2:
+            path.write_text(
+                f"{path.read_text(encoding='utf-8')}local edit after provenance\n",
+                encoding="utf-8",
+            )
+        return snapshot
+
+    monkeypatch.setattr(
+        settings_delta_module,
+        "_capture_settings_snapshot",
+        _capture_then_edit,
+    )
+    result = handle_settings_detected_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": False},
+    )
+
+    assert result.deferred is True
+    assert result.receipts == ()
+    assert result.errors and "changed before governed processing" in result.errors[0]
+    assert not query_settings_receipts(outbox_path=outbox_path).rows
+    assert youtube_md.read_text(encoding="utf-8").endswith(
+        "local edit after provenance\n"
+    )
+
+
+def test_sync_deletion_defers_recreation_after_final_provenance_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    subprocess.run(["git", "init", "-q"], cwd=vault_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Sync Test"], cwd=vault_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync-test@example.invalid"],
+        cwd=vault_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "settings"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=vault_root, check=True)
+    deleted_payload = youtube_md.read_bytes()
+    youtube_md.unlink()
+    subprocess.run(["git", "add", "-u", "settings/youtube.md"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "sync deletion"], cwd=vault_root, check=True)
+
+    real_capture = settings_delta_module._capture_settings_snapshot
+    captures = 0
+
+    def _capture_then_recreate(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal captures
+        snapshot = real_capture(path)
+        captures += 1
+        if captures == 2:
+            path.write_bytes(deleted_payload)
+        return snapshot
+
+    monkeypatch.setattr(
+        settings_delta_module,
+        "_capture_settings_snapshot",
+        _capture_then_recreate,
+    )
+    result = handle_settings_detected_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": True},
+    )
+
+    assert result.deferred is True
+    assert result.receipts == ()
+    assert result.errors and "changed before governed processing" in result.errors[0]
+    assert not query_settings_receipts(outbox_path=outbox_path).rows
+    assert youtube_md.read_bytes() == deleted_payload
 
 
 def test_gitignored_local_settings_edit_is_not_misattributed_as_sync(
