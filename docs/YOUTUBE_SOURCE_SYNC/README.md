@@ -1,4 +1,4 @@
-State: Specification directory (feature-breakdown lane; target-state framing). Instantiates Knowledge Acquisition Platform Phase 4 (continuous discovery) for YouTube. **YSS-01 and YSS-02 are delivered repository-verifiably** (#3916 / PR #3931 and #3917 / PR #3969; YSS-02 transactional lifecycle hardening in #3990); YSS-03..YSS-11 and the parent #3915 operator/live-capability acceptance remain pending. The issue set was filed 2026-07-17.
+State: Specification directory (feature-breakdown lane; target-state framing). Instantiates Knowledge Acquisition Platform Phase 4 (continuous discovery) for YouTube. **YSS-01 through YSS-04 are delivered repository-verifiably** (#3916 / PR #3931, #3917 / PR #3969 with YSS-02 transactional lifecycle hardening in #3990, #3918 / PR #4006, and #3919 / PR #3983); YSS-05..YSS-11 and the parent #3915 operator/live-capability acceptance remain pending. The issue set was filed 2026-07-17.
 Doc role: Capability specification directory
 Authority: Owns the YouTube source-sync capability design — account binding, source registry, continuous discovery, durable acquisition requests, scheduling, and the setup/status surfaces. Subordinate to `docs/KNOWLEDGE_ACQUISITION/README.md` (platform boundary), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` (stages), `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` (triage), `docs/EVENTS.md` (event envelope/outbox), and `docs/SECURITY.md` (secret baseline). It revises `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md` §Discovery by owner directive (see §Decision record).
 Owner: Architecture / knowledge acquisition
@@ -114,8 +114,8 @@ it. The operator path (GCP/OAuth setup, first sync, troubleshooting, live accept
 | --- | --- | --- | --- | --- |
 | 1 | [Establish source registry and settings](ESTABLISH_SOURCE_REGISTRY_AND_SETTINGS.md) | YSS-01 | — | **Delivered repository-verifiably** (#3916 / PR #3931): durable per-account source registry + settings model + validation; live capability acceptance remains pending |
 | 2a | [Bind YouTube account with OAuth](BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md) | YSS-02 | YSS-01 | **Delivered repository-verifiably** (#3917 / PR #3969; lifecycle hardening #3990): device+loopback OAuth, secret-ref token store, transactional connect/disconnect, degradation |
-| 2b | [Establish durable acquisition requests](ESTABLISH_DURABLE_ACQUISITION_REQUESTS.md) | YSS-04 | YSS-01 | source-agnostic request queue + dedup + retries + handover to `acquire_youtube` |
-| 3a | [Build YouTube Data API client](BUILD_YOUTUBE_DATA_API_CLIENT.md) | YSS-03 | YSS-02 (token provider interface only — stubbable) | bounded read-only API client: pagination, ETag, quota accounting, host allowlist |
+| 2b | [Establish durable acquisition requests](ESTABLISH_DURABLE_ACQUISITION_REQUESTS.md) | YSS-04 | YSS-01 | **Delivered repository-verifiably** (#3919 / PR #3983): source-agnostic request queue + dedup + retries + handover to `acquire_youtube`; live capability acceptance remains pending |
+| 3a | [Build YouTube Data API client](BUILD_YOUTUBE_DATA_API_CLIENT.md) | YSS-03 | YSS-02 (token provider interface only — stubbable) | **Delivered repository-verifiably** (#3918 / PR #4006): bounded read-only API client with pagination, ETag, quota accounting, and host allowlist; live capability acceptance remains pending |
 | 3b | [Sync subscriptions from Takeout and RSS](SYNC_SUBSCRIPTIONS_FROM_TAKEOUT_AND_RSS.md) | YSS-07 | YSS-01, YSS-04 | Takeout adoption (operator WIP baseline), channel-RSS incremental discovery, policy modes |
 | 4 | [Discover playlist items continuously](DISCOVER_PLAYLIST_ITEMS_CONTINUOUSLY.md) | YSS-05 | YSS-01, YSS-03, YSS-04 | generic playlist adapter (inbox/owned/liked/public/private), dedup + provenance, cursor discipline, unsupported-list refusal |
 | 5 | [Schedule and operate continuous sync](SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) | YSS-06 | YSS-04, YSS-05 | per-source scheduling, single-run lease, pause, offline/restart reconciliation, backoff, safe shutdown |
@@ -165,7 +165,11 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   a pending journal nor a canonical reconnect token is revoked after it actually landed. Identity or
   first-journal failure is provider-compensated when revocation is authoritative; otherwise the
   encrypted pending authority remains locally recoverable and compensation can be retried. Pending
-  cleanup/retry shares the promotion lock order. Encrypted target/predecessor/generation evidence
+  cleanup requires a visible matching binding row; a candidate ciphertext alone cannot discard its
+  per-attempt handle or be overwritten by a later grant. Retry can recreate the deterministic row
+  from encrypted journal metadata without another provider grant; delayed rows converge and
+  different same-channel winners remain conflicts. Cleanup/retry shares the promotion lock order.
+  Encrypted target/predecessor/generation evidence
   allows promotion only over the exact unchanged predecessor; same-channel token mismatch is
   preserved as a conflict without delete/revoke, while exact same refresh authority permits
   redundant cleanup. Refresh proves store readiness before provider egress and journals any
@@ -243,7 +247,8 @@ checklist entries on the parent issue — never claimed shipped in owner docs un
 ## Relationship to GitHub issues
 
 Filed via `feature-breakdown` 2026-07-17: parent feature issue #3915 is the validation hub. Children
-#3916 (YSS-01) and #3917 (YSS-02) are delivered repository-verifiably; #3990 hardens YSS-02's
-transactional OAuth lifecycle. Children #3918–#3926 (YSS-03..YSS-11) remain governed by their live
-GitHub dependency/lifecycle state. `PARENT_FEATURE_ISSUE.md` mirrors the filed parent. The spec
-directory is the source of truth; issues are execution artifacts.
+#3916 (YSS-01), #3917 (YSS-02), #3918 (YSS-03), and #3919 (YSS-04) are delivered
+repository-verifiably; #3990 hardens YSS-02's transactional OAuth lifecycle. Children #3920–#3926
+(YSS-05..YSS-11) remain governed by their live GitHub dependency/lifecycle state, and parent #3915
+still awaits operator/live-capability acceptance. `PARENT_FEATURE_ISSUE.md` mirrors the filed
+parent. The spec directory is the source of truth; issues are execution artifacts.

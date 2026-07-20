@@ -305,6 +305,7 @@ def _canonical_token_from_pending(pending: StoredToken) -> StoredToken:
         promotion_target_binding_id=None,
         promotion_predecessor_refresh_token=None,
         promotion_predecessor_generation=None,
+        promotion_display_label=None,
     )
 
 
@@ -987,6 +988,32 @@ class YouTubeAccountBinder:
                     )
                     if resolution == "canonical" and canonical_id is not None:
                         try:
+                            canonical_binding = self._bindings.get(canonical_id)
+                        except Exception:
+                            canonical_binding = None
+                        if (
+                            canonical_binding is None
+                            or canonical_binding.provider_channel_id
+                            != token.provider_channel_id
+                            or canonical_binding.reason_code == "auth_disconnected"
+                        ):
+                            recovery, recovered_binding = (
+                                self._recover_candidate_binding_row(
+                                    token, canonical_id
+                                )
+                            )
+                            if recovery != "recovered" or recovered_binding is None:
+                                return {
+                                    "status": recovery,
+                                    "pending_grant_id": pending_grant_id,
+                                    "binding_id": (
+                                        recovered_binding.account_binding_id
+                                        if recovered_binding is not None
+                                        else canonical_id
+                                    ),
+                                }
+                            canonical_binding = recovered_binding
+                        try:
                             self._store.delete(pending_grant_id)
                         except Exception:
                             return {
@@ -1289,9 +1316,34 @@ class YouTubeAccountBinder:
     ) -> dict[str, Any]:
         """Complete a proven interrupted promotion without losing authority."""
         binding = self._bindings.get(binding_id)
+        if binding is None:
+            if (
+                pending.provider_channel_id is not None
+                and binding_id
+                == _binding_candidate_id(pending.provider_channel_id)
+            ):
+                recovery, binding = self._recover_candidate_binding_row(
+                    pending, binding_id
+                )
+                if recovery != "recovered" or binding is None:
+                    return {
+                        "status": recovery,
+                        "pending_grant_id": pending_id,
+                        "binding_id": (
+                            binding.account_binding_id
+                            if binding is not None
+                            else binding_id
+                        ),
+                    }
+            else:
+                return {
+                    "status": "pending_conflict",
+                    "pending_grant_id": pending_id,
+                    "binding_id": binding_id,
+                }
+        assert binding is not None
         if (
-            binding is None
-            or binding.provider_channel_id != pending.provider_channel_id
+            binding.provider_channel_id != pending.provider_channel_id
             or binding.reason_code == "auth_disconnected"
         ):
             return {
@@ -1338,6 +1390,54 @@ class YouTubeAccountBinder:
             "pending_grant_id": pending_id,
             "binding_id": binding_id,
         }
+
+    def _recover_candidate_binding_row(
+        self, pending: StoredToken, binding_id: str
+    ) -> tuple[str, AccountBinding | None]:
+        """Retry one deterministic first-connect create without new consent.
+
+        The caller holds pending -> channel -> candidate lifecycle authority.
+        A delayed exact row converges. A different same-channel winner is
+        reported as conflict and neither credential is overwritten or revoked.
+        """
+        channel_id = pending.provider_channel_id
+        display_label = pending.promotion_display_label
+        if (
+            channel_id is None
+            or display_label is None
+            or pending.promotion_target_binding_id != binding_id
+            or binding_id != _binding_candidate_id(channel_id)
+        ):
+            return "pending_conflict", None
+        try:
+            created = self._bindings.create(
+                provider_channel_id=channel_id,
+                display_label=display_label,
+                scopes=list(pending.scopes),
+                account_binding_id=binding_id,
+                obtained_at=pending.obtained_at,
+            )
+            return "recovered", created
+        except Exception:
+            pass
+        try:
+            exact = self._bindings.get(binding_id)
+        except Exception:
+            exact = None
+        if (
+            isinstance(exact, AccountBinding)
+            and exact.account_binding_id == binding_id
+            and exact.provider_channel_id == channel_id
+            and exact.reason_code != "auth_disconnected"
+        ):
+            return "recovered", exact
+        try:
+            winner = self._bindings.get_by_channel_id(channel_id)
+        except Exception:
+            winner = None
+        if isinstance(winner, AccountBinding):
+            return "pending_conflict", winner
+        return "binding_pending", None
 
     def _recover_pending_refresh_authority(
         self, binding_id: str
@@ -1478,10 +1578,33 @@ class YouTubeAccountBinder:
                         else None
                     ),
                     promotion_predecessor_generation=predecessor_generation,
+                    promotion_display_label=identity.channel_title,
                 )
                 self._bind_pending_grant_identity(
                     pending_id, pending_with_promotion
                 )
+                if binding is None and predecessor is not None:
+                    # A prior first-connect attempt durably installed this
+                    # deterministic candidate credential but its binding create
+                    # is still temporally indeterminate. Never overwrite that
+                    # authority with a later consent grant. The new grant keeps
+                    # its own pending handle and predecessor evidence; both can
+                    # converge once the matching delayed row becomes visible.
+                    try:
+                        delayed_binding = self._bindings.get(binding_id)
+                    except Exception:
+                        delayed_binding = None
+                    if (
+                        isinstance(delayed_binding, AccountBinding)
+                        and delayed_binding.account_binding_id == binding_id
+                        and delayed_binding.provider_channel_id
+                        == identity.channel_id
+                    ):
+                        binding = delayed_binding
+                    else:
+                        raise OAuthGrantDurabilityError(
+                            "grant_pending", pending_grant_id=pending_id
+                        ) from None
                 commit_error: Exception | None = None
                 result: dict[str, Any] | None = None
                 try:
@@ -1496,17 +1619,21 @@ class YouTubeAccountBinder:
                     # retain a hidden ``__context__`` reference to a
                     # secret-bearing backend error. Once the target/candidate
                     # token is itself durable, the earlier pending journal is
-                    # redundant even if binding-row completion is indeterminate.
-                    target_is_durable = self._stored_token_matches(
-                        binding_id, token, write_error=commit_error
-                    )
-                    if target_is_durable and not isinstance(
-                        commit_error, TokenStoreDurabilityError
-                    ):
-                        try:
-                            self._store.delete(pending_id)
-                        except Exception:
-                            pass
+                    # redundant only after binding-row completion is proven.
+                    # An indeterminate first-connect create must retain its
+                    # per-attempt handle even though the deterministic candidate
+                    # ciphertext is visible.
+                    if binding is not None:
+                        target_is_durable = self._stored_token_matches(
+                            binding_id, token, write_error=commit_error
+                        )
+                        if target_is_durable and not isinstance(
+                            commit_error, TokenStoreDurabilityError
+                        ):
+                            try:
+                                self._store.delete(pending_id)
+                            except Exception:
+                                pass
                     raise commit_error
                 assert result is not None
                 # Promotion and pending cleanup remain inside channel/binding
@@ -1588,8 +1715,10 @@ class YouTubeAccountBinder:
                 ):
                     # The provider/channel uniqueness constraint makes a
                     # different visible row the canonical concurrent winner.
-                    # Move the new grant under that binding before removing the
-                    # deterministic candidate record.
+                    # A same-channel row is not proof that its credential is
+                    # this grant. Never overwrite a different/newer generation;
+                    # retain the deterministic candidate and per-attempt journal
+                    # for explicit reconciliation instead.
                     canonical_id = channel_binding.account_binding_id
                     canonical_lifecycle = (
                         self._store.binding_lifecycle_lock(canonical_id)
@@ -1597,10 +1726,14 @@ class YouTubeAccountBinder:
                         else nullcontext()
                     )
                     with canonical_lifecycle:
-                        self._store.put(canonical_id, token)
+                        canonical = self._store.get(canonical_id)
+                        if canonical is None or not _same_refresh_authority(
+                            canonical, token
+                        ):
+                            raise create_error from None
                         if canonical_id != binding_id:
                             self._store.delete(binding_id)
-                    binding = channel_binding
+                        binding = channel_binding
                 else:
                     # Even two successful negative reads are only snapshots: a
                     # delayed commit can appear afterward. Preserve the grant

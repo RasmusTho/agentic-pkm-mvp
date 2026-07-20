@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -985,19 +986,200 @@ def test_connect_precommit_binding_failure_preserves_deterministic_retry_authori
 
     monkeypatch.setattr(bindings, "create", fail_before_insert)
 
-    with pytest.raises(RuntimeError, match="synthetic pre-insert failure"):
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as first_error:
         _connect_device(binder)
+    assert first_error.value.reason_code == "grant_pending"
 
     assert bindings.list_all() == ()
-    first_candidate_ids = store.binding_ids()
-    assert len(first_candidate_ids) == 1
-    assert store.get(first_candidate_ids[0]).refresh_token == SENTINEL_REFRESH
+    first_record_ids = store.binding_ids()
+    assert len(first_record_ids) == 2
+    candidate_ids = [
+        record_id
+        for record_id in first_record_ids
+        if not record_id.startswith("pending-youtube-grant-")
+    ]
+    assert len(candidate_ids) == 1
+    assert store.get(candidate_ids[0]).refresh_token == SENTINEL_REFRESH
 
     # Another failed attempt targets the same idempotency key rather than
     # accumulating uncorrelated credential records.
-    with pytest.raises(RuntimeError, match="synthetic pre-insert failure"):
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as second_error:
         _connect_device(binder)
-    assert store.binding_ids() == first_candidate_ids
+    assert second_error.value.reason_code == "grant_pending"
+    assert store.binding_ids() == first_record_ids
+
+
+def test_definite_precommit_failure_retry_creates_binding_from_original_grant(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    original_create = bindings.create
+
+    def fail_before_insert(**_kwargs):
+        raise RuntimeError("synthetic definite precommit failure")
+
+    monkeypatch.setattr(bindings, "create", fail_before_insert)
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id is not None
+    pending = store.get(pending_id)
+    assert pending is not None
+    candidate_id = oauth._binding_candidate_id(SYNTH_CHANNEL_ID)
+    assert pending.promotion_target_binding_id == candidate_id
+    assert pending.promotion_display_label == SYNTH_CHANNEL_TITLE
+    assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH
+    assert bindings.list_all() == ()
+    token_polls_before_retry = sum(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+
+    monkeypatch.setattr(bindings, "create", original_create)
+    recovered = binder.retry_pending_grant_compensation(pending_id)
+
+    assert recovered == {
+        "status": "canonical",
+        "pending_grant_id": pending_id,
+        "binding_id": candidate_id,
+    }
+    assert bindings.get(candidate_id).state == "connected"
+    assert store.binding_ids() == (candidate_id,)
+    assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/token")
+            for request in provider.requests
+        )
+        == token_polls_before_retry
+    )
+    assert provider.revoked == []
+
+
+def test_indeterminate_first_connect_keeps_distinct_grants_retryable_until_delayed_commit(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    original_create = bindings.create
+    create_kwargs: dict[str, object] = {}
+
+    def fail_before_commit(**kwargs):
+        create_kwargs.update(kwargs)
+        raise RuntimeError("synthetic indeterminate binding create")
+
+    monkeypatch.setattr(bindings, "create", fail_before_commit)
+    first_connection = binder.start_device_connection()
+    first_connection = replace(
+        first_connection,
+        handle=replace(first_connection.handle, device_code="first-device-attempt"),
+    )
+    second_connection = binder.start_device_connection()
+    second_connection = replace(
+        second_connection,
+        handle=replace(second_connection.handle, device_code="second-device-attempt"),
+    )
+    provider.token_responses.extend(
+        [
+            _granted_token(access=SENTINEL_ACCESS, refresh=SENTINEL_REFRESH),
+            _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2),
+        ]
+    )
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as first_error:
+        binder.finish_device_connection(first_connection)
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as second_error:
+        binder.finish_device_connection(second_connection)
+
+    first_pending_id = first_error.value.pending_grant_id
+    second_pending_id = second_error.value.pending_grant_id
+    assert first_error.value.reason_code == "grant_pending"
+    assert second_error.value.reason_code == "grant_pending"
+    assert first_pending_id is not None
+    assert second_pending_id is not None
+    assert first_pending_id != second_pending_id
+    candidate_id = str(create_kwargs["account_binding_id"])
+    assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH
+    assert store.get(first_pending_id).refresh_token == SENTINEL_REFRESH
+    assert store.get(second_pending_id).refresh_token == SENTINEL_REFRESH_2
+    assert provider.revoked == []
+
+    # Neither distinct grant is mistaken for canonical authority while the
+    # matching binding row is absent, and both retain an explicit retry handle.
+    assert binder.retry_pending_grant_compensation(first_pending_id) == {
+        "status": "binding_pending",
+        "pending_grant_id": first_pending_id,
+        "binding_id": candidate_id,
+    }
+    assert binder.retry_pending_grant_compensation(second_pending_id) == {
+        "status": "binding_pending",
+        "pending_grant_id": second_pending_id,
+        "binding_id": candidate_id,
+    }
+    assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH
+    assert provider.revoked == []
+
+    # Once the delayed first create becomes visible, retry first recognizes its
+    # exact canonical grant and retry second promotes only over that predecessor.
+    original_create(**create_kwargs)
+    assert binder.retry_pending_grant_compensation(first_pending_id)["status"] == "canonical"
+    assert binder.retry_pending_grant_compensation(second_pending_id) == {
+        "status": "promoted",
+        "pending_grant_id": second_pending_id,
+        "binding_id": candidate_id,
+    }
+    assert store.binding_ids() == (candidate_id,)
+    assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH_2
+    assert provider.revoked == []
+
+
+def test_indeterminate_first_connect_never_overwrites_newer_same_channel_winner(
+    store, bindings, registry, monkeypatch
+):
+    winner = bindings.create(
+        provider_channel_id=SYNTH_CHANNEL_ID,
+        display_label=SYNTH_CHANNEL_TITLE,
+        scopes=[oauth.SCOPE],
+        account_binding_id="newer-same-channel-winner",
+    )
+    newer = tokstore.StoredToken(
+        refresh_token="sentinel-REFRESH3-must-never-leak",
+        access_token="sentinel-ACCESS3-must-never-leak",
+        expires_at=None,
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-20T00:02:00+00:00",
+        provider_channel_id=SYNTH_CHANNEL_ID,
+        authority_generation=3,
+    )
+    store.put(winner.account_binding_id, newer)
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    channel_reads = 0
+
+    def reveal_winner_after_create(_channel_id):
+        nonlocal channel_reads
+        channel_reads += 1
+        return None if channel_reads == 1 else winner
+
+    def lose_create_ack(**_kwargs):
+        raise RuntimeError("synthetic concurrent create collision")
+
+    monkeypatch.setattr(bindings, "get_by_channel_id", reveal_winner_after_create)
+    monkeypatch.setattr(bindings, "create", lose_create_ack)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id is not None
+    candidate_id = oauth._binding_candidate_id(SYNTH_CHANNEL_ID)
+    assert store.get(winner.account_binding_id) == newer
+    assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
+    assert provider.revoked == []
 
 
 def test_connect_delayed_commit_after_negative_readbacks_preserves_and_converges(
@@ -1032,12 +1214,16 @@ def test_connect_delayed_commit_after_negative_readbacks_preserves_and_converges
     monkeypatch.setattr(bindings, "get", negative_exact_readback)
     monkeypatch.setattr(bindings, "get_by_channel_id", negative_channel_readback)
 
-    with pytest.raises(RuntimeError, match="synthetic delayed insert acknowledgement"):
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
         _connect_device(binder)
+    assert excinfo.value.reason_code == "grant_pending"
 
     assert readbacks == ["exact", "channel"]
     candidate_id = str(create_kwargs["account_binding_id"])
-    assert store.binding_ids() == (candidate_id,)
+    assert set(store.binding_ids()) == {
+        candidate_id,
+        oauth._pending_grant_id(SENTINEL_DEVICE_CODE, None),
+    }
     assert store.get(candidate_id).refresh_token == SENTINEL_REFRESH
 
     monkeypatch.setattr(bindings, "create", original_create)
@@ -1066,13 +1252,16 @@ def test_connect_indeterminate_create_readback_preserves_token(
     monkeypatch.setattr(bindings, "create", fail_create)
     monkeypatch.setattr(bindings, "get", fail_readback)
 
-    with pytest.raises(RuntimeError, match="synthetic indeterminate create"):
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
         _connect_device(binder)
+    assert excinfo.value.reason_code == "grant_pending"
 
     # The only encrypted authority for revoking the just-issued remote grant
     # survives until authoritative binding readback is available.
-    assert len(store.binding_ids()) == 1
-    assert store.get(store.binding_ids()[0]).refresh_token == SENTINEL_REFRESH
+    assert len(store.binding_ids()) == 2
+    assert {
+        store.get(record_id).refresh_token for record_id in store.binding_ids()
+    } == {SENTINEL_REFRESH}
 
 
 def test_failed_first_connect_status_is_not_connected_without_token_record(

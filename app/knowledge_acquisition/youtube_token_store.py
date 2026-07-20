@@ -215,6 +215,7 @@ class StoredToken:
     promotion_target_binding_id: str | None = None
     promotion_predecessor_refresh_token: str | None = None
     promotion_predecessor_generation: int | None = None
+    promotion_display_label: str | None = None
 
     def __repr__(self) -> str:  # redaction-aware (INV-YSS-5)
         return (
@@ -236,6 +237,7 @@ class StoredToken:
             promotion_target_binding_id=self.promotion_target_binding_id,
             promotion_predecessor_refresh_token=self.promotion_predecessor_refresh_token,
             promotion_predecessor_generation=self.promotion_predecessor_generation,
+            promotion_display_label=self.promotion_display_label,
         )
 
     def _to_plain(self) -> dict[str, Any]:
@@ -250,6 +252,7 @@ class StoredToken:
             "promotion_target_binding_id": self.promotion_target_binding_id,
             "promotion_predecessor_refresh_token": self.promotion_predecessor_refresh_token,
             "promotion_predecessor_generation": self.promotion_predecessor_generation,
+            "promotion_display_label": self.promotion_display_label,
         }
 
     @classmethod
@@ -271,6 +274,7 @@ class StoredToken:
                 if data.get("promotion_predecessor_generation") is not None
                 else None
             ),
+            promotion_display_label=data.get("promotion_display_label"),
         )
 
 

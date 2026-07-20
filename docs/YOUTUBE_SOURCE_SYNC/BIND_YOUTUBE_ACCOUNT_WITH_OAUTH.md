@@ -52,9 +52,14 @@ touch the repo, vault, settings values, logs, events, or receipts.
    success, so a landed pending journal or canonical reconnect token is never revoked as though its
    write failed. Identity/journal failure is provider-compensated when revocation is authoritative;
    otherwise the pending authority remains encrypted and locally retryable. Canonical binding
-   persistence precedes the `connected` claim; later pending cleanup may leave only a redundant
-   encrypted copy on crash. Promotion and cleanup stay within pending/channel/binding lifecycle
-   authority. The pending ciphertext records its exact target, predecessor refresh authority, and
+   persistence precedes the `connected` claim; pending cleanup begins only after the matching
+   binding row is visible. A deterministic first-connect candidate without that row retains its
+   per-attempt retry journal, and a later consent gets a distinct journal instead of overwriting the
+   earlier grant. Retry uses encrypted display metadata to re-attempt the same deterministic binding
+   create without minting another grant; a delayed exact row converges and a different same-channel
+   winner remains a non-destructive conflict. Later cleanup may leave only a redundant encrypted
+   copy on crash. Promotion and cleanup stay within pending/channel/binding lifecycle authority. The
+   pending ciphertext records its exact target, predecessor refresh authority, and
    next generation before canonical write. Retry cleans only the same refresh authority, promotes
    only over that unchanged predecessor, and preserves a same-channel token mismatch as
    `pending_conflict` without deletion or provider revocation; channel identity alone is not grant
