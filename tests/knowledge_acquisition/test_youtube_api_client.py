@@ -259,6 +259,49 @@ def test_host_allowlist_and_ref_validation() -> None:
     assert len(redirect_api.requests) == 1
 
 
+@pytest.mark.parametrize(
+    "location",
+    (
+        "https://[SENTINEL-malformed-redirect/youtube/v3/channels",
+        "https://www.googleapis.com:65536/youtube/v3/channels"
+        "?provider=SENTINEL-malformed-redirect",
+    ),
+)
+def test_malformed_redirect_location_is_safely_normalized(location: str) -> None:
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
+
+    sentinel = "SENTINEL-malformed-redirect"
+    response_holder: list[httpx.Response] = []
+
+    class _TrackedRedirectResponse(httpx.Response):
+        close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            super().close()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = _TrackedRedirectResponse(
+            302,
+            request=request,
+            headers={"Location": location},
+            stream=httpx.ByteStream(b"provider body must remain unread"),
+        )
+        response_holder.append(response)
+        return response
+
+    with pytest.raises(YouTubeApiError) as captured:
+        _client(_Api(handler)).get_my_channel()
+
+    error = captured.value
+    assert error.reason_code == "api_unavailable"
+    assert error.status == 302
+    assert response_holder[0].close_calls == 1
+    assert sentinel not in error.detail
+    assert sentinel not in "".join(traceback.format_exception(error))
+    _assert_exception_graph_secret_free(error, sentinel)
+
+
 def test_error_taxonomy_mapping_secret_free() -> None:
     from app.knowledge_acquisition.youtube_api_client import YouTubeApiError
 

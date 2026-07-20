@@ -608,6 +608,10 @@ class YouTubeApiClient:
                         )
                     except DisallowedYouTubeHostError as error:
                         pending_error = error
+                    except ValueError:
+                        pending_error = YouTubeApiError(
+                            "api_unavailable", status, "Data API redirect was malformed"
+                        )
                 if pending_error is None:
                     pending_error = YouTubeApiError(
                         "api_unavailable", status, "Data API redirect was refused"
