@@ -31,6 +31,10 @@ runtime_env_dir="$(dirname "$runtime_env_path")"
 mkdir -p "$runtime_env_dir"
 
 if [ "${NO_VAULT_MODE:-0}" -eq 1 ]; then
+  # Preserve an explicit selector, while retaining the established no-vault
+  # idle fallback. Persisting either value keeps a later pinned-image render
+  # independent of its caller shell.
+  no_vault_llm_provider="${LLM_PROVIDER:-mock}"
   watcher_runtime_env_file="$runtime_env_path"
   case "$watcher_runtime_env_file" in
     /*) ;;
@@ -41,6 +45,7 @@ if [ "${NO_VAULT_MODE:-0}" -eq 1 ]; then
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
 LOCAL_UID=${LOCAL_UID:-$(id -u)}
 LOCAL_GID=${LOCAL_GID:-$(id -g)}
+LLM_PROVIDER=$no_vault_llm_provider
 WATCHER_ENABLE=0
 WATCHER_VAULT_PATH=
 ENV
