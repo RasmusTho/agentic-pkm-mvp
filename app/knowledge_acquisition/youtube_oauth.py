@@ -768,6 +768,7 @@ class TokenProvider:
             self._binding_id, refreshed, write_error=write_error
         ):
             if pending_id is not None:
+                self._degrade("auth_refresh_pending")
                 raise OAuthGrantDurabilityError(
                     "refresh_pending", pending_grant_id=pending_id
                 ) from None
@@ -827,6 +828,7 @@ class TokenProvider:
         if write_error is not None and not self._stored_token_matches(
             self._binding_id, promoted, write_error=write_error
         ):
+            self._degrade("auth_refresh_pending")
             raise OAuthGrantDurabilityError(
                 "refresh_pending", pending_grant_id=pending_id
             ) from None
@@ -1316,6 +1318,55 @@ class YouTubeAccountBinder:
     ) -> dict[str, Any]:
         """Complete a proven interrupted promotion without losing authority."""
         binding = self._bindings.get(binding_id)
+        if binding is not None and (
+            binding.provider_channel_id != pending.provider_channel_id
+            or binding.reason_code == "auth_disconnected"
+        ):
+            return {
+                "status": "pending_conflict",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
+
+        # When an older canonical predecessor already exists, recovering its
+        # row is safe and must precede promotion of a distinct later grant. If
+        # row creation is still failing, leave both encrypted authorities
+        # unchanged instead of overwriting the predecessor without a row.
+        if binding is None and self._store.get(binding_id) is not None:
+            recovery, binding = self._recover_candidate_binding_row(
+                pending, binding_id
+            )
+            if recovery != "recovered" or binding is None:
+                return {
+                    "status": recovery,
+                    "pending_grant_id": pending_id,
+                    "binding_id": (
+                        binding.account_binding_id
+                        if binding is not None
+                        else binding_id
+                    ),
+                }
+
+        # Canonical encrypted authority must be crash-durable before recovery
+        # creates a binding row whose default state claims ``connected``. A
+        # pending-only restart followed by a failed canonical write therefore
+        # leaves no row to overstate authority. Lost acknowledgements still
+        # roll forward through exact durable readback, and a later retry can
+        # recover the deterministic row from the now-canonical ciphertext.
+        canonical = _canonical_token_from_pending(pending)
+        write_error: Exception | None = None
+        try:
+            self._store.put(binding_id, canonical)
+        except Exception as error:
+            write_error = error
+        if write_error is not None and not self._stored_token_matches(
+            binding_id, canonical, write_error=write_error
+        ):
+            return {
+                "status": "promotion_pending",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
         if binding is None:
             if (
                 pending.provider_channel_id is not None
@@ -1348,21 +1399,6 @@ class YouTubeAccountBinder:
         ):
             return {
                 "status": "pending_conflict",
-                "pending_grant_id": pending_id,
-                "binding_id": binding_id,
-            }
-
-        canonical = _canonical_token_from_pending(pending)
-        write_error: Exception | None = None
-        try:
-            self._store.put(binding_id, canonical)
-        except Exception as error:
-            write_error = error
-        if write_error is not None and not self._stored_token_matches(
-            binding_id, canonical, write_error=write_error
-        ):
-            return {
-                "status": "promotion_pending",
                 "pending_grant_id": pending_id,
                 "binding_id": binding_id,
             }

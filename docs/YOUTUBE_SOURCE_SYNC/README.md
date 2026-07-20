@@ -168,15 +168,18 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   cleanup requires a visible matching binding row; a candidate ciphertext alone cannot discard its
   per-attempt handle or be overwritten by a later grant. Retry can recreate the deterministic row
   from encrypted journal metadata without another provider grant; delayed rows converge and
-  different same-channel winners remain conflicts. Cleanup/retry shares the promotion lock order.
-  Encrypted target/predecessor/generation evidence
+  different same-channel winners remain conflicts. A pending-only retry makes its canonical token
+  durable before creating the connected row, while an existing canonical predecessor gets its row
+  recovered before any distinct pending grant can replace it. Cleanup/retry shares the promotion
+  lock order. Encrypted target/predecessor/generation evidence
   allows promotion only over the exact unchanged predecessor; same-channel token mismatch is
   preserved as a conflict without delete/revoke, while exact same refresh authority permits
   redundant cleanup. Refresh proves store readiness before provider egress and journals any
   unexpected rotated refresh credential before canonical write, so store failure recovers without
   another provider request and a newer canonical generation is never overwritten. Connect never
   records `connected` before encrypted token persistence; status never reports an undecryptable or
-  refresh-pending record as connected.
+  refresh-pending record as connected. Refresh pending, conflict, and durability failures stamp the
+  same registered reason code on the binding and dependent authenticated sources.
   Connect, reconnect, refresh, and disconnect serialize each binding's credential lifecycle across
   actors sharing its channel token store; portable store-wide serialization prevents distinct
   bindings from losing aggregate token-file updates. First-connect binding ids are deterministic

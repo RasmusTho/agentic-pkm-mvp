@@ -143,8 +143,13 @@ substrate (the `settings_receipts`/`promotion_receipts` pattern).
 
 ## Reason codes (all surfaces: `last_error`, events, health, UI, CLI)
 
-`auth_missing` (no binding), `auth_key_missing` (token store key absent — fail-closed),
-`auth_expired`, `auth_revoked`, `auth_disconnected` (operator action), `quota_exhausted`,
+`auth_missing` (no binding), `auth_key_missing` (token store key absent or unable to authenticate
+the encrypted aggregate — fail-closed),
+`auth_expired`, `auth_revoked`, `auth_disconnected` (operator action),
+`auth_refresh_pending` (rotated encrypted authority awaits canonical promotion),
+`auth_refresh_conflict` (canonical no longer matches the journal's predecessor generation),
+`auth_refresh_durability` (rotation could not be durably journaled or authoritatively compensated),
+`quota_exhausted`,
 `api_unavailable` (5xx/timeout), `network_error`, `source_gone` (404/private-without-access),
 `source_unsupported` (Watch Later / Watch History), `writeguard_blocked`, `pipeline_dead_letter`,
 `policy_unsupported` (queued acquisition mode/depth has no delivered production path),
@@ -211,13 +216,75 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
 - Tokens (refresh/access) live in an encrypted-at-rest token store file (AES-256-GCM via the
   existing `cryptography` dependency, mirroring `app/heimdal/raw_store.py`): path is an app-local
   binding (default under the channel runtime dir; never the vault, never the repo), key from
-  `YOUTUBE_TOKEN_STORE_KEY` (32 bytes, same provisioning boundary). Missing key with an existing
-  binding ⇒ `auth_key_missing` degraded state — never a plaintext fallback (fail closed).
+  `YOUTUBE_TOKEN_STORE_KEY` (32 bytes, same provisioning boundary). An authenticated encrypted
+  canary binds that configured key to the whole aggregate; a legacy aggregate without the canary is
+  admitted only after every existing record authenticates under the key. A missing or valid-but-
+  wrong key with an existing binding ⇒ `auth_key_missing` degraded state before any grant poll or
+  aggregate mutation — never a plaintext fallback or mixed-key file (fail closed).
 - Redaction: all sync surfaces route through redaction-aware serialization; field names carry
   `token`/`secret`/`credential` tokens so existing key-name redactors match. Exception text from
-  the OAuth/HTTP layer is sanitized (status + class, never response bodies that may echo tokens).
-- Disconnect revokes at the provider (`oauth2.googleapis.com/revoke`), deletes the token record,
-  and disables dependent sources with `auth_disconnected` — acquired artifacts, raw records, and
+  the OAuth/HTTP layer is sanitized (status + an allowlisted OAuth error enum, never arbitrary
+  provider strings or response bodies that may echo tokens).
+- Before polling the device-token endpoint, connect resolves the encryption key and proves the
+  aggregate store's locked atomic write/read path without writing secret probe material. Each POSIX
+  write syncs the staged file before atomic replacement and confirms the parent-directory barrier
+  afterward; Windows uses a write-through replacement. A visible record after a failed barrier is
+  not crash-durable authority until a fresh barrier succeeds. Once
+  the provider returns a grant, connect immediately journals it encrypted under an opaque digest
+  id; no identity probe or binding mutation occurs first. Exact encrypted-record readback treats a
+  lost write acknowledgement as durable success, so a landed pending journal or canonical
+  reconnect token is never revoked as though its write failed. If the journal or identity probe
+  fails without such durable authority, an authoritative provider revocation compensates and
+  removes the journal. An unproven revoke preserves or retries the encrypted pending journal, whose
+  compensation is explicitly retryable. Pending-only first-connect recovery makes the canonical
+  token durable before it creates a binding row whose default state claims `connected`. When an
+  older canonical predecessor exists, recovery first recreates its matching row before a distinct
+  later pending grant can replace it, so a failed row create leaves both authorities intact. After
+  the canonical binding token is durable **and the matching binding row is visible**,
+  pending-journal cleanup is safe and best-effort: a crash can
+  retain a redundant encrypted copy but cannot remove revocation authority. A deterministic
+  first-connect candidate without that row is not canonical authority: its per-attempt journal
+  remains retryable, and a later consent retains a distinct journal rather than overwriting the
+  candidate grant. The encrypted journal carries the display metadata needed to retry the same
+  deterministic binding create without polling for another grant; delayed exact rows converge,
+  while a different same-channel winner remains a non-destructive conflict. Promotion and cleanup
+  remain inside the pending → channel → binding lifecycle-lock order. Before canonical write, the
+  encrypted pending record gains its
+  exact target, predecessor refresh authority, and next authority generation. Retry removes it only
+  when canonical has the same refresh authority, or promotes it only while canonical still exactly
+  matches that predecessor generation. Same-channel identity alone is never canonical proof: a
+  token mismatch against a newer/different generation preserves both records as `pending_conflict`
+  and performs no provider revocation.
+- Connect persists the encrypted token before claiming a binding is connected. Connect,
+  reconnect, refresh, and disconnect serialize each binding's credential lifecycle across service
+  instances and runtime processes sharing the channel token store. The app-local lock filename is
+  a digest of the binding id and its private lock file contains no account identifier or secret.
+  A portable store-wide lock additionally serializes aggregate token-file mutations across
+  distinct bindings (POSIX and Windows), and concurrent first connects re-resolve provider identity
+  under shared authority before creating a binding. First-connect binding ids are deterministic per
+  provider channel. If binding creation returns an exception after its database commit, visible
+  binding/channel readback rolls forward to the committed connected row; negative read snapshots
+  never compensate the encrypted credential because a delayed commit may still appear. Retry then
+  converges through the same candidate id without minting another credential identity.
+- Google's [refresh contract](https://developers.google.com/identity/protocols/oauth2/web-server#offline)
+  documents a successful refresh as returning a new access token while the securely stored refresh
+  token remains the long-lived credential. The implementation nevertheless treats any unexpected,
+  non-empty different `refresh_token` in that response as a rotation: it proves store readiness
+  before `/token`, durably journals the returned authority with its exact predecessor/generation,
+  and only then promotes canonical state. A canonical-write failure leaves
+  `auth_refresh_pending`; the next access promotes without another provider request only if the
+  predecessor is unchanged. A newer/different canonical generation yields
+  `auth_refresh_conflict` and preserves both encrypted authorities. Status never reports either
+  state as connected; pending, conflict, and durability failures stamp the same registered reason
+  code on the binding and dependent sources, and reconnect/disconnect must resolve the journal or
+  fail closed before polling/revoking.
+- Disconnect first revokes at the provider (`oauth2.googleapis.com/revoke`). Only Google's
+  documented HTTP 400 `invalid_token` outcome — meaning already expired or revoked — permits local
+  teardown with `revoked=false`. `invalid_request`, intermediary/unknown 4xx responses, redirects,
+  transport failures, and every other unproven outcome preserve the encrypted token and source state
+  for retry/reconciliation. Credential-bearing OAuth requests set redirect following off at the
+  request site, independent of injected-client defaults. Teardown deletes the token record and
+  disables dependent sources with `auth_disconnected` — acquired artifacts, raw records, and
   receipts are never deleted.
 
 ## Egress posture (YSS-02/03/07/08)

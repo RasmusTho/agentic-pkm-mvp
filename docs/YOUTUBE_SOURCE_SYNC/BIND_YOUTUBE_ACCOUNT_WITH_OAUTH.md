@@ -41,21 +41,24 @@ touch the repo, vault, settings values, logs, events, or receipts.
    id, display label, connected/degraded state, scopes, obtained_at. Client credentials resolve
    from `YOUTUBE_OAUTH_CLIENT_ID`/`YOUTUBE_OAUTH_CLIENT_SECRET` env (host secret-provisioning
    boundary); their *values* are never persisted or printed.
-4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
-   reason codes on the binding and dependent sources (INV-YSS-4). Before each device-token poll,
-   connect proves encryption-key and locked atomic-store readiness. POSIX store writes sync the
-   staged file before atomic replacement and confirm the parent-directory barrier afterward;
+4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`,
+   while rotated-refresh recovery maps to `auth_refresh_pending`, `auth_refresh_conflict`, or
+   `auth_refresh_durability`, on both the binding and dependent sources (INV-YSS-4). Before each
+   device-token poll, connect proves encryption-key and locked atomic-store readiness. POSIX store
+   writes sync the staged file before atomic replacement and confirm the parent-directory barrier afterward;
    Windows uses write-through replacement. Visible readback after a failed barrier is not accepted
    as crash-durable until a fresh barrier succeeds. A returned grant is
    immediately encrypted under an opaque pending-journal id before the fallible identity probe or
    binding work. Exact encrypted-record readback treats a lost write acknowledgement as durable
    success, so a landed pending journal or canonical reconnect token is never revoked as though its
    write failed. Identity/journal failure is provider-compensated when revocation is authoritative;
-   otherwise the pending authority remains encrypted and locally retryable. Canonical binding
-   persistence precedes the `connected` claim; pending cleanup begins only after the matching
-   binding row is visible. A deterministic first-connect candidate without that row retains its
-   per-attempt retry journal, and a later consent gets a distinct journal instead of overwriting the
-   earlier grant. Retry uses encrypted display metadata to re-attempt the same deterministic binding
+   otherwise the pending authority remains encrypted and locally retryable. For a pending-only
+   first connect, canonical token durability precedes binding-row creation and the `connected`
+   claim. If an older canonical predecessor already exists, its row is recovered before a distinct
+   later grant may replace it, so failed row recovery preserves both authorities. Pending cleanup
+   begins only after the matching binding row is visible. A deterministic first-connect candidate
+   without that row retains its per-attempt retry journal, and a later consent gets a distinct
+   journal instead of overwriting the earlier grant. Retry uses encrypted display metadata to re-attempt the same deterministic binding
    create without minting another grant; a delayed exact row converges and a different same-channel
    winner remains a non-destructive conflict. Later cleanup may leave only a redundant encrypted
    copy on crash. Promotion and cleanup stay within pending/channel/binding lifecycle authority. The

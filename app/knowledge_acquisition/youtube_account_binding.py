@@ -34,7 +34,16 @@ VALID_BINDING_STATES: frozenset[str] = frozenset({"connected", "degraded"})
 # The auth reason codes a binding may carry (subset of the contract taxonomy
 # that is auth-scoped). ``None`` means healthy/connected.
 VALID_BINDING_REASON_CODES: frozenset[str] = frozenset(
-    {"auth_missing", "auth_key_missing", "auth_expired", "auth_revoked", "auth_disconnected"}
+    {
+        "auth_missing",
+        "auth_key_missing",
+        "auth_expired",
+        "auth_revoked",
+        "auth_disconnected",
+        "auth_refresh_pending",
+        "auth_refresh_conflict",
+        "auth_refresh_durability",
+    }
 )
 
 _TABLE = "youtube_account_binding"
