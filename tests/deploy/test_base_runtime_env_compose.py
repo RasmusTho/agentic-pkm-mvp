@@ -99,10 +99,35 @@ def test_base_services_do_not_shadow_governed_runtime_env_keys() -> None:
     assert CAPTURE_GOVERNED_KEYS.isdisjoint(capture_environment)
 
 
+@requires_docker
 def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
     watcher = _load_compose(BASE_COMPOSE)["services"]["watcher"]
-
     assert _environment(watcher)["LLM_PROVIDER"] == "${LLM_PROVIDER}"
+
+    env = os.environ.copy()
+    env["LLM_PROVIDER"] = "synthetic-base-provider"
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(BASE_COMPOSE),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    services = json.loads(result.stdout)["services"]
+    assert isinstance(services, dict)
+
+    assert _environment(services["watcher"])["LLM_PROVIDER"] == (
+        "synthetic-base-provider"
+    )
 
 
 @requires_docker
