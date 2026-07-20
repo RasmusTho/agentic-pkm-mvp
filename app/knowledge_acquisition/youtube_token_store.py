@@ -208,6 +208,13 @@ class StoredToken:
     scopes: tuple[str, ...]
     obtained_at: str  # ISO-8601 UTC
     provider_channel_id: str | None
+    # Credential-authority generation and promotion evidence live only inside
+    # this encrypted payload.  They let a retry distinguish the predecessor it
+    # is allowed to replace from a newer independently rotated credential.
+    authority_generation: int = 0
+    promotion_target_binding_id: str | None = None
+    promotion_predecessor_refresh_token: str | None = None
+    promotion_predecessor_generation: int | None = None
 
     def __repr__(self) -> str:  # redaction-aware (INV-YSS-5)
         return (
@@ -225,6 +232,10 @@ class StoredToken:
             scopes=self.scopes,
             obtained_at=self.obtained_at,
             provider_channel_id=self.provider_channel_id,
+            authority_generation=self.authority_generation,
+            promotion_target_binding_id=self.promotion_target_binding_id,
+            promotion_predecessor_refresh_token=self.promotion_predecessor_refresh_token,
+            promotion_predecessor_generation=self.promotion_predecessor_generation,
         )
 
     def _to_plain(self) -> dict[str, Any]:
@@ -235,6 +246,10 @@ class StoredToken:
             "scopes": list(self.scopes),
             "obtained_at": self.obtained_at,
             "provider_channel_id": self.provider_channel_id,
+            "authority_generation": self.authority_generation,
+            "promotion_target_binding_id": self.promotion_target_binding_id,
+            "promotion_predecessor_refresh_token": self.promotion_predecessor_refresh_token,
+            "promotion_predecessor_generation": self.promotion_predecessor_generation,
         }
 
     @classmethod
@@ -246,6 +261,16 @@ class StoredToken:
             scopes=tuple(data.get("scopes") or ()),
             obtained_at=data.get("obtained_at") or _now_iso(),
             provider_channel_id=data.get("provider_channel_id"),
+            authority_generation=int(data.get("authority_generation") or 0),
+            promotion_target_binding_id=data.get("promotion_target_binding_id"),
+            promotion_predecessor_refresh_token=data.get(
+                "promotion_predecessor_refresh_token"
+            ),
+            promotion_predecessor_generation=(
+                int(data["promotion_predecessor_generation"])
+                if data.get("promotion_predecessor_generation") is not None
+                else None
+            ),
         )
 
 

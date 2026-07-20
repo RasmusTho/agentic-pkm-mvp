@@ -197,6 +197,10 @@ class OAuthGrantDurabilityError(RuntimeError):
             message = "OAuth grant finalization failed; provider revocation was confirmed"
         elif reason_code == "grant_pending":
             message = "OAuth grant finalization failed; encrypted pending authority was preserved"
+        elif reason_code == "refresh_pending":
+            message = "OAuth refresh finalization failed; encrypted pending authority was preserved"
+        elif reason_code == "refresh_conflict":
+            message = "OAuth refresh finalization found conflicting encrypted authority"
         else:
             message = "OAuth grant finalization failed without durable recovery authority"
         super().__init__(message)
@@ -279,6 +283,29 @@ def _pending_grant_id(device_code: str, reconnect_binding_id: str | None) -> str
     target = reconnect_binding_id or "first-connect"
     digest = hashlib.sha256(f"{target}\0{device_code}".encode("utf-8")).hexdigest()
     return f"pending-youtube-grant-{digest}"
+
+
+def _pending_refresh_id(binding_id: str) -> str:
+    """Stable opaque journal id for one binding's serialized refresh lane."""
+    digest = hashlib.sha256(f"youtube-refresh\0{binding_id}".encode("utf-8")).hexdigest()
+    return f"pending-youtube-refresh-{digest}"
+
+
+def _same_refresh_authority(left: StoredToken, right: StoredToken) -> bool:
+    """Constant-time equality for the standing provider credential."""
+    return bool(left.refresh_token) and hmac.compare_digest(
+        left.refresh_token, right.refresh_token
+    )
+
+
+def _canonical_token_from_pending(pending: StoredToken) -> StoredToken:
+    """Remove encrypted retry metadata before canonical persistence."""
+    return replace(
+        pending,
+        promotion_target_binding_id=None,
+        promotion_predecessor_refresh_token=None,
+        promotion_predecessor_generation=None,
+    )
 
 
 def _now_iso() -> str:
@@ -647,6 +674,7 @@ class TokenProvider:
             # runtime processes (#3990 review repair).
             with self._store.binding_lifecycle_lock(self._binding_id):
                 token = self._read_token()
+                token = self._recover_pending_refresh(token)
                 if self._is_fresh(token):
                     return token.access_token  # type: ignore[return-value]
                 return self._refresh(token)
@@ -675,22 +703,180 @@ class TokenProvider:
 
     def _refresh(self, token: StoredToken) -> str:
         _log.debug("youtube oauth: refreshing access token for binding %s", self._binding_id)
+        # The provider call can return fresh authority. Prove the encrypted
+        # aggregate and its crash barrier before crossing that boundary.
+        self._store.preflight_write_ready()
         try:
             bundle = self._client.refresh(token.refresh_token)
         except AuthDegradedError as exc:
             self._degrade(exc.reason_code)
             raise
+        rotated_refresh = (
+            bundle.refresh_token
+            if isinstance(bundle.refresh_token, str)
+            and bundle.refresh_token
+            and not hmac.compare_digest(bundle.refresh_token, token.refresh_token)
+            else None
+        )
         refreshed = StoredToken(
-            refresh_token=bundle.refresh_token or token.refresh_token,
+            refresh_token=rotated_refresh or token.refresh_token,
             access_token=bundle.access_token,
             expires_at=_expiry_iso(bundle.expires_in),
             scopes=token.scopes or (SCOPE,),
             obtained_at=_now_iso(),
             provider_channel_id=token.provider_channel_id,
+            authority_generation=(
+                token.authority_generation + 1
+                if rotated_refresh is not None
+                else token.authority_generation
+            ),
         )
-        self._store.put(self._binding_id, refreshed)
+        pending_id: str | None = None
+        if rotated_refresh is not None:
+            pending_id = _pending_refresh_id(self._binding_id)
+            pending = replace(
+                refreshed,
+                promotion_target_binding_id=self._binding_id,
+                promotion_predecessor_refresh_token=token.refresh_token,
+                promotion_predecessor_generation=token.authority_generation,
+            )
+            if not self._write_refresh_journal(pending_id, pending):
+                # Google documents refresh as access-token renewal, but if an
+                # adversarial/non-standard response rotates the standing
+                # credential and local journaling still fails after preflight,
+                # revoke that returned authority when the provider can confirm
+                # it.  An indeterminate double failure remains fail-closed.
+                if self._compensate_refresh_rotation(pending):
+                    self._delete_refresh_journal(pending_id)
+                    self._degrade("auth_revoked")
+                    raise AuthDegradedError(
+                        "auth_revoked",
+                        "rotated refresh authority was revoked after local durability failure",
+                    ) from None
+                self._degrade("auth_refresh_durability")
+                raise OAuthGrantDurabilityError(
+                    "refresh_durability_unavailable"
+                ) from None
+
+        write_error: Exception | None = None
+        try:
+            self._store.put(self._binding_id, refreshed)
+        except Exception as error:
+            write_error = error
+        if write_error is not None and not self._stored_token_matches(
+            self._binding_id, refreshed, write_error=write_error
+        ):
+            if pending_id is not None:
+                raise OAuthGrantDurabilityError(
+                    "refresh_pending", pending_grant_id=pending_id
+                ) from None
+            self._degrade("auth_refresh_durability")
+            raise OAuthGrantDurabilityError("refresh_durability_unavailable") from None
+        if pending_id is not None:
+            self._delete_refresh_journal(pending_id)
         self._clear_degradation()
         return bundle.access_token
+
+    def _recover_pending_refresh(self, canonical: StoredToken) -> StoredToken:
+        """Promote a journal only while its exact predecessor is canonical."""
+        pending_id = _pending_refresh_id(self._binding_id)
+        pending = self._store.get(pending_id)
+        if pending is None:
+            return canonical
+        if (
+            pending.promotion_target_binding_id != self._binding_id
+            or pending.promotion_predecessor_refresh_token is None
+            or pending.promotion_predecessor_generation is None
+        ):
+            self._degrade("auth_refresh_conflict")
+            raise OAuthGrantDurabilityError(
+                "refresh_conflict", pending_grant_id=pending_id
+            ) from None
+
+        if _same_refresh_authority(pending, canonical):
+            # Canonical promotion already landed (possibly with a lost ack), or
+            # a later access-only refresh retained the same standing grant.
+            self._delete_refresh_journal(pending_id)
+            self._clear_degradation()
+            return canonical
+
+        predecessor_matches = (
+            canonical.authority_generation
+            == pending.promotion_predecessor_generation
+            and hmac.compare_digest(
+                canonical.refresh_token,
+                pending.promotion_predecessor_refresh_token,
+            )
+        )
+        if not predecessor_matches:
+            # A newer/different canonical credential is proven. Neither delete
+            # nor revoke the mismatched pending authority, and never overwrite
+            # the newer generation.
+            self._degrade("auth_refresh_conflict")
+            raise OAuthGrantDurabilityError(
+                "refresh_conflict", pending_grant_id=pending_id
+            ) from None
+
+        promoted = _canonical_token_from_pending(pending)
+        write_error: Exception | None = None
+        try:
+            self._store.put(self._binding_id, promoted)
+        except Exception as error:
+            write_error = error
+        if write_error is not None and not self._stored_token_matches(
+            self._binding_id, promoted, write_error=write_error
+        ):
+            raise OAuthGrantDurabilityError(
+                "refresh_pending", pending_grant_id=pending_id
+            ) from None
+        self._delete_refresh_journal(pending_id)
+        self._clear_degradation()
+        return promoted
+
+    def _write_refresh_journal(self, pending_id: str, pending: StoredToken) -> bool:
+        """Persist rotated authority, retrying one post-preflight store fault."""
+        for _attempt in range(2):
+            write_error: Exception | None = None
+            try:
+                self._store.put(pending_id, pending)
+            except Exception as error:
+                write_error = error
+            if write_error is None or self._stored_token_matches(
+                pending_id, pending, write_error=write_error
+            ):
+                return True
+        return False
+
+    def _delete_refresh_journal(self, pending_id: str) -> None:
+        try:
+            self._store.delete(pending_id)
+        except Exception:
+            _log.warning(
+                "youtube oauth: canonical refresh retained redundant encrypted journal"
+            )
+
+    def _stored_token_matches(
+        self,
+        binding_id: str,
+        expected: StoredToken,
+        *,
+        write_error: Exception | None = None,
+    ) -> bool:
+        if isinstance(write_error, TokenStoreDurabilityError):
+            return self._store.confirm_record_durable(binding_id, expected)
+        try:
+            return self._store.get(binding_id) == expected
+        except Exception:
+            return False
+
+    def _compensate_refresh_rotation(self, pending: StoredToken) -> bool:
+        try:
+            self._client.revoke(pending.refresh_token)
+            return True
+        except OAuthProviderError as error:
+            return _provider_confirms_token_already_invalid(error)
+        except Exception:
+            return False
 
     def _degrade(self, reason_code: str) -> None:
         """Stamp the reason on the binding + dependent sources; no cursor touched."""
@@ -775,12 +961,15 @@ class YouTubeAccountBinder:
                     for binding_id in self._store.binding_ids()
                     if binding_id != pending_grant_id
                     and not binding_id.startswith("pending-youtube-grant-")
+                    and not binding_id.startswith("pending-youtube-refresh-")
                 }
                 if token.provider_channel_id is not None:
                     canonical_ids.add(_binding_candidate_id(token.provider_channel_id))
                     visible = self._bindings.get_by_channel_id(token.provider_channel_id)
                     if visible is not None:
                         canonical_ids.add(visible.account_binding_id)
+                if token.promotion_target_binding_id is not None:
+                    canonical_ids.add(token.promotion_target_binding_id)
 
                 with ExitStack() as lifecycle_stack:
                     for binding_id in sorted(canonical_ids):
@@ -793,10 +982,10 @@ class YouTubeAccountBinder:
                             "status": "absent",
                             "pending_grant_id": pending_grant_id,
                         }
-                    canonical_id = self._canonical_binding_for_pending(
+                    resolution, canonical_id = self._pending_resolution(
                         token, canonical_ids
                     )
-                    if canonical_id is not None:
+                    if resolution == "canonical" and canonical_id is not None:
                         try:
                             self._store.delete(pending_grant_id)
                         except Exception:
@@ -807,6 +996,20 @@ class YouTubeAccountBinder:
                             }
                         return {
                             "status": "canonical",
+                            "pending_grant_id": pending_grant_id,
+                            "binding_id": canonical_id,
+                        }
+                    if resolution == "promotable" and canonical_id is not None:
+                        return self._promote_pending_grant(
+                            pending_grant_id, token, canonical_id
+                        )
+                    if resolution == "conflict" and canonical_id is not None:
+                        # Same channel is not same credential authority. A
+                        # token mismatch without exact predecessor evidence can
+                        # be either an unpromoted grant or a newer rotation, so
+                        # preserve both and perform no provider revocation.
+                        return {
+                            "status": "pending_conflict",
                             "pending_grant_id": pending_grant_id,
                             "binding_id": canonical_id,
                         }
@@ -841,6 +1044,16 @@ class YouTubeAccountBinder:
         # Lock order is pending grant -> channel/reconnect identity -> binding
         # -> aggregate token file. No lifecycle path acquires these in reverse.
         with self._store.binding_lifecycle_lock(pending_id):
+            if connection.reconnect_binding_id is not None:
+                # Resolve an interrupted refresh before asking Google for a
+                # second standing grant. Lock order remains pending grant ->
+                # binding -> aggregate token file.
+                with self._store.binding_lifecycle_lock(
+                    connection.reconnect_binding_id
+                ):
+                    self._recover_pending_refresh_authority(
+                        connection.reconnect_binding_id
+                    )
             # A standing grant must not be requested until the encryption key,
             # aggregate file, lock directory, and atomic replace path are ready.
             self._store.preflight_write_ready()
@@ -1013,24 +1226,188 @@ class YouTubeAccountBinder:
                 "youtube oauth: compensated grant retained redundant encrypted journal"
             )
 
-    def _canonical_binding_for_pending(
+    def _pending_resolution(
         self, pending: StoredToken, canonical_ids: set[str]
-    ) -> str | None:
-        """Return canonical local authority that makes revocation unsafe."""
+    ) -> tuple[str, str | None]:
+        """Classify pending authority using exact credential/generation proof."""
+        canonical_by_id: dict[str, StoredToken] = {}
         for binding_id in sorted(canonical_ids):
             canonical = self._store.get(binding_id)
             if canonical is None:
                 continue
-            same_refresh = bool(pending.refresh_token) and hmac.compare_digest(
-                pending.refresh_token, canonical.refresh_token
-            )
-            same_channel = (
+            canonical_by_id[binding_id] = canonical
+            if _same_refresh_authority(pending, canonical):
+                return "canonical", binding_id
+
+        target_id = pending.promotion_target_binding_id
+        if target_id is not None:
+            pending_refresh = self._store.get(_pending_refresh_id(target_id))
+            if pending_refresh is not None:
+                # A refresh transaction that began after this pending grant is
+                # separate authority even while canonical still equals the
+                # older predecessor. Resolve it first; never let this retry
+                # overwrite or delete the newer pending rotation.
+                return "conflict", target_id
+            target = canonical_by_id.get(target_id)
+            if target is not None:
+                predecessor_matches = (
+                    pending.promotion_predecessor_refresh_token is not None
+                    and pending.promotion_predecessor_generation is not None
+                    and target.authority_generation
+                    == pending.promotion_predecessor_generation
+                    and hmac.compare_digest(
+                        target.refresh_token,
+                        pending.promotion_predecessor_refresh_token,
+                    )
+                )
+                if predecessor_matches:
+                    return "promotable", target_id
+            elif (
+                pending.promotion_predecessor_refresh_token is None
+                and pending.promotion_predecessor_generation == 0
+                and pending.authority_generation == 1
+            ):
+                # Durable evidence recorded that this target had no canonical
+                # credential when promotion began. The binding-row guard in
+                # ``_promote_pending_grant`` prevents resurrecting a completed
+                # disconnect or inventing a never-created first-connect row.
+                return "promotable", target_id
+
+        for binding_id, canonical in canonical_by_id.items():
+            if (
                 pending.provider_channel_id is not None
                 and canonical.provider_channel_id == pending.provider_channel_id
+            ):
+                return "conflict", binding_id
+        return "none", None
+
+    def _promote_pending_grant(
+        self,
+        pending_id: str,
+        pending: StoredToken,
+        binding_id: str,
+    ) -> dict[str, Any]:
+        """Complete a proven interrupted promotion without losing authority."""
+        binding = self._bindings.get(binding_id)
+        if (
+            binding is None
+            or binding.provider_channel_id != pending.provider_channel_id
+            or binding.reason_code == "auth_disconnected"
+        ):
+            return {
+                "status": "pending_conflict",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
+
+        canonical = _canonical_token_from_pending(pending)
+        write_error: Exception | None = None
+        try:
+            self._store.put(binding_id, canonical)
+        except Exception as error:
+            write_error = error
+        if write_error is not None and not self._stored_token_matches(
+            binding_id, canonical, write_error=write_error
+        ):
+            return {
+                "status": "promotion_pending",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
+        try:
+            if binding.state != "connected" or binding.reason_code is not None:
+                self._bindings.set_state(
+                    binding_id, state="connected", reason_code=None
+                )
+        except Exception:
+            return {
+                "status": "canonical_pending_state",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
+        try:
+            self._store.delete(pending_id)
+        except Exception:
+            return {
+                "status": "canonical_pending_cleanup",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
+        return {
+            "status": "promoted",
+            "pending_grant_id": pending_id,
+            "binding_id": binding_id,
+        }
+
+    def _recover_pending_refresh_authority(
+        self, binding_id: str
+    ) -> StoredToken | None:
+        """Resolve one refresh journal before another credential lifecycle.
+
+        The caller holds the binding lifecycle lock. A mismatched/newer
+        canonical generation is never overwritten, deleted, or revoked.
+        """
+        pending_id = _pending_refresh_id(binding_id)
+        canonical = self._store.get(binding_id)
+        pending = self._store.get(pending_id)
+        if pending is None:
+            return canonical
+        if canonical is None or (
+            pending.promotion_target_binding_id != binding_id
+            or pending.promotion_predecessor_refresh_token is None
+            or pending.promotion_predecessor_generation is None
+        ):
+            raise OAuthGrantDurabilityError(
+                "refresh_conflict", pending_grant_id=pending_id
+            ) from None
+
+        if _same_refresh_authority(pending, canonical):
+            cleanup_failed = False
+            try:
+                self._store.delete(pending_id)
+            except Exception:
+                cleanup_failed = True
+            if cleanup_failed:
+                raise OAuthGrantDurabilityError(
+                    "refresh_pending", pending_grant_id=pending_id
+                ) from None
+            return canonical
+
+        predecessor_matches = (
+            canonical.authority_generation
+            == pending.promotion_predecessor_generation
+            and hmac.compare_digest(
+                canonical.refresh_token,
+                pending.promotion_predecessor_refresh_token,
             )
-            if same_refresh or same_channel:
-                return binding_id
-        return None
+        )
+        if not predecessor_matches:
+            raise OAuthGrantDurabilityError(
+                "refresh_conflict", pending_grant_id=pending_id
+            ) from None
+
+        promoted = _canonical_token_from_pending(pending)
+        write_error: Exception | None = None
+        try:
+            self._store.put(binding_id, promoted)
+        except Exception as error:
+            write_error = error
+        if write_error is not None and not self._stored_token_matches(
+            binding_id, promoted, write_error=write_error
+        ):
+            raise OAuthGrantDurabilityError(
+                "refresh_pending", pending_grant_id=pending_id
+            ) from None
+        cleanup_failed = False
+        try:
+            self._store.delete(pending_id)
+        except Exception:
+            cleanup_failed = True
+        if cleanup_failed:
+            raise OAuthGrantDurabilityError(
+                "refresh_pending", pending_grant_id=pending_id
+            ) from None
+        return promoted
 
     def _compensate_grant(self, token: StoredToken) -> bool:
         """Return true only when provider revocation is authoritative."""
@@ -1076,6 +1453,35 @@ class YouTubeAccountBinder:
                 else nullcontext()
             )
             with lifecycle:
+                self._recover_pending_refresh_authority(binding_id)
+                predecessor = self._store.get(binding_id)
+                predecessor_generation = (
+                    predecessor.authority_generation
+                    if predecessor is not None
+                    else 0
+                )
+                token = replace(
+                    token,
+                    authority_generation=predecessor_generation + 1,
+                )
+                # Record the exact predecessor and target in the encrypted
+                # pending journal while channel/binding authority is held.
+                # Retry can now promote only over that predecessor and cannot
+                # mistake a newer rotated token for the same grant merely
+                # because both belong to one provider channel.
+                pending_with_promotion = replace(
+                    token,
+                    promotion_target_binding_id=binding_id,
+                    promotion_predecessor_refresh_token=(
+                        predecessor.refresh_token
+                        if predecessor is not None
+                        else None
+                    ),
+                    promotion_predecessor_generation=predecessor_generation,
+                )
+                self._bind_pending_grant_identity(
+                    pending_id, pending_with_promotion
+                )
                 commit_error: Exception | None = None
                 result: dict[str, Any] | None = None
                 try:
@@ -1250,9 +1656,16 @@ class YouTubeAccountBinder:
         state, reason_code = binding.state, binding.reason_code
         try:
             token = self._store.get(binding_id)
+            pending_refresh = self._store.get(_pending_refresh_id(binding_id))
         except TokenStoreKeyMissingError:
             token = None
+            pending_refresh = None
             state, reason_code = "degraded", "auth_key_missing"
+        if pending_refresh is not None:
+            # A provider response may have rotated the standing credential
+            # while canonical promotion is incomplete. The old canonical row
+            # is not sufficient authority for a connected status.
+            state, reason_code = "degraded", "auth_refresh_pending"
         if token is None and state == "connected":
             # Fail closed for any historical/partial connected row that lacks
             # the encrypted authority needed by authenticated operations.
@@ -1288,7 +1701,7 @@ class YouTubeAccountBinder:
 
             revoked = False
             try:
-                token = self._store.get(binding_id)
+                token = self._recover_pending_refresh_authority(binding_id)
             except TokenStoreKeyMissingError:
                 # The encrypted record is the only recoverable remote-revocation
                 # authority. Preserve it until the key is re-provisioned.
@@ -1296,6 +1709,22 @@ class YouTubeAccountBinder:
                     {
                         "status": "disconnect_failed",
                         "reason_code": "auth_key_missing",
+                        "revoked": False,
+                        "retryable": True,
+                        "sources_disabled": 0,
+                    }
+                )
+            except OAuthGrantDurabilityError as error:
+                # Never revoke an older canonical credential while a rotated
+                # refresh response remains pending or conflicts with a proven
+                # newer generation.
+                return redact(
+                    {
+                        "status": "disconnect_failed",
+                        "reason_code": {
+                            "refresh_pending": "auth_refresh_pending",
+                            "refresh_conflict": "auth_refresh_conflict",
+                        }.get(error.reason_code, "auth_refresh_durability"),
                         "revoked": False,
                         "retryable": True,
                         "sources_disabled": 0,

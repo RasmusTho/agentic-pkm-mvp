@@ -54,8 +54,17 @@ touch the repo, vault, settings values, logs, events, or receipts.
    otherwise the pending authority remains encrypted and locally retryable. Canonical binding
    persistence precedes the `connected` claim; later pending cleanup may leave only a redundant
    encrypted copy on crash. Promotion and cleanup stay within pending/channel/binding lifecycle
-   authority; retry recognizes a live canonical grant (even after later token rotation) and cleans
-   the duplicate without revoking it.
+   authority. The pending ciphertext records its exact target, predecessor refresh authority, and
+   next generation before canonical write. Retry cleans only the same refresh authority, promotes
+   only over that unchanged predecessor, and preserves a same-channel token mismatch as
+   `pending_conflict` without deletion or provider revocation; channel identity alone is not grant
+   identity.
+   Google's [documented refresh response](https://developers.google.com/identity/protocols/oauth2/web-server#offline)
+   renews the access token and retains the stored refresh credential. Defense in depth still treats
+   an unexpected different `refresh_token` as rotation: preflight precedes `/token`, the response is
+   journaled encrypted before canonical promotion, and a write failure recovers on the next access
+   only over the proven predecessor generation. Pending/conflicting refresh authority degrades
+   status and blocks reconnect/disconnect provider actions until safely resolved.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file

@@ -661,12 +661,65 @@ def test_reconnect_write_failure_does_not_mistake_old_token_for_new_grant_durabi
     pending_id = excinfo.value.pending_grant_id
     assert pending_id == writes[0]
     assert pending_id.startswith("pending-youtube-grant-")
-    assert writes == [pending_id, pending_id, binding_id]
+    assert writes == [pending_id, pending_id, pending_id, binding_id]
     assert set(store.binding_ids()) == {binding_id, pending_id}
     assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
     assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
     assert SENTINEL_REFRESH_2 not in (repr(excinfo.value) + str(excinfo.value))
     _assert_no_exception_chain(excinfo.value)
+
+
+def test_reconnect_canonical_write_failure_retry_promotes_only_over_proven_predecessor(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    predecessor = store.get(binding_id)
+    assert predecessor is not None
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    reconnect = binder.start_reconnect(binding_id)
+    pending_id = oauth._pending_grant_id(reconnect.handle.device_code, binding_id)
+    original_put = store.put
+
+    def fail_canonical_write(target_id, token):
+        if target_id == binding_id:
+            raise OSError(SENTINEL_REFRESH_2)
+        original_put(target_id, token)
+
+    monkeypatch.setattr(store, "put", fail_canonical_write)
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        binder.finish_device_connection(reconnect)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    pending = store.get(pending_id)
+    assert pending is not None
+    assert pending.promotion_target_binding_id == binding_id
+    assert pending.promotion_predecessor_refresh_token == predecessor.refresh_token
+    assert pending.promotion_predecessor_generation == predecessor.authority_generation
+    assert pending.authority_generation == predecessor.authority_generation + 1
+    assert store.get(binding_id) == predecessor
+    assert provider.revoked == []
+
+    monkeypatch.setattr(store, "put", original_put)
+    retried = binder.retry_pending_grant_compensation(pending_id)
+
+    assert retried == {
+        "status": "promoted",
+        "pending_grant_id": pending_id,
+        "binding_id": binding_id,
+    }
+    promoted = store.get(binding_id)
+    assert promoted is not None
+    assert promoted.refresh_token == SENTINEL_REFRESH_2
+    assert promoted.authority_generation == pending.authority_generation
+    assert promoted.promotion_target_binding_id is None
+    assert promoted.promotion_predecessor_refresh_token is None
+    assert store.has_record(pending_id) is False
+    assert provider.revoked == []
 
 
 def test_reconnect_canonical_write_lost_ack_rolls_forward_without_revoking_new_grant(
@@ -770,7 +823,7 @@ def test_reconnect_canonical_directory_barrier_recovery_preserves_pending_handle
         nonlocal directory_fsyncs
         if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
             directory_fsyncs += 1
-            if directory_fsyncs in {4, 5}:
+            if directory_fsyncs in {5, 6}:
                 raise OSError(SENTINEL_REFRESH_2)
         original_fsync(descriptor)
 
@@ -781,7 +834,7 @@ def test_reconnect_canonical_directory_barrier_recovery_preserves_pending_handle
     with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
         binder.finish_device_connection(reconnect)
 
-    assert directory_fsyncs == 6
+    assert directory_fsyncs == 7
     assert excinfo.value.reason_code == "grant_pending"
     assert excinfo.value.pending_grant_id == pending_id
     assert set(store.binding_ids()) == {binding_id, pending_id}
@@ -811,6 +864,10 @@ def test_pending_retry_never_revokes_rotated_canonical_channel_grant(
         scopes=(oauth.SCOPE,),
         obtained_at="2026-07-18T00:00:00+00:00",
         provider_channel_id=SYNTH_CHANNEL_ID,
+        authority_generation=2,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=SENTINEL_REFRESH,
+        promotion_predecessor_generation=1,
     )
     rotated_canonical = tokstore.StoredToken(
         refresh_token="sentinel-REFRESH3-must-never-leak",
@@ -819,6 +876,7 @@ def test_pending_retry_never_revokes_rotated_canonical_channel_grant(
         scopes=(oauth.SCOPE,),
         obtained_at="2026-07-19T00:00:00+00:00",
         provider_channel_id=SYNTH_CHANNEL_ID,
+        authority_generation=3,
     )
     store.put(pending_id, stale_pending)
     store.put(binding_id, rotated_canonical)
@@ -826,12 +884,63 @@ def test_pending_retry_never_revokes_rotated_canonical_channel_grant(
     retried = binder.retry_pending_grant_compensation(pending_id)
 
     assert retried == {
-        "status": "canonical",
+        "status": "pending_conflict",
         "pending_grant_id": pending_id,
         "binding_id": binding_id,
     }
     assert store.get(binding_id) == rotated_canonical
-    assert store.has_record(pending_id) is False
+    assert store.get(pending_id) == stale_pending
+    assert provider.revoked == []
+
+
+def test_pending_grant_retry_does_not_overwrite_newer_pending_refresh_rotation(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    grant_pending_id = "pending-youtube-grant-overlapping-refresh-test"
+    grant_pending = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        expires_at=None,
+        scopes=canonical.scopes,
+        obtained_at="2026-07-20T00:00:00+00:00",
+        provider_channel_id=canonical.provider_channel_id,
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=canonical.refresh_token,
+        promotion_predecessor_generation=canonical.authority_generation,
+    )
+    refresh_pending_id = oauth._pending_refresh_id(binding_id)
+    refresh_pending = tokstore.StoredToken(
+        refresh_token="sentinel-REFRESH3-must-never-leak",
+        access_token="sentinel-ACCESS3-must-never-leak",
+        expires_at=None,
+        scopes=canonical.scopes,
+        obtained_at="2026-07-20T00:01:00+00:00",
+        provider_channel_id=canonical.provider_channel_id,
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=canonical.refresh_token,
+        promotion_predecessor_generation=canonical.authority_generation,
+    )
+    store.put(grant_pending_id, grant_pending)
+    store.put(refresh_pending_id, refresh_pending)
+
+    result = binder.retry_pending_grant_compensation(grant_pending_id)
+
+    assert result == {
+        "status": "pending_conflict",
+        "pending_grant_id": grant_pending_id,
+        "binding_id": binding_id,
+    }
+    assert store.get(binding_id) == canonical
+    assert store.get(grant_pending_id) == grant_pending
+    assert store.get(refresh_pending_id) == refresh_pending
     assert provider.revoked == []
 
 
@@ -1058,6 +1167,176 @@ def test_status_never_reports_tampered_encrypted_record_as_connected(
 
 
 # --- AC4 --------------------------------------------------------------------
+
+
+def test_rotated_refresh_store_failure_preserves_journal_and_recovers_without_provider_retry(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    predecessor = store.get(binding_id)
+    assert predecessor is not None
+    store.put(binding_id, predecessor.with_expired_access())
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    pending_id = oauth._pending_refresh_id(binding_id)
+    original_put = store.put
+
+    def fail_canonical_write(target_id, token):
+        if target_id == binding_id:
+            raise OSError(SENTINEL_REFRESH_2)
+        original_put(target_id, token)
+
+    monkeypatch.setattr(store, "put", fail_canonical_write)
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        token_provider.get_access_token()
+
+    assert excinfo.value.reason_code == "refresh_pending"
+    assert excinfo.value.pending_grant_id == pending_id
+    _assert_no_exception_chain(excinfo.value)
+    canonical = store.get(binding_id)
+    pending = store.get(pending_id)
+    assert canonical is not None
+    assert pending is not None
+    assert canonical.refresh_token == SENTINEL_REFRESH
+    assert pending.refresh_token == SENTINEL_REFRESH_2
+    assert pending.promotion_target_binding_id == binding_id
+    assert pending.promotion_predecessor_refresh_token == canonical.refresh_token
+    assert pending.promotion_predecessor_generation == canonical.authority_generation
+    assert pending.authority_generation == canonical.authority_generation + 1
+    refresh_failure_text = repr(excinfo.value) + str(excinfo.value) + repr(pending)
+    assert SENTINEL_REFRESH not in refresh_failure_text
+    assert SENTINEL_REFRESH_2 not in refresh_failure_text
+    assert SENTINEL_ACCESS_2 not in refresh_failure_text
+    assert binder.status(binding_id) == {
+        "status": "degraded",
+        "reason_code": "auth_refresh_pending",
+        "scopes": [oauth.SCOPE],
+        "token_store": "encrypted",
+    }
+    token_calls_after_failure = sum(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+
+    monkeypatch.setattr(store, "put", original_put)
+    assert token_provider.get_access_token() == SENTINEL_ACCESS_2
+
+    promoted = store.get(binding_id)
+    assert promoted is not None
+    assert promoted.refresh_token == SENTINEL_REFRESH_2
+    assert promoted.authority_generation == pending.authority_generation
+    assert promoted.promotion_predecessor_refresh_token is None
+    assert store.has_record(pending_id) is False
+    assert provider.revoked == []
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/token")
+            for request in provider.requests
+        )
+        == token_calls_after_failure
+    )
+
+
+def test_disconnect_promotes_pending_refresh_before_provider_revocation(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    pending_id = oauth._pending_refresh_id(binding_id)
+    pending = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        expires_at=None,
+        scopes=canonical.scopes,
+        obtained_at="2026-07-20T00:00:00+00:00",
+        provider_channel_id=canonical.provider_channel_id,
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=canonical.refresh_token,
+        promotion_predecessor_generation=canonical.authority_generation,
+    )
+    store.put(pending_id, pending)
+
+    result = binder.disconnect(binding_id)
+
+    assert result["status"] == "disconnected"
+    assert result["revoked"] is True
+    assert provider.revoked[-1] == {"token": SENTINEL_REFRESH_2}
+    assert store.has_record(binding_id) is False
+    assert store.has_record(pending_id) is False
+    assert bindings.get(binding_id).reason_code == "auth_disconnected"
+
+
+def test_reconnect_stops_before_token_poll_on_conflicting_refresh_generation(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    original = store.get(binding_id)
+    assert original is not None
+    canonical = tokstore.StoredToken(
+        refresh_token="sentinel-REFRESH3-must-never-leak",
+        access_token="sentinel-ACCESS3-must-never-leak",
+        expires_at=None,
+        scopes=original.scopes,
+        obtained_at="2026-07-20T00:01:00+00:00",
+        provider_channel_id=original.provider_channel_id,
+        authority_generation=original.authority_generation + 2,
+    )
+    pending_id = oauth._pending_refresh_id(binding_id)
+    pending = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        expires_at=None,
+        scopes=original.scopes,
+        obtained_at="2026-07-20T00:00:00+00:00",
+        provider_channel_id=original.provider_channel_id,
+        authority_generation=original.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=original.refresh_token,
+        promotion_predecessor_generation=original.authority_generation,
+    )
+    store.put(binding_id, canonical)
+    store.put(pending_id, pending)
+    reconnect = binder.start_reconnect(binding_id)
+    token_calls_before = sum(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        binder.finish_device_connection(reconnect)
+
+    assert excinfo.value.reason_code == "refresh_conflict"
+    assert excinfo.value.pending_grant_id == pending_id
+    _assert_no_exception_chain(excinfo.value)
+    assert store.get(binding_id) == canonical
+    assert store.get(pending_id) == pending
+    assert provider.revoked == []
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/token")
+            for request in provider.requests
+        )
+        == token_calls_before
+    )
 
 
 def test_revoked_auth_degrades_without_cursor_mutation(store, bindings, registry):

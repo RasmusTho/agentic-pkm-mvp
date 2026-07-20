@@ -165,9 +165,14 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   a pending journal nor a canonical reconnect token is revoked after it actually landed. Identity or
   first-journal failure is provider-compensated when revocation is authoritative; otherwise the
   encrypted pending authority remains locally recoverable and compensation can be retried. Pending
-  cleanup/retry shares the promotion lock order and never revokes a grant represented by live
-  canonical authority, including after token rotation. Connect never records `connected` before
-  encrypted token persistence; status never reports an undecryptable record as connected.
+  cleanup/retry shares the promotion lock order. Encrypted target/predecessor/generation evidence
+  allows promotion only over the exact unchanged predecessor; same-channel token mismatch is
+  preserved as a conflict without delete/revoke, while exact same refresh authority permits
+  redundant cleanup. Refresh proves store readiness before provider egress and journals any
+  unexpected rotated refresh credential before canonical write, so store failure recovers without
+  another provider request and a newer canonical generation is never overwritten. Connect never
+  records `connected` before encrypted token persistence; status never reports an undecryptable or
+  refresh-pending record as connected.
   Connect, reconnect, refresh, and disconnect serialize each binding's credential lifecycle across
   actors sharing its channel token store; portable store-wide serialization prevents distinct
   bindings from losing aggregate token-file updates. First-connect binding ids are deterministic
