@@ -1302,6 +1302,81 @@ def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
     assert completed.verified_head_sha == HEAD
 
 
+def test_merged_recovery_accepts_terminal_newline_canonical_body_without_budget_reset(
+    tmp_path,
+) -> None:
+    original_body = "Governing-Issue: #3603\n\nFixes #3603\n"
+    plan = _merge_plan(HEAD, body=original_body)
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+    )
+    crashed_pr = merged_pr(body=original_body[:-1])
+
+    class RecoveryTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(crashed_pr, GREEN)
+            self.restored = False
+
+        def pull_request_comments(self, repository, pr_number):
+            if self.restored:
+                return _merge_comments(self._last_pr)
+            return [
+                {
+                    "author_association": "COLLABORATOR",
+                    "body": plan["authority_receipt_comment"],
+                },
+                {
+                    "author_association": "COLLABORATOR",
+                    "body": prepared["phase_receipt_comment"],
+                },
+            ]
+
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "crashed-host")
+    running = state.start(
+        run.run_id,
+        "crashed-host",
+        claimed.lease_id or "",
+        "01900000-0000-7000-8000-000000000005",
+        verification_consumer.context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=state.repair_budget_projection(run.run_id),
+        ),
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", running.run_id),
+        )
+        conn.commit()
+
+    before_budget = state.repair_budget_projection(run.run_id)
+
+    truth = RecoveryTruth()
+
+    class RecoveryLauncher(DeliveredLauncher):
+        def launch(self, context_pack, **kwargs):
+            assert context_pack["merge_recovery"]["body_state"] == "restored"
+            truth.pr = merged_pr(body=original_body[:-1])
+            truth._last_pr = truth.pr
+            truth.restored = True
+            return super().launch(context_pack, **kwargs)
+
+    completed = VerificationConsumer(
+        state, truth, Auth(), RecoveryLauncher(), "recovery-host"
+    ).recover(run.run_id)
+
+    assert completed.status == "completed"
+    assert state.repair_budget_projection(run.run_id) == before_budget
+
+
 def _corrupt_pending_delivered_receipt(state, run_id, mutate) -> None:
     current = state.get(run_id)
     assert current is not None
