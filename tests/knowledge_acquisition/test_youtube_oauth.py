@@ -3339,8 +3339,10 @@ def test_repeated_consumer_converges_partial_terminal_source_degradation(
         binding_store=bindings,
         source_registry=registry,
     )
-    with pytest.raises(OSError, match="synthetic source degradation crash"):
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as first_error:
         token_provider.get_access_token()
+    assert first_error.value.reason_code == "refresh_durability_unavailable"
+    _assert_no_exception_chain(first_error.value)
 
     assert bindings.get(binding_id).reason_code == "auth_revoked"
     assert registry.get(source.binding_id).last_error is None
@@ -3352,6 +3354,101 @@ def test_repeated_consumer_converges_partial_terminal_source_degradation(
     assert repaired_source.last_error["reason_code"] == "auth_revoked"
     assert repaired_source.cursor == cursor_before
     assert repaired_source.enabled is True
+
+
+def test_api_entrypoint_retry_converges_compensated_refresh_sources_before_journal_delete(
+    store, bindings, registry, monkeypatch
+):
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiClient
+
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    pending_id = oauth._pending_refresh_id(binding_id)
+    store.put(
+        pending_id,
+        replace(
+            canonical,
+            refresh_token=SENTINEL_REFRESH_2,
+            access_token=SENTINEL_ACCESS_2,
+            authority_generation=canonical.authority_generation + 1,
+            promotion_target_binding_id=binding_id,
+            promotion_predecessor_refresh_token=canonical.refresh_token,
+            promotion_predecessor_generation=canonical.authority_generation,
+            promotion_compensation_state="compensated",
+        ),
+    )
+    original_record = registry.record_source_degradation
+    source_write_attempts = 0
+
+    def fail_source_once(target_binding_id, *, reason_code):
+        nonlocal source_write_attempts
+        source_write_attempts += 1
+        if source_write_attempts == 1:
+            raise OSError(SENTINEL_ACCESS)
+        return original_record(target_binding_id, reason_code=reason_code)
+
+    original_delete = store.delete
+    cleanup_observations: list[str] = []
+
+    def assert_source_converged_before_cleanup(target_id):
+        if target_id == pending_id:
+            last_error = registry.get(source.binding_id).last_error
+            assert last_error is not None
+            cleanup_observations.append(last_error["reason_code"])
+        return original_delete(target_id)
+
+    monkeypatch.setattr(registry, "record_source_degradation", fail_source_once)
+    monkeypatch.setattr(store, "delete", assert_source_converged_before_cleanup)
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    api_requests: list[httpx.Request] = []
+
+    def api_handler(request: httpx.Request) -> httpx.Response:
+        api_requests.append(request)
+        return httpx.Response(500, request=request)
+
+    api_client = YouTubeApiClient(
+        token_provider=token_provider,
+        http=httpx.Client(transport=httpx.MockTransport(api_handler)),
+    )
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as first_error:
+        api_client.get_my_channel()
+
+    assert first_error.value.reason_code == "refresh_compensated"
+    assert first_error.value.pending_grant_id == pending_id
+    _assert_no_exception_chain(first_error.value)
+    assert SENTINEL_ACCESS not in str(first_error.value)
+    assert bindings.get(binding_id).reason_code == "auth_revoked"
+    assert registry.get(source.binding_id).last_error is None
+    assert store.has_record(pending_id) is True
+    assert cleanup_observations == []
+
+    with pytest.raises(oauth.AuthDegradedError) as retry_error:
+        api_client.get_my_channel()
+
+    assert retry_error.value.reason_code == "auth_revoked"
+    _assert_no_exception_chain(retry_error.value)
+    assert registry.get(source.binding_id).last_error["reason_code"] == "auth_revoked"
+    assert store.has_record(pending_id) is False
+    assert cleanup_observations == ["auth_revoked"]
+    assert source_write_attempts == 2
+    assert api_requests == []
 
 
 def test_terminal_status_precedes_missing_key_for_disconnect_retry_authority(

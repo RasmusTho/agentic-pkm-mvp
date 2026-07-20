@@ -718,6 +718,7 @@ class TokenProvider:
             # runtime processes (#3990 review repair).
             with self._store.binding_lifecycle_lock(self._binding_id):
                 token = self._read_token()
+                self._reconcile_terminal_binding()
                 token = self._recover_pending_refresh(token)
                 self._require_connected_binding()
                 if self._is_fresh(token):
@@ -778,6 +779,37 @@ class TokenProvider:
             "account binding lacks connected authority",
         ) from None
 
+    def _reconcile_terminal_binding(self) -> None:
+        """Repair terminal source truth before any journal promotion or cleanup."""
+        terminal_reason = self._terminal_binding_reason()
+        if terminal_reason is None:
+            return
+        pending_id = _pending_refresh_id(self._binding_id)
+        read_failed = False
+        pending: StoredToken | None = None
+        try:
+            pending = self._store.get(pending_id)
+        except Exception:
+            read_failed = True
+        if read_failed:
+            raise OAuthGrantDurabilityError(
+                "refresh_durability_unavailable",
+                pending_grant_id=pending_id,
+            ) from None
+        if (
+            pending is not None
+            and pending.promotion_compensation_state == "compensated"
+        ):
+            self._converge_compensated_refresh(
+                pending_id, terminal_reason=terminal_reason
+            )
+        else:
+            self._degrade(terminal_reason)
+        raise AuthDegradedError(
+            terminal_reason,
+            "account binding authority is locally disabled",
+        ) from None
+
     def _is_fresh(self, token: StoredToken) -> bool:
         if not token.access_token or not token.expires_at:
             return False
@@ -794,11 +826,16 @@ class TokenProvider:
         # The provider call can return fresh authority. Prove the encrypted
         # aggregate and its crash barrier before crossing that boundary.
         self._store.preflight_write_ready()
+        degraded_error: AuthDegradedError | None = None
+        bundle: TokenBundle | None = None
         try:
             bundle = self._client.refresh(token.refresh_token)
-        except AuthDegradedError as exc:
-            self._degrade(exc.reason_code)
-            raise
+        except AuthDegradedError as error:
+            degraded_error = error
+        if degraded_error is not None:
+            self._degrade(degraded_error.reason_code)
+            raise degraded_error from None
+        assert bundle is not None
         rotated_refresh = (
             bundle.refresh_token
             if isinstance(bundle.refresh_token, str)
@@ -850,8 +887,7 @@ class TokenProvider:
                         promotion_compensation_state="compensated",
                     )
                     self._write_refresh_journal(pending_id, compensated)
-                    self._degrade("auth_revoked")
-                    self._delete_refresh_journal(pending_id)
+                    self._converge_compensated_refresh(pending_id)
                     raise AuthDegradedError(
                         "auth_revoked",
                         "rotated refresh authority was revoked after local durability failure",
@@ -907,8 +943,7 @@ class TokenProvider:
                     "refresh_durability_unavailable",
                     pending_grant_id=pending_id,
                 ) from None
-            self._degrade("auth_revoked")
-            self._delete_refresh_journal(pending_id)
+            self._converge_compensated_refresh(pending_id)
             raise AuthDegradedError(
                 "auth_revoked",
                 "rotated refresh authority was already provider-compensated",
@@ -1009,20 +1044,51 @@ class TokenProvider:
         except Exception:
             return False
 
+    def _converge_compensated_refresh(
+        self,
+        pending_id: str,
+        *,
+        terminal_reason: str = "auth_revoked",
+    ) -> None:
+        """Persist terminal binding/source truth before deleting compensation state."""
+        persistence_failed = False
+        try:
+            self._degrade(terminal_reason)
+        except OAuthGrantDurabilityError:
+            persistence_failed = True
+        if persistence_failed:
+            raise OAuthGrantDurabilityError(
+                "refresh_compensated",
+                pending_grant_id=pending_id,
+            ) from None
+        self._delete_refresh_journal(pending_id)
+
     def _degrade(self, reason_code: str) -> None:
         """Stamp the reason on the binding + dependent sources; no cursor touched."""
-        binding = self._bindings.get(self._binding_id)
-        effective_reason = reason_code
-        if binding is not None:
-            if binding.reason_code in {"auth_disconnected", "auth_revoked"}:
-                effective_reason = binding.reason_code
-            else:
-                self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
-        if self._registry is not None:
-            for source in self._registry.list_for_account(self._binding_id):
-                self._registry.record_source_degradation(
-                    source.binding_id, reason_code=effective_reason
-                )
+        persistence_failed = False
+        try:
+            binding = self._bindings.get(self._binding_id)
+            effective_reason = reason_code
+            if binding is not None:
+                if binding.reason_code in {"auth_disconnected", "auth_revoked"}:
+                    effective_reason = binding.reason_code
+                else:
+                    self._bindings.set_state(
+                        self._binding_id,
+                        state="degraded",
+                        reason_code=reason_code,
+                    )
+            if self._registry is not None:
+                for source in self._registry.list_for_account(self._binding_id):
+                    self._registry.record_source_degradation(
+                        source.binding_id, reason_code=effective_reason
+                    )
+        except Exception:
+            persistence_failed = True
+        if persistence_failed:
+            raise OAuthGrantDurabilityError(
+                "refresh_durability_unavailable"
+            ) from None
 
     def _clear_degradation(self) -> None:
         binding = self._bindings.get(self._binding_id)
@@ -1084,6 +1150,7 @@ class YouTubeAccountBinder:
         *,
         reason_code: str,
         pending_grant_id: str | None,
+        failure_reason: str = "refresh_durability_unavailable",
     ) -> None:
         """Persist fail-closed refresh state on binding and dependent sources."""
         failed = False
@@ -1100,7 +1167,7 @@ class YouTubeAccountBinder:
             failed = True
         if failed:
             raise OAuthGrantDurabilityError(
-                "refresh_durability_unavailable",
+                failure_reason,
                 pending_grant_id=pending_grant_id,
             ) from None
 
@@ -1731,6 +1798,7 @@ class YouTubeAccountBinder:
                 binding_id,
                 reason_code="auth_revoked",
                 pending_grant_id=pending_id,
+                failure_reason="refresh_compensated",
             )
             try:
                 self._store.delete(pending_id)
