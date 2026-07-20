@@ -164,8 +164,14 @@ interpreted. Calendar entries, participants, prior Episodes, GitHub Issues, docu
 knowledge-graph neighborhoods are not after-the-fact enrichment. They constrain classification,
 entity resolution, reference disambiguation, ontology choice, and extraction.
 
-Context-first does not mean ambient access. Every context item remains scope- and policy-admitted,
-provenance-bearing, and visible as an input to the extraction result.
+Context-first does not mean ambient access. The pipeline is same-scope by default. Every context
+item remains scope- and policy-admitted, provenance-bearing, and visible as an input to the
+extraction result. Crossing a scope boundary requires a typed, directional
+[`CrossScopeFlow`](cross-scope-flow.md) for the operation actually performed. A `retrieve` grant does
+not authorize `surface`, `cite`, `import`, `remember`, `mutate`, `execute`, `export`, or
+`episode_fuse`. The pipeline must preserve the flow's provenance requirements and target evidence
+role, including any required downgrade, redaction, confirmation, expiry, or audit receipt. Missing
+or mismatched grants fail closed; denied material cannot become hidden extraction context.
 
 ### Episodes as first-class objects
 
@@ -214,6 +220,12 @@ interpretation. A single scalar may be a presentation projection, never the stor
 Extraction produces candidates. Publication validates, deduplicates, routes, and—only where the
 target contract permits—submits a governed proposal or effect. Publication never launders an
 extracted candidate into canonical knowledge merely by storing or delivering it.
+
+Publication is also same-scope by default. A route that crosses scope boundaries must name and
+validate the operation-specific `CrossScopeFlow` needed for what the consumer will do—for example
+`cite`, `import`, `remember`, `mutate`, `execute`, or `export`; authorization for an earlier
+`retrieve` does not carry forward. The router must preserve or downgrade provenance and evidence
+role as the flow requires and fail closed before delivery when no matching grant exists.
 
 ## Architecture Overview
 
@@ -354,7 +366,8 @@ Publication is a typed pipeline after extraction:
 2. **Deduplicate/fold** by stable candidate identity while preserving revisions and corrections.
 3. **Classify authority**: analytical output, read-only projection, proposal, or governed effect.
 4. **Route** by candidate type and publication profile to a declared consumer.
-5. **Apply governance** before any durable or external effect.
+5. **Apply governance** before any durable or external effect, including validation of the exact
+   typed, directional `CrossScopeFlow` for every cross-scope route.
 6. **Emit delivery evidence**: result, error class, trace, and receipt where required.
 
 Different domains may publish differently. An architecture decision candidate may enter a decision
@@ -598,8 +611,9 @@ These are architectural workstreams, not backlog items created by this proposal:
    authority semantics.
 6. **Evaluation design** — build an evidence corpus spanning at least Generic Meeting, Workshop, and
    Architecture Review, including ambiguous and context-missing cases.
-7. **Security and policy review** — prove context admission, observed-content quarantine, egress
-   declarations, and scope preservation across plugins.
+7. **Security and policy review** — prove same-scope defaults, context admission, observed-content
+   quarantine, egress declarations, and operation-specific `CrossScopeFlow` enforcement across
+   plugins and publication routes.
 8. **Pilot specialization** — validate that a generic profile and one specialized profile can share
    the pipeline without semantic flattening or caller changes.
 
@@ -621,6 +635,9 @@ are true:
 - confidence axes and calibration posture are explicit and cannot be silently collapsed or upgraded;
 - context admission occurs before semantic extraction and every used context item is visible in
   provenance;
+- same-scope processing is the default, and every cross-scope context use or publication route
+  validates the appropriate typed, directional `CrossScopeFlow`, preserves or downgrades provenance
+  and evidence role as required, and fails closed when authority is absent;
 - publication models name consumers, authority class, deduplication/correction behavior, and receipts;
 - generic fallback, unknown classification, missing context, incompatible extractor, and invalid
   candidate all have fail-legible behavior;
@@ -643,7 +660,7 @@ unpromoted proposal, but must not flatten it into a confirmed capability.
 - `docs/EPISODE_RESOLUTION_ENGINE/README.md`
 - `docs/CAPABILITY_CONTRACT_MODEL.md`
 - `docs/architecture/functional-ontology.md`, `docs/architecture/metadata-bundle.md`,
-  `docs/architecture/semantic-dimensions.md`
+  `docs/architecture/semantic-dimensions.md`, `docs/architecture/cross-scope-flow.md`
 - `docs/adr/ADR-0057-capability-knowledge-model-kvasir.md`
 - `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`,
   `docs/CAPABILITY_KNOWLEDGE_MODEL/CKM_STORE_AND_OBJECT_MODEL.md`
