@@ -244,6 +244,60 @@ def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
     assert successor.returncode == 0
 
 
+@pytest.mark.parametrize("termination_signal", [signal.SIGTERM, signal.SIGINT])
+def test_signalled_waiting_contender_never_runs_command(
+    termination_signal: signal.Signals, tmp_path: Path
+) -> None:
+    resource = f"test-host-lease-wait-signal-{termination_signal.value}-{time.time_ns()}"
+    marker = tmp_path / "contender-ran"
+    holder = subprocess.Popen(
+        _lease_command(resource, "wait-holder", "import time; time.sleep(0.8)"),
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    lock_path = repo_common_lock_path(resource)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if lock_path.exists():
+            try:
+                if json.loads(lock_path.read_text())["execution_id"] == "wait-holder":
+                    break
+            except (json.JSONDecodeError, KeyError):
+                pass
+        time.sleep(0.02)
+    else:
+        holder.kill()
+        holder.wait()
+        pytest.fail("holder did not acquire the host lease")
+
+    contender_child = f"from pathlib import Path; Path({str(marker)!r}).touch()"
+    contender = subprocess.Popen(
+        _lease_command(
+            resource,
+            "signalled-waiter",
+            contender_child,
+            wait_seconds=3,
+        ),
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(0.1)
+    contender.send_signal(termination_signal)
+    holder.wait(timeout=3)
+    contender_stdout, contender_stderr = contender.communicate(timeout=3)
+
+    assert contender.returncode == 128 + termination_signal.value, (
+        contender_stdout,
+        contender_stderr,
+    )
+    assert '"event": "host_lease_signal_forwarded"' in contender_stderr
+    assert '"event": "host_lease_cancelled"' in contender_stderr
+    assert not marker.exists()
+
+
 def test_outer_owner_keeps_lease_until_command_dies_if_supervisor_is_killed(
     tmp_path: Path,
 ) -> None:

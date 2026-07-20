@@ -303,6 +303,22 @@ def _acquire_and_exec(
                 os._exit(_TEMPFAIL)
             time.sleep(min(poll_seconds, wait_seconds - elapsed))
 
+    if pending_signals:
+        cancellation_signal = pending_signals[0]
+        os.close(lock_fd)
+        _report_to_parent(
+            status_fd,
+            {
+                "event": "host_lease_cancelled",
+                "execution_id": execution_id,
+                "resource": resource,
+                "signal": cancellation_signal,
+                "waited_seconds": round(time.monotonic() - started, 3),
+            },
+            close=True,
+        )
+        os._exit(128 + cancellation_signal)
+
     acquired_at = _utc_now()
     held_receipt: dict[str, object] = {
         "acquired_at": acquired_at,
@@ -379,6 +395,8 @@ def _spawn_gated_command(
         os.close(start_write_fd)
         os.close(lock_fd)
         os.close(status_fd)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
         os.setsid()
         os.write(ready_write_fd, b"1")
         os.close(ready_write_fd)
