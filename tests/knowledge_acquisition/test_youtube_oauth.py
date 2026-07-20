@@ -188,13 +188,14 @@ def _binder(
     registry: sr.SourceRegistry,
     *,
     follow_redirects: bool = False,
+    identity_probe: oauth.IdentityProbe = _identity_probe,
 ) -> oauth.YouTubeAccountBinder:
     return oauth.YouTubeAccountBinder(
         oauth_client=_client(provider, follow_redirects=follow_redirects),
         token_store=store,
         binding_store=bindings,
         source_registry=registry,
-        identity_probe=_identity_probe,
+        identity_probe=identity_probe,
     )
 
 
@@ -318,6 +319,242 @@ def test_connect_token_store_failure_does_not_create_connected_binding(
 
     assert bindings.list_all() == ()
     assert store.binding_ids() == ()
+    assert not any(urlsplit(str(r.url)).path.endswith("/token") for r in provider.requests)
+
+
+def test_connect_store_io_preflight_fails_before_provider_poll(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+
+    def fail_readiness():
+        raise OSError("synthetic token-store readiness failure")
+
+    monkeypatch.setattr(store, "preflight_write_ready", fail_readiness)
+
+    with pytest.raises(OSError, match="synthetic token-store readiness failure"):
+        _connect_device(binder)
+
+    assert not any(urlsplit(str(r.url)).path.endswith("/token") for r in provider.requests)
+    assert provider.revoked == []
+    assert bindings.list_all() == ()
+
+
+def test_identity_probe_failure_is_provider_compensated_without_secret_leak(
+    store, bindings, registry
+):
+    provider = _Provider()
+
+    def fail_identity(_access_token):
+        raise RuntimeError(SENTINEL_ACCESS)
+
+    binder = _binder(
+        provider,
+        store,
+        bindings,
+        registry,
+        identity_probe=fail_identity,
+    )
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_compensated"
+    assert excinfo.value.pending_grant_id is None
+    assert provider.revoked == [{"token": SENTINEL_REFRESH}]
+    assert store.binding_ids() == ()
+    assert bindings.list_all() == ()
+    rendered = repr(excinfo.value) + str(excinfo.value)
+    assert SENTINEL_ACCESS not in rendered
+    assert SENTINEL_REFRESH not in rendered
+
+
+def test_incomplete_grant_with_refresh_token_is_compensated_not_discarded(
+    store, bindings, registry
+):
+    provider = _Provider()
+    provider.token_responses.append(
+        httpx.Response(
+            200,
+            json={
+                "refresh_token": SENTINEL_REFRESH,
+                "expires_in": 3600,
+                "scope": oauth.SCOPE,
+                "token_type": "Bearer",
+            },
+        )
+    )
+    binder = _binder(provider, store, bindings, registry)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_compensated"
+    assert provider.revoked == [{"token": SENTINEL_REFRESH}]
+    assert store.binding_ids() == ()
+    assert bindings.list_all() == ()
+    assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
+
+
+def test_identity_probe_and_compensation_failure_preserve_encrypted_pending_authority(
+    store, bindings, registry, tmp_path
+):
+    provider = _Provider()
+    provider.revoke_responses.append(
+        httpx.Response(
+            503,
+            json={"error": "temporarily_unavailable", "error_description": SENTINEL_ACCESS},
+        )
+    )
+
+    def fail_identity(_access_token):
+        raise RuntimeError(SENTINEL_REFRESH)
+
+    binder = _binder(
+        provider,
+        store,
+        bindings,
+        registry,
+        identity_probe=fail_identity,
+    )
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id is not None
+    assert store.binding_ids() == (pending_id,)
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
+    assert bindings.list_all() == ()
+    raw = (tmp_path / "youtube_token_store.enc").read_bytes()
+    assert SENTINEL_REFRESH.encode() not in raw
+    assert SENTINEL_ACCESS.encode() not in raw
+    rendered = repr(excinfo.value) + str(excinfo.value)
+    assert SENTINEL_REFRESH not in rendered
+    assert SENTINEL_ACCESS not in rendered
+
+    retried = binder.retry_pending_grant_compensation(pending_id)
+    assert retried == {"status": "compensated", "pending_grant_id": pending_id}
+    assert store.binding_ids() == ()
+
+
+def test_pending_journal_write_failure_is_provider_compensated(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+
+    def fail_pending_write(_binding_id, _token):
+        raise OSError("synthetic pending journal write failure")
+
+    monkeypatch.setattr(store, "put", fail_pending_write)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_compensated"
+    assert provider.revoked == [{"token": SENTINEL_REFRESH}]
+    assert store.binding_ids() == ()
+    assert bindings.list_all() == ()
+
+
+def test_pending_write_and_compensation_failure_retry_preserves_authority(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    provider.revoke_responses.append(
+        httpx.Response(503, json={"error": "temporarily_unavailable"})
+    )
+    binder = _binder(provider, store, bindings, registry)
+    original_put = store.put
+    writes = 0
+
+    def fail_first_pending_write(binding_id, token):
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            raise OSError("synthetic first pending write failure")
+        original_put(binding_id, token)
+
+    monkeypatch.setattr(store, "put", fail_first_pending_write)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id is not None
+    assert writes == 2
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
+    assert bindings.list_all() == ()
+
+
+def test_binding_store_write_failure_leaves_pending_grant_recoverable(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    original_put = store.put
+    writes: list[str] = []
+
+    def fail_canonical_write(binding_id, token):
+        writes.append(binding_id)
+        if len(writes) == 2:
+            raise OSError(SENTINEL_REFRESH)
+        original_put(binding_id, token)
+
+    monkeypatch.setattr(store, "put", fail_canonical_write)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    assert len(writes) == 2
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id == writes[0]
+    assert pending_id.startswith("pending-youtube-grant-")
+    assert store.binding_ids() == (pending_id,)
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
+    assert bindings.list_all() == ()
+    assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
+
+
+def test_reconnect_write_failure_does_not_mistake_old_token_for_new_grant_durability(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    reconnect = binder.start_reconnect(binding_id)
+    original_put = store.put
+    writes: list[str] = []
+
+    def fail_reconnect_canonical_write(target_id, token):
+        writes.append(target_id)
+        if len(writes) == 2:
+            raise OSError(SENTINEL_REFRESH_2)
+        original_put(target_id, token)
+
+    monkeypatch.setattr(store, "put", fail_reconnect_canonical_write)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        binder.finish_device_connection(reconnect)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id == writes[0]
+    assert pending_id.startswith("pending-youtube-grant-")
+    assert writes[1] == binding_id
+    assert set(store.binding_ids()) == {binding_id, pending_id}
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
+    assert SENTINEL_REFRESH_2 not in (repr(excinfo.value) + str(excinfo.value))
 
 
 def test_connect_post_commit_exception_reconciles_without_deleting_token(

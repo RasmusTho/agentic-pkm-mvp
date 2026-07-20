@@ -153,7 +153,12 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   missing token-store key, disables exactly the authenticated capabilities with a per-source
   `reason_code`; logged-out capabilities (RSS, backfill, explicit URLs) continue. No cursor is
   mutated by an auth failure; no empty poll result caused by auth/API failure is ever recorded as
-  a successful sync. Connect never records `connected` before encrypted token persistence.
+  a successful sync. Before a device-token poll can issue a standing grant, connect proves the
+  encryption key and atomic token-store write/read path. A returned grant is immediately written
+  under an opaque encrypted pending-journal id before identity probing or binding work. Identity or
+  first-journal failure is provider-compensated when revocation is authoritative; otherwise the
+  encrypted pending authority remains locally recoverable and compensation can be retried. Connect
+  never records `connected` before encrypted token persistence.
   Connect, reconnect, refresh, and disconnect serialize each binding's credential lifecycle across
   actors sharing its channel token store; portable store-wide serialization prevents distinct
   bindings from losing aggregate token-file updates. First-connect binding ids are deterministic

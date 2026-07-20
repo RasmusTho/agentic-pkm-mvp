@@ -29,9 +29,12 @@ key degrades the binding and its dependent authenticated sources with a legible
 reason code, mutates no source cursor, and never records an auth failure as an
 empty-success. Connect, reconnect, refresh, and disconnect serialize each
 binding's credential lifecycle across service instances and processes that
-share its channel token store. First-connect binding ids are deterministic per
-provider channel, and an indeterminate binding-create result always preserves
-the encrypted credential so a delayed commit or retry retains authority. Only
+share its channel token store. Key and atomic-store readiness are proven before
+device polling; an issued grant is encrypted in a pending journal before the
+identity probe or binding work, and an unproven compensation preserves that
+recoverable authority. First-connect binding ids are deterministic per provider
+channel, and an indeterminate binding-create result always preserves the
+encrypted credential so a delayed commit or retry retains authority. Only
 Google's documented ``400 invalid_token`` revoke outcome permits destructive
 local teardown; every other revoke failure preserves retry authority. OAuth
 POSTs never follow redirects. Acquired artifacts are never deleted.
@@ -50,7 +53,7 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -181,6 +184,21 @@ class ReconnectChannelMismatchError(RuntimeError):
     """Reconnect consent resolved to a different channel than the target binding."""
 
 
+class OAuthGrantDurabilityError(RuntimeError):
+    """An issued grant was compensated or retained as pending authority."""
+
+    def __init__(self, reason_code: str, *, pending_grant_id: str | None = None) -> None:
+        self.reason_code = reason_code
+        self.pending_grant_id = pending_grant_id
+        if reason_code == "grant_compensated":
+            message = "OAuth grant finalization failed; provider revocation was confirmed"
+        elif reason_code == "grant_pending":
+            message = "OAuth grant finalization failed; encrypted pending authority was preserved"
+        else:
+            message = "OAuth grant finalization failed without durable recovery authority"
+        super().__init__(message)
+
+
 # --- Credential + redaction helpers -----------------------------------------
 
 
@@ -251,6 +269,13 @@ def _binding_candidate_id(provider_channel_id: str) -> str:
     """Return the stable first-connect idempotency key for a YouTube channel."""
     name = f"urn:agentic-pkm:youtube-account-binding:{provider_channel_id}"
     return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+def _pending_grant_id(device_code: str, reconnect_binding_id: str | None) -> str:
+    """Opaque stable journal id for one device-flow completion attempt."""
+    target = reconnect_binding_id or "first-connect"
+    digest = hashlib.sha256(f"{target}\0{device_code}".encode("utf-8")).hexdigest()
+    return f"pending-youtube-grant-{digest}"
 
 
 def _now_iso() -> str:
@@ -366,9 +391,23 @@ class DeviceConnection:
         return self.handle.public_view()
 
 
-def _bundle_from_response(data: dict[str, Any]) -> TokenBundle:
+def _bundle_from_response(
+    data: dict[str, Any], *, preserve_refresh_on_incomplete_access: bool = False
+) -> TokenBundle:
     access = data.get("access_token")
     if not access or not isinstance(access, str):
+        refresh = data.get("refresh_token")
+        if preserve_refresh_on_incomplete_access and isinstance(refresh, str) and refresh:
+            # Device completion owns compensation/journaling. Preserve the
+            # refresh credential in-memory long enough for that boundary to
+            # revoke or encrypt it instead of throwing it away in the parser.
+            return TokenBundle(
+                access_token="",
+                refresh_token=refresh,
+                expires_in=data.get("expires_in"),
+                scope=data.get("scope"),
+                token_type=data.get("token_type"),
+            )
         # A 2xx token response with no access token is not a success -- never
         # treat it as an empty-success (INV-YSS-4).
         raise OAuthProviderError(status=200, error_code="missing_access_token")
@@ -476,7 +515,7 @@ class OAuthClient:
             if exc.error_code in ("access_denied", "expired_token"):
                 raise DeviceAuthorizationError(exc.error_code) from None
             raise
-        return _bundle_from_response(data)
+        return _bundle_from_response(data, preserve_refresh_on_incomplete_access=True)
 
     def build_authorization_url(self, *, redirect_uri: str, state: str, code_challenge: str) -> str:
         params = {
@@ -704,6 +743,25 @@ class YouTubeAccountBinder:
             raise KeyError(f"no such account binding: {binding_id}")
         return DeviceConnection(handle=self._client.start_device_flow(), reconnect_binding_id=binding_id)
 
+    def retry_pending_grant_compensation(self, pending_grant_id: str) -> dict[str, Any]:
+        """Retry revocation for one encrypted pre-binding grant journal."""
+        if not pending_grant_id.startswith("pending-youtube-grant-"):
+            raise ValueError("not a YouTube pending-grant journal id")
+        with self._store.binding_lifecycle_lock(pending_grant_id):
+            token = self._store.get(pending_grant_id)
+            if token is None:
+                return {"status": "absent", "pending_grant_id": pending_grant_id}
+            if not self._compensate_grant(token):
+                return {"status": "pending", "pending_grant_id": pending_grant_id}
+            try:
+                self._store.delete(pending_grant_id)
+            except Exception:
+                return {
+                    "status": "compensated_pending_cleanup",
+                    "pending_grant_id": pending_grant_id,
+                }
+            return {"status": "compensated", "pending_grant_id": pending_grant_id}
+
     def finish_device_connection(self, connection: DeviceConnection) -> dict[str, Any]:
         """Complete one device poll, persist tokens encrypted, bind the account.
 
@@ -711,18 +769,132 @@ class YouTubeAccountBinder:
         material. Raises :class:`DeviceAuthorizationPending` if the user has not
         approved yet (the caller re-polls after ``interval``).
         """
-        bundle = self._client.poll_device_flow(connection.handle.device_code)
-        return self._bind_from_bundle(bundle, connection.reconnect_binding_id)
+        pending_id = _pending_grant_id(
+            connection.handle.device_code,
+            connection.reconnect_binding_id,
+        )
+        # Lock order is pending grant -> channel/reconnect identity -> binding
+        # -> aggregate token file. No lifecycle path acquires these in reverse.
+        with self._store.binding_lifecycle_lock(pending_id):
+            # A standing grant must not be requested until the encryption key,
+            # aggregate file, lock directory, and atomic replace path are ready.
+            self._store.preflight_write_ready()
+            bundle = self._client.poll_device_flow(connection.handle.device_code)
+            pending_token = StoredToken(
+                refresh_token=bundle.refresh_token or "",
+                access_token=bundle.access_token,
+                expires_at=_expiry_iso(bundle.expires_in),
+                scopes=(SCOPE,),
+                obtained_at=_now_iso(),
+                provider_channel_id=None,
+            )
+            self._journal_issued_grant(pending_id, pending_token)
 
-    def _bind_from_bundle(self, bundle: TokenBundle, reconnect_binding_id: str | None) -> dict[str, Any]:
-        if not bundle.refresh_token:
-            # A binding with no refresh token cannot sustain access; fail loud at
-            # bind time rather than storing an empty credential that only breaks
-            # later on the first refresh. The loopback/device requests set
-            # access_type=offline + prompt=consent, so a grant should always
-            # carry one.
-            raise OAuthProviderError(status=200, error_code="missing_refresh_token")
-        identity = self._identity(bundle.access_token)
+            if not bundle.refresh_token or not bundle.access_token:
+                self._abort_journaled_grant(pending_id, pending_token)
+            try:
+                identity = self._identity(bundle.access_token)
+            except Exception:
+                # Identity probing is outside the OAuth transaction and may
+                # fail after Google has issued a standing refresh token. Revoke
+                # when authoritative; otherwise retain the encrypted journal.
+                self._abort_journaled_grant(pending_id, pending_token)
+
+            try:
+                result = self._bind_from_bundle(
+                    bundle,
+                    connection.reconnect_binding_id,
+                    identity,
+                    pending_id=pending_id,
+                )
+            except Exception:
+                # Unknown binding/store exceptions may embed backend details.
+                # When the pending journal still owns the fresh grant, surface
+                # only the stable recovery id/reason and never chain text that
+                # could echo credential material.
+                try:
+                    pending_is_durable = self._store.has_record(pending_id)
+                except Exception:
+                    pending_is_durable = True
+                if pending_is_durable:
+                    raise OAuthGrantDurabilityError(
+                        "grant_pending", pending_grant_id=pending_id
+                    ) from None
+                raise
+            try:
+                self._store.delete(pending_id)
+            except Exception:
+                # The canonical binding token is already durable. A crash or
+                # cleanup failure may leave a duplicate encrypted pending copy,
+                # but cannot remove revocation authority or falsify success.
+                _log.warning(
+                    "youtube oauth: connected binding retained redundant pending grant journal"
+                )
+            return result
+
+    def _journal_issued_grant(self, pending_id: str, token: StoredToken) -> None:
+        """Durably journal a fresh grant or compensate it at the provider."""
+        try:
+            self._store.put(pending_id, token)
+            return
+        except Exception:
+            pass
+
+        if self._compensate_grant(token):
+            raise OAuthGrantDurabilityError("grant_compensated") from None
+
+        # A transient write can fail after the successful readiness probe. If
+        # provider compensation is also indeterminate, retry the encrypted
+        # journal before returning control so retry authority remains local.
+        try:
+            self._store.put(pending_id, token)
+        except Exception:
+            # The second write may fail for a different transient reason than
+            # the first. Re-check provider authority once more before declaring
+            # the physically unsatisfiable store+provider double outage.
+            if self._compensate_grant(token):
+                raise OAuthGrantDurabilityError("grant_compensated") from None
+            raise OAuthGrantDurabilityError("grant_durability_unavailable") from None
+        raise OAuthGrantDurabilityError(
+            "grant_pending", pending_grant_id=pending_id
+        ) from None
+
+    def _abort_journaled_grant(self, pending_id: str, token: StoredToken) -> NoReturn:
+        """Compensate a pre-binding failure or retain its pending authority."""
+        if self._compensate_grant(token):
+            try:
+                self._store.delete(pending_id)
+            except Exception:
+                _log.warning(
+                    "youtube oauth: compensated grant retained redundant encrypted journal"
+                )
+            raise OAuthGrantDurabilityError("grant_compensated") from None
+        raise OAuthGrantDurabilityError(
+            "grant_pending", pending_grant_id=pending_id
+        ) from None
+
+    def _compensate_grant(self, token: StoredToken) -> bool:
+        """Return true only when provider revocation is authoritative."""
+        revocation_token = token.refresh_token or token.access_token or ""
+        if not revocation_token:
+            return False
+        try:
+            self._client.revoke(revocation_token)
+            return True
+        except OAuthProviderError as error:
+            return _provider_confirms_token_already_invalid(error)
+        except Exception:
+            return False
+
+    def _bind_from_bundle(
+        self,
+        bundle: TokenBundle,
+        reconnect_binding_id: str | None,
+        identity: ChannelIdentity,
+        *,
+        pending_id: str,
+    ) -> dict[str, Any]:
+        assert bundle.refresh_token is not None  # checked and journaled by caller
         token = StoredToken(
             refresh_token=bundle.refresh_token,
             access_token=bundle.access_token,
@@ -745,7 +917,23 @@ class YouTubeAccountBinder:
                 else nullcontext()
             )
             with lifecycle:
-                return self._commit_binding(binding, binding_id, identity, token)
+                try:
+                    return self._commit_binding(binding, binding_id, identity, token)
+                except Exception:
+                    # Once the target/candidate token is itself durable, the
+                    # earlier pending journal is redundant even if binding-row
+                    # completion remains indeterminate. If the target write did
+                    # not land, retain pending authority for recovery.
+                    try:
+                        target_is_durable = self._store.get(binding_id) == token
+                    except Exception:
+                        target_is_durable = False
+                    if target_is_durable:
+                        try:
+                            self._store.delete(pending_id)
+                        except Exception:
+                            pass
+                    raise
 
     def _commit_binding(
         self,
@@ -994,6 +1182,7 @@ __all__ = [
     "LoopbackFlow",
     "OAuthClient",
     "OAuthClientCredentialsMissingError",
+    "OAuthGrantDurabilityError",
     "OAuthProviderError",
     "OAuthStateMismatchError",
     "REVOKE_URL",

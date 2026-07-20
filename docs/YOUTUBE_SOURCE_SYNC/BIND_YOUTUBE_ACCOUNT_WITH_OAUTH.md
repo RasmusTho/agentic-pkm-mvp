@@ -40,8 +40,13 @@ touch the repo, vault, settings values, logs, events, or receipts.
    from `YOUTUBE_OAUTH_CLIENT_ID`/`YOUTUBE_OAUTH_CLIENT_SECRET` env (host secret-provisioning
    boundary); their *values* are never persisted or printed.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
-   reason codes on the binding and dependent sources (INV-YSS-4). Connect persists the encrypted
-   token before claiming a binding is connected. Connect, reconnect, refresh, and disconnect are
+   reason codes on the binding and dependent sources (INV-YSS-4). Before each device-token poll,
+   connect proves encryption-key and locked atomic-store readiness. A returned grant is immediately
+   encrypted under an opaque pending-journal id before the fallible identity probe or binding work.
+   Identity/journal failure is provider-compensated when revocation is authoritative; otherwise the
+   pending authority remains encrypted and locally retryable. Canonical binding persistence precedes
+   the `connected` claim; later pending cleanup may leave only a redundant encrypted copy on crash.
+   Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file
    contains no account identifier or secret. A portable store-wide lock serializes aggregate-file

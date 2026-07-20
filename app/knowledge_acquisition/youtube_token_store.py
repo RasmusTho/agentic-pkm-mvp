@@ -34,6 +34,9 @@ Boundary (INV-YSS-5 / INV-YSS-7):
   preventing distinct bindings from losing each other's records. The lock
   backend is guarded and portable across POSIX ``flock`` and Windows
   ``msvcrt.locking``; unsupported platforms fail closed.
+- Device-flow completion proves key plus locked atomic write/read readiness
+  before polling can issue a grant. Fresh grants can therefore be journaled
+  immediately under an opaque pending id before identity/binding work.
 """
 
 from __future__ import annotations
@@ -305,6 +308,26 @@ class YouTubeTokenStore:
             return existed
 
     # --- encrypted record access (key required) -----------------------------
+
+    def preflight_write_ready(self) -> None:
+        """Prove key and atomic store I/O readiness before an OAuth grant.
+
+        The unchanged aggregate is rewritten under the normal store lock and
+        read back before any provider token poll may issue a standing grant.
+        This catches a missing/invalid key, corrupt store, unwritable parent,
+        failed temporary write, and failed atomic replacement without placing
+        any secret material in a probe record.
+        """
+        key = resolve_token_store_key()
+        # Exercise the configured key with the same primitive used by ``put``;
+        # the probe remains in memory and contains no credential material.
+        AESGCM(key).encrypt(os.urandom(_NONCE_BYTES), b"youtube-token-store-readiness", None)
+        with self._lock, self._aggregate_file_lock():
+            data = self._load_file()
+            self._write_file(data)
+            verified = self._load_file()
+            if verified != data:
+                raise RuntimeError("YouTube token store readiness verification failed")
 
     def put(self, binding_id: str, token: StoredToken) -> None:
         """Encrypt and persist ``token`` for ``binding_id`` (requires the key)."""
