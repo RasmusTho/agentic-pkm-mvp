@@ -35,8 +35,10 @@ Boundary (INV-YSS-5 / INV-YSS-7):
   backend is guarded and portable across POSIX ``flock`` and Windows
   ``msvcrt.locking``; unsupported platforms fail closed.
 - Device-flow completion proves key plus locked atomic write/read readiness
-  before polling can issue a grant. Fresh grants can therefore be journaled
-  immediately under an opaque pending id before identity/binding work.
+  before polling can issue a grant. Each aggregate write syncs the staged file,
+  atomically replaces the live path, then syncs its parent directory. Fresh
+  grants can therefore be journaled immediately under an opaque pending id
+  before identity/binding work.
 """
 
 from __future__ import annotations
@@ -223,7 +225,8 @@ class StoredToken:
 class YouTubeTokenStore:
     """AES-256-GCM encrypted token store, one JSON file, one record per binding.
 
-    Individual file operations are thread-safe and writes use atomic replace.
+    Individual file operations are thread-safe and writes sync the staged file,
+    atomically replace the live path, then sync the parent directory.
     Multi-operation credential lifecycles use :meth:`binding_lifecycle_lock`
     for cross-instance and cross-process serialization.
     """
@@ -281,8 +284,20 @@ class YouTubeTokenStore:
     def _write_file(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as staged:
+            staged.write(json.dumps(data, sort_keys=True))
+            staged.flush()
+            # The staged ciphertext/index must reach stable storage before its
+            # name can replace the last durable aggregate.
+            os.fsync(staged.fileno())
         os.replace(tmp, self._path)
+        # Persist the directory-entry replacement itself. Without this fsync a
+        # crash can lose the newly renamed token journal despite a synced file.
+        directory_fd = os.open(self._path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def has_record(self, binding_id: str) -> bool:
         """True if a token record exists for ``binding_id`` (no key required)."""

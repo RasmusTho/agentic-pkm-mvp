@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import stat
 import subprocess
 import sys
 import threading
@@ -56,6 +57,18 @@ _ALL_SENTINELS = (
     SENTINEL_CLIENT_SECRET,
     SENTINEL_DEVICE_CODE,
 )
+
+
+def _assert_no_exception_chain(error: BaseException) -> None:
+    """Secret-bearing failures must not survive in hidden exception links."""
+    seen: set[int] = set()
+    pending = [error]
+    while pending:
+        current = pending.pop()
+        assert id(current) not in seen
+        seen.add(id(current))
+        assert current.__cause__ is None
+        assert current.__context__ is None
 
 
 # --- Transport stub ---------------------------------------------------------
@@ -368,6 +381,7 @@ def test_identity_probe_failure_is_provider_compensated_without_secret_leak(
     rendered = repr(excinfo.value) + str(excinfo.value)
     assert SENTINEL_ACCESS not in rendered
     assert SENTINEL_REFRESH not in rendered
+    _assert_no_exception_chain(excinfo.value)
 
 
 def test_incomplete_grant_with_refresh_token_is_compensated_not_discarded(
@@ -434,6 +448,7 @@ def test_identity_probe_and_compensation_failure_preserve_encrypted_pending_auth
     rendered = repr(excinfo.value) + str(excinfo.value)
     assert SENTINEL_REFRESH not in rendered
     assert SENTINEL_ACCESS not in rendered
+    _assert_no_exception_chain(excinfo.value)
 
     retried = binder.retry_pending_grant_compensation(pending_id)
     assert retried == {"status": "compensated", "pending_grant_id": pending_id}
@@ -455,6 +470,7 @@ def test_pending_journal_write_failure_is_provider_compensated(
         _connect_device(binder)
 
     assert excinfo.value.reason_code == "grant_compensated"
+    _assert_no_exception_chain(excinfo.value)
     assert provider.revoked == [{"token": SENTINEL_REFRESH}]
     assert store.binding_ids() == ()
     assert bindings.list_all() == ()
@@ -491,6 +507,68 @@ def test_pending_write_and_compensation_failure_retry_preserves_authority(
     assert bindings.list_all() == ()
 
 
+def test_pending_journal_write_lost_ack_returns_retry_handle_without_revocation(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    original_put = store.put
+    first_write = True
+
+    def persist_pending_then_lose_ack(binding_id, token):
+        nonlocal first_write
+        original_put(binding_id, token)
+        if first_write:
+            first_write = False
+            raise OSError(SENTINEL_REFRESH)
+
+    monkeypatch.setattr(store, "put", persist_pending_then_lose_ack)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert excinfo.value.reason_code == "grant_pending"
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id is not None
+    assert store.binding_ids() == (pending_id,)
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
+    assert provider.revoked == []
+    assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
+    _assert_no_exception_chain(excinfo.value)
+
+
+def test_pending_parent_directory_fsync_lost_ack_keeps_retry_authority(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    original_fsync = tokstore.os.fsync
+    directory_fsyncs = 0
+
+    def lose_second_directory_fsync_ack(descriptor):
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(tokstore.os.fstat(descriptor).st_mode):
+            directory_fsyncs += 1
+            if directory_fsyncs == 2:
+                raise OSError(SENTINEL_REFRESH)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(tokstore.os, "fsync", lose_second_directory_fsync_ack)
+
+    with pytest.raises(oauth.OAuthGrantDurabilityError) as excinfo:
+        _connect_device(binder)
+
+    assert directory_fsyncs == 2  # readiness, then pending-grant journal
+    assert excinfo.value.reason_code == "grant_pending"
+    pending_id = excinfo.value.pending_grant_id
+    assert pending_id is not None
+    assert store.binding_ids() == (pending_id,)
+    assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
+    assert provider.revoked == []
+    assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
+    _assert_no_exception_chain(excinfo.value)
+
+
 def test_binding_store_write_failure_leaves_pending_grant_recoverable(
     store, bindings, registry, monkeypatch
 ):
@@ -519,6 +597,7 @@ def test_binding_store_write_failure_leaves_pending_grant_recoverable(
     assert store.get(pending_id).refresh_token == SENTINEL_REFRESH
     assert bindings.list_all() == ()
     assert SENTINEL_REFRESH not in (repr(excinfo.value) + str(excinfo.value))
+    _assert_no_exception_chain(excinfo.value)
 
 
 def test_reconnect_write_failure_does_not_mistake_old_token_for_new_grant_durability(
@@ -555,6 +634,45 @@ def test_reconnect_write_failure_does_not_mistake_old_token_for_new_grant_durabi
     assert store.get(binding_id).refresh_token == SENTINEL_REFRESH
     assert store.get(pending_id).refresh_token == SENTINEL_REFRESH_2
     assert SENTINEL_REFRESH_2 not in (repr(excinfo.value) + str(excinfo.value))
+    _assert_no_exception_chain(excinfo.value)
+
+
+def test_reconnect_canonical_write_lost_ack_rolls_forward_without_revoking_new_grant(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    reconnect = binder.start_reconnect(binding_id)
+    pending_id = oauth._pending_grant_id(reconnect.handle.device_code, binding_id)
+    original_put = store.put
+
+    def persist_canonical_then_lose_ack(target_id, token):
+        original_put(target_id, token)
+        if target_id == binding_id:
+            raise OSError(SENTINEL_REFRESH_2)
+
+    monkeypatch.setattr(store, "put", persist_canonical_then_lose_ack)
+
+    result = binder.finish_device_connection(reconnect)
+
+    assert result == {
+        "status": "connected",
+        "account": {"binding_id": binding_id, "channel_title": SYNTH_CHANNEL_TITLE},
+    }
+    assert store.binding_ids() == (binding_id,)
+    assert store.get(binding_id).refresh_token == SENTINEL_REFRESH_2
+    assert provider.revoked == []
+
+    # A stale retry handle is absent and therefore can never revoke the new
+    # canonical grant whose exact readback already proved lost-ack success.
+    retried = binder.retry_pending_grant_compensation(pending_id)
+    assert retried == {"status": "absent", "pending_grant_id": pending_id}
+    assert provider.revoked == []
 
 
 def test_connect_post_commit_exception_reconciles_without_deleting_token(
@@ -1224,6 +1342,37 @@ def test_token_store_roundtrip_and_delete(store):
     assert store.delete("b-1") is True
     assert store.has_record("b-1") is False
     assert store.get("b-1") is None
+
+
+def test_token_store_syncs_staged_file_before_replace_and_parent_after(
+    store, monkeypatch
+):
+    token = tokstore.StoredToken(
+        refresh_token=SENTINEL_REFRESH,
+        access_token=SENTINEL_ACCESS,
+        expires_at="2999-01-01T00:00:00+00:00",
+        scopes=(oauth.SCOPE,),
+        obtained_at="2026-07-18T00:00:00+00:00",
+        provider_channel_id=SYNTH_CHANNEL_ID,
+    )
+    events: list[str] = []
+    original_replace = tokstore.os.replace
+
+    def record_fsync(descriptor):
+        mode = tokstore.os.fstat(descriptor).st_mode
+        events.append("fsync:directory" if stat.S_ISDIR(mode) else "fsync:file")
+
+    def record_replace(source, target):
+        events.append("replace")
+        original_replace(source, target)
+
+    monkeypatch.setattr(tokstore.os, "fsync", record_fsync)
+    monkeypatch.setattr(tokstore.os, "replace", record_replace)
+
+    store.put("b-durable", token)
+
+    assert events == ["fsync:file", "replace", "fsync:directory"]
+    assert store.get("b-durable") == token
 
 
 def test_oauth_client_refuses_off_allowlist_host():

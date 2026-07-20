@@ -792,14 +792,20 @@ class YouTubeAccountBinder:
 
             if not bundle.refresh_token or not bundle.access_token:
                 self._abort_journaled_grant(pending_id, pending_token)
+            identity: ChannelIdentity | None = None
+            identity_failed = False
             try:
                 identity = self._identity(bundle.access_token)
             except Exception:
+                identity_failed = True
+            if identity_failed:
                 # Identity probing is outside the OAuth transaction and may
                 # fail after Google has issued a standing refresh token. Revoke
                 # when authoritative; otherwise retain the encrypted journal.
                 self._abort_journaled_grant(pending_id, pending_token)
 
+            assert identity is not None
+            binding_error: Exception | None = None
             try:
                 result = self._bind_from_bundle(
                     bundle,
@@ -807,7 +813,9 @@ class YouTubeAccountBinder:
                     identity,
                     pending_id=pending_id,
                 )
-            except Exception:
+            except Exception as error:
+                binding_error = error
+            if binding_error is not None:
                 # Unknown binding/store exceptions may embed backend details.
                 # When the pending journal still owns the fresh grant, surface
                 # only the stable recovery id/reason and never chain text that
@@ -819,8 +827,8 @@ class YouTubeAccountBinder:
                 if pending_is_durable:
                     raise OAuthGrantDurabilityError(
                         "grant_pending", pending_grant_id=pending_id
-                    ) from None
-                raise
+                    )
+                raise binding_error
             try:
                 self._store.delete(pending_id)
             except Exception:
@@ -834,30 +842,47 @@ class YouTubeAccountBinder:
 
     def _journal_issued_grant(self, pending_id: str, token: StoredToken) -> None:
         """Durably journal a fresh grant or compensate it at the provider."""
+        first_write_failed = False
         try:
             self._store.put(pending_id, token)
-            return
         except Exception:
-            pass
+            first_write_failed = True
+        if not first_write_failed:
+            return
+
+        # A store write can durably replace the aggregate and then lose its
+        # acknowledgement (including a parent-directory fsync error). Exact
+        # encrypted-record readback is success authority: never revoke it.
+        if self._stored_token_matches(pending_id, token):
+            raise OAuthGrantDurabilityError(
+                "grant_pending", pending_grant_id=pending_id
+            )
 
         if self._compensate_grant(token):
-            raise OAuthGrantDurabilityError("grant_compensated") from None
+            raise OAuthGrantDurabilityError("grant_compensated")
 
         # A transient write can fail after the successful readiness probe. If
         # provider compensation is also indeterminate, retry the encrypted
         # journal before returning control so retry authority remains local.
+        retry_write_failed = False
         try:
             self._store.put(pending_id, token)
         except Exception:
+            retry_write_failed = True
+        if retry_write_failed:
+            if self._stored_token_matches(pending_id, token):
+                raise OAuthGrantDurabilityError(
+                    "grant_pending", pending_grant_id=pending_id
+                )
             # The second write may fail for a different transient reason than
             # the first. Re-check provider authority once more before declaring
             # the physically unsatisfiable store+provider double outage.
             if self._compensate_grant(token):
-                raise OAuthGrantDurabilityError("grant_compensated") from None
-            raise OAuthGrantDurabilityError("grant_durability_unavailable") from None
+                raise OAuthGrantDurabilityError("grant_compensated")
+            raise OAuthGrantDurabilityError("grant_durability_unavailable")
         raise OAuthGrantDurabilityError(
             "grant_pending", pending_grant_id=pending_id
-        ) from None
+        )
 
     def _abort_journaled_grant(self, pending_id: str, token: StoredToken) -> NoReturn:
         """Compensate a pre-binding failure or retain its pending authority."""
@@ -868,10 +893,18 @@ class YouTubeAccountBinder:
                 _log.warning(
                     "youtube oauth: compensated grant retained redundant encrypted journal"
                 )
-            raise OAuthGrantDurabilityError("grant_compensated") from None
+            raise OAuthGrantDurabilityError("grant_compensated")
         raise OAuthGrantDurabilityError(
             "grant_pending", pending_grant_id=pending_id
-        ) from None
+        )
+
+    def _stored_token_matches(self, binding_id: str, expected: StoredToken) -> bool:
+        """Exact encrypted-record readback authority for a lost write ack."""
+        try:
+            stored = self._store.get(binding_id)
+        except Exception:
+            return False
+        return stored == expected
 
     def _compensate_grant(self, token: StoredToken) -> bool:
         """Return true only when provider revocation is authoritative."""
@@ -917,23 +950,26 @@ class YouTubeAccountBinder:
                 else nullcontext()
             )
             with lifecycle:
+                commit_error: Exception | None = None
                 try:
                     return self._commit_binding(binding, binding_id, identity, token)
-                except Exception:
-                    # Once the target/candidate token is itself durable, the
-                    # earlier pending journal is redundant even if binding-row
-                    # completion remains indeterminate. If the target write did
-                    # not land, retain pending authority for recovery.
+                except Exception as error:
+                    commit_error = error
+                assert commit_error is not None
+                # This code intentionally runs outside the exception handler:
+                # any later sanitized durability error must not retain a hidden
+                # ``__context__`` reference to a secret-bearing backend error.
+                # Once the target/candidate token is itself durable, the
+                # earlier pending journal is redundant even if binding-row
+                # completion remains indeterminate. If the target write did
+                # not land, retain pending authority for recovery.
+                target_is_durable = self._stored_token_matches(binding_id, token)
+                if target_is_durable:
                     try:
-                        target_is_durable = self._store.get(binding_id) == token
+                        self._store.delete(pending_id)
                     except Exception:
-                        target_is_durable = False
-                    if target_is_durable:
-                        try:
-                            self._store.delete(pending_id)
-                        except Exception:
-                            pass
-                    raise
+                        pass
+                raise commit_error
 
     def _commit_binding(
         self,
@@ -952,7 +988,13 @@ class YouTubeAccountBinder:
             # Persist the encrypted credential before creating a row whose durable
             # state claims the account is connected. A missing/invalid key therefore
             # cannot leave a connected binding without a token record (#3990).
-        self._store.put(binding_id, token)
+        token_write_error: Exception | None = None
+        try:
+            self._store.put(binding_id, token)
+        except Exception as error:
+            token_write_error = error
+        if token_write_error is not None and not self._stored_token_matches(binding_id, token):
+            raise token_write_error
         if binding is None:
             try:
                 binding = self._bindings.create(

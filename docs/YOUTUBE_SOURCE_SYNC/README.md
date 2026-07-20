@@ -154,8 +154,11 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   `reason_code`; logged-out capabilities (RSS, backfill, explicit URLs) continue. No cursor is
   mutated by an auth failure; no empty poll result caused by auth/API failure is ever recorded as
   a successful sync. Before a device-token poll can issue a standing grant, connect proves the
-  encryption key and atomic token-store write/read path. A returned grant is immediately written
-  under an opaque encrypted pending-journal id before identity probing or binding work. Identity or
+  encryption key and atomic token-store write/read path. Each aggregate write syncs its staged file,
+  atomically replaces the live path, and syncs the parent directory. A returned grant is immediately
+  written under an opaque encrypted pending-journal id before identity probing or binding work.
+  Exact encrypted-record readback treats a lost write acknowledgement as durable success, so neither
+  a pending journal nor a canonical reconnect token is revoked after it actually landed. Identity or
   first-journal failure is provider-compensated when revocation is authoritative; otherwise the
   encrypted pending authority remains locally recoverable and compensation can be retried. Connect
   never records `connected` before encrypted token persistence.

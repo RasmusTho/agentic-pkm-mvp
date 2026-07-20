@@ -41,11 +41,15 @@ touch the repo, vault, settings values, logs, events, or receipts.
    boundary); their *values* are never persisted or printed.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
    reason codes on the binding and dependent sources (INV-YSS-4). Before each device-token poll,
-   connect proves encryption-key and locked atomic-store readiness. A returned grant is immediately
-   encrypted under an opaque pending-journal id before the fallible identity probe or binding work.
-   Identity/journal failure is provider-compensated when revocation is authoritative; otherwise the
-   pending authority remains encrypted and locally retryable. Canonical binding persistence precedes
-   the `connected` claim; later pending cleanup may leave only a redundant encrypted copy on crash.
+   connect proves encryption-key and locked atomic-store readiness. Store writes sync the staged
+   file before atomic replacement and the parent directory afterward. A returned grant is
+   immediately encrypted under an opaque pending-journal id before the fallible identity probe or
+   binding work. Exact encrypted-record readback treats a lost write acknowledgement as durable
+   success, so a landed pending journal or canonical reconnect token is never revoked as though its
+   write failed. Identity/journal failure is provider-compensated when revocation is authoritative;
+   otherwise the pending authority remains encrypted and locally retryable. Canonical binding
+   persistence precedes the `connected` claim; later pending cleanup may leave only a redundant
+   encrypted copy on crash.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file
