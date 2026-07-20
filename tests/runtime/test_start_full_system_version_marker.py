@@ -5,9 +5,16 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
+
+from tests.helpers.runtime_start_harness import (
+    RuntimeStartHarnessTimeout,
+    run_runtime_start,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -34,6 +41,7 @@ def test_start_full_system_exports_vcs_ref_for_compose_build(tmp_path: Path) -> 
     ).stdout.strip()
 
     capture_file = tmp_path / "compose-up.env"
+    progress_file = tmp_path / "startup-progress.log"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
@@ -42,6 +50,10 @@ def test_start_full_system_exports_vcs_ref_for_compose_build(tmp_path: Path) -> 
 set -euo pipefail
 
 capture_file={capture_file!s}
+
+if [ -n "${{STARTUP_HARNESS_PROGRESS_PATH:-}}" ]; then
+  printf 'docker %s\n' "$*" >>"$STARTUP_HARNESS_PROGRESS_PATH"
+fi
 
 if [ "${{1:-}}" = "info" ]; then
   exit 0
@@ -96,17 +108,19 @@ exit 97
         "PKM_ENVIRONMENT": "prod",
         "START_MODE": "diagnostic",
         "START_FLIGHT_RECORDER": "0",
+        # BuilderOps is an independent runtime bootstrap and is irrelevant to
+        # this diagnostic Compose/build-identity contract.
+        "BUILDEROPS_BOOTSTRAP": "0",
+        "STARTUP_HARNESS_PROGRESS_PATH": str(progress_file),
         "VCS_REF": "unknown",
         "BUILT_AT": "unknown",
     }
 
-    proc = subprocess.run(
+    proc = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
         cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
+        progress_path=progress_file,
     )
 
     assert proc.returncode == 99, proc.stderr + proc.stdout
@@ -119,3 +133,70 @@ exit 97
     assert captured["VCS_REF"] == expected_sha
     assert captured["BUILT_AT"] != "unknown"
     assert TIMESTAMP_RE.fullmatch(captured["BUILT_AT"])
+
+
+def test_runtime_start_harness_allows_delayed_scheduling_while_progress_continues(
+    tmp_path: Path,
+) -> None:
+    progress_file = tmp_path / "progress.log"
+    script = """
+import os
+import time
+from pathlib import Path
+
+progress = Path(os.environ["STARTUP_HARNESS_PROGRESS_PATH"])
+for phase in range(4):
+    with progress.open("a", encoding="utf-8") as handle:
+        handle.write(f"phase-{phase}\\n")
+    time.sleep(0.25)
+"""
+    env = {
+        **os.environ,
+        "STARTUP_HARNESS_PROGRESS_PATH": str(progress_file),
+    }
+
+    started = time.monotonic()
+    result = run_runtime_start(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        progress_path=progress_file,
+        initial_progress_timeout=5,
+        stall_timeout=0.6,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    # A fixed total timeout of 0.6s would expire even though every phase makes
+    # progress inside that same bounded stall budget.
+    assert time.monotonic() - started > 0.6
+
+
+def test_runtime_start_harness_fails_loud_when_progress_stalls(tmp_path: Path) -> None:
+    progress_file = tmp_path / "progress.log"
+    script = """
+import os
+import time
+from pathlib import Path
+
+Path(os.environ["STARTUP_HARNESS_PROGRESS_PATH"]).write_text(
+    "phase-started\\n", encoding="utf-8"
+)
+time.sleep(5)
+"""
+    env = {
+        **os.environ,
+        "STARTUP_HARNESS_PROGRESS_PATH": str(progress_file),
+    }
+
+    with pytest.raises(RuntimeStartHarnessTimeout) as exc_info:
+        run_runtime_start(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            env=env,
+            progress_path=progress_file,
+            initial_progress_timeout=5,
+            stall_timeout=0.2,
+        )
+
+    assert exc_info.value.stage == "progress_stall_timeout"
+    assert "phase-started" in exc_info.value.progress_tail
