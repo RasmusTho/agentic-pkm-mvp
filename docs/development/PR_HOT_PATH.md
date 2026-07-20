@@ -84,8 +84,22 @@ distinct open governing parent.
 
 ## Review-Before-CI
 
-For docs-authoring, governance, and direct-repair PRs, run the cheap local review gate before pushing
-or handing a new PR head to expensive GitHub CI:
+For every implementation and direct-repair PR, explicitly complete the TCD risk assessment before
+the cheap local review gate, even when no high-risk surface applies. Supply every applicable
+`--risk-surface`; omitting the option is not evidence that the change is low risk. High-risk work runs
+the gate before its first expensive full suite as well as before push:
+
+```bash
+python3 scripts/review_before_ci_gate.py \
+  --lane implementation \
+  --changed-file app/example.py \
+  --risk-assessment-complete \
+  --risk-surface auth \
+  --review-gate-complete
+```
+
+For docs-authoring and governance PRs, run the cheap local review gate before pushing or handing a
+new PR head to expensive GitHub CI:
 
 ```bash
 python3 scripts/review_before_ci_gate.py \
@@ -98,12 +112,14 @@ The gate is a local ordering check: it exposes whether PR-body preflight, docs g
 governance/contract review should run before CI waiting becomes the main feedback loop. It does not
 replace required GitHub checks, branch protection, or final review triage.
 
-Direct-repair or emergency paths may bypass the local gate only with an explicit reason:
+An emergency direct repair may bypass the local gate only after an explicit completed risk
+assessment finds no high-risk surface. A declared high-risk surface is never bypassable:
 
 ```bash
 python3 scripts/review_before_ci_gate.py \
   --lane direct-repair \
   --changed-file docs/development/PR_HOT_PATH.md \
+  --risk-assessment-complete \
   --bypass-reason "Emergency typo repair; receipt names skipped local gate."
 ```
 

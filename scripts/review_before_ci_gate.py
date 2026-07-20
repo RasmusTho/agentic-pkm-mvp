@@ -76,9 +76,9 @@ def evaluate_review_before_ci_gate(
         raise ReviewBeforeCiGateError(
             "risk_surfaces are valid only for implementation or direct-repair lanes"
         )
-    if normalized_lane == "implementation" and not risk_assessment_complete:
+    if normalized_lane in RISK_REVIEW_LANES and not risk_assessment_complete:
         raise ReviewBeforeCiGateError(
-            "implementation lane requires an explicit completed risk assessment, "
+            "implementation and direct-repair lanes require an explicit completed risk assessment, "
             "including when no high-risk surface applies"
         )
     matched = _matched_surfaces(normalized_lane, files, risks)

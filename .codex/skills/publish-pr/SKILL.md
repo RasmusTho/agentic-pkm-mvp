@@ -192,7 +192,7 @@ TCD_RISK_SURFACES="<space-separated applicable surfaces, or empty>"
 if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
   # Portable read loop, not `mapfile`/`readarray` (bash 4+ only) — macOS ships bash 3.2.
   review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
-  if [ "$PR_LANE" = "implementation" ]; then
+  if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "direct-repair" ]; then
     review_gate_args+=(--risk-assessment-complete)
   fi
   while IFS= read -r file; do

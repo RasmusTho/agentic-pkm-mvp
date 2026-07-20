@@ -86,11 +86,13 @@ def test_bypass_requires_explicit_reason() -> None:
     required = evaluate_review_before_ci_gate(
         lane="direct-repair",
         changed_files=["docs/development/PR_HOT_PATH.md"],
+        risk_assessment_complete=True,
     )
     bypassed = evaluate_review_before_ci_gate(
         lane="direct-repair",
         changed_files=["docs/development/PR_HOT_PATH.md"],
         bypass_reason="Emergency wording repair; receipt will name skipped local gate.",
+        risk_assessment_complete=True,
     )
 
     assert required.may_handoff_to_ci is False
@@ -118,7 +120,7 @@ def test_high_risk_implementation_cannot_bypass_convergence_review() -> None:
 def test_implementation_requires_explicit_risk_assessment_even_when_no_risk_declared() -> None:
     with pytest.raises(
         ReviewBeforeCiGateError,
-        match="requires an explicit completed risk assessment",
+        match="require an explicit completed risk assessment",
     ):
         evaluate_review_before_ci_gate(
             lane="implementation",
@@ -135,6 +137,19 @@ def test_high_risk_direct_repair_cannot_use_emergency_bypass() -> None:
             lane="direct-repair",
             changed_files=["app/oauth/service.py"],
             risk_surfaces=["auth"],
+            bypass_reason="Emergency auth repair.",
+            risk_assessment_complete=True,
+        )
+
+
+def test_direct_repair_cannot_omit_risk_assessment_to_reach_bypass() -> None:
+    with pytest.raises(
+        ReviewBeforeCiGateError,
+        match="require an explicit completed risk assessment",
+    ):
+        evaluate_review_before_ci_gate(
+            lane="direct-repair",
+            changed_files=["app/oauth/service.py"],
             bypass_reason="Emergency auth repair.",
         )
 
@@ -196,6 +211,15 @@ def test_mechanism_convergence_contract_is_wired_across_delivery_skills() -> Non
     assert "risk-convergence form" in issue_to_code
     assert "TCD_RISK_SURFACES" in publish_pr
     assert "Low-convergence circuit breaker" in verification
+
+
+def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> None:
+    hot_path = (REPO_ROOT / "docs/development/PR_HOT_PATH.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--risk-assessment-complete" in hot_path
+    assert "A declared high-risk surface is never bypassable" in hot_path
 
 
 def test_host_global_full_suite_uses_atomic_wrapper_in_canonical_workflow() -> None:
