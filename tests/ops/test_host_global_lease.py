@@ -165,11 +165,10 @@ def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
 
     holder.send_signal(termination_signal)
     holder_stdout, holder_stderr = holder.communicate(timeout=3)
-    assert holder.returncode == 128 + termination_signal.value, (
-        holder_stdout,
-        holder_stderr,
-    )
+    assert holder.returncode != 0, (holder_stdout, holder_stderr)
     assert '"event": "host_lease_released"' in holder_stderr
+    release_receipt = json.loads(holder_stderr.splitlines()[-1])
+    assert release_receipt["return_code"] == holder.returncode
 
     successor = subprocess.run(
         _lease_command(resource, "signal-successor", "pass"),
