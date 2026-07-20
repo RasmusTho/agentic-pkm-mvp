@@ -172,16 +172,16 @@ Re-run the pre-push phase of `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Proc
 ### Review-Before-CI Gate — Before expensive validation and pre-push (mandatory when triggered)
 
 For docs-authoring, governance, and direct-repair PRs, run the cheap local review/contract gate before
-the push creates or updates an expensive GitHub CI head. For implementation or direct-repair work
+the push creates or updates an expensive GitHub CI head. For implementation, governance, or direct-repair work
 touching auth, security, data, migrations, concurrency, external APIs, credential durability, or an
-explicit state machine, run the same gate before the first expensive full suite as well as before
+explicit state machine, run the same gate before the first expensive validation as well as before
 push. Every implementation, governance, and direct-repair lane must explicitly attest that its TCD risk assessment is complete,
 including when the resulting risk-surface set is empty; supply every applicable risk surface. This local ordering gate does
 not replace required GitHub checks, branch protection, or final review triage.
 
 Use `--review-gate-complete` only after the checks returned by the script have run. For a high-risk
-implementation this means a mechanism convergence packet plus a fresh independent high-capability
-review of the local publishable SHA before the full suite; see
+implementation, governance, or direct repair this means a mechanism convergence packet plus a fresh independent high-capability
+review of the local publishable SHA before the selected expensive validation; see
 `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. If an emergency direct
 repair with no declared high-risk surface must bypass this local gate, use `--bypass-reason` and name
 the bypass in the PR/issue receipt. A declared high-risk surface is never bypassable.
@@ -209,6 +209,23 @@ Allowed risk-surface values are: auth, security, data, migration, concurrency, e
 credential-durability, and state-machine. After a multi-blocker or adjacent
 repeat finding in one mechanism, do not set `--review-gate-complete` again until the low-convergence
 circuit breaker in `verification-and-closure` has produced and reviewed a new convergence packet.
+
+For any implementation, governance, or direct-repair lane with a declared high-risk surface, the
+executable order is mandatory and fail-closed:
+
+1. Run focused local checks and prepare the mechanism convergence packet.
+2. Commit the local publishable SHA and obtain the fresh independent high-capability review.
+3. Only after that review passes, run the proportionate validation selected by the governing
+   contract and affected subsystem. A repo-wide full suite is not automatic: require it only when
+   the Issue/owner doc names it or the changed behavior has cross-system blast radius. When it is
+   required, run it through the host lease from
+   `docs/development/DEV_WORKFLOW.md :: Validation baseline` and use the publishable SHA in the
+   execution id. Governance-only changes default to targeted governance/contract tests plus their
+   lint/docs checks.
+4. Re-run the branch-truth pre-push gate and the `review_before_ci_gate.py` command above against
+   the still-unchanged SHA. A changed SHA invalidates both the review and validation evidence and
+   restarts this sequence.
+5. Push only after all four preceding steps pass. Never proceed directly from review to push.
 
 ### Step 5: Push Branch
 

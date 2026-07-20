@@ -13,11 +13,15 @@ If any escalation trigger applies, stop and read [`PR_ESCALATION_PATHS.md`](PR_E
 
 Fill these out before deciding whether the PR stays on the hot path:
 
-- `lane`: `docs` | `code` | `governance` | `maintenance` | `promotion`
+- `lane`: `docs-authoring` | `implementation` | `governance` | `direct-repair`
 - `risk`: `low` | `normal` | `high`
 - `touches_runtime`: `yes` | `no`
 - `touches_ci_or_skills`: `yes` | `no`
 - `closes_issue`: `yes` | `no`
+
+Promotion is not a PR hot-path lane. Route release-channel work through `prepare-promotion`,
+`execute-promotion`, `verify-promotion`, or `rollback-promotion` as applicable; those skills own its
+operator gates and evidence model.
 
 Default rule:
 - if the PR is low-risk and does not touch runtime, CI, skills, migrations, APIs, or public contracts, stay on the hot path
@@ -87,7 +91,9 @@ distinct open governing parent.
 For every implementation, governance, and direct-repair PR, explicitly complete the TCD risk assessment before
 the cheap local review gate, even when no high-risk surface applies. Supply every applicable
 `--risk-surface`; omitting the option is not evidence that the change is low risk. High-risk work runs
-the gate before its first expensive full suite as well as before push:
+the gate before its first expensive validation as well as before push. Validation remains
+affected-subsystem scoped; high risk strengthens ordering and review, but does not by itself mandate
+a repo-wide full suite:
 
 ```bash
 python3 scripts/review_before_ci_gate.py \

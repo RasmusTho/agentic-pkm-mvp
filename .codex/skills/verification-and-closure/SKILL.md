@@ -208,11 +208,12 @@ than independent re-review.
 - A **trivial** fix (single-line wording/doc/formatting, no logic change) may be self-verified against
   the current head SHA without a full re-run.
 - **Stop condition:** the gate passes once a round comes back clean (no new findings). For PRs touching
-  security/data/migration/auth/concurrency/external-API surfaces (`AGENTS.md :: Total Cost of
-  Development` escalation tier), require 2 consecutive clean rounds before passing.
+  security, data, migration, auth, concurrency, external-API, credential-durability, or explicit
+  state-machine surfaces (`AGENTS.md :: Total Cost of Development` escalation tier), require 2
+  consecutive clean rounds before passing.
 - **Low-convergence circuit breaker:** if one round reports two or more blockers in the same
   stateful mechanism, or a later round finds an adjacent blocker in a mechanism already repaired,
-  stop point-fixing and do not start another full suite or publish another head. Build the mechanism
+  stop point-fixing and do not start another expensive validation or publish another head. Build the mechanism
   convergence packet and run the independent pre-expensive-gate review defined in
   `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
   sequence only after that review is clean. Preserve the existing mechanism/domain binding and

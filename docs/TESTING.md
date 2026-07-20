@@ -229,7 +229,7 @@ The CI surface should stay small and explicit. The intended steady-state roles a
 | Workflow role | Purpose | Expected posture |
 | --- | --- | --- |
 | `pr-smoke` | Fast merge blocker: lint, settings validation, `not pg` smoke, architecture/contract checks, deterministic Quality Wave UAT harness, fitness summary parsing | required on PRs |
-| `integration-nightly` | Full `pytest -m "not pg and not alpha_llm"` suite, explicit deterministic Quality Wave acceptance harness, first bounded PG contracts lane, runtime contract regressions, fitness gates | nightly / scheduled |
+| `integration-nightly` | Full non-PG/alpha-excluded CI suite, explicit deterministic Quality Wave acceptance harness, first bounded PG contracts lane, runtime contract regressions, fitness gates | nightly / scheduled |
 | `release-uat` | Quality Wave gate (UAT harness + golden vault + full QW suite), fitness gates | release/UAT gate (tags + manual) |
 
 Human-need acceptance scenarios should map onto those roles explicitly instead of silently riding along with smoke:
@@ -285,8 +285,13 @@ First-green definition:
 
 - `ruff check app tests`
 - `mypy app`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`
-- `python -m app.cli settings-validate --json`
+- the governing Issue's `Verify:` targets and focused tests for the affected subsystem
+- `python -m app.cli settings-validate --json` when settings/runtime contracts are affected
+
+The repo-wide non-PG suite is an escalation, not the default. Run it when the governing contract
+names it or cross-system blast radius cannot be covered by focused subsystem tests:
+
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> --wait-seconds 900 -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m "not pg"`
 
 > **Plugin-load guard:** <!-- plugin-load-guard --> When `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is set, flags provided by
 > plugins are not available unless the plugin is also explicitly loaded with `-p <plugin_name>`.
@@ -297,9 +302,13 @@ First-green definition:
 > Do not assume installing a plugin is sufficient — verify the flag resolves with an explicit
 > `-p` load if autoload is disabled.
 
-For fast local runs that bypass workspace/global pytest configuration, prefer:
-- `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg" -c /dev/null`
+When that repo-wide escalation is required and must bypass workspace/global pytest configuration, prefer:
+- `STORE_BACKEND=memory PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> --wait-seconds 900 -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m "not pg" -c /dev/null`
 - `make smoke` (parallel by default via `pytest-xdist`; override workers with `SMOKE_WORKERS=<n|auto>`, and include e2e lane with `SMOKE_E2E_WORKERS=<n>`)
+
+Bare repo-wide pytest commands in older feature/spec evidence are descriptive shorthand only. Local
+execution always routes the full non-PG or broad repo smoke suite through the repo-common host lease;
+targeted file/directory suites do not require that lease.
 
 ## Concurrency Tests (docs-only)
 These regression suites live in `docs/CONCURRENCY.md` and the new watcher/promotion/test libraries.
@@ -335,7 +344,7 @@ Example commands:
   - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agents/panel_agent/test_panel_wiring.py -m "not pg"`
 
 ## Debugging hanging tests
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 pytest -vv -m "not pg" --faulthandler-timeout 60`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONFAULTHANDLER=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha>:debug --wait-seconds 900 -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -vv -m "not pg" --faulthandler-timeout 60`
 - Note: the dump shows where the test is blocked (e.g. filesystem read / iCloud / background threads).
 
 ## Reality-MVP pipeline sanity
@@ -366,7 +375,7 @@ Example commands:
 | Type | Focus | Command |
 | --- | --- | --- |
 | Unit | Pure functions (retrieval, guardrails) | `PYTHONPATH="$(pwd)" pytest tests/retrieval -q` |
-| Smoke (local/CI) | CLI + pipelines without Postgres | `LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"` |
+| Smoke (local/CI) | CLI + pipelines without Postgres | `LLM_PROVIDER=mock PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha>:smoke --wait-seconds 900 -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m "not pg"` |
 | Transcribe smoke | yt-dlp + ffmpeg + faster-whisper stubs | `pytest -q tests/test_transcribe_smoke.py -m "not pg"` |
 | Hybrid search | End-to-end recall | `pytest -q tests/test_hybrid_search.py` |
 | Reality-MVP e2e | Note → ingest → index → ASK sanity (memory backend) | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/e2e/test_reality_mvp_pipeline.py --maxfail=1` |

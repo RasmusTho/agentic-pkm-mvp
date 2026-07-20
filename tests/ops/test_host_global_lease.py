@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -251,7 +252,7 @@ def test_signalled_waiting_contender_never_runs_command(
     resource = f"test-host-lease-wait-signal-{termination_signal.value}-{time.time_ns()}"
     marker = tmp_path / "contender-ran"
     holder = subprocess.Popen(
-        _lease_command(resource, "wait-holder", "import time; time.sleep(0.8)"),
+        _lease_command(resource, "wait-holder", "import time; time.sleep(2)"),
         cwd=REPO_ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -284,17 +285,146 @@ def test_signalled_waiting_contender_never_runs_command(
         stderr=subprocess.PIPE,
         text=True,
     )
-    time.sleep(0.1)
+    assert contender.stderr is not None
+    readable, _, _ = select.select([contender.stderr], [], [], 3)
+    assert readable, "waiting contender did not publish its readiness receipt"
+    waiting_line = contender.stderr.readline()
+    assert json.loads(waiting_line)["event"] == "host_lease_waiting"
+    cancellation_started = time.monotonic()
     contender.send_signal(termination_signal)
-    holder.wait(timeout=3)
-    contender_stdout, contender_stderr = contender.communicate(timeout=3)
+    try:
+        contender_stdout, remaining_stderr = contender.communicate(timeout=0.75)
+        contender_stderr = waiting_line + remaining_stderr
+    finally:
+        if contender.poll() is None:
+            contender.kill()
+            contender.wait()
+        holder.terminate()
+        holder.wait(timeout=3)
 
     assert contender.returncode == 128 + termination_signal.value, (
         contender_stdout,
         contender_stderr,
     )
+    assert time.monotonic() - cancellation_started < 0.75
     assert '"event": "host_lease_signal_forwarded"' in contender_stderr
     assert '"event": "host_lease_cancelled"' in contender_stderr
+    assert not marker.exists()
+
+
+def test_exec_child_restores_default_sigpipe_disposition() -> None:
+    resource = f"test-host-lease-sigpipe-{time.time_ns()}"
+    command = [
+        sys.executable,
+        str(LEASE_SCRIPT),
+        "--resource",
+        resource,
+        "--execution-id",
+        "sigpipe-default",
+        "--",
+        "/bin/bash",
+        "-o",
+        "pipefail",
+        "-c",
+        "yes | head -n 1 >/dev/null",
+    ]
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 128 + signal.SIGPIPE, result.stderr
+
+
+@pytest.mark.parametrize("kill_process_group", [False, True])
+def test_orphaned_waiting_supervisor_never_runs_command(
+    kill_process_group: bool, tmp_path: Path
+) -> None:
+    resource = f"test-host-lease-orphan-waiter-{kill_process_group}-{time.time_ns()}"
+    marker = tmp_path / "orphan-waiter-ran"
+    release_holder = tmp_path / "release-holder"
+    holder_child = (
+        "import sys, time; from pathlib import Path; "
+        f"release = Path({str(release_holder)!r}); deadline = time.monotonic() + 5; "
+        "\nwhile not release.exists() and time.monotonic() < deadline: time.sleep(0.02)"
+        "\nsys.exit(0 if release.exists() else 2)"
+    )
+    holder = subprocess.Popen(
+        _lease_command(resource, "orphan-wait-holder", holder_child),
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    lock_path = repo_common_lock_path(resource)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if lock_path.exists():
+            try:
+                if json.loads(lock_path.read_text())["execution_id"] == "orphan-wait-holder":
+                    break
+            except (json.JSONDecodeError, KeyError):
+                pass
+        time.sleep(0.02)
+    else:
+        holder.kill()
+        holder.wait()
+        pytest.fail("holder did not acquire the host lease")
+
+    waiter_child = f"from pathlib import Path; Path({str(marker)!r}).touch()"
+    waiter = subprocess.Popen(
+        _lease_command(
+            resource,
+            "orphaned-waiter",
+            waiter_child,
+            wait_seconds=3,
+        ),
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=kill_process_group,
+    )
+    assert waiter.stderr is not None
+    readable, _, _ = select.select([waiter.stderr], [], [], 3)
+    assert readable, "waiting supervisor did not publish its readiness receipt"
+    waiting_receipt = json.loads(waiter.stderr.readline())
+    assert waiting_receipt["event"] == "host_lease_waiting"
+    assert waiting_receipt["supervisor_pid"] == waiting_receipt["supervisor_pgid"]
+    if kill_process_group:
+        assert waiting_receipt["supervisor_pgid"] != os.getpgid(waiter.pid)
+    if kill_process_group:
+        os.killpg(waiter.pid, signal.SIGKILL)
+    else:
+        waiter.kill()
+    waiter.wait(timeout=2)
+    assert json.loads(lock_path.read_text())["execution_id"] == "orphan-wait-holder"
+    release_holder.touch()
+    holder.wait(timeout=3)
+    assert holder.returncode == 0
+
+    supervisor_pid = waiting_receipt["supervisor_pid"]
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(supervisor_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("orphaned waiting supervisor did not exit after parent handoff failed")
+    assert not marker.exists()
+
+    successor = subprocess.run(
+        _lease_command(resource, "orphan-wait-successor", "pass", wait_seconds=1),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=3,
+    )
+    assert successor.returncode == 0, successor.stderr
     assert not marker.exists()
 
 

@@ -715,6 +715,33 @@ def test_governance_lane_companion_prompt_surface_matches_owner_doc() -> None:
     )
 
 
+def test_governance_lane_allowed_surfaces_match_owner_doc() -> None:
+    workflow = _read_development_workflow()
+    governance_lane = workflow.split("## Governance lane", 1)[1].split(
+        "Governance-lane rules:", 1
+    )[0]
+    documented = set(re.findall(r"^  - `([^`]+)`$", governance_lane, re.MULTILINE))
+    documented_exact = {path for path in documented if not path.endswith("**")}
+    documented_prefixes = {
+        path.removesuffix("**") for path in documented if path.endswith("**")
+    }
+
+    contract = _read_workflow()
+    exact_block = contract.split("const governanceAllowedExact = new Set([", 1)[1].split(
+        "]);", 1
+    )[0]
+    prefix_block = contract.split("const governanceAllowedPrefixes = [", 1)[1].split(
+        "];", 1
+    )[0]
+    executable_exact = set(re.findall(r'^\s+"([^"]+)",?$', exact_block, re.MULTILINE))
+    executable_prefixes = set(
+        re.findall(r'^\s+"([^"]+)",?$', prefix_block, re.MULTILINE)
+    )
+
+    assert documented_exact == executable_exact
+    assert documented_prefixes == executable_prefixes
+
+
 def test_review_before_ci_gate_is_governance_lane_allowed() -> None:
     text = _read_workflow()
 
@@ -726,4 +753,6 @@ def test_host_global_lease_is_governance_lane_allowed() -> None:
     text = _read_workflow()
 
     assert '"scripts/run_with_host_lease.py"' in text
+    assert '"scripts/py312_smoke_test.sh"' in text
+    assert '"scripts/verify_runtime_chain.sh"' in text
     assert '"tests/ops/test_host_global_lease.py"' in text

@@ -43,9 +43,10 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
 
 - Install: `python -m pip install -e .`
 - Validation baseline (required pre-merge gate for code-affecting changes; see
-  `docs/development/DEV_WORKFLOW.md :: Validation baseline` for the full, current command set):
-  `ruff check app tests`, `mypy app`, then
-  `python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -q -m "not pg"`
+  `docs/development/DEV_WORKFLOW.md :: Validation baseline`): `ruff check app tests`, `mypy app`,
+  the governing Issue's `Verify:` targets, and focused tests for the affected subsystem. Escalate to
+  the host-leased repo-wide non-PG suite only when the contract names it or cross-system blast radius
+  requires it.
 - When `.codex/skills/**` changed: `python3 scripts/lint_skills_consistency.py`
 - Alpha runtime: `make alpha-up` then `python -m scripts.alpha_e2e`
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -21,7 +23,150 @@ REVIEW_REPAIR_CONTRACT = (
     REPO_ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
 )
 DEV_WORKFLOW = REPO_ROOT / "docs/development/DEV_WORKFLOW.md"
+PROCESS_MAP = REPO_ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 AGENTS = REPO_ROOT / "AGENTS.md"
+
+
+def _bare_repo_wide_not_pg_commands(text: str) -> list[str]:
+    commands: list[str] = []
+    control_characters = frozenset(";&|()")
+    harmless_prefix_flags = frozenset(
+        {"-q", "--quiet", "-s", "-x", "--exitfirst", "--lf", "--ff", "--nf", "--sw"}
+    )
+
+    def is_leased(tokens: list[str], pytest_index: int) -> bool:
+        prefix = tokens[:pytest_index]
+        command_start = 0
+        while command_start < len(prefix) and re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=.*", prefix[command_start]
+        ):
+            command_start += 1
+        if prefix[command_start : command_start + 2] not in (
+            ["python", "scripts/run_with_host_lease.py"],
+            ["python3", "scripts/run_with_host_lease.py"],
+        ):
+            return False
+        wrapper_args = prefix[command_start + 2 :]
+        if "--" not in wrapper_args:
+            return False
+        lease_args = wrapper_args[: wrapper_args.index("--")]
+        resource_values: list[str] = []
+        for index, token in enumerate(lease_args):
+            if token == "--resource":
+                if index + 1 >= len(lease_args):
+                    return False
+                resource_values.append(lease_args[index + 1])
+            elif token.startswith("--resource="):
+                resource_values.append(token.partition("=")[2])
+        return resource_values == ["pytest-not-pg"]
+
+    def is_safely_targeted(pytest_args: list[str]) -> bool:
+        targets: list[str] = []
+        index = 0
+        while index < len(pytest_args):
+            token = pytest_args[index]
+            if token == "-m":
+                if index + 1 >= len(pytest_args):
+                    return False
+                index += 2
+                continue
+            if token.startswith("-m="):
+                index += 1
+                continue
+            if token.startswith("-") and not token.startswith("--") and "m" in token:
+                if token.endswith("m"):
+                    if index + 1 >= len(pytest_args):
+                        return False
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if token in harmless_prefix_flags or re.fullmatch(r"-v+", token):
+                index += 1
+                continue
+            if token.startswith("-"):
+                return False
+            target_path = token.split("::", maxsplit=1)[0]
+            if not target_path.startswith("tests/") or ".." in Path(target_path).parts:
+                return False
+            targets.append(target_path)
+            index += 1
+        return bool(targets)
+
+    command_fragments: list[str] = []
+    for source_line in text.replace("\\\n", " ").splitlines():
+        inline_code = re.findall(r"`([^`]+)`", source_line)
+        if inline_code:
+            command_fragments.extend(inline_code)
+            outside_code = re.sub(r"`[^`]+`", " ", source_line)
+            if outside_code.strip():
+                command_fragments.append(outside_code)
+        else:
+            command_fragments.append(source_line)
+
+    for raw_line in command_fragments:
+        if "pytest" not in raw_line and "py.test" not in raw_line:
+            continue
+        lexer = shlex.shlex(raw_line, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        try:
+            line_tokens = list(lexer)
+        except ValueError:
+            if re.search(r"-m(?:=|\s+).*\bnot\s+pg\b", raw_line, re.IGNORECASE):
+                commands.append(raw_line)
+            continue
+
+        segments: list[list[str]] = [[]]
+        for token in line_tokens:
+            if token and set(token) <= control_characters:
+                if segments[-1]:
+                    segments.append([])
+                continue
+            segments[-1].append(token)
+
+        for tokens in segments:
+            pytest_indexes = [
+                index
+                for index, token in enumerate(tokens)
+                if re.fullmatch(
+                    r"(?:pytest|py\.test)(?:-?\d+(?:\.\d+)*)?",
+                    Path(token).name,
+                )
+            ]
+            if not pytest_indexes:
+                continue
+            for invocation, pytest_index in enumerate(pytest_indexes):
+                next_index = (
+                    pytest_indexes[invocation + 1]
+                    if invocation + 1 < len(pytest_indexes)
+                    else len(tokens)
+                )
+                pytest_args = tokens[pytest_index + 1 : next_index]
+
+                marker_expressions: list[str] = []
+                for index, token in enumerate(pytest_args):
+                    if token == "-m" and index + 1 < len(pytest_args):
+                        marker_expressions.append(pytest_args[index + 1])
+                    elif token.startswith("-m="):
+                        marker_expressions.append(token.partition("=")[2])
+                    elif token.startswith("-") and not token.startswith("--") and "m" in token:
+                        marker_suffix = token.split("m", maxsplit=1)[1]
+                        if marker_suffix:
+                            marker_expressions.append(marker_suffix.removeprefix("="))
+                        elif index + 1 < len(pytest_args):
+                            marker_expressions.append(pytest_args[index + 1])
+                if not marker_expressions or not re.search(
+                    r"\bnot\s+pg\b", marker_expressions[-1], re.IGNORECASE
+                ):
+                    continue
+
+                if is_leased(tokens, pytest_index):
+                    continue
+
+                if not is_safely_targeted(pytest_args):
+                    commands.append(" ".join(tokens[pytest_index:next_index]))
+    return commands
 
 
 def test_docs_governance_changes_require_pre_ci_review_gate() -> None:
@@ -69,7 +214,7 @@ def test_high_risk_implementation_requires_convergence_review_before_expensive_g
     assert "risk:auth" in gate.matched_surfaces
     assert "risk:credential-durability" in gate.matched_surfaces
     assert any("convergence packet" in check for check in gate.required_local_checks)
-    assert any("before the full suite" in check for check in gate.required_local_checks)
+    assert any("before selected expensive validation" in check for check in gate.required_local_checks)
 
 
 def test_standard_implementation_keeps_existing_hot_path() -> None:
@@ -83,10 +228,13 @@ def test_standard_implementation_keeps_existing_hot_path() -> None:
     assert gate.may_handoff_to_ci is True
 
 
-def test_unknown_lane_is_rejected_instead_of_failing_open() -> None:
-    with pytest.raises(ReviewBeforeCiGateError, match="unknown lane: implmentation"):
+@pytest.mark.parametrize(
+    "lane", ["implmentation", "docs", "code", "maintenance", "promotion"]
+)
+def test_unknown_lane_is_rejected_instead_of_failing_open(lane: str) -> None:
+    with pytest.raises(ReviewBeforeCiGateError, match=f"unknown lane: {lane}"):
         evaluate_review_before_ci_gate(
-            lane="implmentation",
+            lane=lane,
             changed_files=["app/oauth/service.py"],
         )
 
@@ -222,6 +370,14 @@ def test_publish_pr_skill_runs_review_gate_before_push() -> None:
     assert "Review-Before-CI Gate" in text
     assert "scripts/review_before_ci_gate.py" in text
     assert text.index("Review-Before-CI Gate") < text.index("### Step 5: Push Branch")
+    focused = text.index("Run focused local checks")
+    independent_review = text.index("fresh independent high-capability review", focused)
+    validation = text.index("run the proportionate validation", independent_review)
+    renewed_gate = text.index("Re-run the branch-truth pre-push gate", validation)
+    push = text.index("Push only after all four preceding steps pass", renewed_gate)
+    assert focused < independent_review < validation < renewed_gate < push
+    assert "A repo-wide full suite is not automatic" in text
+    assert "Governance-only changes default to targeted" in text
 
 
 def test_mechanism_convergence_contract_is_wired_across_delivery_skills() -> None:
@@ -235,7 +391,11 @@ def test_mechanism_convergence_contract_is_wired_across_delivery_skills() -> Non
     assert "mechanism/convergence review before an expensive" in agents
     assert "risk-convergence form" in issue_to_code
     assert "TCD_RISK_SURFACES" in publish_pr
+    assert "implementation, governance, or direct-repair work" in publish_pr
+    assert "implementation, governance, or direct repair" in publish_pr
     assert "Low-convergence circuit breaker" in verification
+    assert "credential-durability" in verification
+    assert "state-machine surfaces" in verification
 
 
 def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> None:
@@ -245,13 +405,148 @@ def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> No
 
     assert "--risk-assessment-complete" in hot_path
     assert "A declared high-risk surface is never bypassable" in hot_path
+    assert (
+        "`lane`: `docs-authoring` | `implementation` | `governance` | "
+        "`direct-repair`"
+    ) in hot_path
+    assert "Promotion is not a PR hot-path lane" in hot_path
+
+
+def test_validation_scope_defaults_to_affected_subsystem_across_owner_docs() -> None:
+    workflow = DEV_WORKFLOW.read_text(encoding="utf-8")
+    process_map = PROCESS_MAP.read_text(encoding="utf-8")
+
+    assert "governing Issue's `Verify:` targets" in workflow
+    assert "uses `scripts/select_pr_tests.py`" in workflow
+    assert "repo-wide non-PG suite only when" in workflow
+    assert "affected-subsystem pytest" in process_map
+    assert "Contract or cross-system full-suite trigger?" in process_map
+    assert "Affected-subsystem validation + current-SHA CI" in process_map
 
 
 def test_host_global_full_suite_uses_atomic_wrapper_in_canonical_workflow() -> None:
     agents = AGENTS.read_text(encoding="utf-8")
     workflow = DEV_WORKFLOW.read_text(encoding="utf-8")
+    template = (REPO_ROOT / ".github/pull_request_template.md").read_text(
+        encoding="utf-8"
+    )
+    runtime_chain = (REPO_ROOT / "scripts/verify_runtime_chain.sh").read_text(
+        encoding="utf-8"
+    )
+    py312_smoke = (REPO_ROOT / "scripts/py312_smoke_test.sh").read_text(
+        encoding="utf-8"
+    )
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    verify_promotion = (REPO_ROOT / ".codex/skills/verify-promotion/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    testing = (REPO_ROOT / "docs/TESTING.md").read_text(encoding="utf-8")
 
     assert "scripts/run_with_host_lease.py" in agents
     assert "Chat reservations" in agents
     assert "--resource pytest-not-pg" in workflow
     assert "is not mutual exclusion" in workflow
+    assert "scripts/run_with_host_lease.py" in template
+    for producer in (
+        runtime_chain,
+        py312_smoke,
+        makefile,
+        verify_promotion,
+        testing,
+    ):
+        assert "scripts/run_with_host_lease.py" in producer
+        assert "--resource pytest-not-pg" in producer
+    for sha_bound_producer in (makefile, runtime_chain, py312_smoke):
+        assert "git rev-parse --short HEAD" in sha_bound_producer
+    for autoload_disabled_producer in (
+        makefile,
+        runtime_chain,
+        py312_smoke,
+        testing,
+    ):
+        relevant_commands = [
+            line
+            for line in autoload_disabled_producer.replace("\\\n", " ").splitlines()
+            if "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in line
+            and "--resource pytest-not-pg" in line
+            and "pytest" in line
+        ]
+        assert relevant_commands
+        for command in relevant_commands:
+            assert "pytest_asyncio.plugin" in command
+            assert "anyio.pytest_plugin" in command
+
+
+def test_owner_docs_do_not_prescribe_bare_repo_wide_not_pg_suites() -> None:
+    owner_docs = (
+        REPO_ROOT / "docs/TESTING.md",
+        REPO_ROOT / "docs/STATUS.md",
+        REPO_ROOT / "docs/eval.md",
+    )
+
+    for owner_doc in owner_docs:
+        assert _bare_repo_wide_not_pg_commands(
+            owner_doc.read_text(encoding="utf-8")
+        ) == [], owner_doc
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -m 'not pg'",
+        'pytest -m "not pg and not alpha_llm"',
+        '```bash\npytest -q -m "not pg"\n```',
+        'pytest -q -m="not pg"',
+        "pytest -q -m='not pg and not alpha_llm'",
+        'pytest -m "not pg" --ignore=tests/slow',
+        'pytest -m "not pg" --ignore tests/slow',
+        'pytest -q -m "not pg" && pytest tests/chat/test_x.py -q',
+        'pytest -q -m "not pg"; pytest tests/chat/test_x.py -q',
+        'pytest -q -m="not pg" & pytest tests/chat/test_x.py -q',
+        '(pytest -q -m "not pg")',
+        'pytest tests/chat -q |& pytest -q -m "not pg"',
+        'pytest -q -m "smoke" -m "not pg"',
+        'pytest -q -m "not pg" --basetemp tests/tmp',
+        "pytest -qm 'not pg'",
+        r"pytest -q -mnot\ pg",
+        "echo scripts/run_with_host_lease.py pytest -q -m 'not pg'",
+        "echo python3 scripts/run_with_host_lease.py --resource pytest-not-pg -- "
+        "pytest -q -m 'not pg'",
+        'pytest -q tests/.. -m "not pg"',
+        'pytest -q tests/foo/../.. -m "not pg"',
+        "python3 scripts/run_with_host_lease.py --resource other "
+        "--execution-id pytest-not-pg -- pytest -m 'not pg'",
+        "pytest -m 'not pg' and a targeted example "
+        "`pytest tests/chat -m 'not pg'`",
+        "python3 scripts/run_with_host_lease.py --resource pytest-not-pg "
+        "--resource other -- pytest -q -m 'not pg'",
+        "python3 scripts/run_with_host_lease.py --resource other "
+        "--resource=pytest-not-pg -- pytest -q -m 'not pg'",
+        'pytest -q tests/chat . -m "not pg"',
+        'pytest -q tests/chat tests/../.. -m "not pg"',
+        'pytest -q tests/chat /tmp/repo -m "not pg"',
+        "py.test -q -m 'not pg'",
+        "/usr/local/bin/py.test -q -m 'not pg'",
+        "pytest-3 -q -m 'not pg'",
+        "pytest3 -q -m 'not pg'",
+        "py.test-3.12 -q -m 'not pg'",
+        "py.test3 -q -m 'not pg'",
+    ],
+)
+def test_bare_repo_wide_not_pg_classifier_rejects_bypasses(command: str) -> None:
+    assert _bare_repo_wide_not_pg_commands(command)
+
+
+def test_bare_repo_wide_not_pg_classifier_allows_targeted_or_leased() -> None:
+    assert _bare_repo_wide_not_pg_commands(
+        'pytest tests/chat -q -m "not pg"'
+    ) == []
+    assert _bare_repo_wide_not_pg_commands(
+        "python3 scripts/run_with_host_lease.py --resource pytest-not-pg -- "
+        'pytest -q -m "not pg"'
+    ) == []
+    assert _bare_repo_wide_not_pg_commands(
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
+        "scripts/run_with_host_lease.py --resource=pytest-not-pg -- "
+        'pytest -q -m "not pg"'
+    ) == []

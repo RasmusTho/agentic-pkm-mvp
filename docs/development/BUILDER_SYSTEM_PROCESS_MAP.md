@@ -172,7 +172,7 @@ flowchart TD
 | work pickup / claim | Active work begins | Agent | ready issue | issue-to-code | issue-to-code | `scripts/issue_pickup_claim.sh` | In Progress, label removed | GitHub/dispatcher | gh view verify | claim can proceed? | release/blocked | blocked label/comment | human decision | [`.codex/skills/issue-to-code/SKILL.md`:129-175], [scripts/issue_pickup_claim.sh:39-59] |
 | implementation | Claimed issue | Agent | issue + owner docs | issue-to-code | issue-to-code | local tests | diff | files | local validation | can proceed? | local repair | block issue | safety/authority risk | [`.codex/skills/issue-to-code/SKILL.md`:236-260] |
 | mechanism convergence review | Before expensive validation when high-risk stateful work triggers | Fresh reviewer | local publishable SHA + convergence packet | review/repair contract | issue-to-code / publish-pr | `review_before_ci_gate.py` + independent review | clean/blocking receipt | none | invariants/states/crash-ordering/races/test map | clean? | focused repair + refreshed packet | block expensive proof | authority conflict only | [docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md#mechanism-convergence-gate] |
-| local validation | Before PR | Agent | changed files | `DEV_WORKFLOW` | issue-to-code | ruff/mypy plus host-leased pytest | validation log + lease receipt | repo-common kernel lock only | checks pass | required checks | local repair | fix or block | cannot verify | [docs/development/DEV_WORKFLOW.md:60-89], [scripts/run_with_host_lease.py] |
+| local validation | Before PR | Agent | changed files | `DEV_WORKFLOW` | issue-to-code | ruff/mypy plus governing `Verify:` and affected-subsystem pytest; host-leased repo-wide suite only on explicit contract/cross-system escalation | validation log; lease receipt only when escalated | repo-common kernel lock only for broad suite | selected checks pass | affected scope; cross-system blast radius? | local repair | fix or block | cannot verify | [docs/development/DEV_WORKFLOW.md:60-89], [scripts/run_with_host_lease.py] |
 | PR publication | Local diff ready | Agent | validated diff | publish-pr | publish-pr | git/gh | branch/commit/PR | GitHub | branch-truth gate | lane? file set? | PR repair | stop on drift | publication ambiguity | [`.codex/skills/publish-pr/SKILL.md`:53-159] |
 | PR contract validation | PR opened/edited | GitHub Action | PR body/files | PR template/governance | none | `issue-pr-governance.yml` | pass/fail check | none | pr-contract | issue link? lane? | body repair | check failure | none unless authority needed | [`.github/workflows/issue-pr-governance.yml`:79-218] |
 | CI | PR/push/schedule/manual | GitHub Actions | PR head | workflows | none | `.github/workflows/**` | checks/artifacts | none | check status | failure? stale? | CI repair | block | blocked-technical/backoff | `gh workflow list`; [`.github/workflows/ci-smoke.yaml`:4-15] |
@@ -494,7 +494,10 @@ flowchart TD
   Fix --> ReReview["Re-review"]
   ReReview --> Findings
   Findings -->|multi-blocker or adjacent repeat| Converge["Mechanism convergence packet + pre-expensive review"]
-  Converge -->|clean| Proof["Host-leased full suite + current-SHA CI"]
+  Converge -->|clean| Scope{"Contract or cross-system full-suite trigger?"}
+  Scope -->|no| Proof["Affected-subsystem validation + current-SHA CI"]
+  Scope -->|yes| Full["Host-leased repo-wide suite"]
+  Full --> Proof
   Proof --> ReReview
   Converge -->|blocking| Fix
   Findings -->|repeats after 2 attempts| Triage["Capability escalation + classifier triage"]

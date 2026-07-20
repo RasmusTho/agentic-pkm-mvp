@@ -20,7 +20,7 @@ GOVERNANCE_PREFIXES = (
     "tests/scripts/",
     "tests/fixtures/",
 )
-DOCS_GOVERNANCE_LANES = {"docs", "docs-authoring", "governance", "direct-repair"}
+DOCS_GOVERNANCE_LANES = {"docs-authoring", "governance", "direct-repair"}
 CANONICAL_LANES = DOCS_GOVERNANCE_LANES | {"implementation"}
 RISK_REVIEW_LANES = {"implementation", "governance", "direct-repair"}
 RISK_SURFACES = {
@@ -204,7 +204,7 @@ def _required_checks(matched: Sequence[str]) -> list[str]:
         checks.extend(
             [
                 "build the mechanism convergence packet (invariants, states, transitions, crash ordering, producers/consumers/recovery, locks, and test map)",
-                "run a fresh independent high-capability review of the local publishable SHA and convergence packet before the full suite",
+                "run a fresh independent high-capability review of the local publishable SHA and convergence packet before selected expensive validation",
             ]
         )
     return checks

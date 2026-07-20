@@ -156,7 +156,9 @@ def run_with_lease(
                 if not raw_child_status:
                     break
                 child_status = json.loads(raw_child_status)
-                if not first_status_seen:
+                if child_status.get("event") == "host_lease_waiting":
+                    _emit(child_status)
+                elif not first_status_seen:
                     status = child_status
                     first_status_seen = True
                     _emit(status)
@@ -235,15 +237,18 @@ def _terminate_process_group(pgid: int) -> bool:
     return True
 
 
-def _report_to_parent(status_fd: int, receipt: dict[str, object], *, close: bool = False) -> None:
+def _report_to_parent(
+    status_fd: int, receipt: dict[str, object], *, close: bool = False
+) -> bool:
     payload = (json.dumps(receipt, sort_keys=True) + "\n").encode()
     try:
         os.write(status_fd, payload)
     except BrokenPipeError:
-        pass
+        return False
     finally:
         if close:
             os.close(status_fd)
+    return True
 
 
 def _acquire_and_exec(
@@ -282,28 +287,9 @@ def _acquire_and_exec(
         os.close(status_fd)
         os._exit(125)
 
-    while True:
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except BlockingIOError:
-            elapsed = time.monotonic() - started
-            if elapsed >= wait_seconds:
-                _report_to_parent(
-                    status_fd,
-                    {
-                        "event": "host_lease_busy",
-                        "execution_id": execution_id,
-                        "holder": _read_holder(lock_path),
-                        "resource": resource,
-                        "waited_seconds": round(elapsed, 3),
-                    },
-                )
-                os.close(lock_fd)
-                os._exit(_TEMPFAIL)
-            time.sleep(min(poll_seconds, wait_seconds - elapsed))
-
-    if pending_signals:
+    def cancel_if_pending() -> None:
+        if not pending_signals:
+            return
         cancellation_signal = pending_signals[0]
         os.close(lock_fd)
         _report_to_parent(
@@ -319,6 +305,45 @@ def _acquire_and_exec(
         )
         os._exit(128 + cancellation_signal)
 
+    waiting_reported = False
+    while True:
+        cancel_if_pending()
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            cancel_if_pending()
+            if not waiting_reported:
+                waiting_receipt: dict[str, object] = {
+                    "event": "host_lease_waiting",
+                    "execution_id": execution_id,
+                    "resource": resource,
+                    "supervisor_pgid": os.getpgrp(),
+                    "supervisor_pid": os.getpid(),
+                }
+                if not _report_to_parent(status_fd, waiting_receipt):
+                    os.close(lock_fd)
+                    os.close(status_fd)
+                    os._exit(125)
+                waiting_reported = True
+            elapsed = time.monotonic() - started
+            if elapsed >= wait_seconds:
+                _report_to_parent(
+                    status_fd,
+                    {
+                        "event": "host_lease_busy",
+                        "execution_id": execution_id,
+                        "holder": _read_holder(lock_path),
+                        "resource": resource,
+                        "waited_seconds": round(elapsed, 3),
+                    },
+                )
+                os.close(lock_fd)
+                os._exit(_TEMPFAIL)
+            time.sleep(min(poll_seconds, wait_seconds - elapsed, 0.1))
+
+    cancel_if_pending()
+
     acquired_at = _utc_now()
     held_receipt: dict[str, object] = {
         "acquired_at": acquired_at,
@@ -330,7 +355,10 @@ def _acquire_and_exec(
         "worktree": str(_git_path("--show-toplevel")),
     }
     _write_receipt(lock_fd, held_receipt)
-    _report_to_parent(status_fd, held_receipt)
+    if not _report_to_parent(status_fd, held_receipt):
+        os.close(lock_fd)
+        os.close(status_fd)
+        os._exit(125)
 
     command_pid, start_fd = _spawn_gated_command(
         command=command,
@@ -397,6 +425,7 @@ def _spawn_gated_command(
         os.close(status_fd)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
         os.setsid()
         os.write(ready_write_fd, b"1")
         os.close(ready_write_fd)

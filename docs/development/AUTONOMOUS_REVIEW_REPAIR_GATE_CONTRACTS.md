@@ -243,7 +243,7 @@ and explicit state machines. It is enacted by `issue-to-code`, `publish-pr`, and
 
 Trigger it:
 
-- before the first local full suite for a high-risk stateful slice;
+- before the first expensive local validation for a high-risk stateful slice;
 - after one review round reports two or more blocking findings in the same mechanism; or
 - when a later review round finds an adjacent blocker in a mechanism already repaired.
 
@@ -259,16 +259,18 @@ The implementation agent must stop point-fixing and build one convergence packet
 - a test matrix mapping each invariant, transition, crash point, and race to focused proof.
 
 A fresh independent reviewer at the strongest capability justified by `AGENTS.md :: Total Cost of
-Development` reviews the packet and local publishable SHA before another full suite. Any blocker
-returns to focused repair and packet review. Only a clean convergence review permits the expensive
-sequence `full suite -> publication -> current-SHA CI -> final clean review gate` to resume.
+Development` reviews the packet and local publishable SHA before another expensive validation. Any
+blocker returns to focused repair and packet review. Only a clean convergence review permits the
+sequence `affected-surface validation -> publication -> current-SHA CI -> final clean review gate`
+to resume. The validation scope comes from the governing contract and affected subsystem; high-risk
+classification alone does not expand it to a repo-wide full suite.
 Creating the packet or changing reviewer capability never resets the existing per-mechanism repair
 budget.
 
 ### Low-convergence receipt
 
 Record the triggering review round, mechanism key, packet location or concise receipt, reviewer
-capability, verdict, and the full-suite/CI cycles avoided or repeated. This is delivery evidence, not
+capability, verdict, and the expensive validation/CI cycles avoided or repeated. This is delivery evidence, not
 a new owner-doc authority surface.
 
 ## Review Repair Loop
