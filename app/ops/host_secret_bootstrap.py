@@ -26,6 +26,7 @@ _SECRET_ENV_NAMES = {
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _CHILD_WAIT_POLL_SECONDS = 0.1
 _CHILD_TERMINATION_GRACE_SECONDS = 5.0
+_CHILD_POST_KILL_REAP_SECONDS = 1.0
 
 KeychainLookup = Callable[[str, str], str]
 CommandRunner = Callable[[list[str], dict[str, str]], int]
@@ -298,7 +299,12 @@ def _subprocess_runner(command: list[str], env: dict[str, str]) -> int:
             except subprocess.TimeoutExpired:
                 active_process.kill()
                 break
-        active_process.wait()
+        try:
+            active_process.wait(timeout=_CHILD_POST_KILL_REAP_SECONDS)
+        except subprocess.TimeoutExpired:
+            # A killed child can remain uninterruptible. Do not let an unbounded
+            # reap prevent the outer context from removing plaintext material.
+            pass
 
     with _temporary_signal_handlers(forward_then_terminate):
         process = subprocess.Popen(command, env=env)

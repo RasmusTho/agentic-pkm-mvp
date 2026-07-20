@@ -269,6 +269,66 @@ def test_signal_during_child_spawn_is_forwarded_after_assignment(
     assert process.poll() == -signal.SIGTERM
 
 
+def test_post_kill_reap_timeout_still_returns_to_secret_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UninterruptibleProcess:
+        def __init__(self) -> None:
+            self.forwarded: list[int] = []
+            self.kills = 0
+            self.wait_timeouts: list[float | None] = []
+
+        def poll(self) -> None:
+            return None
+
+        def send_signal(self, signum: int) -> None:
+            self.forwarded.append(signum)
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.wait_timeouts.append(timeout)
+            raise subprocess.TimeoutExpired("consumer", timeout)
+
+        def kill(self) -> None:
+            self.kills += 1
+
+    process = UninterruptibleProcess()
+
+    def interrupted_popen(
+        _command: list[str],
+        *,
+        env: dict[str, str],
+    ) -> UninterruptibleProcess:
+        observed_path = Path(env["HOST_SECRET_RUNTIME_ENV_FILE"])
+        assert observed_path.is_file()
+        signal.raise_signal(signal.SIGTERM)
+        return process
+
+    monkeypatch.setattr(host_secret_bootstrap.subprocess, "Popen", interrupted_popen)
+    monkeypatch.setattr(
+        host_secret_bootstrap,
+        "_CHILD_TERMINATION_GRACE_SECONDS",
+        0.0,
+    )
+
+    with pytest.raises(HostSecretBootstrapTerminated) as error:
+        run_with_host_secrets(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            command=["consumer"],
+            keychain_lookup=_lookup(),
+            directory=tmp_path,
+        )
+
+    assert error.value.signum == signal.SIGTERM
+    assert process.forwarded == [signal.SIGTERM]
+    assert process.kills == 1
+    assert process.wait_timeouts == [
+        host_secret_bootstrap._CHILD_POST_KILL_REAP_SECONDS
+    ]
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_signal_during_tempfile_creation_defers_until_cleanup_state_is_safe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
