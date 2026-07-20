@@ -59,11 +59,22 @@ services:
       # keys here so the governed env_file chain supplies the binding.
 
   heimdal-capture-watch:
+    # The governed dev deploy wrapper materializes this last layer from the
+    # declared Keychain consumer and removes it after Compose creates the
+    # container. The base interpolation key is reset so it cannot blank or
+    # override the bootstrap layer from a caller shell or runtime env file.
+    env_file: !override
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+      - path: ${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}
+        required: false
     environment:
       LLM_PROVIDER: mock
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      HEIMDAL_RAW_STORE_KEY: !reset null
 
   companion-ui:
     ports: !override

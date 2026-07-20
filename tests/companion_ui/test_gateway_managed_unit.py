@@ -16,7 +16,12 @@ def _construct_override(loader: _ComposeLoader, node: yaml.Node) -> object:
     return loader.construct_sequence(node)
 
 
+def _construct_reset(loader: _ComposeLoader, node: yaml.Node) -> object:
+    return loader.construct_scalar(node)
+
+
 _ComposeLoader.add_constructor("!override", _construct_override)
+_ComposeLoader.add_constructor("!reset", _construct_reset)
 
 
 def _compose(path: str) -> dict:
