@@ -1357,23 +1357,22 @@ def _run_spec_tick(
     )
     if removed_runtime_gating_owner_files:
         summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
-        if not handled_settings_sources:
-            for rel_path in removed_runtime_gating_owner_files:
-                rel_str = str(rel_path)
-                settings_delta = handle_settings_local_delta(
-                    vault_root=cfg.vault_path,
-                    rel_path=rel_path,
-                    previous_values=state.last_settings_runtime_values(rel_str),
-                )
-                if settings_delta.errors:
-                    state.errors += len(settings_delta.errors)
-                    summary["settings_write_errors_in_tick"] = int(
-                        summary.get("settings_write_errors_in_tick", 0)
-                    ) + len(settings_delta.errors)
-                if settings_delta.receipts:
-                    summary["settings_receipts_in_tick"] = int(
-                        summary.get("settings_receipts_in_tick", 0)
-                    ) + len(settings_delta.receipts)
+        for rel_path in removed_runtime_gating_owner_files:
+            rel_str = str(rel_path)
+            settings_delta = handle_settings_local_delta(
+                vault_root=cfg.vault_path,
+                rel_path=rel_path,
+                previous_values=state.last_settings_runtime_values(rel_str),
+            )
+            if settings_delta.errors:
+                state.errors += len(settings_delta.errors)
+                summary["settings_write_errors_in_tick"] = int(
+                    summary.get("settings_write_errors_in_tick", 0)
+                ) + len(settings_delta.errors)
+            if settings_delta.receipts:
+                summary["settings_receipts_in_tick"] = int(
+                    summary.get("settings_receipts_in_tick", 0)
+                ) + len(settings_delta.receipts)
         for rel_path in removed_runtime_gating_owner_files:
             for active_state in active_states.values():
                 active_state.files.pop(str(rel_path), None)

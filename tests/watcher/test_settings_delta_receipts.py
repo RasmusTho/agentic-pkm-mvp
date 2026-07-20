@@ -456,24 +456,55 @@ def test_owner_file_deletion_routes_runtime_gating_reset_through_governed_seam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault_root = tmp_path / "vault"
-    initialize_test_vault(vault_root)
+    VaultManager().initialize_vault(vault_root, machine_role="primary", remember=False)
     outbox_path = tmp_path / "outbox.jsonl"
+    config_path = tmp_path / "watchers.yaml"
+    _write_watchers_config(config_path)
+
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "settings/*.md")
+    monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
+    monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
+    monkeypatch.setenv("WATCHER_DEBOUNCE_MS", "0")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("STORE_BACKEND", "memory")
 
-    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
-    youtube_md.unlink()
+    registry.run_registry_once(config_path)
 
-    result = handle_settings_local_delta(
-        vault_root=vault_root,
-        rel_path=SETTINGS_YOUTUBE_REL,
-        previous_values={"youtubeSync.enabled": True},
+    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    _touch(youtube_md, 1_700_000_100.0)
+    registry.run_registry_once(config_path)
+
+    youtube_md.unlink()
+    # Exercise the production race window: a compiler-source delta in the
+    # same tick must not suppress the authority-bearing owner-file reset.
+    source_md = vault_root / "settings" / "runtime-source.md"
+    source_md.write_text("---\n{}\n---\n", encoding="utf-8")
+    _touch(source_md, 1_700_000_101.0)
+
+    summaries = registry.run_registry_once(config_path)
+    total_deletions = sum(
+        int(summary.get("runtime_gating_owner_file_deletions_in_tick", 0))
+        for summary in summaries.values()
+    )
+    total_receipts = sum(
+        int(summary.get("settings_receipts_in_tick", 0))
+        for summary in summaries.values()
     )
 
-    assert result.errors == ()
-    assert result.values == {"youtubeSync.enabled": False}
-    assert [(receipt.key, receipt.old_value, receipt.new_value) for receipt in result.receipts] == [
-        ("youtubeSync.enabled", True, None)
+    assert total_deletions == 1
+    assert total_receipts == 1
+    rows = [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+    assert [(row.old_value, row.new_value) for row in rows] == [
+        (False, True),
+        (True, None),
     ]
     assert SettingsService().resolve_accepted_runtime_gating(
         VaultManager().validate_vault(vault_root)

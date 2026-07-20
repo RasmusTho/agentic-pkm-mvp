@@ -475,21 +475,25 @@ class SettingsService:
             return accepted
 
         for receipt in receipt_result.rows:
-            definition = self.registry.get(receipt.key)
+            receipt_definition = self.registry.get(receipt.key)
             if (
-                definition is None
-                or definition.key not in RUNTIME_GATING_SETTINGS
-                or expected_files.get(definition.key) != receipt.file
+                receipt_definition is None
+                or receipt_definition.key not in RUNTIME_GATING_SETTINGS
+                or expected_files.get(receipt_definition.key) != receipt.file
             ):
                 continue
-            value = definition.default_value if receipt.new_value is None else receipt.new_value
-            valid, _message = _validate_value(definition, value)
+            value = (
+                receipt_definition.default_value
+                if receipt.new_value is None
+                else receipt.new_value
+            )
+            valid, _message = _validate_value(receipt_definition, value)
             if not valid:
                 continue
-            accepted[definition.key] = EffectiveSetting(
-                key=definition.key,
+            accepted[receipt_definition.key] = EffectiveSetting(
+                key=receipt_definition.key,
                 value=value,
-                scope=definition.scope,
+                scope=receipt_definition.scope,
                 source="accepted-runtime-gating-receipt",
                 source_file=receipt.file,
             )

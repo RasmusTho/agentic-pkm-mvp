@@ -467,23 +467,24 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line."
     ),
-    ("app/vault/settings_service.py", 508): (
+    ("app/vault/settings_service.py", 589): (
         "guarded: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 508 (site unchanged); re-pinned per this census's "
+        "Line drifted 348 -> 508 -> 589 (site unchanged); re-pinned per this census's "
         "own directly-related-repair convention when YSS-01 (#3916) added the "
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
     ),
-    ("app/vault/settings_service.py", 567): (
+    ("app/vault/settings_service.py", 648): (
         "guarded: _scaffold_missing_settings_file asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) "
         "before writing every missing static vault-shared settings seed, including "
         "legacy non-gating paths.md and settings/youtube.md. Line drifted 558 -> 567 "
         "when the scaffold gained its own WriteGuard action name (YSS-01 #3916 "
         "round-B review: scaffolds must not be conflated with runtime-gating "
-        "writes in guard errors/audits)."
+        "writes in guard errors/audits), then 567 -> 648 when #3964 added runtime-"
+        "gating acceptance and reset handling above the unchanged scaffold seam."
     ),
     ("app/instance/vault_registry.py", 1088): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "

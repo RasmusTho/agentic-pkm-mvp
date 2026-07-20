@@ -180,8 +180,14 @@ store *path*, local Takeout import path. Candidate posture (`requires_review: tr
 by WriteGuard + durable settings receipt). Each runtime-gating key is accepted only from its
 registered owner file (`youtube.md` for the shared master switch, `local.md` for the machine-local
 runner switch); a cross-file override is ignored with a `SettingsValidationError` and no success
-receipt. Validation errors degrade to defaults with a `SettingsValidationError`, never silently
-apply. Effective values, scope, and source file are shown by the capability doctor
+receipt. Runtime consumers use `SettingsService.resolve_accepted_runtime_gating`, which derives
+accepted state from the durable governed-write receipts and fails closed to the registered default;
+raw `SettingsService.resolve` remains the operator/provenance view and is not a runtime-gating
+authority accessor. Deleting an owner file is a governed reset to its registered default, and a
+git-synced arrival replays through the same local gate with `surface='sync'` and
+`actor='sync'`, never as a local human receipt. Validation errors degrade to defaults with a
+`SettingsValidationError`, never silently apply. Effective values, scope, and source file are
+shown by the capability doctor
 (`youtube-sync doctor`) via `EffectiveSetting` provenance.
 
 ## Secrets and private bindings (YSS-02)
