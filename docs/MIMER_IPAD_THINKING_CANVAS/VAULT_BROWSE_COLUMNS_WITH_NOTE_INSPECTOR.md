@@ -30,8 +30,10 @@ folder) → see its items → read the selected note with its metadata visible. 
   metadata: `uuid`, zone/origin fields if present, `agent_provenance` block if present, file
   modification date. Parsing uses `YggdrasilCore.FrontmatterDocument` — no new parser.
 - **Hardware keyboard:** arrow/`Tab` moves between columns and list items; `⌘F` (where a list is
-  filterable) focuses a local filter field; `⌘I` toggles the inspector. Use SwiftUI
-  `.keyboardShortcut`/focus APIs — no private API.
+  filterable) focuses a local filter field; `⌘I` toggles the inspector. Use SwiftUI focus APIs and
+  keyboard shortcuts where they reach the active responder chain; a bounded public UIKit
+  `UIKeyCommand` bridge is permitted when required to preserve these commands while a SwiftUI text
+  field is first responder. No private API.
 - Vault listing stays filesystem-based by contract: the client API surface has no
   folder-listing/recent/backlinks endpoint (`docs/contracts/MIMER_CLIENT_CONTRACT.md` §4), and no
   hidden client-side index may be built to compensate (§3 invariant 3) — directory enumeration on
