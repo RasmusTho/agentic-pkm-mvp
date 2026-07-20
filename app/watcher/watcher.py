@@ -20,6 +20,7 @@ from app.watcher.settings_delta import (
     is_settings_control_path,
     is_runtime_gating_owner_path,
     is_settings_source_path,
+    settings_delta_state_values,
 )
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 from app.watcher.state import WatcherState
@@ -307,6 +308,7 @@ def run_tick(
         changed_entries.append((rel, mtime, digest))
 
     settings_source_processed = False
+    pending_runtime_gating_deletions: set[str] = set()
     removed_runtime_gating_owner_files = sorted(
         Path(path)
         for path in state.files.keys() - set(scanned_paths)
@@ -318,6 +320,7 @@ def run_tick(
             vault_root=cfg.vault_path,
             rel_path=rel_path,
             previous_values=state.last_settings_runtime_values(rel_str),
+            observed_missing=True,
         )
         if settings_delta.errors:
             state.errors += len(settings_delta.errors)
@@ -328,9 +331,18 @@ def run_tick(
             summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
                 settings_delta.receipts
             )
-        # Remove the vanished path after its one governed reset so repeated
-        # watcher ticks cannot emit duplicate deletion receipts.
-        state.files.pop(rel_str, None)
+        if settings_delta.errors or settings_delta.deferred:
+            retained_values = settings_delta_state_values(settings_delta)
+            if retained_values is not None:
+                state.update_file_state(
+                    rel_str,
+                    settings_runtime_values=retained_values,
+                )
+            pending_runtime_gating_deletions.add(rel_str)
+        else:
+            # Retire the vanished path only after every governed reset was
+            # durably receipted. Failed/partial resets stay pending for retry.
+            state.files.pop(rel_str, None)
     if removed_runtime_gating_owner_files:
         summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
 
@@ -365,6 +377,8 @@ def run_tick(
             vault_root=cfg.vault_path,
             rel_path=rel,
             previous_values=state.last_settings_runtime_values(rel_str),
+            observed_digest=digest,
+            observed_missing=False,
         )
         if settings_delta.errors:
             state.errors += len(settings_delta.errors)
@@ -395,7 +409,7 @@ def run_tick(
                 rel_str,
                 mtime=mtime,
                 content_hash=digest,
-                settings_runtime_values=settings_delta.values,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
                 seen_at=now,
             )
             continue
@@ -421,7 +435,7 @@ def run_tick(
                 rel_str,
                 mtime=mtime,
                 content_hash=digest,
-                settings_runtime_values=settings_delta.values,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
                 seen_at=now,
             )
             continue
@@ -435,7 +449,7 @@ def run_tick(
                 rel_str,
                 mtime=mtime,
                 content_hash=digest,
-                settings_runtime_values=settings_delta.values,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
                 seen_at=now,
             )
             continue
@@ -443,7 +457,7 @@ def run_tick(
             rel_str,
             mtime=mtime,
             content_hash=digest,
-            settings_runtime_values=settings_delta.values,
+            settings_runtime_values=settings_delta_state_values(settings_delta),
             seen_at=now,
         )
         if last_seen is not None and (now - last_seen) * 1000 < cfg.debounce_ms:
@@ -496,7 +510,7 @@ def run_tick(
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms
     _apply_guardrails(cfg, state, summary)
-    state.prune_files(scanned_paths)
+    state.prune_files([*scanned_paths, *pending_runtime_gating_deletions])
 
     return _finalize_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None)
 

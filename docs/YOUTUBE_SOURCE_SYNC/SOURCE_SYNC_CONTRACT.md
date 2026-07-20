@@ -182,12 +182,17 @@ registered owner file (`youtube.md` for the shared master switch, `local.md` for
 runner switch); a cross-file override is ignored with a `SettingsValidationError` and no success
 receipt. Runtime consumers use `SettingsService.resolve_accepted_runtime_gating`, which derives
 accepted state for the two issue-authorized YouTube gates from identity-bound durable
-governed-write receipts and fails closed to the registered default;
+governed-write receipts in serialized durable append order, deduplicated by validated operation
+identity, and fails closed to the registered default;
 raw `SettingsService.resolve` remains the operator/provenance view and is not a runtime-gating
-authority accessor. Deleting an owner file is a governed reset to its registered default, and a
-git-synced arrival replays through the same local gate with `surface='sync'` and
-`actor='sync'`, never as a local human receipt. The watcher identifies that production provenance
-from a clean tracked Git state; modified/untracked files and non-Git vaults remain local file edits.
+authority accessor. Deleting an owner file is a governed reset to its registered default; a failed
+or deferred reset remains pending for retry, and deletion of the vault-local owner retains its
+accepted identity only while the surviving vault owner still proves the same vault. A git-synced
+arrival replays through the same local gate with `surface='sync'` and `actor='sync'`, never as a
+local human receipt. The watcher identifies that production provenance only when the exact observed
+bytes match the clean tracked Git snapshot and remain unchanged through provenance inspection;
+modified/untracked, raced, or non-Git observations remain local or deferred rather than receiving
+sync attribution.
 Validation errors degrade to defaults with a
 `SettingsValidationError`, never silently apply. Effective values, scope, and source file are
 shown by the capability doctor

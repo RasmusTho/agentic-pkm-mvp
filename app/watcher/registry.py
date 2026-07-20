@@ -49,6 +49,7 @@ from app.watcher.settings_delta import (
     is_settings_control_path,
     is_runtime_gating_owner_path,
     is_settings_source_path,
+    settings_delta_state_values,
 )
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -990,6 +991,8 @@ def _collect_changed_entries(
             vault_root=cfg.vault_path,
             rel_path=rel,
             previous_values=state.last_settings_runtime_values(rel_str),
+            observed_digest=digest,
+            observed_missing=False,
         )
         if settings_delta.errors:
             state.errors += len(settings_delta.errors)
@@ -1045,7 +1048,9 @@ def _collect_changed_entries(
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             if settings_delta.values is not None:
                 _sync_settings_local_state(
-                    states, rel_str=rel_str, values=settings_delta.values
+                    states,
+                    rel_str=rel_str,
+                    values=settings_delta_state_values(settings_delta) or {},
                 )
             changed_entries.append(
                 ChangedEntry(rel_path=rel, mtime=mtime, digest=digest)
@@ -1053,7 +1058,11 @@ def _collect_changed_entries(
             continue
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
         if settings_delta.values is not None:
-            _sync_settings_local_state(states, rel_str=rel_str, values=settings_delta.values)
+            _sync_settings_local_state(
+                states,
+                rel_str=rel_str,
+                values=settings_delta_state_values(settings_delta) or {},
+            )
     return changed_entries, scanned_paths
 
 
@@ -1355,6 +1364,7 @@ def _run_spec_tick(
         for path in state.files.keys() - set(scanned_paths)
         if is_runtime_gating_owner_path(Path(path))
     )
+    pending_runtime_gating_deletions: set[str] = set()
     if removed_runtime_gating_owner_files:
         summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
         for rel_path in removed_runtime_gating_owner_files:
@@ -1363,6 +1373,7 @@ def _run_spec_tick(
                 vault_root=cfg.vault_path,
                 rel_path=rel_path,
                 previous_values=state.last_settings_runtime_values(rel_str),
+                observed_missing=True,
             )
             if settings_delta.errors:
                 state.errors += len(settings_delta.errors)
@@ -1373,9 +1384,18 @@ def _run_spec_tick(
                 summary["settings_receipts_in_tick"] = int(
                     summary.get("settings_receipts_in_tick", 0)
                 ) + len(settings_delta.receipts)
-        for rel_path in removed_runtime_gating_owner_files:
-            for active_state in active_states.values():
-                active_state.files.pop(str(rel_path), None)
+            if settings_delta.errors or settings_delta.deferred:
+                retained_values = settings_delta_state_values(settings_delta)
+                if retained_values is not None:
+                    _sync_settings_local_state(
+                        active_states,
+                        rel_str=rel_str,
+                        values=retained_values,
+                    )
+                pending_runtime_gating_deletions.add(rel_str)
+            else:
+                for active_state in active_states.values():
+                    active_state.files.pop(rel_str, None)
 
     removed_settings_sources = sorted(
         Path(path)
@@ -1466,7 +1486,7 @@ def _run_spec_tick(
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms
     _apply_guardrails_registry(cfg, state, summary)
-    state.prune_files(scanned_paths)
+    state.prune_files([*scanned_paths, *pending_runtime_gating_deletions])
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 

@@ -486,7 +486,9 @@ class SettingsService:
                 is_runtime_gating=True,
                 vault_id=context.active_vault_id,
                 local_instance_id=context.local_instance_id,
-            )
+            ),
+            require_operation_id=True,
+            durable_append_order=True,
         )
         if not receipt_result.source_available:
             return accepted

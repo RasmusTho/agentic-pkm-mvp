@@ -10,17 +10,22 @@ import pytest
 import yaml
 
 import app.watcher.registry as registry
+import app.watcher.watcher as legacy_watcher
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsStore
 from app.vault.settings_service import RUNTIME_GATING_SETTINGS, SettingsService
 from app.receipts.settings_receipts import query_settings_receipts
+from app.watcher.config import WatcherConfig
 from app.watcher.settings_delta import (
     SETTINGS_LOCAL_REL,
     SETTINGS_YOUTUBE_REL,
+    handle_settings_detected_delta,
     handle_settings_local_delta,
     handle_settings_sync_arrival,
+    settings_delta_state_values,
     settings_delta_is_sync_arrival,
 )
+from app.watcher.state import WatcherState
 from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
@@ -513,6 +518,159 @@ def test_owner_file_deletion_routes_runtime_gating_reset_through_governed_seam(
     )["youtubeSync.enabled"].value is False
 
 
+def test_local_owner_file_deletion_uses_retained_identity_for_governed_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_local_settings(vault_root, {"youtubeSync.runnerEnabled": True})
+
+    accepted = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_LOCAL_REL,
+        previous_values={"youtubeSync.runnerEnabled": False},
+    )
+    assert accepted.errors == ()
+    retained_state = settings_delta_state_values(accepted)
+
+    (vault_root / SETTINGS_LOCAL_REL).unlink()
+    reset = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_LOCAL_REL,
+        previous_values=retained_state,
+    )
+
+    assert reset.deferred is False
+    assert reset.errors == ()
+    runner_receipts = [
+        receipt
+        for receipt in reset.receipts
+        if receipt.key == "youtubeSync.runnerEnabled"
+    ]
+    assert [(receipt.old_value, receipt.new_value) for receipt in runner_receipts] == [
+        (True, None)
+    ]
+    assert runner_receipts[0].vault_id == accepted.vault_id
+    assert runner_receipts[0].local_instance_id == accepted.local_instance_id
+
+
+def test_registry_retries_blocked_owner_file_deletion_until_receipted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.write_guard as write_guard_module
+
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    config_path = tmp_path / "watchers.yaml"
+    _write_watchers_config(config_path)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "settings/*.md")
+    monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
+    monkeypatch.setenv("WATCHER_DEBOUNCE_MS", "0")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    registry.run_registry_once(config_path)
+
+    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    _touch(youtube_md, 1_700_000_300.0)
+    registry.run_registry_once(config_path)
+    youtube_md.unlink()
+
+    with patch.object(
+        write_guard_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance"},
+    ):
+        blocked = registry.run_registry_once(config_path)
+    assert sum(
+        int(summary.get("settings_write_errors_in_tick", 0))
+        for summary in blocked.values()
+    ) >= 1
+
+    with patch.object(
+        write_guard_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        recovered = registry.run_registry_once(config_path)
+    assert sum(
+        int(summary.get("settings_receipts_in_tick", 0))
+        for summary in recovered.values()
+    ) == 1
+    rows = [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+    assert [(row.old_value, row.new_value) for row in rows] == [
+        (False, True),
+        (True, None),
+    ]
+
+
+def test_legacy_watcher_retries_blocked_owner_file_deletion_until_receipted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.write_guard as write_guard_module
+
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    cfg = WatcherConfig(
+        enable=True,
+        vault_path=vault_root,
+        scope_glob="settings/*.md",
+        debounce_ms=0,
+        rate_limit_per_min=30,
+        state_path=tmp_path / "legacy-state.json",
+        stop_file=tmp_path / "WATCHER_STOP",
+        outbox_path=outbox_path,
+        summary_interval=0,
+        tick_sleep_seconds=0.0,
+        tick_log_path=tmp_path / "legacy-tick.jsonl",
+    )
+    state = WatcherState()
+    legacy_watcher.run_tick(cfg, state, now=1_700_000_400.0)
+    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    _touch(youtube_md, 1_700_000_401.0)
+    legacy_watcher.run_tick(cfg, state, now=1_700_000_401.0)
+    youtube_md.unlink()
+
+    with patch.object(
+        write_guard_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance"},
+    ):
+        blocked = legacy_watcher.run_tick(cfg, state, now=1_700_000_402.0)
+    assert int(blocked.get("settings_write_errors_in_tick", 0)) >= 1
+
+    with patch.object(
+        write_guard_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "healthy", "reason": None},
+    ):
+        recovered = legacy_watcher.run_tick(cfg, state, now=1_700_000_403.0)
+    assert int(recovered.get("settings_receipts_in_tick", 0)) == 1
+    rows = [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+    assert [(row.old_value, row.new_value) for row in rows] == [
+        (False, True),
+        (True, None),
+    ]
+
+
 def test_sync_arrival_replay_does_not_emit_human_actor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -581,6 +739,52 @@ def test_runtime_gating_sync_arrival_unwired_uses_production_dispatch(
     assert [(row.surface, row.actor, row.new_value) for row in rows] == [
         ("sync", "sync", True)
     ]
+
+
+def test_sync_arrival_revalidates_exact_bytes_after_git_provenance_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    subprocess.run(["git", "init", "-q"], cwd=vault_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Sync Test"], cwd=vault_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync-test@example.invalid"],
+        cwd=vault_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "settings"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=vault_root, check=True)
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    subprocess.run(["git", "add", "settings/youtube.md"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "sync arrival"], cwd=vault_root, check=True)
+
+    real_run = subprocess.run
+    raced = False
+
+    def _run_with_race(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal raced
+        result = real_run(*args, **kwargs)
+        command = args[0] if args else kwargs.get("args")
+        if not raced and isinstance(command, list) and "status" in command:
+            raced = True
+            _write_youtube_settings(vault_root, {"youtubeSync.enabled": False})
+        return result
+
+    monkeypatch.setattr("app.watcher.settings_delta.subprocess.run", _run_with_race)
+    result = handle_settings_detected_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": False},
+    )
+
+    assert result.deferred is True
+    assert result.receipts == ()
+    assert result.errors and "changed during provenance inspection" in result.errors[0]
+    assert not query_settings_receipts(outbox_path=outbox_path).rows
 
 
 def test_gitignored_local_settings_edit_is_not_misattributed_as_sync(

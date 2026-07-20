@@ -16,6 +16,7 @@ This test asserts:
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from textwrap import dedent
@@ -203,6 +204,81 @@ def test_runtime_acceptance_receipt_is_idempotent_by_operation_identity(
     ]
     assert len(records) == 1
     assert durable_settings_write_receipt_exists(receipt) is True
+
+
+def test_runtime_acceptance_replays_durable_append_order_not_wall_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    manager, vault = _manager(tmp_path)
+    context = manager.context
+    owner_file = str(vault / "settings" / "youtube.md")
+
+    emit_durable_settings_write_receipt_once(
+        SettingsWriteReceipt(
+            key="youtubeSync.enabled",
+            value=True,
+            old_value=False,
+            new_value=True,
+            file=owner_file,
+            surface="api",
+            actor="human",
+            timestamp="2099-01-01T00:00:00+00:00",
+            is_runtime_gating=True,
+            operation_id="runtime-gating:enable",
+            vault_id=context.active_vault_id,
+            local_instance_id=context.local_instance_id,
+        )
+    )
+    emit_durable_settings_write_receipt_once(
+        SettingsWriteReceipt(
+            key="youtubeSync.enabled",
+            value=False,
+            old_value=True,
+            new_value=False,
+            file=owner_file,
+            surface="api",
+            actor="human",
+            timestamp="2000-01-01T00:00:00+00:00",
+            is_runtime_gating=True,
+            operation_id="runtime-gating:disable",
+            vault_id=context.active_vault_id,
+            local_instance_id=context.local_instance_id,
+        )
+    )
+
+    accepted = SettingsService().resolve_accepted_runtime_gating(context)
+    assert accepted["youtubeSync.enabled"].value is False
+
+
+def test_settings_receipt_query_deduplicates_validated_operation_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    receipt = SettingsWriteReceipt(
+        key="youtubeSync.enabled",
+        value=True,
+        old_value=False,
+        new_value=True,
+        file="youtube.md",
+        surface="sync",
+        actor="sync",
+        is_runtime_gating=True,
+        operation_id="runtime-gating:dedup",
+        vault_id="vault-test",
+        local_instance_id="local-test",
+    )
+    emit_durable_settings_write_receipt_once(receipt)
+    record = json.loads(outbox_path.read_text(encoding="utf-8"))
+
+    result = query_settings_receipts(records=[record, dict(record)])
+
+    assert len(result.rows) == 1
+    assert result.rows[0].operation_id == receipt.operation_id
 
 
 def test_required_receipt_fsyncs_full_fresh_parent_chain(
