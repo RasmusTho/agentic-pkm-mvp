@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import subprocess
 import sys
 import time
@@ -125,6 +126,80 @@ def test_child_keeps_lease_if_wrapper_is_killed() -> None:
     time.sleep(0.9)
     successor = subprocess.run(
         _lease_command(resource, "late-successor", "pass"),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert successor.returncode == 0
+
+
+@pytest.mark.parametrize("termination_signal", [signal.SIGTERM, signal.SIGINT])
+def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
+    termination_signal: signal.Signals,
+) -> None:
+    resource = f"test-host-lease-signal-{termination_signal.value}-{time.time_ns()}"
+    holder = subprocess.Popen(
+        _lease_command(resource, "signal-holder", "import time; time.sleep(30)"),
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    lock_path = repo_common_lock_path(resource)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if lock_path.exists():
+            try:
+                if json.loads(lock_path.read_text())["event"] == "host_lease_acquired":
+                    break
+            except (json.JSONDecodeError, KeyError):
+                pass
+        time.sleep(0.02)
+    else:
+        holder.kill()
+        holder.wait()
+        pytest.fail("holder did not acquire the host lease")
+
+    holder.send_signal(termination_signal)
+    holder_stdout, holder_stderr = holder.communicate(timeout=3)
+    assert holder.returncode == 128 + termination_signal.value, (
+        holder_stdout,
+        holder_stderr,
+    )
+    assert '"event": "host_lease_released"' in holder_stderr
+
+    successor = subprocess.run(
+        _lease_command(resource, "signal-successor", "pass"),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert successor.returncode == 0
+
+
+def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
+    resource = f"test-host-lease-descendant-{time.time_ns()}"
+    child = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "sys.exit(0)"
+    )
+    holder = subprocess.run(
+        _lease_command(resource, "descendant-holder", child),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=3,
+    )
+    assert holder.returncode == 0
+    assert '"event": "host_lease_released"' in holder.stderr
+
+    successor = subprocess.run(
+        _lease_command(resource, "descendant-successor", "pass"),
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

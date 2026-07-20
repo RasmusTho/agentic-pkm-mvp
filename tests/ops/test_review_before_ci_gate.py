@@ -5,7 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.review_before_ci_gate import evaluate_review_before_ci_gate
+import pytest
+
+from scripts.review_before_ci_gate import (
+    ReviewBeforeCiGateError,
+    evaluate_review_before_ci_gate,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -92,6 +97,19 @@ def test_bypass_requires_explicit_reason() -> None:
     assert bypassed.may_handoff_to_ci is True
     assert bypassed.bypass_reason == "Emergency wording repair; receipt will name skipped local gate."
     assert bypassed.preserves_ci_authority is True
+
+
+def test_high_risk_implementation_cannot_bypass_convergence_review() -> None:
+    with pytest.raises(
+        ReviewBeforeCiGateError,
+        match="only for the emergency direct-repair lane",
+    ):
+        evaluate_review_before_ci_gate(
+            lane="implementation",
+            changed_files=["app/oauth/service.py"],
+            risk_surfaces=["auth"],
+            bypass_reason="Skip convergence review.",
+        )
 
 
 def test_cli_fails_until_review_gate_is_complete() -> None:

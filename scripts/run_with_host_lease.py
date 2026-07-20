@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -108,43 +109,63 @@ def run_with_lease(
         os._exit(127)
 
     os.close(write_fd)
-    with os.fdopen(read_fd, encoding="utf-8") as status_stream:
-        raw_status = status_stream.readline()
-    status = json.loads(raw_status) if raw_status else {
-        "event": "host_lease_command_error",
-        "execution_id": execution_id,
-        "resource": resource,
-        "error": "lease child exited before reporting status",
-    }
-    _emit(status)
-    _, wait_status = os.waitpid(child_pid, 0)
+    previous_handlers: dict[signal.Signals, object] = {}
+
+    def forward_signal(signum: int, _frame: object) -> None:
+        try:
+            os.kill(child_pid, signum)
+        except ProcessLookupError:
+            pass
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, forward_signal)
+    terminal_status: dict[str, object] | None = None
+    try:
+        with os.fdopen(read_fd, encoding="utf-8") as status_stream:
+            raw_status = status_stream.readline()
+            status = json.loads(raw_status) if raw_status else {
+                "event": "host_lease_command_error",
+                "execution_id": execution_id,
+                "resource": resource,
+                "error": "lease child exited before reporting status",
+            }
+            _emit(status)
+            raw_terminal_status = status_stream.readline()
+            if raw_terminal_status:
+                terminal_status = json.loads(raw_terminal_status)
+        _, wait_status = os.waitpid(child_pid, 0)
+    finally:
+        for signum, previous_handler in previous_handlers.items():
+            signal.signal(signum, previous_handler)
     return_code = os.waitstatus_to_exitcode(wait_status)
     if return_code < 0:
         return_code = 128 + abs(return_code)
     if status.get("event") != "host_lease_acquired":
         return return_code
-
-    released_receipt: dict[str, object] = {
-        "acquired_at": status["acquired_at"],
-        "duration_seconds": round(time.monotonic() - started, 3),
-        "event": "host_lease_released",
-        "execution_id": execution_id,
-        "released_at": _utc_now(),
-        "resource": resource,
-        "return_code": return_code,
-    }
-    _emit(released_receipt)
+    if terminal_status is None:
+        terminal_status = {
+            "acquired_at": status["acquired_at"],
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "event": "host_lease_release_unconfirmed",
+            "execution_id": execution_id,
+            "resource": resource,
+            "return_code": return_code,
+        }
+    _emit(terminal_status)
     return return_code
 
 
-def _report_to_parent(status_fd: int, receipt: dict[str, object]) -> None:
+def _report_to_parent(
+    status_fd: int, receipt: dict[str, object], *, close: bool = False
+) -> None:
     payload = (json.dumps(receipt, sort_keys=True) + "\n").encode()
     try:
         os.write(status_fd, payload)
     except BrokenPipeError:
         pass
     finally:
-        os.close(status_fd)
+        if close:
+            os.close(status_fd)
 
 
 def _acquire_and_exec(
@@ -192,12 +213,47 @@ def _acquire_and_exec(
     }
     _write_receipt(fd, held_receipt)
     _report_to_parent(status_fd, held_receipt)
-    os.set_inheritable(fd, True)
+
+    command_process: subprocess.Popen[bytes] | None = None
+
+    def forward_signal(signum: int, _frame: object) -> None:
+        if command_process is None:
+            return
+        try:
+            os.killpg(command_process.pid, signum)
+        except ProcessLookupError:
+            pass
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, forward_signal)
     try:
-        os.execvp(command[0], list(command))
+        command_process = subprocess.Popen(
+            list(command),
+            close_fds=True,
+            start_new_session=True,
+        )
+        command_return_code = command_process.wait()
     except FileNotFoundError:
-        os.close(fd)
-        os._exit(127)
+        command_return_code = 127
+
+    if command_return_code < 0:
+        command_return_code = 128 + abs(command_return_code)
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+    _report_to_parent(
+        status_fd,
+        {
+            "acquired_at": acquired_at,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "event": "host_lease_released",
+            "execution_id": execution_id,
+            "released_at": _utc_now(),
+            "resource": resource,
+            "return_code": command_return_code,
+        },
+        close=True,
+    )
+    os._exit(command_return_code)
 
 
 def _parser() -> argparse.ArgumentParser:

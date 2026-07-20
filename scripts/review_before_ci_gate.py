@@ -80,6 +80,10 @@ def evaluate_review_before_ci_gate(
     bypass = _clean_text(bypass_reason)
     if bypass and not required:
         raise ReviewBeforeCiGateError("bypass_reason is only valid when the review gate is required")
+    if bypass and normalized_lane != "direct-repair":
+        raise ReviewBeforeCiGateError(
+            "bypass_reason is valid only for the emergency direct-repair lane"
+        )
     if bypass:
         return _gate(
             normalized_lane,
