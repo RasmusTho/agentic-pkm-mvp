@@ -7,7 +7,9 @@ YouTube/Google account -- the `account_binding_id` that authenticated rows in
 `acquisition_source_registry` (YSS-01) reference. It records the provider
 channel id (`UC...` -- identity, never a title), a display label, the
 connected/degraded auth state + reason code, the granted scopes, and
-timestamps. It carries **no secret**: tokens live in the AES-256-GCM
+timestamps. A monotonic non-secret `binding_generation` supplies compare-and-set
+authority for lifecycle recovery; wall-clock timestamps are observational only.
+It carries **no secret**: tokens live in the AES-256-GCM
 `youtube_token_store` file, client credentials live in host env
 (`docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Secrets and private
 bindings`, INV-YSS-5).
@@ -20,6 +22,7 @@ in `youtube_account_binding.py`):
 - `state` is one of `connected` / `degraded`.
 - a `connected` binding carries no `reason_code` (a degraded reason and a
   healthy state are mutually exclusive).
+- `binding_generation` is positive and advances on every state write.
 
 plus a unique `(provider, provider_channel_id)` index: one binding per account.
 
@@ -67,13 +70,26 @@ def upgrade() -> None:
             obtained_at TIMESTAMPTZ NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            binding_generation BIGINT NOT NULL DEFAULT 1,
             CONSTRAINT youtube_account_binding_state_chk CHECK (
                 state IN ('connected', 'degraded')
             ),
             CONSTRAINT youtube_account_binding_connected_reason_chk CHECK (
                 state <> 'connected' OR reason_code IS NULL
+            ),
+            CONSTRAINT youtube_account_binding_generation_chk CHECK (
+                binding_generation >= 1
             )
         )
+        """
+    )
+    # The idempotent ALTER also migrates a bootstrap-created table that predates
+    # generation CAS. Existing rows begin at generation 1; every subsequent
+    # service-layer state transition advances it atomically.
+    op.execute(
+        f"""
+        ALTER TABLE {_TABLE}
+        ADD COLUMN IF NOT EXISTS binding_generation BIGINT NOT NULL DEFAULT 1
         """
     )
     # Existing test/bootstrap-created tables predate the CHECK constraints; add
@@ -82,6 +98,7 @@ def upgrade() -> None:
     for name, check in (
         ("youtube_account_binding_state_chk", "state IN ('connected', 'degraded')"),
         ("youtube_account_binding_connected_reason_chk", "state <> 'connected' OR reason_code IS NULL"),
+        ("youtube_account_binding_generation_chk", "binding_generation >= 1"),
     ):
         op.execute(
             f"""

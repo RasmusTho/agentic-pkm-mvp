@@ -62,7 +62,11 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 
 from app.knowledge_acquisition.source_registry import SourceRegistry
-from app.knowledge_acquisition.youtube_account_binding import AccountBinding, AccountBindingStore
+from app.knowledge_acquisition.youtube_account_binding import (
+    AccountBinding,
+    AccountBindingGenerationConflictError,
+    AccountBindingStore,
+)
 from app.knowledge_acquisition.youtube_token_store import (
     StoredToken,
     TokenStoreDurabilityError,
@@ -295,6 +299,16 @@ def _pending_refresh_id(binding_id: str) -> str:
     return f"pending-youtube-refresh-{digest}"
 
 
+def _binding_generation_evidence(binding_generation: int) -> str:
+    """Encode monotonic binding CAS authority in the legacy encrypted slot.
+
+    The serialized field name is retained for token-store compatibility, but
+    timestamp-shaped values from older pending journals never match this
+    prefix and therefore fail closed as non-promotable terminal conflicts.
+    """
+    return f"binding-generation:{binding_generation}"
+
+
 def _same_refresh_authority(left: StoredToken, right: StoredToken) -> bool:
     """Constant-time equality for the standing provider credential."""
     return bool(left.refresh_token) and hmac.compare_digest(
@@ -309,6 +323,7 @@ def _canonical_token_from_pending(pending: StoredToken) -> StoredToken:
         promotion_target_binding_id=None,
         promotion_predecessor_refresh_token=None,
         promotion_predecessor_generation=None,
+        promotion_predecessor_binding_updated_at=None,
         promotion_display_label=None,
         promotion_compensation_state=None,
     )
@@ -798,8 +813,22 @@ class TokenProvider:
             ) from None
         if (
             pending is not None
-            and pending.promotion_compensation_state == "compensated"
+            and pending.promotion_compensation_state in {"pending", "compensated"}
         ):
+            if pending.promotion_compensation_state == "pending":
+                if not self._compensate_refresh_rotation(pending):
+                    raise OAuthGrantDurabilityError(
+                        "refresh_durability_unavailable",
+                        pending_grant_id=pending_id,
+                    ) from None
+                compensated = replace(
+                    pending, promotion_compensation_state="compensated"
+                )
+                if not self._write_refresh_journal(pending_id, compensated):
+                    raise OAuthGrantDurabilityError(
+                        "refresh_durability_unavailable",
+                        pending_grant_id=pending_id,
+                    ) from None
             self._converge_compensated_refresh(
                 pending_id, terminal_reason=terminal_reason
             )
@@ -886,7 +915,12 @@ class TokenProvider:
                         compensation_pending,
                         promotion_compensation_state="compensated",
                     )
-                    self._write_refresh_journal(pending_id, compensated)
+                    if not self._write_refresh_journal(pending_id, compensated):
+                        self._degrade("auth_refresh_durability")
+                        raise OAuthGrantDurabilityError(
+                            "refresh_durability_unavailable",
+                            pending_grant_id=pending_id,
+                        ) from None
                     self._converge_compensated_refresh(pending_id)
                     raise AuthDegradedError(
                         "auth_revoked",
@@ -935,7 +969,12 @@ class TokenProvider:
                 compensated = replace(
                     pending, promotion_compensation_state="compensated"
                 )
-                self._write_refresh_journal(pending_id, compensated)
+                if not self._write_refresh_journal(pending_id, compensated):
+                    self._degrade("auth_refresh_durability")
+                    raise OAuthGrantDurabilityError(
+                        "refresh_durability_unavailable",
+                        pending_grant_id=pending_id,
+                    ) from None
                 pending = compensated
             elif compensation_state != "compensated":
                 self._degrade("auth_refresh_durability")
@@ -1254,13 +1293,43 @@ class YouTubeAccountBinder:
                             canonical_binding.state != "connected"
                             or canonical_binding.reason_code is not None
                         ):
+                            expected_generation: int | None = None
                             if (
                                 canonical_binding.reason_code
                                 in {"auth_disconnected", "auth_revoked"}
-                                and not self._pending_supersedes_binding_state(
-                                    token, canonical_binding
-                                )
                             ):
+                                if self._pending_supersedes_binding_state(
+                                    token, canonical_binding
+                                ):
+                                    expected_generation = (
+                                        canonical_binding.binding_generation
+                                    )
+                                else:
+                                    try:
+                                        self._store.delete(pending_grant_id)
+                                    except Exception:
+                                        return {
+                                            "status": "canonical_pending_cleanup",
+                                            "pending_grant_id": pending_grant_id,
+                                            "binding_id": canonical_id,
+                                        }
+                                    return {
+                                        "status": "canonical_terminal",
+                                        "pending_grant_id": pending_grant_id,
+                                        "binding_id": canonical_id,
+                                    }
+                            try:
+                                canonical_binding = self._bindings.set_state(
+                                    canonical_id,
+                                    state="connected",
+                                    reason_code=None,
+                                    expected_binding_generation=expected_generation,
+                                )
+                            except AccountBindingGenerationConflictError:
+                                # A newer terminal transition won the durable
+                                # CAS after this journal was created. The same
+                                # canonical credential makes the journal
+                                # redundant, so cleanup cannot lose authority.
                                 try:
                                     self._store.delete(pending_grant_id)
                                 except Exception:
@@ -1274,12 +1343,6 @@ class YouTubeAccountBinder:
                                     "pending_grant_id": pending_grant_id,
                                     "binding_id": canonical_id,
                                 }
-                            try:
-                                canonical_binding = self._bindings.set_state(
-                                    canonical_id,
-                                    state="connected",
-                                    reason_code=None,
-                                )
                             except Exception:
                                 return {
                                     "status": "binding_pending",
@@ -1334,11 +1397,14 @@ class YouTubeAccountBinder:
     def _pending_supersedes_binding_state(
         pending: StoredToken, binding: AccountBinding
     ) -> bool:
-        """Prove new consent was issued against this exact binding version."""
-        predecessor_version = pending.promotion_predecessor_binding_updated_at
+        """Prove new consent was issued against this exact binding generation."""
+        predecessor_generation = pending.promotion_predecessor_binding_updated_at
         return (
-            predecessor_version is not None
-            and hmac.compare_digest(predecessor_version, binding.updated_at)
+            predecessor_generation is not None
+            and hmac.compare_digest(
+                predecessor_generation,
+                _binding_generation_evidence(binding.binding_generation),
+            )
         )
 
     def finish_device_connection(self, connection: DeviceConnection) -> dict[str, Any]:
@@ -1620,15 +1686,22 @@ class YouTubeAccountBinder:
     ) -> dict[str, Any]:
         """Complete a proven interrupted promotion without losing authority."""
         binding = self._bindings.get(binding_id)
-        if binding is not None and (
-            binding.provider_channel_id != pending.provider_channel_id
-            or binding.reason_code == "auth_disconnected"
-        ):
-            return {
-                "status": "pending_conflict",
-                "pending_grant_id": pending_id,
-                "binding_id": binding_id,
-            }
+        if binding is not None:
+            if binding.provider_channel_id != pending.provider_channel_id:
+                return {
+                    "status": "pending_conflict",
+                    "pending_grant_id": pending_id,
+                    "binding_id": binding_id,
+                }
+            if (
+                binding.reason_code in {"auth_disconnected", "auth_revoked"}
+                and not self._pending_supersedes_binding_state(pending, binding)
+            ):
+                return {
+                    "status": "pending_conflict",
+                    "pending_grant_id": pending_id,
+                    "binding_id": binding_id,
+                }
 
         # When an older canonical predecessor already exists, recovering its
         # row is safe and must precede promotion of a distinct later grant. If
@@ -1695,10 +1768,7 @@ class YouTubeAccountBinder:
                     "binding_id": binding_id,
                 }
         assert binding is not None
-        if (
-            binding.provider_channel_id != pending.provider_channel_id
-            or binding.reason_code == "auth_disconnected"
-        ):
+        if binding.provider_channel_id != pending.provider_channel_id:
             return {
                 "status": "pending_conflict",
                 "pending_grant_id": pending_id,
@@ -1706,9 +1776,24 @@ class YouTubeAccountBinder:
             }
         try:
             if binding.state != "connected" or binding.reason_code is not None:
-                self._bindings.set_state(
-                    binding_id, state="connected", reason_code=None
+                expected_generation = (
+                    binding.binding_generation
+                    if binding.reason_code
+                    in {"auth_disconnected", "auth_revoked"}
+                    else None
                 )
+                self._bindings.set_state(
+                    binding_id,
+                    state="connected",
+                    reason_code=None,
+                    expected_binding_generation=expected_generation,
+                )
+        except AccountBindingGenerationConflictError:
+            return {
+                "status": "pending_conflict",
+                "pending_grant_id": pending_id,
+                "binding_id": binding_id,
+            }
         except Exception:
             return {
                 "status": "canonical_pending_state",
@@ -1790,6 +1875,38 @@ class YouTubeAccountBinder:
         pending = self._store.get(pending_id)
         if pending is None:
             return canonical
+        if pending.promotion_compensation_state == "pending":
+            # Compensation may have reached Google while the durable
+            # ``compensated`` marker did not. Revoke idempotently, then require
+            # exact encrypted marker durability before terminal degradation or
+            # cleanup. Reconnect/disconnect therefore recover this state
+            # directly instead of relying on a separate token consumer.
+            if not self._compensate_grant(pending):
+                raise OAuthGrantDurabilityError(
+                    "refresh_durability_unavailable",
+                    pending_grant_id=pending_id,
+                ) from None
+            compensated = replace(
+                pending, promotion_compensation_state="compensated"
+            )
+            marker_durable = False
+            for _attempt in range(2):
+                marker_write_error: Exception | None = None
+                try:
+                    self._store.put(pending_id, compensated)
+                except Exception as error:
+                    marker_write_error = error
+                if marker_write_error is None or self._stored_token_matches(
+                    pending_id, compensated, write_error=marker_write_error
+                ):
+                    marker_durable = True
+                    break
+            if not marker_durable:
+                raise OAuthGrantDurabilityError(
+                    "refresh_durability_unavailable",
+                    pending_grant_id=pending_id,
+                ) from None
+            pending = compensated
         if pending.promotion_compensation_state == "compensated":
             # The provider-compensated authority is terminal. Persist that
             # fail-closed truth before removing the only crash-recovery marker;
@@ -1940,7 +2057,9 @@ class YouTubeAccountBinder:
                     ),
                     promotion_predecessor_generation=predecessor_generation,
                     promotion_predecessor_binding_updated_at=(
-                        binding.updated_at if binding is not None else None
+                        _binding_generation_evidence(binding.binding_generation)
+                        if binding is not None
+                        else None
                     ),
                     promotion_display_label=identity.channel_title,
                 )
@@ -2144,17 +2263,27 @@ class YouTubeAccountBinder:
             if reason_code in {"auth_disconnected", "auth_revoked"}
             else None
         )
+        if terminal_reason is not None:
+            # Persisted terminal authority is complete status truth. Do not
+            # consult the encrypted projection: its missing key, malformed
+            # aggregate, or ordinary I/O failure cannot outrank an explicit
+            # disconnect/revocation marker.
+            return redact(
+                {
+                    "status": "degraded",
+                    "reason_code": terminal_reason,
+                    "scopes": list(binding.scopes),
+                    "token_store": "encrypted",
+                }
+            )
         try:
             token = self._store.get(binding_id)
             pending_refresh = self._store.get(_pending_refresh_id(binding_id))
         except TokenStoreKeyMissingError:
             token = None
             pending_refresh = None
-            if terminal_reason is None:
-                state, reason_code = "degraded", "auth_key_missing"
-        if terminal_reason is not None:
-            state, reason_code = "degraded", terminal_reason
-        elif pending_refresh is not None:
+            state, reason_code = "degraded", "auth_key_missing"
+        if pending_refresh is not None:
             # A provider response may have rotated the standing credential
             # while canonical promotion is incomplete. The old canonical row
             # is not sufficient authority for a connected status.

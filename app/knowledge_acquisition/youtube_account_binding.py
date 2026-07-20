@@ -7,7 +7,9 @@ state -- **never** any secret. Tokens live in the encrypted
 ``youtube_token_store``; client credentials live in host env. This row carries
 only: the binding id, the provider channel id (source-native ``UC...`` id --
 identity, never a title), a display label, the connected/degraded state + a
-reason code, the granted scopes, and timestamps (INV-YSS-5).
+reason code, the granted scopes, a monotonic binding generation, and timestamps
+(INV-YSS-5).  The generation is non-secret compare-and-set authority for OAuth
+lifecycle recovery; wall-clock timestamps remain observational only.
 
 Dual backend and store discipline mirror ``source_registry`` exactly: memory
 backend for ``not_pg`` tests, Postgres for a configured runtime (fail-loud on
@@ -50,7 +52,8 @@ _TABLE = "youtube_account_binding"
 _MIGRATION_HINT = (
     "youtube_account_binding schema is migration-owned: run 'alembic upgrade head' "
     "against this database. See "
-    "app/alembic/versions/a2f1c3e4d5b6_yss02_youtube_account_binding.py."
+    "app/alembic/versions/a2f1c3e4d5b6_yss02_youtube_account_binding.py and "
+    "e1f2a3b4c5d6_yss02_binding_generation_cas.py."
 )
 _ALLOWED_BACKENDS = {"memory", "pg"}
 
@@ -65,6 +68,10 @@ class AccountBindingValidationError(ValueError):
 
 class DuplicateAccountBindingError(ValueError):
     """Raised when a binding for the same provider channel id already exists."""
+
+
+class AccountBindingGenerationConflictError(RuntimeError):
+    """Raised when a state write no longer owns its expected binding generation."""
 
 
 def _now_iso() -> str:
@@ -85,6 +92,7 @@ class AccountBinding:
     obtained_at: str
     created_at: str
     updated_at: str
+    binding_generation: int
 
 
 def _validate_state(state: str, reason_code: str | None) -> None:
@@ -178,12 +186,31 @@ class _MemoryAccountBindingBackend:
         with self._lock:
             return tuple(self._rows.values())
 
-    def set_state(self, account_binding_id: str, state: str, reason_code: str | None) -> AccountBinding:
+    def set_state(
+        self,
+        account_binding_id: str,
+        state: str,
+        reason_code: str | None,
+        expected_binding_generation: int | None = None,
+    ) -> AccountBinding:
         with self._lock:
             row = self._rows.get(account_binding_id)
             if row is None:
                 raise KeyError(f"no such account binding: {account_binding_id}")
-            updated = replace(row, state=state, reason_code=reason_code, updated_at=_now_iso())
+            if (
+                expected_binding_generation is not None
+                and row.binding_generation != expected_binding_generation
+            ):
+                raise AccountBindingGenerationConflictError(
+                    "account binding generation changed before state persistence"
+                )
+            updated = replace(
+                row,
+                state=state,
+                reason_code=reason_code,
+                updated_at=_now_iso(),
+                binding_generation=row.binding_generation + 1,
+            )
             self._rows[account_binding_id] = updated
             return updated
 
@@ -217,6 +244,7 @@ _COLUMNS = (
     "obtained_at",
     "created_at",
     "updated_at",
+    "binding_generation",
 )
 _COLUMNS_SQL = ", ".join(_COLUMNS)
 
@@ -240,6 +268,18 @@ def _assert_pg_schema(conn: Any) -> None:
     row = cur.fetchone()
     if not (row and row[0]):
         raise AccountBindingSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = %s "
+        "AND column_name = 'binding_generation' AND data_type = 'bigint' "
+        "AND is_nullable = 'NO'",
+        (_TABLE,),
+    )
+    if cur.fetchone() is None:
+        raise AccountBindingSchemaMissingError(
+            f"Table '{_TABLE}' lacks required BIGINT NOT NULL column "
+            f"'binding_generation'. {_MIGRATION_HINT}"
+        )
 
 
 def _bootstrap_pg(conn: Any) -> None:
@@ -260,11 +300,36 @@ def _bootstrap_pg(conn: Any) -> None:
             obtained_at TIMESTAMPTZ NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            binding_generation BIGINT NOT NULL DEFAULT 1,
             CONSTRAINT youtube_account_binding_state_chk CHECK (state IN ('connected', 'degraded')),
             CONSTRAINT youtube_account_binding_connected_reason_chk CHECK (
                 state <> 'connected' OR reason_code IS NULL
+            ),
+            CONSTRAINT youtube_account_binding_generation_chk CHECK (
+                binding_generation >= 1
             )
         )
+        """
+    )
+    cur.execute(
+        f"ALTER TABLE {_TABLE} ADD COLUMN IF NOT EXISTS "
+        "binding_generation BIGINT NOT NULL DEFAULT 1"
+    )
+    cur.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'youtube_account_binding_generation_chk'
+                  AND conrelid = '{_TABLE}'::regclass
+            ) THEN
+                ALTER TABLE {_TABLE}
+                ADD CONSTRAINT youtube_account_binding_generation_chk
+                CHECK (binding_generation >= 1);
+            END IF;
+        END $$;
         """
     )
     cur.execute(
@@ -301,6 +366,7 @@ def _row_to_binding(row: tuple[Any, ...]) -> AccountBinding:
         obtained_at=_iso(values["obtained_at"]) or "",
         created_at=_iso(values["created_at"]) or "",
         updated_at=_iso(values["updated_at"]) or "",
+        binding_generation=int(values["binding_generation"]),
     )
 
 
@@ -324,9 +390,11 @@ class _PgAccountBindingBackend:
                     f"""
                     INSERT INTO {_TABLE} (
                         account_binding_id, provider, provider_channel_id, display_label,
-                        state, reason_code, scopes, obtained_at, created_at, updated_at
+                        state, reason_code, scopes, obtained_at, created_at, updated_at,
+                        binding_generation
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s::jsonb, %s::timestamptz, %s::timestamptz, %s::timestamptz
+                        %s, %s, %s, %s, %s, %s, %s::jsonb, %s::timestamptz,
+                        %s::timestamptz, %s::timestamptz, %s
                     )
                     """,
                     (
@@ -340,6 +408,7 @@ class _PgAccountBindingBackend:
                         binding.obtained_at,
                         binding.created_at,
                         binding.updated_at,
+                        binding.binding_generation,
                     ),
                 )
             except UniqueViolation as exc:
@@ -388,23 +457,40 @@ class _PgAccountBindingBackend:
         finally:
             conn.close()
 
-    def set_state(self, account_binding_id: str, state: str, reason_code: str | None) -> AccountBinding:
+    def set_state(
+        self,
+        account_binding_id: str,
+        state: str,
+        reason_code: str | None,
+        expected_binding_generation: int | None = None,
+    ) -> AccountBinding:
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
+            params: list[Any] = [state, reason_code, _now_iso(), account_binding_id]
+            generation_clause = ""
+            if expected_binding_generation is not None:
+                generation_clause = " AND binding_generation = %s"
+                params.append(expected_binding_generation)
             cur.execute(
-                f"UPDATE {_TABLE} SET state = %s, reason_code = %s, updated_at = %s::timestamptz "
-                "WHERE account_binding_id = %s",
-                (state, reason_code, _now_iso(), account_binding_id),
+                f"UPDATE {_TABLE} SET state = %s, reason_code = %s, "
+                "updated_at = %s::timestamptz, "
+                "binding_generation = binding_generation + 1 "
+                f"WHERE account_binding_id = %s{generation_clause} "
+                f"RETURNING {_COLUMNS_SQL}",
+                tuple(params),
             )
-            if cur.rowcount == 0:
+            row = cur.fetchone()
+            if row is None:
+                if expected_binding_generation is not None:
+                    raise AccountBindingGenerationConflictError(
+                        "account binding generation changed before state persistence"
+                    )
                 raise KeyError(f"no such account binding: {account_binding_id}")
+            return _row_to_binding(tuple(row))
         finally:
             conn.close()
-        result = self.get(account_binding_id)
-        assert result is not None  # just wrote it
-        return result
 
     def delete(self, account_binding_id: str) -> bool:
         conn = _pg_connect()
@@ -458,6 +544,7 @@ class AccountBindingStore:
             obtained_at=obtained_at or now,
             created_at=now,
             updated_at=now,
+            binding_generation=1,
         )
         return self._backend.insert(binding)
 
@@ -471,10 +558,28 @@ class AccountBindingStore:
         return self._backend.list_all()
 
     def set_state(
-        self, account_binding_id: str, *, state: str, reason_code: str | None = None
+        self,
+        account_binding_id: str,
+        *,
+        state: str,
+        reason_code: str | None = None,
+        expected_binding_generation: int | None = None,
     ) -> AccountBinding:
         _validate_state(state, reason_code)
-        return self._backend.set_state(account_binding_id, state, reason_code)
+        if expected_binding_generation is not None and (
+            isinstance(expected_binding_generation, bool)
+            or not isinstance(expected_binding_generation, int)
+            or expected_binding_generation < 1
+        ):
+            raise AccountBindingValidationError(
+                "expected_binding_generation must be an integer >= 1"
+            )
+        return self._backend.set_state(
+            account_binding_id,
+            state,
+            reason_code,
+            expected_binding_generation,
+        )
 
     def delete(self, account_binding_id: str) -> bool:
         return self._backend.delete(account_binding_id)
@@ -482,6 +587,7 @@ class AccountBindingStore:
 
 __all__ = [
     "AccountBinding",
+    "AccountBindingGenerationConflictError",
     "AccountBindingSchemaMissingError",
     "AccountBindingStore",
     "AccountBindingValidationError",

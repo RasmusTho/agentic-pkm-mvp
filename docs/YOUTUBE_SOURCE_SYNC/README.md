@@ -171,14 +171,21 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   different same-channel winners remain conflicts. A pending-only retry makes its canonical token
   durable before creating the connected row, while an existing canonical predecessor gets its row
   recovered before any distinct pending grant can replace it. Cleanup/retry shares the promotion
-  lock order. Encrypted target/predecessor/generation evidence
-  allows promotion only over the exact unchanged predecessor; same-channel token mismatch is
-  preserved as a conflict without delete/revoke, while exact same refresh authority permits
-  redundant cleanup. Refresh proves store readiness before provider egress and journals any
+  lock order. Encrypted target/predecessor/credential-generation evidence plus the binding row's
+  durable monotonic generation allows promotion only over the exact unchanged predecessor;
+  same-channel token mismatch is preserved as a conflict without delete/revoke. Clearing terminal
+  binding authority additionally uses generation compare-and-set, so a same-timestamp terminal
+  write defeats stale pending promotion while exact matching-generation reconnect remains
+  recoverable. Exact same refresh authority permits redundant cleanup. Refresh proves store
+  readiness before provider egress and journals any
   unexpected rotated refresh credential before canonical write, so store failure recovers without
-  another provider request and a newer canonical generation is never overwritten. Connect never
-  records `connected` before encrypted token persistence; status never reports an undecryptable or
-  refresh-pending record as connected. Refresh pending, conflict, and durability failures stamp the
+  another provider request and a newer canonical generation is never overwritten. Provider
+  compensation must durably advance its encrypted marker before `auth_revoked` or cleanup; an
+  unconfirmed marker remains retryable `auth_refresh_durability`, while compensated cleanup residue
+  converges idempotently after restart. Connect never records `connected` before encrypted token
+  persistence; status returns persisted terminal binding authority before any token-store read and
+  never reports an undecryptable or refresh-pending record as connected. Refresh pending, conflict,
+  and durability failures stamp the
   same registered reason code on the binding and dependent authenticated sources.
   Connect, reconnect, refresh, and disconnect serialize each binding's credential lifecycle across
   actors sharing its channel token store; portable store-wide serialization prevents distinct

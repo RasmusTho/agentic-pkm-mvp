@@ -40,7 +40,9 @@ touch the repo, vault, settings values, logs, events, or receipts.
    upgrade, so a wrong key cannot create a mixed-key store. Store file path is an app-local binding
    defaulting under the channel runtime dir; never inside a vault, never tracked.
 3. **Account binding record** (non-secret) in the registry substrate: binding id, provider channel
-   id, display label, connected/degraded state, scopes, obtained_at. Client credentials resolve
+   id, display label, connected/degraded state, scopes, obtained_at, and a durable monotonic binding
+   generation. Each state write advances the generation; terminal-state recovery compares it
+   atomically, while wall-clock `updated_at` remains observational only. Client credentials resolve
    from `YOUTUBE_OAUTH_CLIENT_ID`/`YOUTUBE_OAUTH_CLIENT_SECRET` env (host secret-provisioning
    boundary); their *values* are never persisted or printed.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`,
@@ -76,8 +78,12 @@ touch the repo, vault, settings values, logs, events, or receipts.
    journaled encrypted before canonical promotion, and a write failure recovers on the next access
    only over the proven predecessor generation. Before provider compensation, the encrypted
    journal is durably marked non-promotable; authoritative revocation advances that marker to
-   compensated and durably degrades binding/source truth to `auth_revoked` before best-effort
-   cleanup, so a crash can never restore revoked authority or report the binding connected.
+   compensated, and that encrypted marker must be confirmed durable before binding/source truth
+   becomes `auth_revoked` or best-effort cleanup starts. An unconfirmed marker retains `pending`
+   plus `auth_refresh_durability`, and token consumption, reconnect, or disconnect idempotently
+   retries provider compensation and marker persistence. Cleanup failure leaves `compensated`
+   residue that restart converges before any new grant can proceed, so a crash can never restore
+   revoked authority or report the binding connected.
    Pending/conflicting refresh authority durably
    degrades the account binding and every dependent source, without cursor mutation, and blocks
    reconnect/disconnect provider actions until safely resolved. Failure classification and the
@@ -92,8 +98,10 @@ touch the repo, vault, settings values, logs, events, or receipts.
    residue reports `auth_revoked`; its cleanup persists that terminal truth before deleting the
    journal, retrying dependent-source degradation idempotently after any partial write. Disconnect
    may then finish teardown, while reconnect can replace terminal authority only through new consent
-   whose pending grant names the exact predecessor binding version and whose canonical
-   ciphertext and binding state both converge. Redundant/stale pending cleanup never clears
+   whose pending grant names the exact predecessor binding generation and whose canonical
+   ciphertext and binding state both converge through generation compare-and-set. Same-timestamp
+   transitions cannot collide: a terminal state write always advances generation. Stale distinct
+   authority remains `pending_conflict`; redundant same-token cleanup never clears
    `auth_disconnected` or `auth_revoked`.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
@@ -114,8 +122,9 @@ touch the repo, vault, settings values, logs, events, or receipts.
    sources with `auth_disconnected`, and deletes no acquired artifacts. `reconnect()` re-runs consent
    onto the same binding when the provider channel id matches.
    Token consumption requires the non-optional binding authority dependency and a positively durable
-   `connected` row with no reason code; ciphertext alone is never access authority. Status likewise
-   gives persisted `auth_disconnected`/`auth_revoked` precedence over transient token-read failures.
+   `connected` row with no reason code; ciphertext alone is never access authority. Status returns
+   persisted `auth_disconnected`/`auth_revoked` before any token-store read, including ordinary I/O
+   failure.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + an
    allowlisted OAuth error enum only); no token, code, or client secret in any emitted string.
 

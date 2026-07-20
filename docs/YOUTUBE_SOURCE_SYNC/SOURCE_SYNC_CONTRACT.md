@@ -250,10 +250,16 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   deterministic binding create without polling for another grant; delayed exact rows converge,
   while a different same-channel winner remains a non-destructive conflict. Promotion and cleanup
   remain inside the pending → channel → binding lifecycle-lock order. Before canonical write, the
-  encrypted pending record gains its
-  exact target, predecessor refresh authority, and next authority generation. Retry removes it only
+  encrypted pending record gains its exact target, predecessor refresh authority, next credential
+  generation, and the binding row's durable monotonic generation. The latter is compare-and-set
+  authority; `updated_at` remains observational wall-clock data and is never lifecycle authority.
+  Retry removes it only
   when canonical has the same refresh authority, or promotes it only while canonical still exactly
-  matches that predecessor generation. Same-channel identity alone is never canonical proof: a
+  matches that predecessor generation. Clearing persisted `auth_disconnected`/`auth_revoked`
+  additionally requires an atomic match on the exact predecessor binding generation. A stale
+  distinct-token journal remains encrypted as `pending_conflict`; an exact matching-generation
+  reconnect may converge both canonical ciphertext and `connected` binding state. Same-channel
+  identity alone is never canonical proof: a
   token mismatch against a newer/different generation preserves both records as `pending_conflict`
   and performs no provider revocation.
 - Connect persists the encrypted token before claiming a binding is connected. Connect,
@@ -278,9 +284,13 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   `auth_refresh_conflict` and preserves both encrypted authorities. Status never reports either
   state as connected. If local journaling cannot be confirmed, a durable encrypted compensation
   marker makes the rotated authority non-promotable before provider revocation; authoritative
-  compensation advances that marker and persists `auth_revoked` binding/source truth before
-  cleanup. Retained crash residue reports revoked and can only be cleaned or re-compensated, never
-  promoted; reconnect requires new consent. Pending, conflict, and durability failures stamp the same registered reason
+  compensation must durably advance that marker before `auth_revoked` binding/source truth or
+  cleanup may follow. If the marker write or its acknowledgement cannot be confirmed, the durable
+  `pending` marker remains `auth_refresh_durability` retry authority; token consumption,
+  reconnect, or disconnect idempotently re-compensates and re-persists the marker. Cleanup failure
+  leaves a durable `compensated` marker that restart converges before any new consent or revoke.
+  Retained crash residue can only be cleaned or re-compensated, never promoted; reconnect requires
+  new consent after compensation. Pending, conflict, and durability failures stamp the same registered reason
   code on the binding and dependent sources while the per-binding lifecycle lock is still held, and reconnect/disconnect must resolve the journal or
   fail closed before polling/revoking.
 - Loopback redirect admission runs on the raw string before URI parsing can normalize it: the URI
@@ -295,11 +305,14 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
 - Authenticated token consumption requires positive durable binding authority (`connected` with no
   reason code), not merely readable/fresh ciphertext. A postcanonical reconnect failure therefore
   remains blocked until retry converges the binding row. Pending-grant cleanup may clear a terminal
-  state only when the grant's durable predecessor-version evidence matches that exact terminal
-  transition; stale residue is cleanup-only. Terminal binding/source degradation is an
+  state only when the grant's durable predecessor binding generation matches atomically; a
+  same-timestamp terminal transition still advances generation, and stale same-token residue is
+  cleanup-only while stale distinct-token authority remains a non-destructive conflict. Terminal
+  binding/source degradation is an
   idempotent producer, so a retry repairs dependent-source truth after a partial write before any
-  compensation journal is removed. Status preserves persisted `auth_disconnected`/`auth_revoked`
-  over transient key/read failures.
+  compensation journal is removed. Status returns persisted `auth_disconnected`/`auth_revoked`
+  before any token-store projection read, so missing keys, malformed aggregates, and ordinary I/O
+  failures cannot outrank terminal authority.
 - Disconnect then revokes at the provider (`oauth2.googleapis.com/revoke`). Only Google's
   documented HTTP 400 `invalid_token` outcome — meaning already expired or revoked — permits local
   teardown with `revoked=false`. `invalid_request`, intermediary/unknown 4xx responses, redirects,

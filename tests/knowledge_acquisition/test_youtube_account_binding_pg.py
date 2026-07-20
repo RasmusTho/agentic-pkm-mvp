@@ -4,7 +4,9 @@ Exercises the SAME service-layer contract as the memory backend (which
 ``tests/knowledge_acquisition/test_youtube_oauth.py`` drives implicitly) against
 the real Postgres-backed ``AccountBindingStore``, proving the integrity rules
 hold identically on both backends and that the forward-only migration
-``a2f1c3e4d5b6`` creates the schema the store's fail-loud preflight expects.
+``e1f2a3b4c5d6`` creates the generation-CAS schema the store's fail-loud
+preflight expects. It also proves that an already-stamped pre-repair database
+is upgraded without losing existing bindings.
 
 Marked ``pg``: excluded by the default ``-m "not pg"`` suite; does not run
 locally without a real Postgres. Mirrors ``test_source_registry_pg.py`` -- an
@@ -27,14 +29,16 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from sqlalchemy.engine import URL
 
 from app.knowledge_acquisition.youtube_account_binding import (
+    AccountBindingGenerationConflictError,
+    AccountBindingSchemaMissingError,
     AccountBindingStore,
     AccountBindingValidationError,
     DuplicateAccountBindingError,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PRE_YSS02_HEAD = "bd79f3044759"
-YSS02_HEAD = "a2f1c3e4d5b6"
+PRE_BINDING_GENERATION_HEAD = "d9e0f1a2b3c4"
+BINDING_GENERATION_HEAD = "e1f2a3b4c5d6"
 
 # Synthetic ids only (INV-YSS-9).
 CHANNEL_A = "UC__test__acct_binding_pg_a"
@@ -49,8 +53,10 @@ def _alembic_config() -> Config:
 
 
 @pytest.fixture
-def migrated_binding_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[Config]:
-    """Yield an Alembic-migrated isolated database and drop it afterwards."""
+def scratch_binding_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[Config, str]]:
+    """Yield an isolated empty database and drop it afterwards."""
     from app.db.dsn import resolve_dsn
 
     admin_dsn = resolve_dsn()
@@ -86,11 +92,20 @@ def migrated_binding_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[Confi
         monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
         monkeypatch.delenv("STORE_BACKEND", raising=False)
         config = _alembic_config()
-        command.upgrade(config, YSS02_HEAD)
-        yield config
+        yield config, scratch_conninfo
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as conn:
             conn.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
+
+
+@pytest.fixture
+def migrated_binding_database(
+    scratch_binding_database: tuple[Config, str],
+) -> Config:
+    """Yield an isolated database migrated through the generation-CAS head."""
+    config, _scratch_conninfo = scratch_binding_database
+    command.upgrade(config, BINDING_GENERATION_HEAD)
+    return config
 
 
 @pytest.mark.pg
@@ -103,6 +118,7 @@ def test_pg_backend_contract(migrated_binding_database: Config) -> None:
     assert created.state == "connected"
     assert created.reason_code is None
     assert created.scopes == (SCOPE,)
+    assert created.binding_generation == 1
 
     # Round-trips out of Postgres unchanged.
     fetched = store.get(created.account_binding_id)
@@ -111,12 +127,34 @@ def test_pg_backend_contract(migrated_binding_database: Config) -> None:
     assert store.get_by_channel_id(CHANNEL_A).account_binding_id == created.account_binding_id
 
     # Degrade → reason set; reconnect → reason cleared.
-    degraded = store.set_state(created.account_binding_id, state="degraded", reason_code="auth_revoked")
+    degraded = store.set_state(
+        created.account_binding_id,
+        state="degraded",
+        reason_code="auth_revoked",
+        expected_binding_generation=created.binding_generation,
+    )
     assert degraded.state == "degraded"
     assert degraded.reason_code == "auth_revoked"
-    reconnected = store.set_state(created.account_binding_id, state="connected", reason_code=None)
+    assert degraded.binding_generation == 2
+    reconnected = store.set_state(
+        created.account_binding_id,
+        state="connected",
+        reason_code=None,
+        expected_binding_generation=degraded.binding_generation,
+    )
     assert reconnected.state == "connected"
     assert reconnected.reason_code is None
+    assert reconnected.binding_generation == 3
+
+    # A stale compare-and-set cannot overwrite or otherwise mutate the winner.
+    with pytest.raises(AccountBindingGenerationConflictError):
+        store.set_state(
+            created.account_binding_id,
+            state="degraded",
+            reason_code="auth_revoked",
+            expected_binding_generation=degraded.binding_generation,
+        )
+    assert store.get(created.account_binding_id) == reconnected
 
     # One binding per channel (unique index).
     with pytest.raises(DuplicateAccountBindingError):
@@ -140,4 +178,62 @@ def test_pg_backend_contract(migrated_binding_database: Config) -> None:
 
     # The migration is forward-only.
     with pytest.raises(RuntimeError, match="forward-only"):
-        command.downgrade(migrated_binding_database, PRE_YSS02_HEAD)
+        command.downgrade(migrated_binding_database, PRE_BINDING_GENERATION_HEAD)
+
+
+@pytest.mark.pg
+def test_existing_resource_upgrade_backfills_generation_and_restores_schema(
+    scratch_binding_database: tuple[Config, str],
+) -> None:
+    config, scratch_conninfo = scratch_binding_database
+    command.upgrade(config, PRE_BINDING_GENERATION_HEAD)
+
+    pre_repair_store = AccountBindingStore.for_runtime()
+    existing = pre_repair_store.create(
+        provider_channel_id=CHANNEL_A,
+        display_label="Existing Chan",
+        scopes=[SCOPE],
+    )
+    assert existing.binding_generation == 1
+
+    # Model an existing DB stamped past the original YSS-02 migration before
+    # binding_generation became a runtime invariant.
+    with psycopg.connect(scratch_conninfo) as conn:
+        conn.execute(
+            "ALTER TABLE youtube_account_binding "
+            "DROP CONSTRAINT IF EXISTS youtube_account_binding_generation_chk"
+        )
+        conn.execute(
+            "ALTER TABLE youtube_account_binding "
+            "DROP COLUMN IF EXISTS binding_generation"
+        )
+
+    with pytest.raises(AccountBindingSchemaMissingError, match="binding_generation"):
+        AccountBindingStore.for_runtime()
+
+    command.upgrade(config, BINDING_GENERATION_HEAD)
+
+    upgraded_store = AccountBindingStore.for_runtime()
+    upgraded = upgraded_store.get(existing.account_binding_id)
+    assert upgraded is not None
+    assert upgraded.provider_channel_id == CHANNEL_A
+    assert upgraded.binding_generation == 1
+
+    with psycopg.connect(scratch_conninfo) as conn:
+        column_shape = conn.execute(
+            "SELECT data_type, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = 'youtube_account_binding' "
+            "AND column_name = 'binding_generation'"
+        ).fetchone()
+        constraint = conn.execute(
+            "SELECT pg_get_constraintdef(oid) "
+            "FROM pg_constraint "
+            "WHERE conname = 'youtube_account_binding_generation_chk' "
+            "AND conrelid = 'youtube_account_binding'::regclass"
+        ).fetchone()
+
+    assert column_shape == ("bigint", "NO")
+    assert constraint is not None
+    assert "binding_generation >= 1" in constraint[0]
