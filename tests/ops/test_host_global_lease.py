@@ -135,17 +135,14 @@ def test_child_keeps_lease_if_wrapper_is_killed() -> None:
     assert successor.returncode == 0
 
 
-@pytest.mark.parametrize("termination_signal", [signal.SIGTERM, signal.SIGINT])
-def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
-    termination_signal: signal.Signals,
-) -> None:
-    resource = f"test-host-lease-signal-{termination_signal.value}-{time.time_ns()}"
+def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed() -> None:
+    resource = f"test-host-lease-group-crash-{time.time_ns()}"
     holder = subprocess.Popen(
-        _lease_command(resource, "signal-holder", "import time; time.sleep(30)"),
+        _lease_command(resource, "group-crash-holder", "import time; time.sleep(0.8)"),
         cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     lock_path = repo_common_lock_path(resource)
     deadline = time.monotonic() + 3
@@ -162,8 +159,47 @@ def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
         holder.wait()
         pytest.fail("holder did not acquire the host lease")
 
+    os.killpg(holder.pid, signal.SIGKILL)
+    holder.wait(timeout=2)
+    contender = subprocess.run(
+        _lease_command(resource, "group-crash-contender", "pass"),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert contender.returncode == 75
+
+    time.sleep(0.9)
+    successor = subprocess.run(
+        _lease_command(resource, "group-crash-successor", "pass"),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert successor.returncode == 0
+
+
+@pytest.mark.parametrize("termination_signal", [signal.SIGTERM, signal.SIGINT])
+def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
+    termination_signal: signal.Signals,
+) -> None:
+    resource = f"test-host-lease-signal-{termination_signal.value}-{time.time_ns()}"
+    holder = subprocess.Popen(
+        _lease_command(resource, "signal-holder", "import time; time.sleep(30)"),
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stderr is not None
+    acquired_line = holder.stderr.readline()
+    assert json.loads(acquired_line)["event"] == "host_lease_acquired"
+
     holder.send_signal(termination_signal)
-    holder_stdout, holder_stderr = holder.communicate(timeout=3)
+    holder_stdout, remaining_stderr = holder.communicate(timeout=3)
+    holder_stderr = acquired_line + remaining_stderr
     assert holder.returncode != 0, (holder_stdout, holder_stderr)
     assert '"event": "host_lease_released"' in holder_stderr
     release_receipt = json.loads(holder_stderr.splitlines()[-1])

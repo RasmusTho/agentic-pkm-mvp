@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -95,9 +96,12 @@ def run_with_lease(
     started = time.monotonic()
     lock_path = repo_common_lock_path(resource)
     lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    parent_ready_read_fd, parent_ready_write_fd = os.pipe()
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
     if child_pid == 0:
+        os.close(parent_ready_write_fd)
+        os.setsid()
         os.close(read_fd)
         _acquire_and_exec(
             lock_path=lock_path,
@@ -110,48 +114,62 @@ def run_with_lease(
             started=started,
             status_fd=write_fd,
             inherited_signal_mask=previous_signal_mask,
+            parent_ready_fd=parent_ready_read_fd,
         )
         os._exit(127)
 
+    os.close(parent_ready_read_fd)
     os.close(write_fd)
-    previous_handlers: dict[signal.Signals, object] = {}
-
-    def forward_signal(signum: int, _frame: object) -> None:
-        try:
-            os.kill(child_pid, signum)
-        except ProcessLookupError:
-            pass
-
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        previous_handlers[signum] = signal.signal(signum, forward_signal)
-    signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+    os.write(parent_ready_write_fd, b"1")
+    os.close(parent_ready_write_fd)
     command_status: dict[str, object] | None = None
     command_complete: dict[str, object] | None = None
+    status: dict[str, object] = {
+        "event": "host_lease_command_error",
+        "execution_id": execution_id,
+        "resource": resource,
+        "error": "lease child exited before reporting status",
+    }
+    first_status_seen = False
     try:
         with os.fdopen(read_fd, encoding="utf-8") as status_stream:
-            raw_status = status_stream.readline()
-            status = (
-                json.loads(raw_status)
-                if raw_status
-                else {
-                    "event": "host_lease_command_error",
-                    "execution_id": execution_id,
-                    "resource": resource,
-                    "error": "lease child exited before reporting status",
-                }
-            )
-            _emit(status)
-            for raw_child_status in status_stream:
+            while True:
+                pending_signals = signal.sigpending() & forwarded_signals
+                for pending_signal in pending_signals:
+                    delivered_signal = signal.sigwait({pending_signal})
+                    try:
+                        os.kill(child_pid, delivered_signal)
+                    except ProcessLookupError:
+                        pass
+                    _emit(
+                        {
+                            "event": "host_lease_signal_forwarded",
+                            "execution_id": execution_id,
+                            "resource": resource,
+                            "signal": delivered_signal,
+                        }
+                    )
+                readable, _, _ = select.select([status_stream], [], [], 0.1)
+                if not readable:
+                    continue
+                raw_child_status = status_stream.readline()
+                if not raw_child_status:
+                    break
                 child_status = json.loads(raw_child_status)
-                if child_status.get("event") == "host_lease_command_started":
+                if not first_status_seen:
+                    status = child_status
+                    first_status_seen = True
+                    _emit(status)
+                elif child_status.get("event") == "host_lease_command_started":
                     command_status = child_status
                     _emit(child_status)
                 elif child_status.get("event") == "host_lease_command_complete":
                     command_complete = child_status
+            if not first_status_seen:
+                _emit(status)
         _, wait_status = os.waitpid(child_pid, 0)
     finally:
-        for signum, previous_handler in previous_handlers.items():
-            signal.signal(signum, previous_handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
     return_code = os.waitstatus_to_exitcode(wait_status)
     if return_code < 0:
         return_code = 128 + abs(return_code)
@@ -240,6 +258,7 @@ def _acquire_and_exec(
     started: float,
     status_fd: int,
     inherited_signal_mask: set[signal.Signals],
+    parent_ready_fd: int,
 ) -> None:
     command_pid: int | None = None
     pending_signals: list[int] = []
@@ -256,6 +275,12 @@ def _acquire_and_exec(
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, forward_signal)
     signal.pthread_sigmask(signal.SIG_SETMASK, inherited_signal_mask)
+    parent_ready = os.read(parent_ready_fd, 1)
+    os.close(parent_ready_fd)
+    if parent_ready != b"1":
+        os.close(lock_fd)
+        os.close(status_fd)
+        os._exit(125)
 
     while True:
         try:
@@ -316,7 +341,11 @@ def _acquire_and_exec(
         pass
     finally:
         os.close(start_fd)
-    _, command_wait_status = os.waitpid(command_pid, 0)
+    while True:
+        waited_pid, command_wait_status = os.waitpid(command_pid, os.WNOHANG)
+        if waited_pid == command_pid:
+            break
+        time.sleep(0.05)
     command_return_code = os.waitstatus_to_exitcode(command_wait_status)
 
     if command_return_code < 0:
