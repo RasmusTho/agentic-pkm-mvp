@@ -15,10 +15,12 @@ from app.watcher.config import WatcherConfig
 from app.watcher.heartbeat import write_heartbeat
 from app.watcher.relevance_tick import relevance_tick_enabled, run_relevance_tick
 from app.watcher.settings_delta import (
-    handle_settings_local_delta,
+    handle_settings_detected_delta,
     handle_settings_source_delta,
     is_settings_control_path,
+    is_runtime_gating_owner_path,
     is_settings_source_path,
+    settings_delta_state_values,
 )
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 from app.watcher.state import WatcherState
@@ -291,7 +293,11 @@ def run_tick(
         scanned_paths.append(rel_str)
         last_mtime = state.last_mtime(rel_str)
         previous_hash = state.last_hash(rel_str)
-        if last_mtime is not None and last_mtime == mtime:
+        if (
+            last_mtime is not None
+            and last_mtime == mtime
+            and not is_runtime_gating_owner_path(rel)
+        ):
             state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash, seen_at=now)
             continue
         hashed = _hash_file(path)
@@ -306,6 +312,44 @@ def run_tick(
         changed_entries.append((rel, mtime, digest))
 
     settings_source_processed = False
+    pending_runtime_gating_deletions: set[str] = set()
+    removed_runtime_gating_owner_files = sorted(
+        Path(path)
+        for path in state.files.keys() - set(scanned_paths)
+        if is_runtime_gating_owner_path(Path(path))
+    )
+    for rel_path in removed_runtime_gating_owner_files:
+        rel_str = str(rel_path)
+        settings_delta = handle_settings_detected_delta(
+            vault_root=cfg.vault_path,
+            rel_path=rel_path,
+            previous_values=state.last_settings_runtime_values(rel_str),
+            observed_missing=True,
+        )
+        if settings_delta.errors:
+            state.errors += len(settings_delta.errors)
+            summary["settings_write_errors_in_tick"] = int(summary.get("settings_write_errors_in_tick", 0)) + len(
+                settings_delta.errors
+            )
+        if settings_delta.receipts:
+            summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
+                settings_delta.receipts
+            )
+        if settings_delta.errors or settings_delta.deferred:
+            retained_values = settings_delta_state_values(settings_delta)
+            if retained_values is not None:
+                state.update_file_state(
+                    rel_str,
+                    settings_runtime_values=retained_values,
+                )
+            pending_runtime_gating_deletions.add(rel_str)
+        else:
+            # Retire the vanished path only after every governed reset was
+            # durably receipted. Failed/partial resets stay pending for retry.
+            state.files.pop(rel_str, None)
+    if removed_runtime_gating_owner_files:
+        summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
+
     removed_settings_sources = sorted(
         Path(path)
         for path in state.files.keys() - set(scanned_paths)
@@ -333,10 +377,12 @@ def run_tick(
     for rel, mtime, digest in changed_entries:
         rel_str = str(rel)
         last_seen = state.last_seen(rel_str)
-        settings_delta = handle_settings_local_delta(
+        settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
             rel_path=rel,
             previous_values=state.last_settings_runtime_values(rel_str),
+            observed_digest=digest,
+            observed_missing=False,
         )
         if settings_delta.errors:
             state.errors += len(settings_delta.errors)
@@ -347,18 +393,17 @@ def run_tick(
             summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
                 settings_delta.receipts
             )
-            try:
-                mtime = (cfg.vault_path / rel).stat().st_mtime
-            except OSError:
-                pass
-            hashed = _hash_file(cfg.vault_path / rel)
-            if hashed is not None:
-                digest = hashed[0]
+        if settings_delta.processed_digest is not None:
+            digest = settings_delta.processed_digest
         if settings_delta.deferred:
             # The gating delta could not be routed (vault not selected). Do
             # not record the file as seen: it must re-process on a later tick
             # once the vault validates, or the unrouted on-disk edit would
             # silently become effective through resolution.
+            state.invalidate_file_observation(
+                rel_str,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
+            )
             continue
         # A settings source edit re-ingests the effective bundle
         # so the running services honor it within one tick (SETTINGS-01 / F1).
@@ -367,7 +412,7 @@ def run_tick(
                 rel_str,
                 mtime=mtime,
                 content_hash=digest,
-                settings_runtime_values=settings_delta.values,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
                 seen_at=now,
             )
             continue
@@ -393,7 +438,7 @@ def run_tick(
                 rel_str,
                 mtime=mtime,
                 content_hash=digest,
-                settings_runtime_values=settings_delta.values,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
                 seen_at=now,
             )
             continue
@@ -407,7 +452,7 @@ def run_tick(
                 rel_str,
                 mtime=mtime,
                 content_hash=digest,
-                settings_runtime_values=settings_delta.values,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
                 seen_at=now,
             )
             continue
@@ -415,7 +460,7 @@ def run_tick(
             rel_str,
             mtime=mtime,
             content_hash=digest,
-            settings_runtime_values=settings_delta.values,
+            settings_runtime_values=settings_delta_state_values(settings_delta),
             seen_at=now,
         )
         if last_seen is not None and (now - last_seen) * 1000 < cfg.debounce_ms:
@@ -468,7 +513,7 @@ def run_tick(
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms
     _apply_guardrails(cfg, state, summary)
-    state.prune_files(scanned_paths)
+    state.prune_files([*scanned_paths, *pending_runtime_gating_deletions])
 
     return _finalize_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None)
 
