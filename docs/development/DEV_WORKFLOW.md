@@ -66,11 +66,17 @@ Practical rule:
 - Code-affecting changes:
   - `ruff check app tests`
   - `mypy app`
-  - `pytest -q -m "not pg"`
+  - `python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -q -m "not pg"`
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
 Run narrower or broader suites when the touched area requires it.
+
+The full non-PG suite is host-global. The wrapper above holds an atomic repo-common kernel lock for
+the entire child process and releases it automatically when the process exits. A chat handshake,
+process census, or quiet-period check is useful diagnosis but is not mutual exclusion. If the lock
+is already held, do not start another suite and do not kill the holder; retry only with bounded wait
+or after the holder's receipt shows terminal state.
 
 Enforcement note:
 - The command list above is a required pre-merge gate, not advisory.

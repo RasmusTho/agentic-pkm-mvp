@@ -210,6 +210,13 @@ than independent re-review.
 - **Stop condition:** the gate passes once a round comes back clean (no new findings). For PRs touching
   security/data/migration/auth/concurrency/external-API surfaces (`AGENTS.md :: Total Cost of
   Development` escalation tier), require 2 consecutive clean rounds before passing.
+- **Low-convergence circuit breaker:** if one round reports two or more blockers in the same
+  stateful mechanism, or a later round finds an adjacent blocker in a mechanism already repaired,
+  stop point-fixing and do not start another full suite or publish another head. Build the mechanism
+  convergence packet and run the independent pre-expensive-gate review defined in
+  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
+  sequence only after that review is clean. Preserve the existing mechanism/domain binding and
+  attempt count; this replan does not reset budget or reduce the final two-clean-round requirement.
 - Repair budget is per stable failure mechanism and failure domain: two standard repair attempts
   followed, when needed, by two strongest-capability repair attempts for that same key. The closed
   domains are review/code correctness, static-quality, lease/concurrency, and

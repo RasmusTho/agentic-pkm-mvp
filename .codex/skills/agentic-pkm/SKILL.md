@@ -44,7 +44,8 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
 - Install: `python -m pip install -e .`
 - Validation baseline (required pre-merge gate for code-affecting changes; see
   `docs/development/DEV_WORKFLOW.md :: Validation baseline` for the full, current command set):
-  `ruff check app tests`, `mypy app`, `pytest -q -m "not pg"`
+  `ruff check app tests`, `mypy app`, then
+  `python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -q -m "not pg"`
 - When `.codex/skills/**` changed: `python3 scripts/lint_skills_consistency.py`
 - Alpha runtime: `make alpha-up` then `python -m scripts.alpha_e2e`
 
