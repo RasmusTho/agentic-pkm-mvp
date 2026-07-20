@@ -287,6 +287,12 @@ Rules:
 
 When all prerequisites are met:
 
+Verified-merge authority and phase body digests canonicalize GitHub PR-body storage by removing at
+most one terminal LF before digest derivation or comparison. That LF is equivalent to its absence;
+every other body byte and whitespace character remains exact, and substantive body drift fails
+closed. This digest equivalence does not relax any head, title, closing-set, authority-receipt, or
+phase-continuity gate below.
+
 1. freeze the authenticated v2 context (`run_id`, repository, PR, exact head, governing issue,
    `closing_issues`, durable `supporting_issues`, attempts, and 2+2 repair-budget projection); re-read
    the live PR title/body/head and GitHub `closingIssuesReferences`, and reject any mismatch or title
@@ -297,8 +303,9 @@ When all prerequisites are met:
    changing the body so the original authority remains durable and auditable
 3. replace the live PR body with the plan's neutralized body, which converts every authenticated
    closer to evidence-only `Refs`; immediately re-read the PR and fail closed unless the head and
-   neutralized body are byte-identical to the plan, the title and body contain no canonical or
-   malformed closing attempt, and `closingIssuesReferences` is empty. Because the body edit triggers
+   neutralized body matches the plan under the terminal-LF-only canonical digest contract above, the
+   title and body contain no canonical or malformed closing attempt, and `closingIssuesReferences`
+   is empty. Because the body edit triggers
    governance again, the triggered `pr-contract` must authenticate the trusted, non-conflicting
    exact-head authority receipt against the complete neutralized body issue set; fabricated
    `Refs`/`Verified-Closing-Issues` text is never sufficient. Wait for the latest `pr-contract` run
