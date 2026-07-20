@@ -51,6 +51,7 @@ def _render_channel_with_synthetic_runtime_env(
     tmp_path: Path,
     *,
     channel: str,
+    no_vault: bool = False,
 ) -> dict[str, object]:
     assert channel in {"prod", "test"}
     runtime_dir = "tmp-test" if channel == "test" else "tmp"
@@ -69,15 +70,31 @@ def _render_channel_with_synthetic_runtime_env(
         shutil.copy2(source, destination)
 
     runtime_env = synthetic_root / runtime_dir / "runtime.env"
-    runtime_lines = [
-        "LLM_PROVIDER=synthetic-provider",
-        "HEIMDAL_CAPTURE_WATCH_DIR=/synthetic/capture/inbox",
-        "HEIMDAL_CAPTURE_INTERVAL_SECONDS=17",
-        f"HEIMDAL_RAW_STORE_KEY={'a' * 64}",
-    ]
-    runtime_env.write_text(
-        "\n".join(runtime_lines) + "\n", encoding="utf-8"
-    )
+    if no_vault:
+        export_env = os.environ.copy()
+        export_env.pop("VAULT_ROOT", None)
+        export_env.pop("VAULT_HOST_ROOT", None)
+        export_env["NO_VAULT_MODE"] = "1"
+        export_env["RUNTIME_ENV_PATH"] = str(runtime_env)
+        export_env["LLM_PROVIDER"] = "synthetic-no-vault-provider"
+        subprocess.run(
+            ["bash", str(REPO_ROOT / "scripts/export_runtime_env.sh")],
+            cwd=REPO_ROOT,
+            env=export_env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    else:
+        runtime_lines = [
+            "LLM_PROVIDER=synthetic-provider",
+            "HEIMDAL_CAPTURE_WATCH_DIR=/synthetic/capture/inbox",
+            "HEIMDAL_CAPTURE_INTERVAL_SECONDS=17",
+            f"HEIMDAL_RAW_STORE_KEY={'a' * 64}",
+        ]
+        runtime_env.write_text(
+            "\n".join(runtime_lines) + "\n", encoding="utf-8"
+        )
     channel_env = tmp_path / f"{channel}.env"
     channel_env.write_text(
         "APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\n"
@@ -165,6 +182,23 @@ def test_prod_watcher_effective_render_preserves_runtime_env_and_defaults(
     assert watcher["LLM_PROVIDER"] == "synthetic-provider"
     assert watcher["WATCHER_STATE_DIR"] == "tmp"
     assert watcher["WATCHER_MAX_SCANNED_FILES_PER_TICK"] == "500"
+
+
+@requires_docker
+def test_prod_image_only_pin_no_vault_render_preserves_exported_provider(
+    tmp_path: Path,
+) -> None:
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="prod", no_vault=True
+    )
+    services = rendered["services"]
+    assert isinstance(services, dict)
+
+    for service_name in ("api", "worker", "watcher"):
+        service_environment = _environment(services[service_name])
+        assert service_environment["LLM_PROVIDER"] == "synthetic-no-vault-provider"
+        assert service_environment["LLM_PROVIDER_ENFORCE"] == "1"
+    assert _environment(services["watcher"])["WATCHER_ENABLE"] == "0"
 
 
 @requires_docker
