@@ -209,18 +209,25 @@ def materialize_consumer_environment(
     def cleanup_materialized_file() -> None:
         nonlocal cleanup_in_progress, fd
         cleanup_in_progress = True
+        cleanup_error: OSError | None = None
         try:
             if fd is not None:
-                os.close(fd)
-                fd = None
-            if file_path is None:
-                return
-            try:
-                file_path.unlink(missing_ok=True)
-            except OSError as exc:
+                try:
+                    os.close(fd)
+                except OSError as exc:
+                    cleanup_error = exc
+                finally:
+                    fd = None
+            if file_path is not None:
+                try:
+                    file_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+            if cleanup_error is not None:
                 raise HostSecretBootstrapError(
                     "host secret bootstrap failed for declared consumer"
-                ) from exc
+                ) from cleanup_error
         finally:
             cleanup_in_progress = False
 

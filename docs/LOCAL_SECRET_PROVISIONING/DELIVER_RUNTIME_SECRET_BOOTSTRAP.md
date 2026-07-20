@@ -45,6 +45,7 @@ may become a second source of truth.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_signal_during_child_spawn_is_forwarded_after_assignment`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_signal_during_tempfile_creation_defers_until_cleanup_state_is_safe`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_signal_during_fdopen_transfer_unlinks_and_closes_material`
+      Verify: `tests/ops/test_host_secret_bootstrap.py::test_fdopen_failure_after_descriptor_close_still_unlinks_material`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_repeated_sigterm_kills_and_reaps_ignoring_consumer`
 - [ ] `heimdal-capture-watch` receives `HEIMDAL_RAW_STORE_KEY` through this path without a repository
       secret or changed product code.

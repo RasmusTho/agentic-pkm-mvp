@@ -325,6 +325,36 @@ def test_signal_during_fdopen_transfer_unlinks_and_closes_material(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_fdopen_failure_after_descriptor_close_still_unlinks_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_close = host_secret_bootstrap.os.close
+
+    def failed_fdopen_after_close(fd: int, *_args: object, **_kwargs: object) -> object:
+        real_close(fd)
+        raise OSError("fdopen ownership transfer failed with sensitive context")
+
+    monkeypatch.setattr(
+        host_secret_bootstrap.os,
+        "fdopen",
+        failed_fdopen_after_close,
+    )
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            keychain_lookup=_lookup(),
+            directory=tmp_path,
+        ):
+            pytest.fail("consumer must not launch after fdopen failure")
+
+    assert str(error.value) == "host secret bootstrap failed for declared consumer"
+    assert "sensitive context" not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_repeated_sigterm_kills_and_reaps_ignoring_consumer(
     tmp_path: Path,
 ) -> None:
