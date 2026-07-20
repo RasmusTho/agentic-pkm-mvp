@@ -727,12 +727,30 @@ class TokenProvider:
         try:
             token = self._store.get(self._binding_id)
         except TokenStoreKeyMissingError:
+            terminal_reason = self._terminal_binding_reason()
+            if terminal_reason is not None:
+                raise AuthDegradedError(
+                    terminal_reason, "account binding is disconnected"
+                ) from None
             self._degrade("auth_key_missing")
             raise AuthDegradedError("auth_key_missing", "token store key is not provisioned") from None
         if token is None:
+            terminal_reason = self._terminal_binding_reason()
+            if terminal_reason is not None:
+                raise AuthDegradedError(
+                    terminal_reason, "account binding is disconnected"
+                ) from None
             self._degrade("auth_missing")
             raise AuthDegradedError("auth_missing", "no token stored for this binding")
         return token
+
+    def _terminal_binding_reason(self) -> str | None:
+        if self._bindings is None:
+            return None
+        binding = self._bindings.get(self._binding_id)
+        if binding is not None and binding.reason_code == "auth_disconnected":
+            return "auth_disconnected"
+        return None
 
     def _is_fresh(self, token: StoredToken) -> bool:
         if not token.access_token or not token.expires_at:
@@ -806,8 +824,8 @@ class TokenProvider:
                         promotion_compensation_state="compensated",
                     )
                     self._write_refresh_journal(pending_id, compensated)
-                    self._delete_refresh_journal(pending_id)
                     self._degrade("auth_revoked")
+                    self._delete_refresh_journal(pending_id)
                     raise AuthDegradedError(
                         "auth_revoked",
                         "rotated refresh authority was revoked after local durability failure",
@@ -863,8 +881,8 @@ class TokenProvider:
                     "refresh_durability_unavailable",
                     pending_grant_id=pending_id,
                 ) from None
-            self._delete_refresh_journal(pending_id)
             self._degrade("auth_revoked")
+            self._delete_refresh_journal(pending_id)
             raise AuthDegradedError(
                 "auth_revoked",
                 "rotated refresh authority was already provider-compensated",
@@ -970,6 +988,8 @@ class TokenProvider:
         if self._bindings is not None:
             binding = self._bindings.get(self._binding_id)
             if binding is not None:
+                if binding.reason_code == "auth_disconnected":
+                    return
                 self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
         if self._registry is not None:
             for source in self._registry.list_for_account(self._binding_id):
@@ -1024,6 +1044,7 @@ class YouTubeAccountBinder:
         return {
             "refresh_pending": "auth_refresh_pending",
             "refresh_conflict": "auth_refresh_conflict",
+            "refresh_compensated": "auth_revoked",
         }.get(reason_code, "auth_refresh_durability")
 
     def _degrade_refresh_authority(
@@ -1641,6 +1662,15 @@ class YouTubeAccountBinder:
         pending = self._store.get(pending_id)
         if pending is None:
             return canonical
+        if pending.promotion_compensation_state == "compensated":
+            try:
+                self._store.delete(pending_id)
+            except Exception:
+                raise OAuthGrantDurabilityError(
+                    "refresh_compensated",
+                    pending_grant_id=pending_id,
+                ) from None
+            return canonical
         if pending.promotion_compensation_state is not None:
             raise OAuthGrantDurabilityError(
                 "refresh_durability_unavailable",
@@ -1980,7 +2010,12 @@ class YouTubeAccountBinder:
             # A provider response may have rotated the standing credential
             # while canonical promotion is incomplete. The old canonical row
             # is not sufficient authority for a connected status.
-            state, reason_code = "degraded", "auth_refresh_pending"
+            if pending_refresh.promotion_compensation_state == "compensated":
+                state, reason_code = "degraded", "auth_revoked"
+            elif pending_refresh.promotion_compensation_state is not None:
+                state, reason_code = "degraded", "auth_refresh_durability"
+            else:
+                state, reason_code = "degraded", "auth_refresh_pending"
         if token is None and state == "connected":
             # Fail closed for any historical/partial connected row that lacks
             # the encrypted authority needed by authenticated operations.

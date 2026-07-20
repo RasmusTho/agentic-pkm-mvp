@@ -1958,6 +1958,165 @@ def test_compensated_refresh_cleanup_residue_is_never_promoted(
     assert binding.reason_code == "auth_revoked"
 
 
+def test_compensated_refresh_crash_before_degradation_never_reports_connected(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    store.put(binding_id, canonical.with_expired_access())
+    provider.token_responses.append(
+        _granted_token(access=SENTINEL_ACCESS_2, refresh=SENTINEL_REFRESH_2)
+    )
+    pending_id = oauth._pending_refresh_id(binding_id)
+    original_put = store.put
+    original_confirm = store.confirm_record_durable
+
+    def land_unconfirmed_initial_journal(target_id, token):
+        if target_id == pending_id and token.promotion_compensation_state is None:
+            original_put(target_id, token)
+            raise tokstore.TokenStoreDurabilityError("unconfirmed refresh journal")
+        original_put(target_id, token)
+
+    def reject_initial_journal_confirmation(target_id, token):
+        if target_id == pending_id and token.promotion_compensation_state is None:
+            return False
+        return original_confirm(target_id, token)
+
+    monkeypatch.setattr(store, "put", land_unconfirmed_initial_journal)
+    monkeypatch.setattr(
+        store, "confirm_record_durable", reject_initial_journal_confirmation
+    )
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(provider),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+
+    def crash_before_auth_revoked_write(reason_code):
+        if reason_code == "auth_revoked":
+            raise RuntimeError("simulated crash before binding degradation")
+
+    monkeypatch.setattr(token_provider, "_degrade", crash_before_auth_revoked_write)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        token_provider.get_access_token()
+
+    assert provider.revoked[-1] == {"token": SENTINEL_REFRESH_2}
+    compensated = store.get(pending_id)
+    assert compensated is not None
+    assert compensated.promotion_compensation_state == "compensated"
+    assert binder.status(binding_id) == {
+        "status": "degraded",
+        "reason_code": "auth_revoked",
+        "scopes": [oauth.SCOPE],
+        "token_store": "encrypted",
+    }
+
+
+def test_compensated_refresh_residue_reports_revoked_and_disconnect_converges(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    pending_id = oauth._pending_refresh_id(binding_id)
+    compensated = replace(
+        canonical,
+        refresh_token=SENTINEL_REFRESH_2,
+        access_token=SENTINEL_ACCESS_2,
+        authority_generation=canonical.authority_generation + 1,
+        promotion_target_binding_id=binding_id,
+        promotion_predecessor_refresh_token=canonical.refresh_token,
+        promotion_predecessor_generation=canonical.authority_generation,
+        promotion_compensation_state="compensated",
+    )
+    store.put(pending_id, compensated)
+    bindings.set_state(binding_id, state="degraded", reason_code="auth_revoked")
+    token_calls_before = sum(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+
+    assert binder.status(binding_id) == {
+        "status": "degraded",
+        "reason_code": "auth_revoked",
+        "scopes": [oauth.SCOPE],
+        "token_store": "encrypted",
+    }
+    result = binder.disconnect(binding_id)
+
+    assert result["status"] == "disconnected"
+    assert store.has_record(pending_id) is False
+    assert store.has_record(binding_id) is False
+    assert provider.revoked[-1] == {"token": SENTINEL_REFRESH}
+    assert bindings.get(binding_id).reason_code == "auth_disconnected"
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/token")
+            for request in provider.requests
+        )
+        == token_calls_before
+    )
+
+
+def test_compensated_refresh_residue_reconnects_only_through_new_consent(
+    store, bindings, registry
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    canonical = store.get(binding_id)
+    assert canonical is not None
+    pending_id = oauth._pending_refresh_id(binding_id)
+    store.put(
+        pending_id,
+        replace(
+            canonical,
+            refresh_token=SENTINEL_REFRESH_2,
+            access_token=SENTINEL_ACCESS_2,
+            authority_generation=canonical.authority_generation + 1,
+            promotion_target_binding_id=binding_id,
+            promotion_predecessor_refresh_token=canonical.refresh_token,
+            promotion_predecessor_generation=canonical.authority_generation,
+            promotion_compensation_state="compensated",
+        ),
+    )
+    bindings.set_state(binding_id, state="degraded", reason_code="auth_revoked")
+    reconnect = binder.start_reconnect(binding_id)
+    token_calls_before = sum(
+        urlsplit(str(request.url)).path.endswith("/token")
+        for request in provider.requests
+    )
+
+    result = binder.finish_device_connection(reconnect)
+
+    assert result["status"] == "connected"
+    assert store.has_record(pending_id) is False
+    reconnected = store.get(binding_id)
+    assert reconnected is not None
+    assert reconnected.refresh_token == SENTINEL_REFRESH
+    assert reconnected.refresh_token != SENTINEL_REFRESH_2
+    assert bindings.get(binding_id).state == "connected"
+    assert bindings.get(binding_id).reason_code is None
+    assert provider.revoked == []
+    assert (
+        sum(
+            urlsplit(str(request.url)).path.endswith("/token")
+            for request in provider.requests
+        )
+        == token_calls_before + 1
+    )
+
+
 def test_disconnect_promotes_pending_refresh_before_provider_revocation(
     store, bindings, registry
 ):
@@ -2359,6 +2518,69 @@ def test_disconnect_revokes_without_deleting_artifacts(store, bindings, registry
     # Acquired artifacts are never deleted by a disconnect.
     assert raw_store.get_raw_record_by_content_identity("cid-artifact-1") is not None
     assert raw_store.all_raw_records()[0].id == raw_row.id
+
+
+def test_token_provider_queued_behind_disconnect_preserves_terminal_reason(
+    store, bindings, registry
+):
+    provider = _Provider()
+    provider.revoke_release = threading.Event()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="owned_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Owned",
+        account_binding_id=binding_id,
+    )
+    cursor_before = dict(source.cursor)
+    token_provider = oauth.TokenProvider(
+        binding_id=binding_id,
+        token_store=store,
+        oauth_client=_client(_Provider()),
+        binding_store=bindings,
+        source_registry=registry,
+    )
+    disconnect_results: list[dict] = []
+    consumer_errors: list[BaseException] = []
+    consumer_finished = threading.Event()
+
+    def run_disconnect() -> None:
+        disconnect_results.append(binder.disconnect(binding_id))
+
+    def run_queued_consumer() -> None:
+        try:
+            token_provider.get_access_token()
+        except BaseException as error:
+            consumer_errors.append(error)
+        finally:
+            consumer_finished.set()
+
+    disconnect_thread = threading.Thread(target=run_disconnect)
+    disconnect_thread.start()
+    assert provider.revoke_started.wait(timeout=5)
+    consumer_thread = threading.Thread(target=run_queued_consumer)
+    consumer_thread.start()
+    try:
+        assert consumer_finished.wait(timeout=0.2) is False
+    finally:
+        provider.revoke_release.set()
+    disconnect_thread.join(timeout=5)
+    consumer_thread.join(timeout=5)
+
+    assert disconnect_results[0]["status"] == "disconnected"
+    assert len(consumer_errors) == 1
+    assert isinstance(consumer_errors[0], oauth.AuthDegradedError)
+    assert consumer_errors[0].reason_code == "auth_disconnected"
+    binding = bindings.get(binding_id)
+    assert binding is not None
+    assert binding.state == "degraded"
+    assert binding.reason_code == "auth_disconnected"
+    disabled = registry.get(source.binding_id)
+    assert disabled.enabled is False
+    assert disabled.cursor == cursor_before
+    assert disabled.last_error["reason_code"] == "auth_disconnected"
 
 
 def test_disconnect_preserves_token_when_provider_revoke_fails(store, bindings, registry):

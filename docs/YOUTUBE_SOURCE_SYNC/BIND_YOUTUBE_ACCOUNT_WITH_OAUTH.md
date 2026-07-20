@@ -76,7 +76,8 @@ touch the repo, vault, settings values, logs, events, or receipts.
    journaled encrypted before canonical promotion, and a write failure recovers on the next access
    only over the proven predecessor generation. Before provider compensation, the encrypted
    journal is durably marked non-promotable; authoritative revocation advances that marker to
-   compensated before best-effort cleanup, so crash residue can never restore revoked authority.
+   compensated and durably degrades binding/source truth to `auth_revoked` before best-effort
+   cleanup, so a crash can never restore revoked authority or report the binding connected.
    Pending/conflicting refresh authority durably
    degrades the account binding and every dependent source, without cursor mutation, and blocks
    reconnect/disconnect provider actions until safely resolved. Failure classification and the
@@ -84,6 +85,10 @@ touch the repo, vault, settings values, logs, events, or receipts.
    stale actor cannot overwrite another service instance's completed recovery. A reconnect never cleans its
    pending journal merely because canonical ciphertext is visible: the binding row must also be
    durably `connected` before cleanup.
+   A completed operator disconnect is terminal for queued token consumers: missing ciphertext after
+   disconnect preserves `auth_disconnected` on the binding and disabled sources instead of being
+   rewritten as `auth_missing`. Compensated refresh residue reports `auth_revoked`; disconnect may
+   clean it and finish teardown, while reconnect can replace it only through new consent.
    Connect, reconnect, refresh, and disconnect are
    serialized per binding across service instances and runtime processes sharing the channel token
    store. The app-local lock filename is a digest of the binding id and the private lock file
