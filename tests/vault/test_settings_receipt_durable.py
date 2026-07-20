@@ -29,6 +29,7 @@ from app.receipts.settings_receipts import (
 )
 from app.receipts.settings_write import (
     durable_settings_write_receipt_exists,
+    emit_durable_settings_write_receipt_once,
     emit_settings_write_receipt,
 )
 from app.settings import compiler
@@ -170,6 +171,38 @@ def test_required_receipt_appends_each_record_with_one_os_write(
 
     assert len(writes) == 1
     assert writes[0].endswith(b"\n")
+
+
+def test_runtime_acceptance_receipt_is_idempotent_by_operation_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    receipt = SettingsWriteReceipt(
+        key="youtubeSync.enabled",
+        value=True,
+        old_value=False,
+        new_value=True,
+        file="youtube.md",
+        surface="sync",
+        actor="sync",
+        is_runtime_gating=True,
+        operation_id="runtime-gating:test-operation",
+        vault_id="vault-test",
+        local_instance_id="local-test",
+    )
+
+    emit_durable_settings_write_receipt_once(receipt)
+    emit_durable_settings_write_receipt_once(receipt)
+
+    records = [
+        line
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(records) == 1
+    assert durable_settings_write_receipt_exists(receipt) is True
 
 
 def test_required_receipt_fsyncs_full_fresh_parent_chain(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 from typing import Any, Mapping
 
 from app.vault.manager import VaultManager
@@ -171,9 +172,10 @@ def handle_settings_local_delta(
     machine legitimately accepted and receipted); the returned ACCEPTED
     values stay at the last guarded state and the denial surfaces via
     ``errors`` with no success receipt. Because ``SettingsService.resolve``
-    re-reads the owner file directly, runtime-gating consumers MUST consume
-    this seam's accepted values (as the watcher does for
-    ``enableVaultWatcher``), never raw resolution. When the vault is not
+    re-reads the owner file directly, the future YSS-06/YSS-10 consumers MUST
+    consume the accepted accessor for the two YouTube gates, never raw
+    resolution. Existing watcher/indexing gates keep their established
+    permissions path outside #3964. When the vault is not
     selected the delta cannot be routed at all and the result is marked
     ``deferred``: callers skip recording the file as seen so the edit
     re-processes once the vault validates.
@@ -202,14 +204,33 @@ def handle_settings_local_delta(
         if document is not None and key in document.frontmatter
     }
     service = settings_service or SettingsService(markdown_store=store)
+    manager = VaultManager(markdown_store=store)
+    context = manager.validate_vault(vault_root)
+    if context.status != "selected":
+        fallback_values = dict(previous_values or {})
+        detail = f": {context.validation_error}" if context.validation_error else ""
+        return SettingsDeltaResult(
+            values=fallback_values,
+            errors=(
+                f"{rel_path.as_posix()} delta requires selected vault; "
+                f"status={context.status}{detail}",
+            ),
+            deferred=True,
+        )
+
     if previous_values is None:
         # A lost/empty watcher state is not evidence that an on-disk gate was
-        # previously accepted. Treat each present value as a transition from
-        # its registered safe/default baseline so activation still requires
-        # WriteGuard and a durable receipt.
+        # previously accepted. Rebuild the YSS baseline from receipts bound to
+        # this vault identity/generation; keys outside #3964 retain their
+        # established registered defaults.
+        durable_accepted = service.resolve_accepted_runtime_gating(context)
         accepted_previous_values = {
-            key: definition.default_value
-            for key in current_values
+            key: (
+                durable_accepted[key].value
+                if key in durable_accepted
+                else definition.default_value
+            )
+            for key in gating_keys
             if (definition := service.registry.get(key)) is not None
         }
     else:
@@ -219,19 +240,6 @@ def handle_settings_local_delta(
         accepted_previous_values = {
             key: value for key, value in previous_values.items() if key in gating_keys
         }
-
-    manager = VaultManager(markdown_store=store)
-    context = manager.validate_vault(vault_root)
-    if context.status != "selected":
-        detail = f": {context.validation_error}" if context.validation_error else ""
-        return SettingsDeltaResult(
-            values=accepted_previous_values,
-            errors=(
-                f"{rel_path.as_posix()} delta requires selected vault; "
-                f"status={context.status}{detail}",
-            ),
-            deferred=True,
-        )
 
     resolution = service.resolve(context)
     errors = []
@@ -322,6 +330,95 @@ def handle_settings_sync_arrival(
     )
 
 
+def settings_delta_is_sync_arrival(*, vault_root: Path, rel_path: Path) -> bool:
+    """Return true when the observed settings bytes are clean Git state.
+
+    The production watcher is filesystem-polled, so Git cleanliness is the
+    available provenance boundary: a tracked clean file (or clean tracked
+    deletion) arrived through repository synchronization; a modified or
+    untracked working-tree file remains a local file edit. Non-Git vaults and
+    Git inspection failures conservatively stay local-human.
+    """
+
+    if not (vault_root / ".git").exists():
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                rel_path.as_posix(),
+            ],
+            cwd=vault_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0 or result.stdout.strip():
+        return False
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", rel_path.as_posix()],
+        cwd=vault_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if tracked.returncode == 0:
+        return True
+    if (vault_root / rel_path).exists():
+        # In particular, settings/local.md is intentionally gitignored. A
+        # clean `git status` alone would misclassify every local edit as sync.
+        return False
+
+    head_change = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--name-status",
+            "-r",
+            "HEAD",
+            "--",
+            rel_path.as_posix(),
+        ],
+        cwd=vault_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return head_change.returncode == 0 and any(
+        line.startswith("D\t") for line in head_change.stdout.splitlines()
+    )
+
+
+def handle_settings_detected_delta(
+    *,
+    vault_root: Path,
+    rel_path: Path,
+    previous_values: Mapping[str, Any] | None,
+) -> SettingsDeltaResult:
+    """Dispatch a production watcher delta with its real local/sync provenance."""
+
+    if settings_delta_is_sync_arrival(vault_root=vault_root, rel_path=rel_path):
+        return handle_settings_sync_arrival(
+            vault_root=vault_root,
+            rel_path=rel_path,
+            previous_values=previous_values,
+        )
+    return handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=rel_path,
+        previous_values=previous_values,
+    )
+
+
 __all__ = [
     "SETTINGS_LOCAL_REL",
     "SETTINGS_YOUTUBE_REL",
@@ -329,9 +426,11 @@ __all__ = [
     "SettingsDeltaResult",
     "SettingsSourceDeltaResult",
     "handle_settings_local_delta",
+    "handle_settings_detected_delta",
     "handle_settings_sync_arrival",
     "handle_settings_source_delta",
     "is_runtime_gating_owner_path",
     "is_settings_source_path",
     "is_settings_control_path",
+    "settings_delta_is_sync_arrival",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
@@ -18,6 +19,7 @@ from app.watcher.settings_delta import (
     SETTINGS_YOUTUBE_REL,
     handle_settings_local_delta,
     handle_settings_sync_arrival,
+    settings_delta_is_sync_arrival,
 )
 from tests.helpers.vault_settings import initialize_test_vault
 
@@ -532,6 +534,116 @@ def test_sync_arrival_replay_does_not_emit_human_actor(
     assert [receipt.surface for receipt in result.receipts] == ["sync"]
     rows = query_settings_receipts(outbox_path=outbox_path).rows
     assert [row.actor for row in rows if row.key == "youtubeSync.enabled"] == ["sync"]
+
+
+def test_runtime_gating_sync_arrival_unwired_uses_production_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    VaultManager().initialize_vault(vault_root, machine_role="primary", remember=False)
+    config_path = tmp_path / "watchers.yaml"
+    outbox_path = tmp_path / "outbox.jsonl"
+    _write_watchers_config(config_path)
+    subprocess.run(["git", "init", "-q"], cwd=vault_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Sync Test"], cwd=vault_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync-test@example.invalid"],
+        cwd=vault_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "settings"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=vault_root, check=True)
+
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "settings/*.md")
+    monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
+    monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
+    monkeypatch.setenv("WATCHER_DEBOUNCE_MS", "0")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    registry.run_registry_once(config_path)
+
+    youtube_md = _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    _touch(youtube_md, 1_700_000_200.0)
+    subprocess.run(["git", "add", "settings/youtube.md"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "sync arrival"], cwd=vault_root, check=True)
+
+    registry.run_registry_once(config_path)
+
+    rows = [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+    assert [(row.surface, row.actor, row.new_value) for row in rows] == [
+        ("sync", "sync", True)
+    ]
+
+
+def test_gitignored_local_settings_edit_is_not_misattributed_as_sync(
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    VaultManager().initialize_vault(vault_root, machine_role="primary", remember=False)
+    subprocess.run(["git", "init", "-q"], cwd=vault_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Sync Test"], cwd=vault_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync-test@example.invalid"],
+        cwd=vault_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "settings"], cwd=vault_root, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=vault_root, check=True)
+
+    _write_local_settings(vault_root, {"youtubeSync.runnerEnabled": True})
+
+    assert settings_delta_is_sync_arrival(
+        vault_root=vault_root,
+        rel_path=SETTINGS_LOCAL_REL,
+    ) is False
+
+
+def test_runtime_gating_replay_ignores_durable_accepted_baseline_is_repaired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.write_guard as _wg_module
+
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    _write_youtube_settings(vault_root, {"youtubeSync.enabled": True})
+    accepted = handle_settings_local_delta(
+        vault_root=vault_root,
+        rel_path=SETTINGS_YOUTUBE_REL,
+        previous_values={"youtubeSync.enabled": False},
+    )
+    assert len(accepted.receipts) == 1
+
+    with patch.object(
+        _wg_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        return_value={"state": "safe_mode", "reason": "maintenance window"},
+    ):
+        replay = handle_settings_local_delta(
+            vault_root=vault_root,
+            rel_path=SETTINGS_YOUTUBE_REL,
+            previous_values=None,
+        )
+
+    assert replay.errors == ()
+    assert replay.receipts == ()
+    assert replay.values == {"youtubeSync.enabled": True}
+    rows = [
+        row
+        for row in query_settings_receipts(outbox_path=outbox_path).rows
+        if row.key == "youtubeSync.enabled"
+    ]
+    assert len(rows) == 1
 
 
 def test_cross_file_runtime_gating_residue_is_reported_and_unaccepted(

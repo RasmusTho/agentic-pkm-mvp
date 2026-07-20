@@ -44,7 +44,7 @@ from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbe
 from app.watcher.scope import derive_scope_roots, matches_scope
 from app.watcher.settings_delta import (
     SETTINGS_SOURCE_DIR_NAME,
-    handle_settings_local_delta,
+    handle_settings_detected_delta,
     handle_settings_source_delta,
     is_settings_control_path,
     is_runtime_gating_owner_path,
@@ -986,7 +986,7 @@ def _collect_changed_entries(
         if previous_hash is not None and previous_hash == digest:
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             continue
-        settings_delta = handle_settings_local_delta(
+        settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
             rel_path=rel,
             previous_values=state.last_settings_runtime_values(rel_str),
@@ -1359,7 +1359,7 @@ def _run_spec_tick(
         summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
         for rel_path in removed_runtime_gating_owner_files:
             rel_str = str(rel_path)
-            settings_delta = handle_settings_local_delta(
+            settings_delta = handle_settings_detected_delta(
                 vault_root=cfg.vault_path,
                 rel_path=rel_path,
                 previous_values=state.last_settings_runtime_values(rel_str),

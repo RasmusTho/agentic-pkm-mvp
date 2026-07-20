@@ -15,7 +15,7 @@ from app.watcher.config import WatcherConfig
 from app.watcher.heartbeat import write_heartbeat
 from app.watcher.relevance_tick import relevance_tick_enabled, run_relevance_tick
 from app.watcher.settings_delta import (
-    handle_settings_local_delta,
+    handle_settings_detected_delta,
     handle_settings_source_delta,
     is_settings_control_path,
     is_runtime_gating_owner_path,
@@ -314,7 +314,7 @@ def run_tick(
     )
     for rel_path in removed_runtime_gating_owner_files:
         rel_str = str(rel_path)
-        settings_delta = handle_settings_local_delta(
+        settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
             rel_path=rel_path,
             previous_values=state.last_settings_runtime_values(rel_str),
@@ -361,7 +361,7 @@ def run_tick(
     for rel, mtime, digest in changed_entries:
         rel_str = str(rel)
         last_seen = state.last_seen(rel_str)
-        settings_delta = handle_settings_local_delta(
+        settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
             rel_path=rel,
             previous_values=state.last_settings_runtime_values(rel_str),

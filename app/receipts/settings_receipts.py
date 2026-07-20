@@ -27,6 +27,8 @@ class SettingsReceiptQuery:
     surface: str | None = None
     actor: str | None = None
     is_runtime_gating: bool | None = None
+    vault_id: str | None = None
+    local_instance_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,8 @@ class SettingsReceiptRow:
     surface: str | None
     actor: str | None
     is_runtime_gating: bool
+    vault_id: str | None
+    local_instance_id: str | None
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,8 @@ def _project_settings_receipt(record: dict[str, Any]) -> tuple[SettingsReceiptRo
             surface=first_str(payload.get("surface")),
             actor=first_str(payload.get("actor")),
             is_runtime_gating=bool(payload.get("is_runtime_gating", False)),
+            vault_id=first_str(payload.get("vault_id")),
+            local_instance_id=first_str(payload.get("local_instance_id")),
         ),
         "",
     )
@@ -134,6 +140,10 @@ def _matches(row: SettingsReceiptRow, query: SettingsReceiptQuery) -> bool:
     if query.actor and query.actor != row.actor:
         return False
     if query.is_runtime_gating is not None and query.is_runtime_gating != row.is_runtime_gating:
+        return False
+    if query.vault_id and query.vault_id != row.vault_id:
+        return False
+    if query.local_instance_id and query.local_instance_id != row.local_instance_id:
         return False
     return True
 

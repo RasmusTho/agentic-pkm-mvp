@@ -93,9 +93,12 @@ TTS provider enable crosses an external boundary. EBF applies. Not re-decided he
 
 A direct hand-edit of a registered owner file previously produced no receipt — only the watcher
 picking it up at next start. The API door is wired, and the file-originated door routes
-runtime-gating deltas through `SettingsService.update_setting`. Runtime consumers use
-`SettingsService.resolve_accepted_runtime_gating`, not the raw Markdown resolver, so a denied,
-first-seen, cross-file, or unreceipted on-disk value cannot become trusted runtime state. The CLI
+runtime-gating deltas through `SettingsService.update_setting`. The future YSS-06/YSS-10
+consumers use `SettingsService.resolve_accepted_runtime_gating` for
+`youtubeSync.enabled` / `youtubeSync.runnerEnabled`, not the raw Markdown resolver, so a denied,
+first-seen, cross-file, or unreceipted on-disk YouTube gate cannot become trusted runtime state.
+The existing watcher/indexing startup gates retain their established `VaultPermissions` path; this
+slice does not silently change their current runtime semantics. The CLI
 `app.cli vault` group is init/preflight only and still has no runtime-gating toggle command to wire.
 
 ## Server-authoritative classification rule

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -72,10 +73,31 @@ class MarkdownSettingsStore:
         return MarkdownSettingsDocument(path=path, frontmatter=frontmatter, body=body)
 
     def write_missing(self, path: Path, frontmatter: Mapping[str, Any], body: str) -> bool:
-        if path.exists():
-            return False
+        """Create a settings document without overwriting a concurrent creator."""
+
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render_markdown_settings(frontmatter, body), encoding="utf-8")
+        payload = render_markdown_settings(frontmatter, body).encode("utf-8")
+        try:
+            descriptor = os.open(
+                path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+        except FileExistsError:
+            return False
+        try:
+            written = os.write(descriptor, payload)
+            if written != len(payload):
+                raise OSError("partial settings scaffold write")
+            os.fsync(descriptor)
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        finally:
+            os.close(descriptor)
         return True
 
     def write_frontmatter(self, path: Path, frontmatter: Mapping[str, Any], *, body: str | None = None) -> None:
