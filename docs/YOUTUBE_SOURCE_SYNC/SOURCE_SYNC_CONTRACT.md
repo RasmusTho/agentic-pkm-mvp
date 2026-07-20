@@ -190,9 +190,11 @@ or deferred reset remains pending for retry, and deletion of the vault-local own
 accepted identity only while the surviving vault owner still proves the same vault. A git-synced
 arrival replays through the same local gate with `surface='sync'` and `actor='sync'`, never as a
 local human receipt. The watcher identifies that production provenance only when the exact observed
-bytes match the clean tracked Git snapshot and remain unchanged through provenance inspection;
-modified/untracked, raced, or non-Git observations remain local or deferred rather than receiving
-sync attribution.
+bytes match the clean tracked Git snapshot and remain unchanged through durable acceptance; watcher
+state advances only that accepted digest, so a later generation remains pending rather than being
+marked seen. Durable receipts carry the registered owner filename, never the vault path.
+Modified/untracked, raced, receipt-failed, or non-Git observations remain local or deferred rather
+than receiving stale sync attribution.
 Validation errors degrade to defaults with a
 `SettingsValidationError`, never silently apply. Effective values, scope, and source file are
 shown by the capability doctor

@@ -21,6 +21,7 @@ from unittest.mock import patch
 import pytest
 
 from app.knowledge_acquisition.source_registry import VALID_ACQUISITION_MODES
+from app.receipts.settings_receipts import query_settings_receipts
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import MarkdownSettingsStore
 from app.vault.settings_service import (
@@ -204,6 +205,47 @@ def test_accepted_runtime_receipt_best_effort_after_write_fails_closed(
     # receipt exists.
     assert service.resolve(context).settings["youtubeSync.enabled"].value is True
     assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is False
+
+
+def test_runtime_acceptance_receipt_uses_non_sensitive_owner_identifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    _write(
+        settings_dir / "youtube.md",
+        "---\nscope: vault-shared\nyoutubeSync.enabled: false\n---\n",
+    )
+
+    _effective, receipt = SettingsService().update_setting(
+        context,
+        "youtubeSync.enabled",
+        True,
+        surface="api",
+        actor="human",
+    )
+
+    assert receipt.file == "youtube.md"
+    assert str(vault_root) not in outbox_path.read_text(encoding="utf-8")
+    rows = query_settings_receipts(outbox_path=outbox_path).rows
+    assert [(row.key, row.file) for row in rows] == [
+        ("youtubeSync.enabled", "youtube.md")
+    ]
+    assert (
+        SettingsService().resolve_accepted_runtime_gating(context)[
+            "youtubeSync.enabled"
+        ].value
+        is True
+    )
 
 
 def test_defaults_scopes_provenance_and_gated_writes(tmp_path: Path) -> None:

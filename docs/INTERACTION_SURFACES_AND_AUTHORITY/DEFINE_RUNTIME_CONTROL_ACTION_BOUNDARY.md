@@ -69,12 +69,13 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 4. `SettingsWriteReceipt(key, value, surface, actor, timestamp, is_runtime_gating=True)` is
    emitted and logged at INFO.
 5. The same receipt is durably persisted as a `settings.write.receipt` outbox event
-   (`app/vault/settings_service.py :: _emit_settings_write_receipt`, #2787) so the accountability
+   (`app/receipts/settings_write.py :: emit_durable_settings_write_receipt_once`, #2787) so the accountability
    evidence survives process restart — the in-memory dataclass in step 4 is no longer the only
    record. Queryable via `app/receipts/settings_receipts.py :: query_settings_receipts`, mirroring
    the `promotion.transition.applied` / `PromotionReceiptQuery` precedent. Runtime acceptance
    replays that durable stream in serialized append order and deduplicates combined receipt views
-   by validated operation identity rather than wall-clock order.
+   by validated operation identity rather than wall-clock order. The receipt names only the
+   registered owner filename; it never persists the vault path.
 
 **Valid origins of the same seam (no new surfaces here):**
 - UI → `POST /api/companion/vault/settings` (surface=`'api'`) — **wired** (sole caller: `app/api/routes/companion.py:826`)
@@ -86,7 +87,9 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 - Git-synced file arrival → the same local gate (surface=`'sync'`, actor=`'sync'`) — it is never
   attributed as a local human write and never bypasses accepted-state enforcement. Sync provenance
   requires the exact observed bytes to match the clean tracked Git snapshot and to remain unchanged
-  through inspection; raced observations are deferred.
+  through durable acceptance. Watcher state advances only the accepted digest; a newer generation
+  invalidates the observation and remains pending for the next tick. Raced observations and
+  transient receipt failures are deferred.
 - Future MCP/API → addable when there is a consumer (out of scope here)
 
 ### Tier 3 — External-boundary enable

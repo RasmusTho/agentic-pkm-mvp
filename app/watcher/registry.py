@@ -957,6 +957,19 @@ def _sync_settings_local_state(
         state.update_file_state(rel_str, settings_runtime_values=values)
 
 
+def _invalidate_settings_generation(
+    states: Mapping[str, WatcherState],
+    *,
+    rel_str: str,
+    values: Mapping[str, object] | None,
+) -> None:
+    for state in states.values():
+        state.invalidate_file_observation(
+            rel_str,
+            settings_runtime_values=values,
+        )
+
+
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -975,7 +988,11 @@ def _collect_changed_entries(
         scanned_paths.append(rel_str)
         last_mtime = state.last_mtime(rel_str)
         previous_hash = state.last_hash(rel_str)
-        if last_mtime is not None and last_mtime == mtime:
+        if (
+            last_mtime is not None
+            and last_mtime == mtime
+            and not is_runtime_gating_owner_path(rel)
+        ):
             state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
             continue
         hashed = _hash_file(path)
@@ -1003,18 +1020,18 @@ def _collect_changed_entries(
             summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
                 settings_delta.receipts
             )
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:
-                pass
-            hashed = _hash_file(path)
-            if hashed is not None:
-                digest = hashed[0]
+        if settings_delta.processed_digest is not None:
+            digest = settings_delta.processed_digest
         if settings_delta.deferred:
             # The gating delta could not be routed (vault not selected). Do
             # not record the file as seen: it must re-process on a later tick
             # once the vault validates, or the unrouted on-disk edit would
             # silently become effective through resolution.
+            _invalidate_settings_generation(
+                states,
+                rel_str=rel_str,
+                values=settings_delta_state_values(settings_delta),
+            )
             continue
         if is_settings_source_path(rel):
             # Settings markdown is runtime control input, never ordinary vault

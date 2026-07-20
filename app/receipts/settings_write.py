@@ -8,7 +8,7 @@ import os
 import fcntl
 from contextlib import contextmanager
 from contextvars import ContextVar
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +23,12 @@ _NEW_VALUE_UNSET = object()
 _old_value_override: ContextVar[Any] = ContextVar(
     "settings_receipt_old_value",
     default=_OLD_VALUE_UNSET,
+)
+_acceptance_precondition_override: ContextVar[Callable[[], None] | None] = (
+    ContextVar(
+        "settings_receipt_acceptance_precondition",
+        default=None,
+    )
 )
 
 
@@ -218,7 +224,11 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
     return False
 
 
-def emit_durable_settings_write_receipt_once(receipt: SettingsWriteReceipt) -> None:
+def emit_durable_settings_write_receipt_once(
+    receipt: SettingsWriteReceipt,
+    *,
+    acceptance_precondition: Callable[[], None] | None = None,
+) -> None:
     """Durably append and read back one operation-scoped receipt exactly once.
 
     The sibling lock serializes check-and-append across settings writers.  If a
@@ -240,6 +250,8 @@ def emit_durable_settings_write_receipt_once(receipt: SettingsWriteReceipt) -> N
         try:
             if durable_settings_write_receipt_exists(receipt):
                 return
+            if acceptance_precondition is not None:
+                acceptance_precondition()
             try:
                 emit_settings_write_receipt(receipt, require_durable=True)
             except ReceiptDurabilityUncertainError:
@@ -304,6 +316,23 @@ def resolve_settings_receipt_old_value(default: Any) -> Any:
     return default if value is _OLD_VALUE_UNSET else value
 
 
+@contextmanager
+def settings_receipt_acceptance_precondition(
+    precondition: Callable[[], None] | None,
+) -> Iterator[None]:
+    """Bind an optimistic generation check to the durable receipt boundary."""
+
+    token = _acceptance_precondition_override.set(precondition)
+    try:
+        yield
+    finally:
+        _acceptance_precondition_override.reset(token)
+
+
+def resolve_settings_receipt_acceptance_precondition() -> Callable[[], None] | None:
+    return _acceptance_precondition_override.get()
+
+
 def _flatten(values: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
     flattened: dict[str, Any] = {}
     for key, value in values.items():
@@ -321,6 +350,8 @@ __all__ = [
     "emit_durable_settings_write_receipt_once",
     "emit_settings_write_receipt",
     "emit_settings_write_receipts_for_changes",
+    "resolve_settings_receipt_acceptance_precondition",
     "resolve_settings_receipt_old_value",
+    "settings_receipt_acceptance_precondition",
     "settings_receipt_old_value",
 ]

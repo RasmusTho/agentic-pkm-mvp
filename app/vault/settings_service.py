@@ -12,6 +12,7 @@ from app.receipts.settings_write import (
     SettingsWriteReceipt,
     emit_durable_settings_write_receipt_once,
     emit_settings_write_receipt,
+    resolve_settings_receipt_acceptance_precondition,
     resolve_settings_receipt_old_value,
 )
 from app.vault.manager import VaultContext, shared_settings_file_seed
@@ -631,7 +632,7 @@ class SettingsService:
             surface=surface,
             actor=actor,
             is_runtime_gating=is_runtime_gating,
-            file=str(path),
+            file=definition.file,
             old_value=old_value,
             new_value=receipt_value,
             operation_id=f"settings-write:{uuid4()}",
@@ -651,7 +652,16 @@ class SettingsService:
         # survives process restart (#2787).
         try:
             if is_runtime_gating:
-                emit_durable_settings_write_receipt_once(receipt)
+                acceptance_precondition = (
+                    resolve_settings_receipt_acceptance_precondition()
+                )
+                if acceptance_precondition is None:
+                    emit_durable_settings_write_receipt_once(receipt)
+                else:
+                    emit_durable_settings_write_receipt_once(
+                        receipt,
+                        acceptance_precondition=acceptance_precondition,
+                    )
             else:
                 emit_settings_write_receipt(receipt)
         except Exception as exc:

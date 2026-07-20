@@ -7,7 +7,10 @@ import subprocess
 from typing import Any, Mapping
 
 from app.vault.manager import VaultContext, VaultManager
-from app.receipts.settings_write import settings_receipt_old_value
+from app.receipts.settings_write import (
+    settings_receipt_acceptance_precondition,
+    settings_receipt_old_value,
+)
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_DIR
 from app.vault.markdown_settings import (
     MarkdownSettingsDocument,
@@ -78,6 +81,8 @@ class SettingsDeltaResult:
     deferred: bool = False
     vault_id: str | None = None
     local_instance_id: str | None = None
+    processed_digest: str | None = None
+    processed_missing: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -352,6 +357,7 @@ def handle_settings_local_delta(
 
     store = markdown_store or MarkdownSettingsStore()
     path = vault_root / rel_path
+    processing_snapshot: _ObservedSettingsSnapshot | None = None
     if _verified_snapshot is not None:
         try:
             processing_snapshot = _capture_settings_snapshot(path)
@@ -487,20 +493,54 @@ def handle_settings_local_delta(
         if current_present and previous_values.get(key) != current_values[key]:
             changed_keys.append(key)
     if not changed_keys:
+        generation_error = _settings_generation_error(
+            path=path,
+            rel_path=rel_path,
+            expected=processing_snapshot,
+            phase="before state advance",
+        )
         return SettingsDeltaResult(
             values=current_values,
-            errors=tuple(errors),
+            errors=tuple([*errors, generation_error] if generation_error else errors),
+            deferred=generation_error is not None,
             vault_id=context.active_vault_id,
             local_instance_id=context.local_instance_id,
+            processed_digest=(
+                processing_snapshot.digest if processing_snapshot is not None else None
+            ),
+            processed_missing=(
+                not processing_snapshot.exists
+                if processing_snapshot is not None
+                else None
+            ),
         )
 
     receipts: list[SettingsWriteReceipt] = []
     accepted_values = dict(current_values)
+    acceptance_failed = False
+
+    def _assert_generation_current() -> None:
+        generation_error = _settings_generation_error(
+            path=path,
+            rel_path=rel_path,
+            expected=processing_snapshot,
+            phase="before durable acceptance",
+        )
+        if generation_error is not None:
+            raise SettingsWriteError(generation_error)
+
     for key in changed_keys:
         try:
             persist = key in current_keys
             value = current_values[key] if persist else resolution.settings[key].value
-            with settings_receipt_old_value(previous_values.get(key)):
+            with (
+                settings_receipt_old_value(previous_values.get(key)),
+                settings_receipt_acceptance_precondition(
+                    _assert_generation_current
+                    if processing_snapshot is not None
+                    else None
+                ),
+            ):
                 _effective, receipt = service.update_setting(
                     context,
                     key,
@@ -511,6 +551,7 @@ def handle_settings_local_delta(
                 )
         except SettingsWriteError as exc:
             errors.append(str(exc))
+            acceptance_failed = True
             if key in previous_values:
                 accepted_values[key] = previous_values[key]
             else:
@@ -524,12 +565,30 @@ def handle_settings_local_delta(
             # treating the old on-disk value as trusted history.
             accepted_values[key] = value
 
+    generation_error = _settings_generation_error(
+        path=path,
+        rel_path=rel_path,
+        expected=processing_snapshot,
+        phase="before state advance",
+    )
+    if generation_error is not None:
+        errors.append(generation_error)
+
     return SettingsDeltaResult(
         values=accepted_values,
         receipts=tuple(receipts),
         errors=tuple(errors),
+        deferred=acceptance_failed or generation_error is not None,
         vault_id=context.active_vault_id,
         local_instance_id=context.local_instance_id,
+        processed_digest=(
+            processing_snapshot.digest if processing_snapshot is not None else None
+        ),
+        processed_missing=(
+            not processing_snapshot.exists
+            if processing_snapshot is not None
+            else None
+        ),
     )
 
 
@@ -571,6 +630,24 @@ def _capture_settings_snapshot(path: Path) -> _ObservedSettingsSnapshot:
         digest=hashlib.sha256(payload).hexdigest(),
         payload=payload,
     )
+
+
+def _settings_generation_error(
+    *,
+    path: Path,
+    rel_path: Path,
+    expected: _ObservedSettingsSnapshot | None,
+    phase: str,
+) -> str | None:
+    if expected is None:
+        return None
+    try:
+        current = _capture_settings_snapshot(path)
+    except OSError as exc:
+        return f"{rel_path.as_posix()} generation unavailable {phase}: {exc}"
+    if current != expected:
+        return f"{rel_path.as_posix()} changed {phase}"
+    return None
 
 
 def _git_snapshot_is_sync_arrival(

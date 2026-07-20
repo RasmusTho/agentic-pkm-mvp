@@ -467,11 +467,11 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line."
     ),
-    ("app/vault/settings_service.py", 616): (
+    ("app/vault/settings_service.py", 617): (
         "guarded: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 (site unchanged); re-pinned per this census's "
+        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 (site unchanged); re-pinned per this census's "
         "own directly-related-repair convention when YSS-01 (#3916) added the "
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
@@ -494,7 +494,7 @@ WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files."
     ),
-    ("app/vault/settings_service.py", 686): (
+    ("app/vault/settings_service.py", 696): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call."
     ),

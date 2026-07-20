@@ -293,7 +293,11 @@ def run_tick(
         scanned_paths.append(rel_str)
         last_mtime = state.last_mtime(rel_str)
         previous_hash = state.last_hash(rel_str)
-        if last_mtime is not None and last_mtime == mtime:
+        if (
+            last_mtime is not None
+            and last_mtime == mtime
+            and not is_runtime_gating_owner_path(rel)
+        ):
             state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash, seen_at=now)
             continue
         hashed = _hash_file(path)
@@ -389,18 +393,17 @@ def run_tick(
             summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
                 settings_delta.receipts
             )
-            try:
-                mtime = (cfg.vault_path / rel).stat().st_mtime
-            except OSError:
-                pass
-            hashed = _hash_file(cfg.vault_path / rel)
-            if hashed is not None:
-                digest = hashed[0]
+        if settings_delta.processed_digest is not None:
+            digest = settings_delta.processed_digest
         if settings_delta.deferred:
             # The gating delta could not be routed (vault not selected). Do
             # not record the file as seen: it must re-process on a later tick
             # once the vault validates, or the unrouted on-disk edit would
             # silently become effective through resolution.
+            state.invalidate_file_observation(
+                rel_str,
+                settings_runtime_values=settings_delta_state_values(settings_delta),
+            )
             continue
         # A settings source edit re-ingests the effective bundle
         # so the running services honor it within one tick (SETTINGS-01 / F1).
