@@ -359,10 +359,10 @@ services:
       - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
       - VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-}
       - VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL:-}
+      # Bare base-stack startup gets this non-secret selector from .env/the
+      # shell. deploy_channel_compose pins it from governed channel/runtime env.
       - LLM_PROVIDER=${LLM_PROVIDER}
       - WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC-1}
-      - WATCHER_STATE_DIR=${WATCHER_STATE_DIR:-}
-      - WATCHER_MAX_SCANNED_FILES_PER_TICK=${WATCHER_MAX_SCANNED_FILES_PER_TICK:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -386,12 +386,11 @@ services:
   # iCloud-synced Shortcut destination). Same shape as `watcher` above —
   # full host-filesystem mount so the watched folder resolves at its native
   # host path, DB access for the raw-store write path, Compose-supervised
-  # restart. `HEIMDAL_CAPTURE_WATCH_DIR` and `HEIMDAL_RAW_STORE_KEY` are
-  # never given a real default (only an empty-string compose fallback, so
-  # parsing this shared base file never hard-fails for unrelated services):
-  # the watched folder differs per host and the encryption key is an
-  # operator-provisioned secret. Left unset, the container fails loud at
-  # runtime (see the environment block below), not at compose-parse time.
+  # restart. Host-specific capture values are carried by the final
+  # WATCHER_RUNTIME_ENV_FILE env_file layer. They must not be repeated under
+  # `environment`: Compose would interpolate those entries from the CLI
+  # environment and override the governed env_file values. Left unset, the
+  # container fails loud at runtime, not at compose-parse time.
   heimdal-capture-watch:
     build:
       context: .

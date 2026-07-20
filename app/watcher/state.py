@@ -161,6 +161,21 @@ class WatcherState:
             entry["last_emitted"] = emitted_at
         self.files[rel_path] = entry
 
+    def invalidate_file_observation(
+        self,
+        rel_path: str,
+        *,
+        settings_runtime_values: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Retain accepted settings state while forcing the file to be rehashed."""
+
+        entry = dict(self.files.get(rel_path) or {})
+        entry.pop("mtime", None)
+        entry.pop("hash", None)
+        if settings_runtime_values is not None:
+            entry["settings_runtime_values"] = dict(settings_runtime_values)
+        self.files[rel_path] = entry
+
     def prune_files(self, keep_paths: Iterable[str]) -> None:
         keep = {path for path in keep_paths if path}
         if not keep:

@@ -42,8 +42,10 @@ import pytest
 from tests.properties._machinery import (
     REGISTERED_WRITE_SEAMS,
     WRITE_FRONTMATTER_SITE_CLASSIFICATION,
+    WRITE_MISSING_SITE_CLASSIFICATION,
     WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION,
     find_write_frontmatter_call_sites,
+    find_write_missing_call_sites,
     find_write_note_relative_call_sites,
 )
 
@@ -93,6 +95,32 @@ def test_every_write_seam_asserts_writeguard() -> None:
     ]
     assert not bad_classification, (
         f"Every classification must start with 'guarded' or 'out_of_scope': {bad_classification}"
+    )
+
+    write_missing_sites = find_write_missing_call_sites()
+    assert write_missing_sites, "expected known production write_missing call sites"
+    unregistered_write_missing = [
+        site for site in write_missing_sites if site not in WRITE_MISSING_SITE_CLASSIFICATION
+    ]
+    assert not unregistered_write_missing, (
+        "Unregistered write_missing call site(s) found; classify each guarded or "
+        f"explicit bootstrap caller: {unregistered_write_missing}"
+    )
+    stale_write_missing = [
+        site for site in WRITE_MISSING_SITE_CLASSIFICATION if site not in set(write_missing_sites)
+    ]
+    assert not stale_write_missing, (
+        "WRITE_MISSING_SITE_CLASSIFICATION has stale entries: "
+        f"{stale_write_missing}"
+    )
+    invalid_write_missing = [
+        (site, classification)
+        for site, classification in WRITE_MISSING_SITE_CLASSIFICATION.items()
+        if not classification.startswith(("guarded", "bootstrap"))
+    ]
+    assert not invalid_write_missing, (
+        "write_missing classifications must be guarded or bootstrap: "
+        f"{invalid_write_missing}"
     )
 
 

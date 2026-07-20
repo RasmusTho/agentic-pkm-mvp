@@ -8,7 +8,6 @@ Live tests (pg marker) require a running pkm-test Docker stack.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -142,21 +141,17 @@ def test_test_compose_watcher_state_dir_overrides_parent_env() -> None:
     Verify: Issue #1656 — parent WATCHER_STATE_DIR=tmp cannot shadow the
     test-channel watcher override after base + test compose files are merged.
     """
-    parent_env = os.environ.copy()
-    parent_env["WATCHER_STATE_DIR"] = "tmp"
-
     base = _load_compose(BASE_COMPOSE)
     test_overlay = _load_compose(TEST_COMPOSE)
     base_watcher_env = _compose_env((base["services"] or {})["watcher"])
     overlay_watcher_env = _compose_env((test_overlay["services"] or {})["watcher"])
 
-    # Compose interpolates this base entry from the parent environment before
-    # the test overlay environment map is merged.
-    assert base_watcher_env["WATCHER_STATE_DIR"] == "${WATCHER_STATE_DIR:-}"
-    interpolated_base_env = dict(base_watcher_env)
-    interpolated_base_env["WATCHER_STATE_DIR"] = parent_env["WATCHER_STATE_DIR"]
+    # The base service receives its default through env_file. It must not
+    # declare an interpolated environment entry that a parent shell can use to
+    # shadow either that default or the channel overlay (#3885).
+    assert "WATCHER_STATE_DIR" not in base_watcher_env
 
-    watcher_env = {**interpolated_base_env, **overlay_watcher_env}
+    watcher_env = {**base_watcher_env, **overlay_watcher_env}
 
     assert watcher_env["WATCHER_STATE_DIR"] == "tmp-test"
     assert watcher_env["WATCHER_STOP_FILE"] == "/app/tmp-test/WATCHER_STOP"

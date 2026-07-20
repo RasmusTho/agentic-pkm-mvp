@@ -95,14 +95,17 @@ def _read_channel_env_value(env_file: Path, key: str) -> str:
 def _deploy_subshell_environment(
     channel_env_file: Path,
     parent_shell_env: Mapping[str, str],
+    *,
+    repo_root: Path = REPO_ROOT,
 ) -> dict[str, str]:
     """Mirror deploy_channel_compose's governed env pinning for the subshell.
 
-    The wrapper exports WATCHER_RUNTIME_ENV_FILE and VAULT_HOST_ROOT from the
-    governed channel/runtime env files (or unsets them) so a stale parent
-    shell cannot swap the selected runtime env or vault host root. It never
-    passes the runtime env file as a Compose CLI --env-file (that would expose
-    its DSNs to interpolation).
+    The wrapper exports WATCHER_RUNTIME_ENV_FILE, the non-secret LLM_PROVIDER
+    selector, and VAULT_HOST_ROOT from the governed channel/runtime env files
+    (using the channel runtime-env default when the pin omits its path) so a
+    stale parent shell cannot swap those selectors. It
+    never passes the runtime env file as a Compose CLI --env-file (that would
+    expose its DSNs to interpolation).
     """
     env = dict(parent_shell_env)
 
@@ -113,11 +116,25 @@ def _deploy_subshell_environment(
     if runtime_env_ref:
         candidate = Path(runtime_env_ref)
         runtime_env_file = (
-            candidate if candidate.is_absolute() else REPO_ROOT / runtime_env_ref
+            candidate if candidate.is_absolute() else repo_root / runtime_env_ref
         )
         env["WATCHER_RUNTIME_ENV_FILE"] = runtime_env_ref
     else:
-        env.pop("WATCHER_RUNTIME_ENV_FILE", None)
+        runtime_env_ref = "./tmp/runtime.env"
+        runtime_env_file = repo_root / "tmp/runtime.env"
+        env["WATCHER_RUNTIME_ENV_FILE"] = runtime_env_ref
+
+    llm_provider = _read_channel_env_value(channel_env_file, "LLM_PROVIDER")
+    if runtime_env_file is not None and runtime_env_file.is_file():
+        runtime_llm_provider = _read_channel_env_value(
+            runtime_env_file, "LLM_PROVIDER"
+        )
+        if runtime_llm_provider:
+            llm_provider = runtime_llm_provider
+    if llm_provider:
+        env["LLM_PROVIDER"] = llm_provider
+    else:
+        env.pop("LLM_PROVIDER", None)
 
     vault_host_root = _read_channel_env_value(channel_env_file, "VAULT_HOST_ROOT")
     if (
@@ -132,6 +149,32 @@ def _deploy_subshell_environment(
         env.pop("VAULT_HOST_ROOT", None)
 
     return env
+
+
+def test_deploy_subshell_environment_uses_dev_runtime_env_default(
+    tmp_path: Path,
+) -> None:
+    """An image-only DEV pin uses the governed default, never ambient state."""
+    channel_env = tmp_path / "dev.env"
+    channel_env.write_text(
+        "APP_IMAGE_TAG=0000000000000000000000000000000000000000\n",
+        encoding="utf-8",
+    )
+    runtime_env = tmp_path / "tmp/runtime.env"
+    runtime_env.parent.mkdir()
+    runtime_env.write_text("LLM_PROVIDER=governed-provider\n", encoding="utf-8")
+
+    cli_env = _deploy_subshell_environment(
+        channel_env,
+        {
+            "WATCHER_RUNTIME_ENV_FILE": "/hostile/ambient/runtime.env",
+            "LLM_PROVIDER": "hostile-provider",
+        },
+        repo_root=tmp_path,
+    )
+
+    assert cli_env["WATCHER_RUNTIME_ENV_FILE"] == "./tmp/runtime.env"
+    assert cli_env["LLM_PROVIDER"] == "governed-provider"
 
 
 def _effective_container_env_value(

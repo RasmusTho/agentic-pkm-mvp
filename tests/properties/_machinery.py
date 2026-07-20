@@ -467,11 +467,11 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line."
     ),
-    ("app/vault/settings_service.py", 508): (
+    ("app/vault/settings_service.py", 617): (
         "guarded: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 508 (site unchanged); re-pinned per this census's "
+        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 (site unchanged); re-pinned per this census's "
         "own directly-related-repair convention when YSS-01 (#3916) added the "
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
@@ -490,6 +490,22 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "
         "plane Sigma (formal-model.md sec 2.3), not a Human Knowledge Artifact."
+    ),
+}
+
+# ``MarkdownSettingsStore.write_missing`` is a distinct O_EXCL vault-write
+# primitive. It is intentionally available to explicit vault bootstrap, while
+# post-init scaffolding must be guarded by its direct caller. Keep the census
+# closed so moving a write from ``write_frontmatter`` cannot make it disappear
+# from the WriteGuard inventory.
+WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
+    ("app/vault/manager.py", 496): (
+        "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
+        "pre-selection initialization transition; O_EXCL preserves existing owner files."
+    ),
+    ("app/vault/settings_service.py", 696): (
+        "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
+        "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call."
     ),
 }
 
@@ -571,6 +587,7 @@ def spy_on_durable_writes(monkeypatch: pytest.MonkeyPatch, spy: WriteSpy) -> Ite
     import app.knowledge.write_ops as write_ops_mod
 
     original_write_frontmatter = markdown_settings_mod.MarkdownSettingsStore.write_frontmatter
+    original_write_missing = markdown_settings_mod.MarkdownSettingsStore.write_missing
     original_write_note_from_absolute = write_ops_mod.write_note_from_absolute
 
     def traced_write_frontmatter(
@@ -582,6 +599,16 @@ def spy_on_durable_writes(monkeypatch: pytest.MonkeyPatch, spy: WriteSpy) -> Ite
             args_repr=f"path={path!r}",
         )
         return original_write_frontmatter(self, path, frontmatter, body=body)
+
+    def traced_write_missing(
+        self: Any, path: Any, frontmatter: Any, body: Any
+    ) -> Any:
+        spy.record(
+            seam="app.vault.markdown_settings::MarkdownSettingsStore.write_missing",
+            caller=_immediate_caller_qualname(),
+            args_repr=f"path={path!r}",
+        )
+        return original_write_missing(self, path, frontmatter, body)
 
     def traced_write_note_from_absolute(
         path: Any, content: Any, *, vault_root: Any, **kwargs: Any
@@ -595,6 +622,9 @@ def spy_on_durable_writes(monkeypatch: pytest.MonkeyPatch, spy: WriteSpy) -> Ite
 
     monkeypatch.setattr(
         markdown_settings_mod.MarkdownSettingsStore, "write_frontmatter", traced_write_frontmatter
+    )
+    monkeypatch.setattr(
+        markdown_settings_mod.MarkdownSettingsStore, "write_missing", traced_write_missing
     )
     monkeypatch.setattr(write_ops_mod, "write_note_from_absolute", traced_write_note_from_absolute)
     # note_uuid.py imported write_note_from_absolute directly into its module
@@ -641,6 +671,29 @@ def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, 
                 continue
             func = node.func
             if isinstance(func, ast.Attribute) and func.attr == "write_frontmatter":
+                sites.append((rel, node.lineno))
+    return sites
+
+
+def find_write_missing_call_sites(root: Path = APP_ROOT) -> list[tuple[str, int]]:
+    """AST-scan every production ``*.write_missing(...)`` call site."""
+
+    sites: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        rel = str(path.relative_to(REPO_ROOT))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "write_missing":
                 sites.append((rel, node.lineno))
     return sites
 

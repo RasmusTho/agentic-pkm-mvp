@@ -70,11 +70,12 @@ def test_base_service_defined() -> None:
     assert "./config/runtime.defaults.env" in env_file_paths
     assert any("WATCHER_RUNTIME_ENV_FILE" in p for p in env_file_paths)
 
-    # Watch dir / key are never given a real default -- only the empty-string
-    # compose fallback so parsing this shared base file never hard-fails for
-    # unrelated services (api/worker/db/...).
-    assert svc["environment"]["HEIMDAL_CAPTURE_WATCH_DIR"] == "${HEIMDAL_CAPTURE_WATCH_DIR:-}"
-    assert svc["environment"]["HEIMDAL_RAW_STORE_KEY"] == "${HEIMDAL_RAW_STORE_KEY:-}"
+    # Runtime values ride the service env_file chain. Declaring them under
+    # `environment` would shadow that chain with CLI interpolation (#3885).
+    environment = svc.get("environment") or {}
+    assert "HEIMDAL_CAPTURE_WATCH_DIR" not in environment
+    assert "HEIMDAL_CAPTURE_INTERVAL_SECONDS" not in environment
+    assert "HEIMDAL_RAW_STORE_KEY" not in environment
 
 
 def test_channel_overlays_bind_expected_environment() -> None:

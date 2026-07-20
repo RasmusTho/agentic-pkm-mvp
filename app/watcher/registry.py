@@ -44,10 +44,12 @@ from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbe
 from app.watcher.scope import derive_scope_roots, matches_scope
 from app.watcher.settings_delta import (
     SETTINGS_SOURCE_DIR_NAME,
-    handle_settings_local_delta,
+    handle_settings_detected_delta,
     handle_settings_source_delta,
     is_settings_control_path,
+    is_runtime_gating_owner_path,
     is_settings_source_path,
+    settings_delta_state_values,
 )
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -955,6 +957,19 @@ def _sync_settings_local_state(
         state.update_file_state(rel_str, settings_runtime_values=values)
 
 
+def _invalidate_settings_generation(
+    states: Mapping[str, WatcherState],
+    *,
+    rel_str: str,
+    values: Mapping[str, object] | None,
+) -> None:
+    for state in states.values():
+        state.invalidate_file_observation(
+            rel_str,
+            settings_runtime_values=values,
+        )
+
+
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -973,7 +988,11 @@ def _collect_changed_entries(
         scanned_paths.append(rel_str)
         last_mtime = state.last_mtime(rel_str)
         previous_hash = state.last_hash(rel_str)
-        if last_mtime is not None and last_mtime == mtime:
+        if (
+            last_mtime is not None
+            and last_mtime == mtime
+            and not is_runtime_gating_owner_path(rel)
+        ):
             state.update_file_state(rel_str, mtime=mtime, content_hash=previous_hash)
             continue
         hashed = _hash_file(path)
@@ -985,10 +1004,12 @@ def _collect_changed_entries(
         if previous_hash is not None and previous_hash == digest:
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             continue
-        settings_delta = handle_settings_local_delta(
+        settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
             rel_path=rel,
             previous_values=state.last_settings_runtime_values(rel_str),
+            observed_digest=digest,
+            observed_missing=False,
         )
         if settings_delta.errors:
             state.errors += len(settings_delta.errors)
@@ -999,18 +1020,18 @@ def _collect_changed_entries(
             summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
                 settings_delta.receipts
             )
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:
-                pass
-            hashed = _hash_file(path)
-            if hashed is not None:
-                digest = hashed[0]
+        if settings_delta.processed_digest is not None:
+            digest = settings_delta.processed_digest
         if settings_delta.deferred:
             # The gating delta could not be routed (vault not selected). Do
             # not record the file as seen: it must re-process on a later tick
             # once the vault validates, or the unrouted on-disk edit would
             # silently become effective through resolution.
+            _invalidate_settings_generation(
+                states,
+                rel_str=rel_str,
+                values=settings_delta_state_values(settings_delta),
+            )
             continue
         if is_settings_source_path(rel):
             # Settings markdown is runtime control input, never ordinary vault
@@ -1044,7 +1065,9 @@ def _collect_changed_entries(
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             if settings_delta.values is not None:
                 _sync_settings_local_state(
-                    states, rel_str=rel_str, values=settings_delta.values
+                    states,
+                    rel_str=rel_str,
+                    values=settings_delta_state_values(settings_delta) or {},
                 )
             changed_entries.append(
                 ChangedEntry(rel_path=rel, mtime=mtime, digest=digest)
@@ -1052,7 +1075,11 @@ def _collect_changed_entries(
             continue
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
         if settings_delta.values is not None:
-            _sync_settings_local_state(states, rel_str=rel_str, values=settings_delta.values)
+            _sync_settings_local_state(
+                states,
+                rel_str=rel_str,
+                values=settings_delta_state_values(settings_delta) or {},
+            )
     return changed_entries, scanned_paths
 
 
@@ -1349,6 +1376,44 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
     )
+    removed_runtime_gating_owner_files = sorted(
+        Path(path)
+        for path in state.files.keys() - set(scanned_paths)
+        if is_runtime_gating_owner_path(Path(path))
+    )
+    pending_runtime_gating_deletions: set[str] = set()
+    if removed_runtime_gating_owner_files:
+        summary["runtime_gating_owner_file_deletions_in_tick"] = len(removed_runtime_gating_owner_files)
+        for rel_path in removed_runtime_gating_owner_files:
+            rel_str = str(rel_path)
+            settings_delta = handle_settings_detected_delta(
+                vault_root=cfg.vault_path,
+                rel_path=rel_path,
+                previous_values=state.last_settings_runtime_values(rel_str),
+                observed_missing=True,
+            )
+            if settings_delta.errors:
+                state.errors += len(settings_delta.errors)
+                summary["settings_write_errors_in_tick"] = int(
+                    summary.get("settings_write_errors_in_tick", 0)
+                ) + len(settings_delta.errors)
+            if settings_delta.receipts:
+                summary["settings_receipts_in_tick"] = int(
+                    summary.get("settings_receipts_in_tick", 0)
+                ) + len(settings_delta.receipts)
+            if settings_delta.errors or settings_delta.deferred:
+                retained_values = settings_delta_state_values(settings_delta)
+                if retained_values is not None:
+                    _sync_settings_local_state(
+                        active_states,
+                        rel_str=rel_str,
+                        values=retained_values,
+                    )
+                pending_runtime_gating_deletions.add(rel_str)
+            else:
+                for active_state in active_states.values():
+                    active_state.files.pop(rel_str, None)
+
     removed_settings_sources = sorted(
         Path(path)
         for path in state.files.keys() - set(scanned_paths)
@@ -1438,7 +1503,7 @@ def _run_spec_tick(
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms
     _apply_guardrails_registry(cfg, state, summary)
-    state.prune_files(scanned_paths)
+    state.prune_files([*scanned_paths, *pending_runtime_gating_deletions])
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 

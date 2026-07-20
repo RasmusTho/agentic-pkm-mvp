@@ -151,12 +151,28 @@ def test_export_runtime_env_no_vault_omits_both_vault_vars(tmp_path: Path) -> No
     """No-vault idle posture (#2005) writes neither VAULT_ROOT nor VAULT_HOST_ROOT."""
     repo_root, out_path, env = _runtime_env_base(tmp_path)
     env["NO_VAULT_MODE"] = "1"
+    env.pop("LLM_PROVIDER", None)
 
     subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
 
     text = out_path.read_text(encoding="utf-8")
     assert not re.search(r"^VAULT_ROOT=", text, re.M)
     assert not re.search(r"^VAULT_HOST_ROOT=", text, re.M)
+    assert re.search(r"^LLM_PROVIDER=mock$", text, re.M)
+
+
+def test_export_runtime_env_no_vault_preserves_llm_provider(tmp_path: Path) -> None:
+    """The idle runtime env keeps the preflight-validated provider selector."""
+    repo_root, out_path, env = _runtime_env_base(tmp_path)
+    env["NO_VAULT_MODE"] = "1"
+    env["LLM_PROVIDER"] = "synthetic-no-vault-provider"
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    lines = out_path.read_text(encoding="utf-8").splitlines()
+    assert [line for line in lines if line.startswith("LLM_PROVIDER=")] == [
+        "LLM_PROVIDER=synthetic-no-vault-provider"
+    ]
 
 
 def test_compose_volume_source_uses_host_root_var() -> None:

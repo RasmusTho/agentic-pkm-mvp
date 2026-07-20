@@ -43,12 +43,18 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "scripts/lib").mkdir(parents=True)
     (root / "config/deploy").mkdir(parents=True)
     (root / "app/alembic/versions").mkdir(parents=True)
+    (root / "app/ops").mkdir(parents=True)
     (root / "app/release_channels").mkdir(parents=True)
+    (root / "config/secrets").mkdir(parents=True)
     (root / "ops/deployments").mkdir(parents=True)
 
     for relative in (
         "app/release_channels/__init__.py",
         "app/release_channels/reversibility.py",
+        "app/ops/__init__.py",
+        "app/ops/host_secret_contract.py",
+        "app/ops/host_secret_bootstrap.py",
+        "config/secrets/host_secret_contract.json",
         "scripts/deploy_channel.sh",
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/lib/deploy_channel_compose.sh",
@@ -70,6 +76,13 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     bin_dir.mkdir()
     docker_marker = tmp_path / "docker-called"
     event_log = tmp_path / "deploy-events.log"
+    _write_executable(
+        bin_dir / "security",
+        """#!/usr/bin/env bash
+set -eu
+printf '%064d\n' 0
+""",
+    )
     _write_executable(
         bin_dir / "docker",
         f"""#!/usr/bin/env bash
@@ -1487,9 +1500,9 @@ def test_prod_deploy_pending_retry_preflight_ignores_ambient_runtime_env_file(
     """Regression test for #3903 round 3: an earlier revision fell back to an
     exported shell WATCHER_RUNTIME_ENV_FILE when the pin file lacked the key.
     The real deploy path never does this -- scripts/lib's compose helper
-    resolves that variable ONLY from the pin file and explicitly `unset`s it
-    before invoking Compose whenever the pin file lacks the key. Round 4
-    removed the whole file-reading mechanism this bug lived in, but an
+    resolves that variable from the pin file or its governed channel default
+    (`./tmp/runtime.env` for PROD), never from the ambient shell. Round 4
+    removed the whole DSN file-reading mechanism this bug lived in, but an
     ambient WATCHER_RUNTIME_ENV_FILE pointing at a poisoned DSN must still
     have no effect -- the current resolution path does not consult that
     variable at all (docker-compose.prod.yml's explicit `environment:`
