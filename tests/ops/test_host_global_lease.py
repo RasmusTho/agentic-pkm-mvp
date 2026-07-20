@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from scripts.run_with_host_lease import repo_common_lock_path
+from scripts.run_with_host_lease import repo_common_lock_path, run_with_lease
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -200,6 +202,59 @@ def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
 
     successor = subprocess.run(
         _lease_command(resource, "descendant-successor", "pass"),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert successor.returncode == 0
+
+
+def test_signal_arriving_during_command_spawn_is_replayed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    resource = f"test-host-lease-spawn-signal-{time.time_ns()}"
+    spawn_started = tmp_path / "spawn-started"
+    command = [sys.executable, "-c", "import time; time.sleep(30)"]
+    real_popen = subprocess.Popen
+    real_fork = os.fork
+    senders: list[threading.Thread] = []
+
+    def delayed_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        if args and args[0] == command:
+            spawn_started.touch()
+            time.sleep(0.4)
+        return real_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(subprocess, "Popen", delayed_popen)
+
+    def terminate_during_spawn() -> None:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not spawn_started.exists():
+            time.sleep(0.01)
+        if spawn_started.exists():
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    def fork_then_schedule_signal() -> int:
+        child_pid = real_fork()
+        if child_pid > 0:
+            sender = threading.Thread(target=terminate_during_spawn)
+            sender.start()
+            senders.append(sender)
+        return child_pid
+
+    monkeypatch.setattr(os, "fork", fork_then_schedule_signal)
+    return_code = run_with_lease(
+        resource=resource,
+        execution_id="spawn-signal-holder",
+        command=command,
+    )
+    for sender in senders:
+        sender.join(timeout=1)
+
+    assert return_code == 143
+    successor = subprocess.run(
+        _lease_command(resource, "spawn-signal-successor", "pass"),
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

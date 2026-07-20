@@ -175,21 +175,26 @@ For docs-authoring, governance, and direct-repair PRs, run the cheap local revie
 the push creates or updates an expensive GitHub CI head. For implementation or direct-repair work
 touching auth, security, data, migrations, concurrency, external APIs, credential durability, or an
 explicit state machine, run the same gate before the first expensive full suite as well as before
-push. Supply each applicable risk surface from the TCD classification. This local ordering gate does
+push. Every implementation lane must explicitly attest that its TCD risk assessment is complete,
+including when the resulting risk-surface set is empty; supply every applicable risk surface. This local ordering gate does
 not replace required GitHub checks, branch protection, or final review triage.
 
 Use `--review-gate-complete` only after the checks returned by the script have run. For a high-risk
 implementation this means a mechanism convergence packet plus a fresh independent high-capability
 review of the local publishable SHA before the full suite; see
 `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. If an emergency direct
-repair must bypass this local gate, use `--bypass-reason` and name the bypass in the PR/issue receipt.
+repair with no declared high-risk surface must bypass this local gate, use `--bypass-reason` and name
+the bypass in the PR/issue receipt. A declared high-risk surface is never bypassable.
 
 ```bash
 PR_LANE="<implementation|docs-authoring|governance|direct-repair>"
 TCD_RISK_SURFACES="<space-separated applicable surfaces, or empty>"
-if [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ] || [ -n "$TCD_RISK_SURFACES" ]; then
+if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
   # Portable read loop, not `mapfile`/`readarray` (bash 4+ only) — macOS ships bash 3.2.
   review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
+  if [ "$PR_LANE" = "implementation" ]; then
+    review_gate_args+=(--risk-assessment-complete)
+  fi
   while IFS= read -r file; do
     [ -n "$file" ] && review_gate_args+=(--changed-file "$file")
   done < <(git diff --name-only origin/main...HEAD)

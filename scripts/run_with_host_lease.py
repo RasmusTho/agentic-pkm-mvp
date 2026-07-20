@@ -215,9 +215,11 @@ def _acquire_and_exec(
     _report_to_parent(status_fd, held_receipt)
 
     command_process: subprocess.Popen[bytes] | None = None
+    pending_signals: list[int] = []
 
     def forward_signal(signum: int, _frame: object) -> None:
         if command_process is None:
+            pending_signals.append(signum)
             return
         try:
             os.killpg(command_process.pid, signum)
@@ -232,6 +234,11 @@ def _acquire_and_exec(
             close_fds=True,
             start_new_session=True,
         )
+        for pending_signal in pending_signals:
+            try:
+                os.killpg(command_process.pid, pending_signal)
+            except ProcessLookupError:
+                break
         command_return_code = command_process.wait()
     except FileNotFoundError:
         command_return_code = 127

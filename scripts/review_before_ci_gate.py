@@ -60,6 +60,7 @@ def evaluate_review_before_ci_gate(
     review_gate_complete: bool = False,
     bypass_reason: str | None = None,
     risk_surfaces: Sequence[str] = (),
+    risk_assessment_complete: bool = False,
 ) -> ReviewBeforeCiGate:
     """Return local review-before-CI gate guidance for a PR prep stage."""
 
@@ -75,14 +76,20 @@ def evaluate_review_before_ci_gate(
         raise ReviewBeforeCiGateError(
             "risk_surfaces are valid only for implementation or direct-repair lanes"
         )
+    if normalized_lane == "implementation" and not risk_assessment_complete:
+        raise ReviewBeforeCiGateError(
+            "implementation lane requires an explicit completed risk assessment, "
+            "including when no high-risk surface applies"
+        )
     matched = _matched_surfaces(normalized_lane, files, risks)
     required = bool(matched)
     bypass = _clean_text(bypass_reason)
     if bypass and not required:
         raise ReviewBeforeCiGateError("bypass_reason is only valid when the review gate is required")
-    if bypass and normalized_lane != "direct-repair":
+    if bypass and (normalized_lane != "direct-repair" or risks):
         raise ReviewBeforeCiGateError(
-            "bypass_reason is valid only for the emergency direct-repair lane"
+            "bypass_reason is valid only for an emergency direct-repair with no "
+            "declared high-risk surface"
         )
     if bypass:
         return _gate(
@@ -231,6 +238,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--review-gate-complete", action="store_true")
     parser.add_argument("--bypass-reason")
     parser.add_argument("--risk-surface", action="append", default=[])
+    parser.add_argument("--risk-assessment-complete", action="store_true")
     return parser
 
 
@@ -243,6 +251,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             review_gate_complete=args.review_gate_complete,
             bypass_reason=args.bypass_reason,
             risk_surfaces=args.risk_surface,
+            risk_assessment_complete=args.risk_assessment_complete,
         )
     except ReviewBeforeCiGateError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), file=sys.stderr)

@@ -230,6 +230,11 @@ stops remain blocked while their bounded recovery path proceeds autonomously.
 
 ## Mechanism Convergence Gate
 
+The implementation lane must explicitly record that TCD risk classification was completed even when
+no high-risk surface applies. Omitting the risk-surface argument is not evidence of a low-risk
+classification. Once any high-risk surface is declared, neither implementation nor direct-repair may
+bypass this gate; only a clean convergence review permits expensive proof to begin.
+
 This is the cheap design/correctness gate that precedes expensive proof for high-risk stateful work.
 It applies to auth, security, data, migrations, concurrency, external APIs, credential durability,
 and explicit state machines. It is enacted by `issue-to-code`, `publish-pr`, and

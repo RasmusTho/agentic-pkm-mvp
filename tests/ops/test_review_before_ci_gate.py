@@ -60,6 +60,7 @@ def test_high_risk_implementation_requires_convergence_review_before_expensive_g
         lane="implementation",
         changed_files=["app/oauth/service.py", "tests/oauth/test_service.py"],
         risk_surfaces=["auth", "credential-durability", "state-machine"],
+        risk_assessment_complete=True,
     )
 
     assert gate.status == "required"
@@ -74,6 +75,7 @@ def test_standard_implementation_keeps_existing_hot_path() -> None:
     gate = evaluate_review_before_ci_gate(
         lane="implementation",
         changed_files=["app/panel/formatting.py", "tests/panel/test_formatting.py"],
+        risk_assessment_complete=True,
     )
 
     assert gate.status == "not_required"
@@ -102,13 +104,38 @@ def test_bypass_requires_explicit_reason() -> None:
 def test_high_risk_implementation_cannot_bypass_convergence_review() -> None:
     with pytest.raises(
         ReviewBeforeCiGateError,
-        match="only for the emergency direct-repair lane",
+        match="only for an emergency direct-repair",
     ):
         evaluate_review_before_ci_gate(
             lane="implementation",
             changed_files=["app/oauth/service.py"],
             risk_surfaces=["auth"],
+            risk_assessment_complete=True,
             bypass_reason="Skip convergence review.",
+        )
+
+
+def test_implementation_requires_explicit_risk_assessment_even_when_no_risk_declared() -> None:
+    with pytest.raises(
+        ReviewBeforeCiGateError,
+        match="requires an explicit completed risk assessment",
+    ):
+        evaluate_review_before_ci_gate(
+            lane="implementation",
+            changed_files=["app/oauth/service.py"],
+        )
+
+
+def test_high_risk_direct_repair_cannot_use_emergency_bypass() -> None:
+    with pytest.raises(
+        ReviewBeforeCiGateError,
+        match="no declared high-risk surface",
+    ):
+        evaluate_review_before_ci_gate(
+            lane="direct-repair",
+            changed_files=["app/oauth/service.py"],
+            risk_surfaces=["auth"],
+            bypass_reason="Emergency auth repair.",
         )
 
 
