@@ -1,11 +1,11 @@
-State: Target-state specification directory for the post-MVP CKM Measurement & Access capability. Backlog is filed as parent #3775 with children #3776-#3781. The five owner decisions are accepted below. Issue #3776 is reconciled and under current-SHA verification; the remaining children stay blocked pending reconciliation and strict revalidation of their task and Issue contracts. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138. No successor delivery claim until verification and closure complete.
+State: Target-state specification directory for the post-MVP CKM Measurement & Access capability. Backlog is filed as parent #3775 with children #3776-#3781. Q1a #3776, Q1b #3777, Q2 #3778, M1 #3779, and O1b #3781 are terminal delivered. O1a #3780 is on PR #4060 under current-SHA verification. Parent #3775 remains open and blocked pending its post-delivery receipts, D11/D12, learning, owner-doc, and acceptance audit; this child delivery does not claim parent acceptance. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the accepted post-MVP access, measurement, observation, dependency, and acceptance contract. Subordinate to ADR-0057 and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: this directory for implementation task shape; ADR-0057 for CKM existence and authority posture; canonical fitness registration remains in `docs/architecture/SBS_FITNESS_RULES.md`.
-Last reviewed: 2026-07-15
+Last reviewed: 2026-07-22
 
 # CKM Measurement & Access
 
@@ -89,18 +89,18 @@ Partial-failure paths:
 - Retaining a metric sample fails: the already-returned read result remains unchanged, no partial retained sample is eligible for comparison, and the failure is surfaced explicitly.
 - O1 records an unsupported historical question: the record remains privacy-safe evidence, not authorization for M2. M2 requires an accepted question with source authority and new executable contract.
 - O1 records repeated feature demand: O2 remains a proposal gate; no feature, prediction, automation, or federation work is pre-authorized.
-- O1 event recording fails: the failure follows the authoritative OEF contract, while the already-returned query result/refusal and CKM state remain unchanged.
+- O1 observation persistence fails: the BuilderOps-local outer adapter returns a typed observation error and rolls back its adjacent-store transaction, while the already-returned query result/refusal and CKM state remain unchanged. Product/runtime OEF outbox, worker, retry, and dead-letter semantics do not apply.
 
 ## Implementation tasks
 
 | Order | Task / Issue | Outcome | Dependencies | Parallelization |
 | --- | --- | --- | --- | --- |
-| 1 | [ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md](ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md) (Q1a, #3776) | Lifecycle-safe identity, policy-bound DTO/error/envelope schemas, epoch/revision, and complete-snapshot contract | owner decisions recorded; task and Issue contract reconciled | serial |
-| 2 | [DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md](DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md) (Q1b, #3777) | Working read-only one-transaction bounded complete snapshot service and CLI JSON | #3776 | serial; implementation delivery in progress; Q1 parent validation requires both Q1a and Q1b receipts |
-| 3a | [OPTIMIZE_BOUNDED_QUERY_PLANS.md](OPTIMIZE_BOUNDED_QUERY_PLANS.md) (Q2, #3778) | Filters, batch plans, indexes, constant query count, N+1 removal | #3777 | may parallelize after Q1 with M1/O1a if ownership stays isolated |
-| 3b | [DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md](DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md) (M1, #3779) | Versioned metrics, explicitly retained replayable source samples, fully bound observations, storage accounting, and 365-day pruning/correction lifecycle | #3777 | may parallelize after Q1 with Q2/O1a |
-| 3c | [CAPTURE_QUERY_QUESTIONS.md](CAPTURE_QUERY_QUESTIONS.md) (O1a, #3780) | Privacy-safe query/unsupported/question observation | #3777 | may parallelize after Q1; must reconcile any authoritative OEF event contract |
-| 4 | [COMPARE_COMPATIBLE_OBSERVATIONS.md](COMPARE_COMPATIBLE_OBSERVATIONS.md) (O1b, #3781) | Compatible immutable observation comparison | #3779 | may follow M1 independently of Q2 unless live scale disproves the Q1 bound |
+| 1 | [ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md](ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md) (Q1a, #3776) | Lifecycle-safe identity, policy-bound DTO/error/envelope schemas, epoch/revision, and complete-snapshot contract | owner decisions recorded; task and Issue contract reconciled | terminal delivered |
+| 2 | [DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md](DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md) (Q1b, #3777) | Working read-only one-transaction bounded complete snapshot service and CLI JSON | #3776 | terminal delivered; Q1 parent validation retains both Q1a and Q1b receipts |
+| 3a | [OPTIMIZE_BOUNDED_QUERY_PLANS.md](OPTIMIZE_BOUNDED_QUERY_PLANS.md) (Q2, #3778) | Filters, batch plans, indexes, constant query count, N+1 removal | #3777 | terminal delivered |
+| 3b | [DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md](DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md) (M1, #3779) | Versioned metrics, explicitly retained replayable source samples, fully bound observations, storage accounting, and 365-day pruning/correction lifecycle | #3777 | terminal delivered |
+| 3c | [CAPTURE_QUERY_QUESTIONS.md](CAPTURE_QUERY_QUESTIONS.md) (O1a, #3780) | Privacy-safe query/unsupported/question observation | #3777 | PR #4060 under current-SHA verification |
+| 4 | [COMPARE_COMPATIBLE_OBSERVATIONS.md](COMPARE_COMPATIBLE_OBSERVATIONS.md) (O1b, #3781) | Compatible immutable observation comparison | #3779 | terminal delivered |
 
 Dependency graph:
 
@@ -165,6 +165,14 @@ implementation/test evidence only: it establishes neither trend nor cadence.
 
 ## Observation-gated future work
 
+- **O1a records bounded categories, not content or authority.** The delivered
+  BuilderOps-local adapter distinguishes supported results, typed refusals,
+  unsupported historical requests, and human-accepted questions. Accepted
+  questions use the closed categories `evidence_coverage_change`,
+  `source_freshness_change`, `citation_confidence_change`,
+  and `candidate_finding_composition_change`.
+  These categories are structural evidence only: their presence, frequency,
+  or source-authority digest cannot activate a capability or create backlog.
 - **M2 is not filed or Ready.** The accepted question set is limited to compatible sampled changes in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition. Filing still requires a costed smallest implementation, source authority, precise semantics, and verifiable refusal behavior. General bitemporality is not the answer.
 - **O2 is not filed or pre-authorized.** Filters beyond Q2, comparison/timeline product surfaces, drift, prediction, automation, and federation require accepted observation evidence and their normal authority path.
 - Two compatible snapshots are only the mathematical minimum for a delta. They do not prove a cadence, trend, window duration, or minimum evidence count.
@@ -173,21 +181,21 @@ implementation/test evidence only: it establishes neither trend nor cadence.
 
 - [x] All five owner decisions are accepted in the authoritative specification.
   Verify: decision writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Accepted pre-implementation owner decisions`
-- [ ] Every affected task and Issue contract reflects the accepted owner decisions before any child resumes.
+- [x] Every affected task and Issue contract reflects the accepted owner decisions before any child resumes.
   Verify: strict readiness validation and reconciliation receipt for each affected Issue
-- [ ] Q1 contract and implementation prove lifecycle-safe non-reused public identity, atomic state revision, one-transaction complete snapshots, policy metadata, tagged missing states, deterministic bounded capture, completeness accounting, and exact lookup.
+- [x] Q1 contract and implementation prove lifecycle-safe non-reused public identity, atomic state revision, one-transaction complete snapshots, policy metadata, tagged missing states, deterministic bounded capture, completeness accounting, and exact lookup.
   Verify: Q1a and Q1b child delivery receipts plus `tests/builderops/ckm/test_query_service.py`
-- [ ] Query execution is read-only/side-effect free; incomplete/oversized capture and all unknown schema/version/policy/semantics states fail explicitly.
+- [x] Query execution is read-only/side-effect free; incomplete/oversized capture and all unknown schema/version/policy/semantics states fail explicitly.
   Verify: `tests/builderops/ckm/test_query_service.py::test_query_path_is_read_only_and_side_effect_free`; `tests/builderops/ckm/test_query_service.py::test_incomplete_or_oversized_snapshot_refuses`
 - [x] Q2 proves bounded indexed plans, constant query counts per complete capture, and no N+1 regression without weakening Q1 ordering/completeness guarantees.
   Verify: `tests/builderops/ckm/test_query_plans.py`
-- [ ] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings; any aggregate is `human_advisory_only`, accompanied by its evidence-rich components, and cannot drive machine authority.
+- [x] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings; any aggregate is `human_advisory_only`, accompanied by its evidence-rich components, and cannot drive machine authority.
   Verify: `tests/builderops/ckm/test_metrics.py`
-- [ ] M1 owns complete sampled-retention delivery: explicit post-read capture of immutable source payload plus observation, 365-day policy binding, count/byte visibility, previewed early pruning, superseding correction, non-content deletion markers, and replay refusal for unavailable payloads; O1a owns the corresponding observation correction/deletion lifecycle truth.
+- [x] M1 owns complete sampled-retention delivery: explicit post-read capture of immutable source payload plus observation, 365-day policy binding, count/byte visibility, previewed early pruning, superseding correction, non-content deletion markers, and replay refusal for unavailable payloads; O1a owns the corresponding observation correction/deletion lifecycle truth.
   Verify: `tests/builderops/ckm/test_metrics.py::test_explicit_retention_runs_outside_read_path_and_binds_source_sample`; `tests/builderops/ckm/test_metrics.py::test_retained_samples_apply_storage_accounting_and_pruning_policy`; `tests/builderops/ckm/test_metrics.py::test_retained_sample_correction_and_deletion_preserve_lifecycle_truth`; `tests/builderops/ckm/test_observation_capture.py::test_observation_correction_and_deletion_preserve_lifecycle_truth`; `tests/builderops/ckm/test_metric_comparison.py::test_unavailable_or_tampered_retained_source_refuses_comparison`
-- [ ] O1a records privacy-safe real questions outside the read path and preserves typed unsupported requests without authorizing new capability.
+- [x] O1a records privacy-safe real questions outside the read path and preserves typed unsupported requests without authorizing new capability.
   Verify: `tests/builderops/ckm/test_observation_capture.py`; validation receipt on the successor parent
-- [ ] O1b compares only compatible immutable observations and refuses every semantics-bearing mismatch; cadence and minimum-snapshot hypotheses remain explicitly unresolved.
+- [x] O1b compares only compatible immutable observations and refuses every semantics-bearing mismatch; cadence and minimum-snapshot hypotheses remain explicitly unresolved.
   Verify: `tests/builderops/ckm/test_metric_comparison.py`; validation receipt on the successor parent
 - [ ] Every child has a delivery receipt, owner-doc resolution, transition-debt result, and local review/CI evidence; D11/D12 and unresolved learning candidates are terminally resolved.
   Verify: successor-parent closure ledger and child issue receipts
