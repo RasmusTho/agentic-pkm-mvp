@@ -1,4 +1,4 @@
-State: Target-state specification directory for the post-MVP CKM Measurement & Access capability. Backlog is filed as parent #3775 with children #3776-#3781. Q1a #3776, Q1b #3777, Q2 #3778, M1 #3779, and O1b #3781 are terminal delivered. O1a #3780 is on PR #4060 under current-SHA verification. Parent #3775 remains open and blocked pending its post-delivery receipts, D11/D12, learning, owner-doc, and acceptance audit; this child delivery does not claim parent acceptance. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138.
+State: Target-state specification directory for the post-MVP CKM Measurement & Access capability. Backlog is filed as parent #3775 with children #3776-#3781. Q1a #3776, Q1b #3777, Q2 #3778, M1 #3779, O1a #3780, and O1b #3781 are terminal delivered. This docs-only promotion completes the O1a/child owner-doc promotion. Parent #3775 remains open and blocked pending its separate final acceptance/closure audit; child delivery does not itself claim parent acceptance. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the accepted post-MVP access, measurement, observation, dependency, and acceptance contract. Subordinate to ADR-0057 and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
@@ -99,7 +99,7 @@ Partial-failure paths:
 | 2 | [DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md](DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md) (Q1b, #3777) | Working read-only one-transaction bounded complete snapshot service and CLI JSON | #3776 | terminal delivered; Q1 parent validation retains both Q1a and Q1b receipts |
 | 3a | [OPTIMIZE_BOUNDED_QUERY_PLANS.md](OPTIMIZE_BOUNDED_QUERY_PLANS.md) (Q2, #3778) | Filters, batch plans, indexes, constant query count, N+1 removal | #3777 | terminal delivered |
 | 3b | [DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md](DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md) (M1, #3779) | Versioned metrics, explicitly retained replayable source samples, fully bound observations, storage accounting, and 365-day pruning/correction lifecycle | #3777 | terminal delivered |
-| 3c | [CAPTURE_QUERY_QUESTIONS.md](CAPTURE_QUERY_QUESTIONS.md) (O1a, #3780) | Privacy-safe query/unsupported/question observation | #3777 | PR #4060 under current-SHA verification |
+| 3c | [CAPTURE_QUERY_QUESTIONS.md](CAPTURE_QUERY_QUESTIONS.md) (O1a, #3780) | Privacy-safe query/unsupported/question observation | #3777 | terminal delivered by PR #4060 |
 | 4 | [COMPARE_COMPATIBLE_OBSERVATIONS.md](COMPARE_COMPATIBLE_OBSERVATIONS.md) (O1b, #3781) | Compatible immutable observation comparison | #3779 | terminal delivered |
 
 Dependency graph:

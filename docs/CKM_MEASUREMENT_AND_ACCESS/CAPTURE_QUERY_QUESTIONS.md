@@ -79,4 +79,4 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
 
 ## Related GitHub Issues
 
-Implementation issue #3780 is on PR #4060 under current-SHA verification beneath open, blocked validation parent #3775. Its reconciled contract explicitly excludes the Product/runtime OEF event path in favor of the BuilderOps-local adjacent observation store. TCD hint: Terra/high; escalate for privacy, authority, retention, or observation-failure ambiguity.
+Implementation issue #3780 was terminally delivered by PR #4060 beneath open, blocked validation parent #3775. Its reconciled contract explicitly excludes the Product/runtime OEF event path in favor of the BuilderOps-local adjacent observation store. TCD hint: Terra/high; escalate for privacy, authority, retention, or observation-failure ambiguity.
