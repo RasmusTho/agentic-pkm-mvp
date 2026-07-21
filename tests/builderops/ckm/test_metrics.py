@@ -81,6 +81,26 @@ def test_replay_refuses_tampered_retained_source(tmp_path: Path) -> None:
     assert exc.value.code == "tampered_retained_source"
 
 
+@pytest.mark.parametrize(
+    ("tampered_payload", "storage_type"),
+    (("tampered-text", "text"), (42, "integer"), (3.14, "real")),
+)
+def test_replay_refuses_unsupported_sqlite_payload_storage_classes(
+    tmp_path: Path, tampered_payload: object, storage_type: str
+) -> None:
+    retained = MetricRetentionStore(tmp_path / f"metrics-{storage_type}.sqlite")
+    sample = retained.retain(_result(tmp_path), retained_at="2026-07-21T00:00:00Z")
+    with sqlite3.connect(retained.path) as conn:
+        conn.execute(
+            "UPDATE ckm_metric_sample_v1 SET source_payload = ? WHERE sample_id = ?",
+            (tampered_payload, sample.sample_id),
+        )
+    with pytest.raises(CkmContractError) as exc:
+        retained.replay(sample.sample_id)
+    assert exc.value.code == "tampered_retained_source"
+    assert exc.value.details["storage_type"] == storage_type
+
+
 def test_retained_samples_apply_storage_accounting_and_pruning_policy(tmp_path: Path) -> None:
     retained = MetricRetentionStore(tmp_path / "metrics.sqlite")
     sample = retained.retain(_result(tmp_path), retained_at="2026-01-01T00:00:00Z")

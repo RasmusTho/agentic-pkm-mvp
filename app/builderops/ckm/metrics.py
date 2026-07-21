@@ -205,11 +205,13 @@ class MetricRetentionStore:
     def replay(self, sample_id: str) -> dict[str, Any]:
         self.initialize()
         with sqlite3.connect(self.path) as conn:
-            row = conn.execute("SELECT source_payload, source_digest, lifecycle, lifecycle_marker_json FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
+            row = conn.execute("SELECT source_payload, source_digest, lifecycle, lifecycle_marker_json, typeof(source_payload) FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
         if row is None:
             raise CkmContractError("missing_retained_sample", "retained metric sample is unknown", {"sample_id": sample_id})
         if row[0] is None:
-            raise CkmContractError("source_unavailable", "retained source payload is unavailable", {"sample_id": sample_id, "lifecycle": row[2], "marker": json.loads(row[3])})
+            raise CkmContractError("source_unavailable", "retained source payload is unavailable", {"sample_id": sample_id, "lifecycle": row[2]})
+        if row[4] != "blob" or not isinstance(row[0], (bytes, bytearray, memoryview)):
+            raise CkmContractError("tampered_retained_source", "retained source payload failed integrity verification", {"sample_id": sample_id, "storage_type": row[4]})
         try:
             payload = json.loads(bytes(row[0]).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
