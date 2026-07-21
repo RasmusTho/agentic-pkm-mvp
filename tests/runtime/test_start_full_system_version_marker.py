@@ -230,6 +230,40 @@ def test_runtime_start_harness_classifies_missing_initial_progress(
     assert exc_info.value.progress_tail == ""
 
 
+def _assert_descendant_terminated(pid: int, *, timeout: float = 2.0) -> None:
+    """Assert a term-resistant descendant is terminated: gone or a zombie.
+
+    ``_stop_process`` returns as soon as the process group is zombie-only, so a
+    descendant reparented to init after the group SIGKILL may still occupy a
+    not-yet-reaped zombie slot. A zombie is effectively dead, but
+    ``os.kill(pid, 0)`` does not raise ``ProcessLookupError`` for one, so a
+    strict ``pytest.raises(ProcessLookupError)`` oracle contradicts the harness
+    contract and can flake. Accept either fully gone or a zombie state.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        try:
+            stat = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(pid)],
+                check=False,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):  # pragma: no cover - defensive
+            stat = ""
+        if not stat or "Z" in stat:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"descendant {pid} still running (stat={stat!r}) after {timeout:g}s"
+            )
+        time.sleep(0.02)
+
+
 def test_runtime_start_harness_kills_term_resistant_descendant(
     tmp_path: Path,
 ) -> None:
@@ -271,8 +305,7 @@ time.sleep(30)
 
     assert exc_info.value.stage == "progress_stall_timeout"
     child_pid = int(exc_info.value.progress_tail.strip().split("=", 1)[1])
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
+    _assert_descendant_terminated(child_pid)
 
 
 def test_runtime_start_harness_cleans_descendant_after_successful_parent_exit(
@@ -325,8 +358,7 @@ Path(os.environ["STARTUP_HARNESS_PROGRESS_PATH"]).write_text(
 
     assert result.returncode == 0, result.stderr + result.stdout
     child_pid = int(progress_file.read_text(encoding="utf-8").strip().split("=", 1)[1])
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
+    _assert_descendant_terminated(child_pid)
 
 
 @pytest.mark.parametrize(
