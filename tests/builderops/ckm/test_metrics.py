@@ -151,6 +151,86 @@ def test_retained_sample_correction_and_deletion_preserve_lifecycle_truth(tmp_pa
     assert exc.value.code == "source_unavailable"
 
 
+def test_correction_preserves_non_default_metric_definition_and_refuses_mismatch(
+    tmp_path: Path,
+) -> None:
+    retained = MetricRetentionStore(tmp_path / "metric-correction.sqlite")
+    result = _result(tmp_path)
+    original = retained.retain(
+        result,
+        metric_id="provenance_coverage",
+        retained_at="2026-01-01T00:00:00Z",
+    )
+    corrected = retained.correct(
+        original.sample_id,
+        result,
+        metric_id="provenance_coverage",
+        semantic_version="1.0.0",
+        retained_at="2026-01-02T00:00:00Z",
+    )
+    with sqlite3.connect(retained.path) as conn:
+        rows = conn.execute(
+            "SELECT sample_id, lifecycle, observation_json FROM ckm_metric_sample_v1 WHERE sample_id IN (?, ?) ORDER BY sample_id",
+            (original.sample_id, corrected.sample_id),
+        ).fetchall()
+    observations = {sample_id: json.loads(payload) for sample_id, _, payload in rows}
+    lifecycles = {sample_id: lifecycle for sample_id, lifecycle, _ in rows}
+    assert lifecycles[original.sample_id] == "superseded"
+    assert observations[original.sample_id]["metric_definition"] == observations[corrected.sample_id]["metric_definition"]
+    for digest in ("formula_digest", "detector_digest", "configuration_digest"):
+        assert observations[original.sample_id]["bindings"][digest] == observations[corrected.sample_id]["bindings"][digest]
+    assert observations[corrected.sample_id]["metric_definition"]["id"] == "provenance_coverage"
+
+    mismatch = retained.retain(
+        result,
+        metric_id="provenance_coverage",
+        retained_at="2026-02-01T00:00:00Z",
+    )
+    usage_before_mismatch = retained.storage_usage()
+    with pytest.raises(CkmContractError) as exc:
+        retained.correct(
+            mismatch.sample_id,
+            result,
+            metric_id="capability_population",
+            retained_at="2026-02-02T00:00:00Z",
+        )
+    assert exc.value.code == "metric_definition_mismatch"
+    assert retained.storage_usage() == usage_before_mismatch
+    with sqlite3.connect(retained.path) as conn:
+        assert conn.execute(
+            "SELECT lifecycle FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+            (mismatch.sample_id,),
+        ).fetchone()[0] == "retained"
+
+
+def test_correction_refuses_corrupt_persisted_metric_definition(tmp_path: Path) -> None:
+    retained = MetricRetentionStore(tmp_path / "corrupt-metric-correction.sqlite")
+    result = _result(tmp_path)
+    original = retained.retain(
+        result,
+        metric_id="provenance_coverage",
+        retained_at="2026-01-01T00:00:00Z",
+    )
+    with sqlite3.connect(retained.path) as conn:
+        payload = json.loads(
+            conn.execute(
+                "SELECT observation_json FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+                (original.sample_id,),
+            ).fetchone()[0]
+        )
+        payload["metric_definition"]["definition_digest"] = "tampered"
+        conn.execute(
+            "UPDATE ckm_metric_sample_v1 SET observation_json = ? WHERE sample_id = ?",
+            (json.dumps(payload), original.sample_id),
+        )
+    with pytest.raises(CkmContractError) as exc:
+        retained.correct(
+            original.sample_id, result, retained_at="2026-01-02T00:00:00Z"
+        )
+    assert exc.value.code == "corrupt_retained_observation"
+    assert retained.storage_usage()["count"] == 1
+
+
 def test_correction_payloads_remain_accounted_and_policy_prunable(tmp_path: Path) -> None:
     retained = MetricRetentionStore(tmp_path / "correction-accounting.sqlite")
     result = _result(tmp_path)

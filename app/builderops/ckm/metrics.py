@@ -231,13 +231,41 @@ class MetricRetentionStore:
                 observation_marker = {"observation_id": row[4], "payload_removed": True}
                 conn.execute("UPDATE ckm_metric_sample_v1 SET source_payload = NULL, source_digest = '', observation_json = ?, watermarks_json = '{}', finding_evaluations_json = '{}', lifecycle = ?, lifecycle_marker_json = ?, deleted_at = ? WHERE sample_id = ? AND source_payload IS NOT NULL", (canonical_json(observation_marker), reason, canonical_json(marker), at, sample_id))
 
-    def correct(self, sample_id: str, result: ResultEnvelope, *, finding_evaluations: Mapping[str, Any] | None = None, retained_at: str | None = None) -> RetainedSample:
+    def correct(self, sample_id: str, result: ResultEnvelope, *, finding_evaluations: Mapping[str, Any] | None = None, retained_at: str | None = None, metric_id: str | None = None, semantic_version: str | None = None) -> RetainedSample:
         self.initialize()
         with sqlite3.connect(self.path) as conn:
-            exists = conn.execute("SELECT 1 FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
-        if exists is None:
+            row = conn.execute("SELECT observation_json, typeof(observation_json), source_payload, lifecycle FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
+        if row is None:
             raise CkmContractError("missing_retained_sample", "retained metric sample is unknown", {"sample_id": sample_id})
-        replacement = self.retain(result, finding_evaluations=finding_evaluations, retained_at=retained_at, supersedes_sample_id=sample_id)
+        if row[2] is None:
+            raise CkmContractError("source_unavailable", "retained source payload is unavailable for correction", {"sample_id": sample_id, "lifecycle": row[3]})
+        if row[1] != "text" or not isinstance(row[0], str):
+            raise CkmContractError("corrupt_retained_observation", "retained metric definition binding is corrupt", {"sample_id": sample_id})
+        try:
+            observation = json.loads(row[0])
+            stored_definition = observation["metric_definition"]
+            stored_id = stored_definition["id"]
+            stored_version = stored_definition["semantic_version"]
+            bindings = observation["bindings"]
+            if not isinstance(stored_definition, Mapping) or not isinstance(bindings, Mapping):
+                raise TypeError("metric definition and bindings must be objects")
+            expected_definition = dict(metric_definition(stored_id, stored_version))
+        except (json.JSONDecodeError, KeyError, TypeError, CkmContractError) as exc:
+            raise CkmContractError("corrupt_retained_observation", "retained metric definition binding is corrupt", {"sample_id": sample_id}) from exc
+        expected_binding_digests = {
+            "formula_digest": canonical_digest(expected_definition["formula"]),
+            "detector_digest": canonical_digest(expected_definition["detector_bindings"]),
+            "configuration_digest": canonical_digest(expected_definition["configuration_bindings"]),
+        }
+        if stored_definition != expected_definition or any(
+            bindings.get(key) != value for key, value in expected_binding_digests.items()
+        ):
+            raise CkmContractError("corrupt_retained_observation", "retained metric definition binding is corrupt", {"sample_id": sample_id})
+        if (metric_id is not None and metric_id != stored_id) or (
+            semantic_version is not None and semantic_version != stored_version
+        ):
+            raise CkmContractError("metric_definition_mismatch", "correction metric definition must exactly match the retained sample", {"sample_id": sample_id, "stored_metric_id": stored_id, "stored_semantic_version": stored_version})
+        replacement = self.retain(result, metric_id=stored_id, finding_evaluations=finding_evaluations, retained_at=retained_at, supersedes_sample_id=sample_id)
         with sqlite3.connect(self.path) as conn:
             conn.execute("UPDATE ckm_metric_sample_v1 SET lifecycle = 'superseded', lifecycle_marker_json = ? WHERE sample_id = ?", (canonical_json({"event": "superseded", "successor": replacement.sample_id, "payload_removed": False}), sample_id))
         return replacement
