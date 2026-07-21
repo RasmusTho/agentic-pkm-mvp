@@ -120,6 +120,20 @@ class CkmQueryService:
         else:
             rows = conn.execute("SELECT * FROM ckm_capability WHERE public_id = ? ORDER BY public_id", (public_id,)).fetchall()
             if not rows:
+                identity = conn.execute(
+                    "SELECT status FROM ckm_public_identity WHERE public_id = ? AND resource_type = 'capability'",
+                    (public_id,),
+                ).fetchone()
+                if identity is not None and identity["status"] == "tombstone":
+                    successors = conn.execute(
+                        "SELECT successor_public_id, relation FROM ckm_identity_successor WHERE source_public_id = ? ORDER BY successor_public_id",
+                        (public_id,),
+                    ).fetchall()
+                    raise CkmContractError(
+                        "tombstoned_resource",
+                        "CKM capability public ID is tombstoned",
+                        {"public_id": public_id, "successors": [dict(row) for row in successors]},
+                    )
                 raise CkmContractError("missing_resource", "CKM capability public ID was not found", {"public_id": public_id})
         # A state revision must be stable over the complete read set.  The
         # transaction gives the snapshot guarantee; the second read makes an
