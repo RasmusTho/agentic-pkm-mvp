@@ -12,6 +12,7 @@ import pytest
 
 import app.builderops.config as builderops_config
 from app.builderops.store import SqliteBuilderOpsStore
+from app.builderops.cutover_evidence import CutoverEvidenceError, build_receipt, discover_legacy_stores, write_receipt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,31 +28,34 @@ def _write_cutover_ack(
     user_id: str | None = None,
 ) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
-    path = builderops_config.host_cutover_ack_path(state_dir)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": builderops_config.CUTOVER_ACK_SCHEMA,
-                "scope": "same-user-same-host",
-                "host_id": host_id or builderops_config.current_host_id(),
-                "user_id": user_id or builderops_config.current_user_id(),
-                "legacy_stores_reconciled": True,
-                "participating_repos": repos
-                if repos is not None
-                else [f"local/repo-{index}" for index, _root in enumerate(roots or [Path.cwd()])],
-                "participating_roots": [
-                    str(root.resolve()) for root in (roots or [Path.cwd()])
-                ],
-                "inventory_epoch": str(uuid4()),
-                "actor": "operator-test",
-                "acknowledged_at": (
-                    acknowledged_at or datetime.now(timezone.utc)
-                ).isoformat(),
-            }
-        ),
-        encoding="utf-8",
+    target = SqliteBuilderOpsStore(state_dir / "builderops.sqlite3")
+    target.initialize()
+    target.create_agent_worklog(
+        id=f"awl_cutover_{uuid4().hex}", summary="cutover fixture", body="fixture",
+        task_context={}, source_refs=[{"ref_type": "github_issue", "ref": "#3686"}],
+        created_by={"actor_type": "agent", "id": "test"},
     )
-    path.chmod(0o600)
+    root_values = roots or [Path.cwd()]
+    participants = [
+        {"repository": (repos or [f"local/repo-{i}" for i in range(len(root_values))])[i], "root": str(root.resolve())}
+        for i, root in enumerate(root_values)
+    ]
+    reconciliation = [{"path": item["path"], "disposition": "retained"} for item in discover_legacy_stores(participants)]
+    receipt = build_receipt(
+        state_dir=state_dir, participants=participants, reconciliation=reconciliation, actor="operator-test"
+    )
+    if host_id:
+        receipt["host_id"] = host_id
+    if user_id:
+        receipt["user_id"] = user_id
+    if acknowledged_at:
+        receipt["reconciled_at"] = acknowledged_at.isoformat()
+    if host_id or user_id or acknowledged_at:
+        body = dict(receipt)
+        body.pop("receipt_sha256")
+        import hashlib
+        receipt["receipt_sha256"] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    write_receipt(state_dir, receipt)
 
 
 def _run_implicit_cli(*, cwd: Path, home: Path) -> subprocess.CompletedProcess[str]:
@@ -279,7 +283,7 @@ def test_host_ack_is_bound_to_host_user_inventory_and_reconciliation_epoch(
     state_dir = tmp_path / "host-state" / "builderops"
     legacy_db = repo / "runtime" / "builderops" / "builderops.sqlite3"
     legacy_db.parent.mkdir(parents=True)
-    legacy_db.write_bytes(b"SQLite format 3\x00")
+    SqliteBuilderOpsStore(legacy_db).initialize()
     stale = datetime.now(timezone.utc) - timedelta(days=1)
     monkeypatch.chdir(repo)
 
@@ -312,7 +316,7 @@ def test_host_ack_rejects_broad_parent_that_hides_newer_nested_legacy_store(
     repo.mkdir(parents=True)
     legacy_db = repo / "runtime" / "builderops" / "builderops.sqlite3"
     legacy_db.parent.mkdir(parents=True)
-    legacy_db.write_bytes(b"SQLite format 3\x00")
+    SqliteBuilderOpsStore(legacy_db).initialize()
     acknowledged_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     newer = acknowledged_at + timedelta(seconds=30)
     os.utime(legacy_db, (newer.timestamp(), newer.timestamp()))
@@ -341,7 +345,7 @@ def test_host_ack_rejects_broad_secondary_root_with_newer_nested_store(
     nested_repo.mkdir(parents=True)
     legacy_db = nested_repo / "runtime" / "builderops" / "builderops.sqlite3"
     legacy_db.parent.mkdir(parents=True)
-    legacy_db.write_bytes(b"SQLite format 3\x00")
+    SqliteBuilderOpsStore(legacy_db).initialize()
     acknowledged_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     newer = acknowledged_at + timedelta(seconds=30)
     os.utime(legacy_db, (newer.timestamp(), newer.timestamp()))
@@ -369,14 +373,12 @@ def test_host_ack_rejects_non_directory_secondary_root(
     non_directory.write_text("not a directory", encoding="utf-8")
     state_dir = tmp_path / "host-state" / "builderops"
     monkeypatch.chdir(current_repo)
-    _write_cutover_ack(
-        state_dir,
-        ["owner/repo-a", "owner/not-a-root"],
-        roots=[current_repo, non_directory],
-    )
-
-    with pytest.raises(ValueError, match="fresh inventory epoch"):
-        builderops_config._validate_host_cutover_ack(state_dir)
+    with pytest.raises(CutoverEvidenceError, match="unique directories"):
+        _write_cutover_ack(
+            state_dir,
+            ["owner/repo-a", "owner/not-a-root"],
+            roots=[current_repo, non_directory],
+        )
 
 
 def test_host_ack_fails_closed_on_inventory_traversal_error(

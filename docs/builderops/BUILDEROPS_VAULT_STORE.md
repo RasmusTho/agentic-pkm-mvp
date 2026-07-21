@@ -96,7 +96,22 @@ Existing legacy stores under `<checkout>/runtime/builderops/` are not migrated, 
 silently treated as the consolidated store by this code change. Absence of a legacy store in the
 current repository is not evidence that other participating repositories have no legacy state.
 With neither store override set, path loading therefore fails before opening or initializing the
-host-stable database unless the operator has installed this host-level acknowledgement:
+host-stable database unless the operator has installed the supported producer-generated receipt.
+The receipt is created (without running live cutover) with:
+
+```text
+python -m app.builderops builderops cutover-evidence generate \
+  --participants-file participants.json --reconciliation-file reconciliation.json \
+  --actor <operator> --json
+```
+
+The ordered participant/repository/root list is the explicit inventory boundary. The producer
+recursively discovers every legacy store beneath those roots, binds its identity and disposition,
+the actual host and numeric user, one reconciliation epoch, and an already-existing non-empty target.
+The validator recomputes those bindings before SQLite initialization; copied, stale, incomplete,
+post-epoch-mutated, or empty-target receipts fail closed.
+The payload schema is `builderops.host-store-cutover.v2`; the `host-store-cutover-v1.json`
+filename is intentionally retained as the compatibility location for the prior marker.
 
 ```text
 ~/.local/state/builderops/host-store-cutover-v1.json
@@ -104,16 +119,17 @@ host-stable database unless the operator has installed this host-level acknowled
 
 ```json
 {
-  "schema_version": "builderops.host-store-cutover.v1",
+  "schema_version": "builderops.host-store-cutover.v2",
   "scope": "same-user-same-host",
   "host_id": "actual local hostname",
   "user_id": "actual local numeric uid",
-  "legacy_stores_reconciled": true,
-  "participating_repos": ["owner/repo-a", "owner/repo-b"],
-  "participating_roots": ["/absolute/repo-a", "/absolute/repo-b"],
-  "inventory_epoch": "7afaf9af-b94f-4b5e-8242-c3cb45fc70fb",
+  "participants": [{"repository": "owner/repo-a", "root": "/absolute/repo-a"}],
+  "reconciliation_epoch": "7afaf9af-b94f-4b5e-8242-c3cb45fc70fb",
   "actor": "operator identity",
-  "acknowledged_at": "2026-07-15T00:00:00Z"
+  "reconciled_at": "2026-07-15T00:00:00Z",
+  "legacy_store_inventory": [],
+  "reconciliation": [],
+  "target_store": {"path": "/absolute/state/builderops.sqlite3", "record_count": 1}
 }
 ```
 
