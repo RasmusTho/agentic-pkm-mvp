@@ -476,7 +476,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
     ),
-    ("app/instance/vault_registry.py", 1088): (
+    ("app/instance/vault_registry.py", 1373): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "

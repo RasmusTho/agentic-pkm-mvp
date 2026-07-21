@@ -51,15 +51,16 @@ def _service(compose: Path, name: str = _SERVICE) -> dict:
 def test_base_service_defined() -> None:
     svc = _service(_BASE_COMPOSE)
 
-    assert svc["command"] == [
-        "/bin/bash",
-        "-c",
-        "mkdir -p /app/tmp && python -m app.cli heimdal capture-watch",
-    ]
+    assert svc["command"][:2] == ["/bin/bash", "-c"]
+    assert "app.instance.runtime preflight" in svc["command"][2]
+    assert "--consumer heimdal-capture-watch" in svc["command"][2]
+    assert "INSTANCE_STATE_LEGACY_ROLLBACK" in svc["command"][2]
+    assert "exec python -m app.cli heimdal capture-watch" in svc["command"][2]
     assert svc["restart"] == "unless-stopped"
     assert "/Users:/Users" in svc["volumes"]
     assert "/Volumes:/Volumes" in svc["volumes"]
     assert "runtime-tmp:/app/tmp" in svc["volumes"]
+    assert "instance-state:/app/instance-state" in svc["volumes"]
     assert svc["depends_on"]["db"]["condition"] == "service_healthy"
     assert svc["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
 

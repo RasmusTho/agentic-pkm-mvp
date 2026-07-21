@@ -97,7 +97,15 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     run_block = text.split('echo "deploy plan:', 1)[1]
     assert run_block.index("migration_gate") < run_block.index("write_pin")
     assert run_block.index("write_pin") < run_block.index("compose pull")
-    assert run_block.index("compose pull") < run_block.index("recreate_channel_services")
+    assert run_block.index("compose pull") < run_block.index(
+        "prepare_instance_state_deployment"
+    )
+    assert run_block.index("prepare_instance_state_deployment") < run_block.index(
+        "migration execution failed"
+    )
+    assert run_block.index("migration execution failed") < run_block.index(
+        "recreate_channel_services"
+    )
 
     result = subprocess.run(
         ["bash", "-n", str(SCRIPT)],
@@ -414,6 +422,32 @@ def test_manual_rollback_never_runs_target_forward_migration_authority(tmp_path:
     assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
     events = _deploy_events(env)
     assert not any(" stop api worker watcher" in event for event in events)
+    assert not any("exit-code-from migrate" in event for event in events)
+    assert not any("instance-state-init" in event for event in events)
+    assert not any("deployment-begin" in event for event in events)
+    assert not any("deployment-prove" in event for event in events)
+    assert not any("deployment-finish" in event for event in events)
+    assert not any("docker ps --no-trunc" in event for event in events)
+
+
+def test_prod_rollback_ensures_external_volume_without_instance_state_authority(
+    tmp_path: Path,
+) -> None:
+    root, env, rollback_sha = _deploy_harness(tmp_path)
+    pre_rollback_sha = "8" * 40
+    pin_path = _seed_previous_pin(root, pre_rollback_sha, channel="prod")
+
+    result = _run_rollback(root, env, rollback_sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert "docker volume inspect pkm-prod_instance-state" in events
+    assert not any("instance-state-init" in event for event in events)
+    assert not any("deployment-begin" in event for event in events)
+    assert not any("deployment-prove" in event for event in events)
+    assert not any("deployment-finish" in event for event in events)
+    assert not any("docker ps --no-trunc" in event for event in events)
     assert not any("exit-code-from migrate" in event for event in events)
 
 

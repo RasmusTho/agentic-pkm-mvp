@@ -19,9 +19,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _merged_dev_compose() -> dict[str, object]:
+def _merged_dev_compose(tmp_path: Path) -> dict[str, object]:
     env = os.environ.copy()
     env.pop("LLM_PROVIDER", None)
+    env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(tmp_path / "instance-ownership")
     result = subprocess.run(
         [
             "docker",
@@ -53,8 +54,8 @@ def _environment(service: dict[str, object]) -> dict[str, str]:
     return {str(key): str(value) for key, value in environment.items()}
 
 
-def test_dev_services_use_documented_mock_provider() -> None:
-    compose = _merged_dev_compose()
+def test_dev_services_use_documented_mock_provider(tmp_path: Path) -> None:
+    compose = _merged_dev_compose(tmp_path)
     services = compose["services"]
     assert isinstance(services, dict)
 

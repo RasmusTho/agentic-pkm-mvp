@@ -51,7 +51,9 @@ def test_production_mutations_are_locked_atomic_and_revision_checked(tmp_path) -
     assert len(VaultRegistryStore(process_path).load().registrations) == 4
 
 
-@pytest.mark.parametrize("interruption_artifact", ["snapshot", "checksum", "main"])
+@pytest.mark.parametrize(
+    "interruption_artifact", ["snapshot", "checksum", "rollback_export", "main"]
+)
 def test_restart_recovers_every_precommit_interruption(tmp_path, monkeypatch, interruption_artifact) -> None:
     path = tmp_path / f"interrupted-{interruption_artifact}.md"
     store = VaultRegistryStore(path)
@@ -60,10 +62,12 @@ def test_restart_recovers_every_precommit_interruption(tmp_path, monkeypatch, in
         store.path: store.path.read_bytes(),
         store.snapshot_path: store.snapshot_path.read_bytes(),
         store.snapshot_checksum_path: store.snapshot_checksum_path.read_bytes(),
+        store.rollback_export_path: store.rollback_export_path.read_bytes(),
     }
     target = {
         "snapshot": store.snapshot_path,
         "checksum": store.snapshot_checksum_path,
+        "rollback_export": store.rollback_export_path,
         "main": store.path,
     }[interruption_artifact]
     real_write = registry_module._atomic_private_write

@@ -42,6 +42,8 @@ _REGISTRY_FIELDS = {
     "appInstallId",
     "lastActiveVaultRef",
     "registrations",
+    "removalTombstones",
+    "transferLineage",
     "settingsRebind",
 }
 _REGISTRATION_FIELDS = {
@@ -110,6 +112,29 @@ class VaultRegistration:
 
 
 @dataclass(frozen=True)
+class RemovalTombstone:
+    vault_binding_id: str
+    ref: str
+    path: str
+    vault_id: str | None
+    local_instance_id: str | None
+    content_epoch: int
+
+
+@dataclass(frozen=True)
+class TransferLineage:
+    source_binding_id: str
+    destination_binding_id: str
+    local_instance_id: str | None
+    vault_id: str | None
+    source_channel_id: str
+    destination_channel_id: str
+    source_registry_revision: int
+    destination_registry_revision: int
+    ownership_transfer_id: str
+
+
+@dataclass(frozen=True)
 class RegistrySnapshot:
     schema: str
     authority: str
@@ -117,6 +142,8 @@ class RegistrySnapshot:
     app_install_id: str
     last_active_vault_ref: str | None
     registrations: dict[str, VaultRegistration]
+    removal_tombstones: dict[str, RemovalTombstone] = field(default_factory=dict)
+    transfer_lineage: tuple[TransferLineage, ...] = ()
     settings_rebind: dict[str, Any] | None = None
     extensions: dict[str, Any] = field(default_factory=dict)
 
@@ -136,6 +163,7 @@ class VaultRegistryStore:
         self.lock_path = path.with_suffix(path.suffix + ".lock")
         self.snapshot_path = path.with_suffix(path.suffix + ".last-good")
         self.snapshot_checksum_path = path.with_suffix(path.suffix + ".last-good.sha256")
+        self.rollback_export_path = path.with_suffix(path.suffix + ".legacy-export")
         self.transaction_path = path.with_suffix(path.suffix + ".transaction")
 
     def load(self) -> RegistrySnapshot:
@@ -242,6 +270,76 @@ class VaultRegistryStore:
             self._write_locked(updated)
             return updated
 
+    def commit_state(
+        self,
+        *,
+        registrations: dict[str, VaultRegistration],
+        removal_tombstones: dict[str, RemovalTombstone] | None = None,
+        transfer_lineage: tuple[TransferLineage, ...] | None = None,
+        extensions: dict[str, Any] | None = None,
+        expected_revision: int | None = None,
+    ) -> RegistrySnapshot:
+        """Atomically commit one lifecycle/transfer state transition."""
+
+        with self._locked():
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            validated: dict[str, VaultRegistration] = {}
+            for binding_id, registration in registrations.items():
+                if binding_id != registration.vault_binding_id:
+                    raise RegistryError("registration key does not match vault_binding_id")
+                self._validate_registration(registration)
+                self._assert_registration_unique(registration, validated)
+                validated[binding_id] = registration
+            updated = RegistrySnapshot(
+                schema=current.schema,
+                authority=current.authority,
+                revision=current.revision + 1,
+                app_install_id=current.app_install_id,
+                last_active_vault_ref=current.last_active_vault_ref,
+                registrations=validated,
+                removal_tombstones=copy.deepcopy(
+                    current.removal_tombstones
+                    if removal_tombstones is None
+                    else removal_tombstones
+                ),
+                transfer_lineage=copy.deepcopy(
+                    current.transfer_lineage if transfer_lineage is None else transfer_lineage
+                ),
+                settings_rebind=copy.deepcopy(current.settings_rebind),
+                extensions=copy.deepcopy(current.extensions if extensions is None else extensions),
+            )
+            self._write_locked(updated)
+            return updated
+
+    def set_extension_state(
+        self,
+        *,
+        default_vault_binding_id: str | None,
+        dimensions: Mapping[str, object],
+        principal_state: Mapping[str, object],
+        background_state: Mapping[str, object],
+        runtime_floors: Mapping[str, object],
+    ) -> RegistrySnapshot:
+        """Persist the 01B mechanical state that must survive backup/restore."""
+
+        current = self.load()
+        extensions = copy.deepcopy(current.extensions)
+        extensions.update(
+            {
+                "defaultVaultBindingId": default_vault_binding_id,
+                "dimensions": copy.deepcopy(dict(dimensions)),
+                "principalState": copy.deepcopy(dict(principal_state)),
+                "backgroundState": copy.deepcopy(dict(background_state)),
+                "runtimeFloors": copy.deepcopy(dict(runtime_floors)),
+            }
+        )
+        return self.commit_state(
+            registrations=dict(current.registrations),
+            extensions=extensions,
+            expected_revision=current.revision,
+        )
+
     def require_authoritative_activation(self, proof: RegistryActivationProof) -> None:
         if not (proof.rollback_exporter and proof.rollback_transformer and proof.previous_image_preflight):
             raise CapabilityNotReadyError(
@@ -249,6 +347,21 @@ class VaultRegistryStore:
                 "before registry authority activation"
             )
         raise CapabilityNotReadyError("MVR-01C authority cutover is not delivered by MVR-01A")
+
+    def materialize_legacy_rollback(self, target_path: Path) -> AppLocalSettings:
+        """Transform the latest scalar-representable revision for a previous image."""
+
+        with self._locked():
+            current = self._read_current_locked(recover=True)
+            if len(current.registrations) > 1:
+                raise CapabilityNotReadyError(
+                    "MVR-01C explicit rollback target is required for multiple registrations"
+                )
+            payload = self._rollback_export_payload(current)
+            if not self.rollback_export_path.exists() or self.rollback_export_path.read_bytes() != payload:
+                raise RegistryError("latest-revision legacy rollback export is missing or stale")
+            _atomic_private_write(Path(target_path), payload)
+        return AppLocalSettingsStore(Path(target_path)).load()
 
     def _empty_snapshot(self) -> RegistrySnapshot:
         return RegistrySnapshot(
@@ -298,6 +411,8 @@ class VaultRegistryStore:
             app_install_id=current.app_install_id,
             last_active_vault_ref=current.last_active_vault_ref,
             registrations=registrations,
+            removal_tombstones=copy.deepcopy(current.removal_tombstones),
+            transfer_lineage=copy.deepcopy(current.transfer_lineage),
             settings_rebind=copy.deepcopy(current.settings_rebind),
             extensions=copy.deepcopy(current.extensions),
         )
@@ -325,6 +440,7 @@ class VaultRegistryStore:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 self._recover_transaction_locked()
+                self._ensure_rollback_export_locked()
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
@@ -356,6 +472,7 @@ class VaultRegistryStore:
                 raise RegistryError("registry is corrupt and no unambiguous last-good snapshot exists") from exc
             snapshot, payload = recovered
             _atomic_private_write(self.path, payload)
+            _atomic_private_write(self.rollback_export_path, self._rollback_export_payload(snapshot))
             return snapshot
 
     def _restore_or_initialize_missing_locked(self) -> RegistrySnapshot:
@@ -363,6 +480,7 @@ class VaultRegistryStore:
         if recovered is not None:
             snapshot, payload = recovered
             _atomic_private_write(self.path, payload)
+            _atomic_private_write(self.rollback_export_path, self._rollback_export_payload(snapshot))
             return snapshot
         if os.path.lexists(self.snapshot_path) or os.path.lexists(self.snapshot_checksum_path):
             raise RegistryError(
@@ -399,15 +517,18 @@ class VaultRegistryStore:
             "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
         ).encode("utf-8")
         checksum = (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii")
+        rollback_export = self._rollback_export_payload(snapshot)
         previous = {
             self.path: _read_previous_transaction_file(self.path, allow_legacy_mode=True),
             self.snapshot_path: _read_previous_transaction_file(self.snapshot_path),
             self.snapshot_checksum_path: _read_previous_transaction_file(self.snapshot_checksum_path),
+            self.rollback_export_path: _read_previous_transaction_file(self.rollback_export_path),
         }
         next_generation = {
             self.path: payload,
             self.snapshot_path: payload,
             self.snapshot_checksum_path: checksum,
+            self.rollback_export_path: rollback_export,
         }
         prepared = self._transaction_manifest("prepared", previous, next_generation)
         _atomic_private_write(self.transaction_path, prepared)
@@ -462,10 +583,17 @@ class VaultRegistryStore:
         }
 
     def _decode_generation(self, value: object) -> dict[Path, bytes | None]:
-        if not isinstance(value, dict) or set(value) != set(self._transaction_artifacts()):
+        legacy_names = {"main", "snapshot", "checksum"}
+        if not isinstance(value, dict) or frozenset(value) not in {
+            frozenset(self._transaction_artifacts()),
+            frozenset(legacy_names),
+        }:
             raise RegistryError("registry transaction generation is malformed")
         decoded: dict[Path, bytes | None] = {}
         for name, path in self._transaction_artifacts().items():
+            if name not in value:
+                decoded[path] = None
+                continue
             artifact = value[name]
             if artifact is None:
                 decoded[path] = None
@@ -490,6 +618,7 @@ class VaultRegistryStore:
             "main": self.path,
             "snapshot": self.snapshot_path,
             "checksum": self.snapshot_checksum_path,
+            "rollback_export": self.rollback_export_path,
         }
 
     def _recover_transaction_locked(self) -> None:
@@ -517,13 +646,16 @@ class VaultRegistryStore:
         payload = generation.get(self.path)
         snapshot = generation.get(self.snapshot_path)
         checksum = generation.get(self.snapshot_checksum_path)
+        rollback_export = generation.get(self.rollback_export_path)
         if payload is None or snapshot != payload or checksum is None:
             raise RegistryError("registry transaction next generation is incomplete")
         if checksum != (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii"):
             raise RegistryError("registry transaction next generation checksum is invalid")
         try:
             frontmatter, _ = _split_rendered(payload.decode("utf-8"), self.path)
-            self._snapshot_from_frontmatter(frontmatter)
+            parsed = self._snapshot_from_frontmatter(frontmatter)
+            if rollback_export is not None and rollback_export != self._rollback_export_payload(parsed):
+                raise RegistryError("registry transaction rollback export is invalid")
         except (UnicodeDecodeError, RegistryParseError, RegistryError) as exc:
             raise RegistryError("registry transaction next generation payload is invalid") from exc
 
@@ -543,7 +675,12 @@ class VaultRegistryStore:
         *,
         use_raw_writer: bool = False,
     ) -> None:
-        for path in (self.snapshot_path, self.snapshot_checksum_path, self.path):
+        for path in (
+            self.snapshot_path,
+            self.snapshot_checksum_path,
+            self.rollback_export_path,
+            self.path,
+        ):
             payload = generation[path]
             if payload is None:
                 if os.path.lexists(path):
@@ -564,6 +701,50 @@ class VaultRegistryStore:
         self.transaction_path.unlink(missing_ok=True)
         _fsync_directory(self.transaction_path.parent)
 
+    def _ensure_rollback_export_locked(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            document = _read_document(self.path)
+        except (OSError, RegistryParseError):
+            return
+        if _optional_str(document.frontmatter.get("schema")) != CURRENT_REGISTRY_SCHEMA:
+            return
+        try:
+            snapshot = self._snapshot_from_frontmatter(document.frontmatter)
+        except RegistryError:
+            return
+        expected = self._rollback_export_payload(snapshot)
+        if self.rollback_export_path.exists():
+            _assert_private(self.rollback_export_path, directory=False)
+        if not self.rollback_export_path.exists() or self.rollback_export_path.read_bytes() != expected:
+            _atomic_private_write(self.rollback_export_path, expected)
+
+    def _rollback_export_payload(self, snapshot: RegistrySnapshot) -> bytes:
+        known = {
+            item.ref: {
+                "path": item.path,
+                "vaultId": item.vault_id,
+                "vaultName": item.vault_name,
+                "localInstanceId": item.local_instance_id,
+                "lastOpenedAt": item.last_opened_at,
+            }
+            for item in sorted(snapshot.registrations.values(), key=lambda item: item.ref)
+        }
+        frontmatter = {
+            "schema": APP_LOCAL_SCHEMA,
+            "scope": "app-local",
+            "appInstallId": snapshot.app_install_id,
+            "lastActiveVaultRef": snapshot.last_active_vault_ref,
+            "knownVaults": known,
+            "mvrRegistrySchema": snapshot.schema,
+            "mvrRegistryRevision": snapshot.revision,
+        }
+        return _render_markdown_settings(
+            frontmatter,
+            "# Legacy Registry Rollback Export\nGenerated from the latest committed registry revision.\n",
+        ).encode("utf-8")
+
     def _frontmatter_from_snapshot(self, snapshot: RegistrySnapshot) -> dict[str, Any]:
         frontmatter = copy.deepcopy(snapshot.extensions)
         frontmatter.update(
@@ -577,6 +758,13 @@ class VaultRegistryStore:
                     binding_id: _registration_to_frontmatter(item)
                     for binding_id, item in sorted(snapshot.registrations.items())
                 },
+                "removalTombstones": {
+                    binding_id: _tombstone_to_frontmatter(item)
+                    for binding_id, item in sorted(snapshot.removal_tombstones.items())
+                },
+                "transferLineage": [
+                    _transfer_lineage_to_frontmatter(item) for item in snapshot.transfer_lineage
+                ],
                 "settingsRebind": copy.deepcopy(snapshot.settings_rebind),
             }
         )
@@ -603,6 +791,20 @@ class VaultRegistryStore:
             self._validate_registration(registration)
             self._assert_registration_unique(registration, registrations)
             registrations[registration.vault_binding_id] = registration
+        raw_tombstones = frontmatter.get("removalTombstones") or {}
+        if not isinstance(raw_tombstones, dict):
+            raise RegistryError("registry removalTombstones must be a mapping")
+        removal_tombstones: dict[str, RemovalTombstone] = {}
+        for binding_id, raw in raw_tombstones.items():
+            if not isinstance(raw, dict):
+                raise RegistryError(f"removal tombstone {binding_id} must be a mapping")
+            removal_tombstones[str(binding_id)] = _tombstone_from_frontmatter(
+                str(binding_id), raw
+            )
+        raw_lineage = frontmatter.get("transferLineage") or []
+        if not isinstance(raw_lineage, list):
+            raise RegistryError("registry transferLineage must be a list")
+        transfer_lineage = tuple(_transfer_lineage_from_frontmatter(raw) for raw in raw_lineage)
         app_install_id = _optional_str(frontmatter.get("appInstallId"))
         if app_install_id is None:
             raise RegistryError("registry appInstallId is required")
@@ -617,6 +819,8 @@ class VaultRegistryStore:
             app_install_id=app_install_id,
             last_active_vault_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
             registrations=registrations,
+            removal_tombstones=removal_tombstones,
+            transfer_lineage=transfer_lineage,
             settings_rebind=copy.deepcopy(settings_rebind),
             extensions=extensions,
         )
@@ -714,7 +918,13 @@ def preflight_registry_payload(path: Path) -> RegistrySnapshot:
     store = VaultRegistryStore(path)
     snapshot = store.load()
     _assert_private(path.parent, directory=True)
-    for candidate in (path, store.lock_path, store.snapshot_path, store.snapshot_checksum_path):
+    for candidate in (
+        path,
+        store.lock_path,
+        store.snapshot_path,
+        store.snapshot_checksum_path,
+        store.rollback_export_path,
+    ):
         _assert_private(candidate, directory=False)
     return snapshot
 
@@ -828,6 +1038,81 @@ def _registration_from_frontmatter(binding_id: str, raw: Mapping[str, Any]) -> V
         vault_name=_optional_str(raw.get("vaultName")),
         last_opened_at=_optional_str(raw.get("lastOpenedAt")),
         extensions={key: copy.deepcopy(value) for key, value in raw.items() if key not in _REGISTRATION_FIELDS},
+    )
+
+
+def _tombstone_to_frontmatter(item: RemovalTombstone) -> dict[str, Any]:
+    return {
+        "ref": item.ref,
+        "path": item.path,
+        "vaultId": item.vault_id,
+        "localInstanceId": item.local_instance_id,
+        "contentEpoch": item.content_epoch,
+    }
+
+
+def _tombstone_from_frontmatter(
+    binding_id: str, raw: Mapping[str, Any]
+) -> RemovalTombstone:
+    ref = _optional_str(raw.get("ref"))
+    path = _optional_str(raw.get("path"))
+    epoch = raw.get("contentEpoch")
+    if ref is None or path is None or not isinstance(epoch, int) or epoch < 1:
+        raise RegistryError(f"removal tombstone {binding_id} is invalid")
+    return RemovalTombstone(
+        vault_binding_id=binding_id,
+        ref=ref,
+        path=path,
+        vault_id=_optional_str(raw.get("vaultId")),
+        local_instance_id=_optional_str(raw.get("localInstanceId")),
+        content_epoch=epoch,
+    )
+
+
+def _transfer_lineage_to_frontmatter(item: TransferLineage) -> dict[str, Any]:
+    return {
+        "sourceBindingId": item.source_binding_id,
+        "destinationBindingId": item.destination_binding_id,
+        "localInstanceId": item.local_instance_id,
+        "vaultId": item.vault_id,
+        "sourceChannelId": item.source_channel_id,
+        "destinationChannelId": item.destination_channel_id,
+        "sourceRegistryRevision": item.source_registry_revision,
+        "destinationRegistryRevision": item.destination_registry_revision,
+        "ownershipTransferId": item.ownership_transfer_id,
+    }
+
+
+def _transfer_lineage_from_frontmatter(raw: object) -> TransferLineage:
+    if not isinstance(raw, dict):
+        raise RegistryError("transfer lineage entry must be a mapping")
+    source = _optional_str(raw.get("sourceBindingId"))
+    destination = _optional_str(raw.get("destinationBindingId"))
+    if source is None or destination is None:
+        raise RegistryError("transfer lineage entry requires source and destination")
+    source_channel = _optional_str(raw.get("sourceChannelId"))
+    destination_channel = _optional_str(raw.get("destinationChannelId"))
+    transfer_id = _optional_str(raw.get("ownershipTransferId"))
+    source_revision = raw.get("sourceRegistryRevision")
+    destination_revision = raw.get("destinationRegistryRevision")
+    if (
+        source_channel is None
+        or destination_channel is None
+        or transfer_id is None
+        or not isinstance(source_revision, int)
+        or not isinstance(destination_revision, int)
+    ):
+        raise RegistryError("transfer lineage entry is incomplete")
+    return TransferLineage(
+        source_binding_id=source,
+        destination_binding_id=destination,
+        local_instance_id=_optional_str(raw.get("localInstanceId")),
+        vault_id=_optional_str(raw.get("vaultId")),
+        source_channel_id=source_channel,
+        destination_channel_id=destination_channel,
+        source_registry_revision=source_revision,
+        destination_registry_revision=destination_revision,
+        ownership_transfer_id=transfer_id,
     )
 
 
@@ -1141,6 +1426,8 @@ __all__ = [
     "RegistryRevisionConflict",
     "RegistrySecurityError",
     "RegistrySnapshot",
+    "RemovalTombstone",
+    "TransferLineage",
     "VaultRegistration",
     "VaultRegistryStore",
     "default_app_local_settings_path",

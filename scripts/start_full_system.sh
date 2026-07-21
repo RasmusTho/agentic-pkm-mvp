@@ -63,6 +63,7 @@ unset _pkm_caller_vault_root_set _pkm_channel_vault_root_set
 
 source "scripts/lib/runtime_endpoint_probe.sh"
 source "scripts/lib/start_full_system_env.sh"
+source "scripts/lib/instance_state_deployment.sh"
 apply_start_full_system_defaults
 
 # Signboard is a dispatcher projection. Resolve this on the host before the
@@ -759,6 +760,7 @@ FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
 VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
 resolve_channel_defaults
+prepare_instance_ownership_host_state_dir
 export_prod_build_identity
 API_BASE_URL="${API_BASE_URL%/}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-$API_BASE_URL/healthz}"
@@ -1087,6 +1089,17 @@ run_docker_compose() {
   fi
 }
 
+ensure_prod_instance_state_volume() {
+  if [ "${COMPOSE_PROJECT_NAME:-}" != "pkm-prod" ]; then
+    return 0
+  fi
+  if docker volume inspect pkm-prod_instance-state >/dev/null 2>&1; then
+    return 0
+  fi
+  docker volume create --label agentic-pkm.surface=instance-state \
+    pkm-prod_instance-state >/dev/null
+}
+
 check_compose_port_conflicts() {
   local target_services=("$@")
   local config_json
@@ -1159,6 +1172,13 @@ PY
 }
 
 run_preflight
+ensure_prod_instance_state_volume
+if prepare_instance_state_deployment run_docker_compose "${PKM_ENVIRONMENT:-dev}"; then
+  :
+else
+  instance_state_rc=$?
+  exit "${instance_state_rc}"
+fi
 start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"
 
 llm_provider="${LLM_PROVIDER:-}"

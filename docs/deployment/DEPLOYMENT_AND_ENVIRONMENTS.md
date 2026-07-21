@@ -5,8 +5,8 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-07-18
-Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
+Last reviewed: 2026-07-19
+Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
 
 ## Why this document exists
 
@@ -55,15 +55,50 @@ Notes on the current model:
 
 ### Multi-vault instance-state rollout boundary
 
-MVR-01A introduces the dormant `app.instance.vault_registry` store and its private-file,
+MVR-01A provides the dormant `app.instance.vault_registry` store and its private-file,
 cross-process lock, CAS, physical-root identity, crash-recoverable transaction journal, snapshot,
-and corruption-recovery contracts. It does not change current channel mounts or make that schema
-authoritative. The production picker continues to write the legacy scalar app-local payload.
+and corruption-recovery contracts. MVR-01B now provides the protected channel-scoped
+`/app/instance-state` named volume, the shared private `/app/instance-ownership` host ledger/key,
+and identical fail-loud preflight for API, worker, watcher, and Heimdal capture watcher. The
+`instance-state-init` producer verifies owner-only state before those consumers start; their
+resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. It does not invent a
+missing registry or ledger during consumer preflight. The host bind source is resolved before
+Compose interpolation to the canonical absolute
+`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path (or an explicit absolute
+override), so separate checkouts and all three channel projects mount the same ledger. Compose may
+not create a checkout-relative substitute. Every consumer rejects any active host-global deployment
+lease, including a lease owned by another channel, before reading or mutating channel state.
 
-The protected per-channel `/app/instance-state` volume, cross-consumer mount/preflight, backup and
-rollback transformer are MVR-01B work. MVR-01C owns the guarded authority cutover. A deployment must
-therefore not infer that the presence of the dormant schema permits a second active production
-binding or retire the legacy source before those later gates are present.
+Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
+`scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the
+shared producer derives every dev/test/prod/native legacy owner from canonical channel and runtime
+env sources, stopped or running Compose writer config and scalar stores, the native scalar store,
+and the governed caller binding. It writes a private baseline only after two complete snapshots are
+identical. The wrapper then installs a durable host-global deployment lease before its channel
+restart fence, stops API/worker/watcher/Heimdal, probes dev/test/prod/native consumers twice, and
+durably proves quiescence. Two new owner-source snapshots must reproduce the baseline exactly before
+the producer marks the inventory drained and copies it to
+`/app/instance-ownership/legacy-owner-inventory.json`; missing sources, config/store races, and
+equal or nested roots across owner domains abort without seeding a partial set. A live writer or a
+post-stop owner validation failure leaves the fence in place. The nonce-plus-inventory-digest proof
+is required for restore, final export/preservation, and legacy bootstrap. The finalizer rejects an
+incomplete, non-private, or unvalidated inventory, captures the final legacy fingerprint, imports it
+on first volume or preserves it beside an established dormant registry, calls the host-global
+legacy-owner bootstrap, creates a verified registry/ledger/key backup, and clears the fence.
+`INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored inside that stopped interval
+before finalization and consumer startup. Failure leaves the fence in place, so upgraded consumer
+preflight refuses restart. Rollback to a previous image that predates `app.instance.runtime` is
+selected explicitly by the deploy wrapper and uses a Compose-owned compatibility guard: it may
+start only when neither the host-global lease nor any channel restart fence exists. Current images
+always run the full authenticated runtime preflight; module absence outside explicit rollback fails
+closed.
+
+This 01B recovery boundary also includes canonical-root overlap rejection and dormant recoverable
+lifecycle lineage. It deliberately leaves `authority: dormant`: the production picker continues to
+read and write the legacy scalar app-local payload, second-registration and lifecycle producers
+remain sealed, and the independently durable legacy source must not be retired. MVR-01C alone owns
+the guarded rollback gateway and authority cutover; the presence of the 01B volume or prepared
+registry is never evidence that cutover has occurred.
 
 ### Target
 
@@ -155,11 +190,14 @@ The deploy procedure is the same shape for every channel; only the pin target an
 
 1. **Pin the ref.** Resolve the commit SHA to deploy and its already-built image tag (`ghcr.io/<owner>/pkm-app:<sha>`). For `prod`, the SHA must be the one authorized by the promotion-plan contract in `docs/RELEASE_CHANNELS/README.md` (the `stable`-ref decision; see also #2527). Update the channel's deploy-pin file to that tag.
 2. **Migration gate (forward-only surfaced + operator ack).** Diff the migrations between the currently-running SHA and the target SHA. Classify each per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`. **Surface every forward-only (irreversible) migration explicitly and require operator acknowledgement before proceeding** — a forward-only migration is the one thing that makes a deploy not cleanly rollback-able. Reversible migrations proceed under the standard gate; forward-only migrations are an `agent:needs-human` stop.
-3. **Drain producers, migrate, then recreate API + gateway.** Pull the pinned image. When the candidate contains migrations, stop the running API, worker, watcher, capture-watch, and Companion UI before invoking the one-shot migration authority; a pre-cutover writer blocked on a migration lock must not resume after commit and create legacy-only state. Only after successful migration completion may the channel's API/worker/watcher containers and gateway unit be recreated against the target (`docker compose … up -d --force-recreate` for the channel project + gateway-unit recreate). `scripts/deploy_channel.sh` resolves the channel's generated runtime-env reference without sourcing or printing it: an explicit pin-file reference wins, otherwise dev/prod use `./tmp/runtime.env` and test uses `./tmp-test/runtime.env`, matching the runtime-env producer. It pins that governed reference and only the explicitly allowlisted selectors `VAULT_HOST_ROOT` and the non-secret `LLM_PROVIDER` from governed channel/runtime env into the Compose process, so caller-shell values cannot replace them. The channel pin itself is Compose's CLI `--env-file` and may intentionally supply overlay interpolation values such as PROD DSN overrides. The generated runtime env named by `WATCHER_RUNTIME_ENV_FILE` is never passed as a CLI env file: its DSNs, provider credentials, and raw-store keys remain confined to the services' `env_file` layers rather than being copied into CLI interpolation. When the governed vault selector is already reachable through the base same-path `/Users` or `/Volumes` mounts, deploy and rollback append `docker-compose.full-host-vault.yml` and bind runtime selectors to that one container path; they do not add the duplicate legacy `/app/vault` mount. Other explicit sources retain `docker-compose.legacy-vault.yml` compatibility. TEST appends `docker-compose.test-vault.yml` last so its watcher is activated against whichever one container path the access overlay selected. With no explicit vault, no vault overlay is selected and the base+channel no-vault posture remains intact. Because routes load at container start, the recreate — not a file update — is what makes new code live. Recreate API and gateway together so they never diverge in version.
-4. **Health gate: liveness first, readiness second.** Block until the channel's API `/healthz` returns `{"ok": true}` (`app/api/routes/health_contract.py`) and then require both readiness probes on the channel's ports: `/readyz` must pass, and `/api/health` must report `required_ok: true`. `/healthz` is only a liveness probe; deploy completion requires readiness evidence that startup dependencies, DB connectivity, and the deployed code path are actually usable. The gateway's own `/healthz` must also respond. A deploy is not "done" until liveness and both readiness predicates pass; a failing gate triggers §Rollback.
-5. **Complete every post-mutation gate, then record the deployed SHA.** Confirm `/version` (`{git_sha, built_at}`) and the `version` field on `/api/health` report the SHA just deployed; require the fleet-model fitness check, Companion UI smoke, and capture-watch health gate to pass; then record the deploy receipt (and `ops/promotions/` for prod, per the promotion contract). The successful receipt is the final gate and is not written while any earlier required gate is unresolved. This closes the loop opened by #2602: the marker is only trustworthy once the bind-mount is retired (S5) and the image artifact has been made immutable by digest pinning or explicit SHA-tag enforcement, so S5 must land before the SHA in `/version` can be treated as authoritative for what is running.
+3. **Quiesce/finalize instance state, then execute changed migrations.** Pull the pinned image. For a deploy, `scripts/deploy_channel.sh` runs the instance-state deployment producer before migration execution: it holds the host-global fence, quiesces API/worker/watcher/Heimdal writers, and finalizes or restores the protected instance-state boundary. It then stops every runtime writer again and runs the target image's one-shot migration service before any target runtime is recreated. When the migration diff is non-empty, the executor writes a durable pending-migration marker before mutating the pin. The marker binds the source SHA (or explicit no-baseline sentinel), target SHA, and forward-only acknowledgement; it is removed only after the migration service reports success.
+4. **Recreate API + gateway.** Only after the instance-state finalization and migration execution succeed, recreate the channel's API/worker/watcher containers and the gateway unit against the pinned image (`docker compose … up -d --force-recreate` for the channel project + gateway-unit recreate). `scripts/deploy_channel.sh` reads the channel's generated runtime-env reference without sourcing or printing it. It pins that governed reference and only its parsed `VAULT_HOST_ROOT` selector into the Compose process, so caller-shell values cannot replace them and runtime DSNs never participate in Compose interpolation. When that governed selector is already reachable through the base same-path `/Users` or `/Volumes` mounts, deploy and rollback append `docker-compose.full-host-vault.yml` and bind runtime selectors to that one container path; they do not add the duplicate legacy `/app/vault` mount. Other explicit sources retain `docker-compose.legacy-vault.yml` compatibility. TEST appends `docker-compose.test-vault.yml` last so its watcher is activated against whichever one container path the access overlay selected. With no explicit vault, no vault overlay is selected and the base+channel no-vault posture remains intact. Because routes load at container start, the recreate — not a file update — is what makes new code live. Recreate API and gateway together so they never diverge in version.
+5. **Health gate: liveness first, readiness second.** Block until the channel's API `/healthz` returns `{"ok": true}` (`app/api/routes/health_contract.py`) and then require both readiness probes on the channel's ports: `/readyz` must pass, and `/api/health` must report `required_ok: true`. `/healthz` is only a liveness probe; deploy completion requires readiness evidence that startup dependencies, DB connectivity, and the deployed code path are actually usable. The gateway's own `/healthz` must also respond. A deploy is not "done" until liveness and both readiness predicates pass; a failing gate triggers §Rollback.
+6. **Complete every post-mutation gate, then record the deployed SHA.** Confirm `/version` (`{git_sha, built_at}`) and the `version` field on `/api/health` report the SHA just deployed; require the fleet-model fitness check, Companion UI smoke, and capture-watch health gate to pass; then record the deploy receipt (and `ops/promotions/` for prod, per the promotion contract). The successful receipt is the final gate and is not written while any earlier required gate is unresolved. This closes the loop opened by #2602: the marker is only trustworthy once the bind-mount is retired (S5) and the image artifact has been made immutable by digest pinning or explicit SHA-tag enforcement, so S5 must land before the SHA in `/version` can be treated as authoritative for what is running.
 
-After the channel pin is mutated, every terminal failure — image pull, migration execution, service recreate/liveness, readiness, version identity, fleet-model fitness, Companion UI smoke, capture-watch health, or receipt creation — uses one fail-closed recovery path. That path preserves the failing gate's original non-zero status and diagnostics. Before migration execution begins it restores the previous pin and attempts to recreate the prior service set. Once any migration execution begins, a non-zero or lost container result is treated as possibly committed: the deploy hot path does not reverse even a migration classified as reversible, because reversal belongs to the governed rollback-promotion path. It retains the target pin until database revision and prior-image compatibility are proven. A durable per-channel pending-migration marker records the original SHA range before pin mutation; an interrupted same-SHA retry must revalidate and rerun that exact migration range before runtime services may start, and a different target is blocked until the pending epoch is reconciled.
+Before migration execution begins, a pending marker makes interruption recovery fail closed: a retry must target the marker's exact SHA, revalidate the recorded source-to-target migration classification and forward-only acknowledgement, and cannot deploy a different target until the marker is reconciled. After migration execution begins, a nonzero result is possibly committed even when the migration container did not report success. The executor therefore retains both the pending marker and the schema-compatible target pin rather than recreating a possibly schema-incompatible previous image. For reversible migrations, reconcile the database revision and use the governed rollback path if reversal is proved and appropriate; for forward-only migrations, prove the revision is unchanged or apply a compatible forward fix. In either case, the migration is never auto-reversed by the deploy hot path.
+
+For failures before migration execution starts, the ordinary fail-closed recovery path preserves the failing gate's original non-zero status and diagnostics, restores the previous pin, and attempts to recreate the prior service set before returning. The instance-state fence remains in place if its finalization fails, so consumer preflight refuses restart.
 
 ## Promotion workflow binding
 
@@ -176,15 +214,13 @@ migration gate, recreate, health gate, UI smoke, and deploy/rollback receipt sem
 Rollback reuses the deploy mechanism in reverse, against the previous known-good pin.
 
 1. **Resolve previous-good pin.** Identify the channel's previous known-good image tag (the prior deploy-pin value; for `prod`, the previous `stable` SHA per `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`).
-2. **Migration reversal (reversible only).** Reverse only migrations classified reversible. **Forward-only migrations are not auto-reversed.** After one is applied, the deploy failure path retains the schema-compatible target image for a forward fix; selecting an older image requires explicit evidence that all of its producers and consumers are compatible with the migrated schema. Vault content is immutable across rollback.
+2. **Migration reversal (reversible only).** Reverse only migrations classified reversible. **Forward-only migrations are not auto-reversed** — if the failed deploy applied a forward-only migration, rollback of code can still proceed, but the schema state and any data implications are an operator decision (this is exactly why step 2 of the deploy gates on forward-only ack). Vault content is immutable across rollback.
 3. **Recreate against the previous pin.** Bump the channel pin back to the previous tag and recreate API + gateway (same mechanism as deploy step 3). No rebuild — the previous image already exists in the registry.
 4. **Health gate + record.** Re-run the §Deploy liveness/readiness gate, confirm `/readyz` passes and `/api/health.required_ok` is `true`, and confirm `/version` now reports the rolled-back SHA. Record the rollback receipt.
 
 Rollback is a tag-bump + recreate because images are immutable and retained in the registry — the same property that makes promotion cheap makes rollback cheap.
 
 Once a manual rollback has selected and pinned the previous known-good target, failure handling follows the actual service state. If image pull or service recreate fails before the target service set is established, the executor restores the pre-rollback pin and recreates that service set so pin and runtime identity do not diverge. After the rollback target has been recreated successfully, a later verification-gate failure preserves that failure's status and diagnostics and retains the rollback target; it does not automatically restore the pre-rollback candidate that the operator is trying to leave. A successful rollback receipt is still withheld until every required gate passes.
-
-Rollback never consumes or clears a channel's durable pending-migration marker (`config/deploy/<channel>.migration-pending.env`): that marker records an interrupted deploy attempt's ambiguous migration state and belongs to the deploy path. Reconcile it by retrying the same deploy target (the executor replays the recorded classification) or by removing the file manually only after the operator has verified the database revision against the recorded range. The executor also serializes the mutation phase per channel via `config/deploy/<channel>.env.lock`; a stale lock directory after a hard kill must be removed manually after confirming no `deploy_channel.sh` process is running.
 
 ## Live post-deploy UI smoke
 
