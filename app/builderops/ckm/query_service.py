@@ -110,7 +110,25 @@ class CkmQueryService:
         completeness = CompletenessManifest((ObjectClassCompleteness("capability", included=len(resources), filtered=(total - len(resources)) if public_id else 0),), complete=True)
         watermarks = {str(row["source"]): str(row["value"]) for row in conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source")}
         provenance = tuple({"source_ref": item.provenance[0]["source_ref"]} for item in resources) or ({"source_ref": "ckm:empty"},)
-        snapshot = SnapshotManifest.build(state=state, taxonomy_digest=canonical_digest([item.public_id for item in resources]), watermarks=watermarks, provenance=provenance, completeness=completeness, read_set=read_set)
+        # Taxonomy identity belongs to the state, not to one query subset.
+        # In particular, exact lookup and complete capture at the same revision
+        # must bind the same taxonomy digest.
+        taxonomy = [
+            {
+                "public_id": str(row["public_id"]),
+                "parent_public_id": str(row["parent_public_id"] or ""),
+                "lifecycle": str(row["lifecycle"]),
+            }
+            for row in conn.execute(
+                """
+                SELECT child.public_id, parent.public_id AS parent_public_id, child.lifecycle
+                FROM ckm_capability AS child
+                LEFT JOIN ckm_capability AS parent ON parent.id = child.parent_id
+                ORDER BY child.public_id
+                """
+            )
+        ]
+        snapshot = SnapshotManifest.build(state=state, taxonomy_digest=canonical_digest(taxonomy), watermarks=watermarks, provenance=provenance, completeness=completeness, read_set=read_set)
         return ResultEnvelope(resource_type="capability", query_digest=canonical_query_digest(query), snapshot=snapshot, resources=resources)
 
     @staticmethod
