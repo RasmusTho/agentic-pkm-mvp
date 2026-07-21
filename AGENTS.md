@@ -157,6 +157,15 @@ Escalation triggers (raise model and/or reasoning, or route to a more specialize
 - auth / security / data / migration / concurrency / payments / external API touched
 - non-trivial CI failure; residual risk hard to assess.
 
+For auth, security, data, migration, concurrency, external-API, credential-durability, or explicit
+state-machine work, put the cheapest adequate mechanism/convergence review before an expensive
+full-suite or CI handoff. If one review round reports multiple blockers in the same stateful
+mechanism, or a later round finds an adjacent blocker in that mechanism, stop point-fixing and run
+the mechanism-level convergence gate in
+`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` before another expensive proof cycle.
+This gate does not replace current-SHA CI or the final independent review gate, and it does not reset
+repair budgets.
+
 De-escalation triggers (lower model/reasoning, narrow context) — when:
 
 - the plan is clear and decomposed into mechanical steps
@@ -190,6 +199,11 @@ Many agents run against this repo at once. C_coordination, C_delay, and C_rework
 - **Right-size fan-out.** Parallelize only independent issues with isolated worktrees, explicit return receipts, and an explicit token/quality rationale. Over-fanning raises C_coordination faster than it cuts C_delay — when in doubt, fewer agents.
 - **Reconcile races on evidence, do not redo.** On a claim or delivery collision, the latest unreleased lease governs; verify on `origin/main` and close your duplicate rather than re-implementing.
 - **Shared-budget awareness.** The GitHub API budget (5,000/hr) is shared across every concurrent agent, and GraphQL exhausts first. A tool call's real cost is its *marginal cost to all agents*, not to your task — so never busy-wait on a shared budget, prefer the transport that spares the scarce bucket (REST `gh api` over GraphQL `gh pr`/`gh issue`/`gh repo`; `git push --delete` over the API for branch ops), and read the free `gh api rate_limit` endpoint before assuming exhaustion. The same rule covers any pooled resource (CI runners, the embedding/Ollama queue). For waiting on CI checks (and the optional `--codex` verdict path, inactive as the default gate) specifically, follow `_shared/CI_WAIT_CONTRACT.md` — a tight `gh pr checks` loop drains the shared GraphQL bucket to zero and stalls every other agent.
+- **Atomically lease host-global validation.** Run repo-wide local suites and other host-global
+  commands through `scripts/run_with_host_lease.py`; the repo-common kernel file lock is the
+  exclusion authority across worktrees. Chat reservations, process census, polling, and
+  quiet-period observations are advisory only and must not authorize a run. If the lease is held,
+  fail or wait boundedly; never interrupt the holder. Do not background a leased command.
 - **Fail-closed gate composition.** Any command whose exit code gates a subsequent action (commit, push, merge, receipt) must run bare with its status captured directly (`rc=$?`) — never composed with `|| echo`, `| tail`, `| grep`, backgrounding, or anything that substitutes another command's exit status for the gate's. A gate whose failure mode is silent success is not a gate. (Instances: BRANCH_TRUTH_GATE `|| echo` 2026-06-13; PR #2759 pipe-masked merge gate 2026-07-02.)
 
 ### TCD output blocks

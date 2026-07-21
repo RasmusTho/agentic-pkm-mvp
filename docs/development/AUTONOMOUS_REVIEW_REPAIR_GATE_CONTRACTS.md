@@ -5,8 +5,8 @@ Owner: Builder System governance
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-09
-Last verified against: issue #3211, issue #3224, issue #3225, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
+Last reviewed: 2026-07-20
+Last verified against: issue #3211, issue #3224, issue #3225, the 2026-07-20 human session RCA, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
 
 # Autonomous Review and Repair Gate Contracts
 
@@ -227,6 +227,51 @@ Frontier-rescue stop conditions:
 When a stop condition triggers, classify it through [Escalation classifier](#escalation-classifier).
 Only an explicit authority category may route to Human Exception; safe technical
 stops remain blocked while their bounded recovery path proceeds autonomously.
+
+## Mechanism Convergence Gate
+
+The implementation, governance, and direct-repair lanes must explicitly record that TCD risk
+classification was completed even when no high-risk surface applies. Omitting the risk-surface
+argument is not evidence of a low-risk classification. Governance that changes executable stateful
+or concurrency enforcement is not exempt. Once any high-risk surface is declared, no lane may bypass
+this gate; only a clean convergence review permits expensive proof to begin.
+
+This is the cheap design/correctness gate that precedes expensive proof for high-risk stateful work.
+It applies to auth, security, data, migrations, concurrency, external APIs, credential durability,
+and explicit state machines. It is enacted by `issue-to-code`, `publish-pr`, and
+`verification-and-closure`; it does not replace current-SHA CI or the final independent review gate.
+
+Trigger it:
+
+- before the first expensive local validation for a high-risk stateful slice;
+- after one review round reports two or more blocking findings in the same mechanism; or
+- when a later review round finds an adjacent blocker in a mechanism already repaired.
+
+The implementation agent must stop point-fixing and build one convergence packet containing:
+
+- the stable mechanism/domain key and invariant being protected;
+- valid, terminal, indeterminate, and compensated states;
+- allowed transitions and every writer that can perform them;
+- durability/crash ordering at each externally visible or authority-changing boundary;
+- producers, consumers, cleanup, retry, restart, and recovery paths;
+- lock ownership/order plus stale-observation and queued-consumer races;
+- all prior findings and attempted fixes bound to the same mechanism key; and
+- a test matrix mapping each invariant, transition, crash point, and race to focused proof.
+
+A fresh independent reviewer at the strongest capability justified by `AGENTS.md :: Total Cost of
+Development` reviews the packet and local publishable SHA before another expensive validation. Any
+blocker returns to focused repair and packet review. Only a clean convergence review permits the
+sequence `affected-surface validation -> publication -> current-SHA CI -> final clean review gate`
+to resume. The validation scope comes from the governing contract and affected subsystem; high-risk
+classification alone does not expand it to a repo-wide full suite.
+Creating the packet or changing reviewer capability never resets the existing per-mechanism repair
+budget.
+
+### Low-convergence receipt
+
+Record the triggering review round, mechanism key, packet location or concise receipt, reviewer
+capability, verdict, and the expensive validation/CI cycles avoided or repeated. This is delivery evidence, not
+a new owner-doc authority surface.
 
 ## Review Repair Loop
 

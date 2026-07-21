@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan the cheap review gate that must run before expensive CI handoff."""
+"""Plan the cheap review gate before expensive local validation or CI handoff."""
 
 from __future__ import annotations
 
@@ -20,7 +20,19 @@ GOVERNANCE_PREFIXES = (
     "tests/scripts/",
     "tests/fixtures/",
 )
-DOCS_GOVERNANCE_LANES = {"docs", "docs-authoring", "governance", "direct-repair"}
+DOCS_GOVERNANCE_LANES = {"docs-authoring", "governance", "direct-repair"}
+CANONICAL_LANES = DOCS_GOVERNANCE_LANES | {"implementation"}
+RISK_REVIEW_LANES = {"implementation", "governance", "direct-repair"}
+RISK_SURFACES = {
+    "auth",
+    "concurrency",
+    "credential-durability",
+    "data",
+    "external-api",
+    "migration",
+    "security",
+    "state-machine",
+}
 
 
 class ReviewBeforeCiGateError(ValueError):
@@ -48,21 +60,42 @@ def evaluate_review_before_ci_gate(
     changed_files: Sequence[str],
     review_gate_complete: bool = False,
     bypass_reason: str | None = None,
+    risk_surfaces: Sequence[str] = (),
+    risk_assessment_complete: bool = False,
 ) -> ReviewBeforeCiGate:
     """Return local review-before-CI gate guidance for a PR prep stage."""
 
     normalized_lane = lane.strip().lower()
     if not normalized_lane:
         raise ReviewBeforeCiGateError("lane is required")
+    if normalized_lane not in CANONICAL_LANES:
+        raise ReviewBeforeCiGateError(
+            f"unknown lane: {normalized_lane}; allowed: {', '.join(sorted(CANONICAL_LANES))}"
+        )
     files = [_normalize_path(path) for path in changed_files]
     if not files:
         raise ReviewBeforeCiGateError("at least one changed file is required")
 
-    matched = _matched_surfaces(normalized_lane, files)
+    risks = _normalize_risk_surfaces(risk_surfaces)
+    if risks and normalized_lane not in RISK_REVIEW_LANES:
+        raise ReviewBeforeCiGateError(
+            "risk_surfaces are valid only for implementation, governance, or direct-repair lanes"
+        )
+    if normalized_lane in RISK_REVIEW_LANES and not risk_assessment_complete:
+        raise ReviewBeforeCiGateError(
+            "implementation, governance, and direct-repair lanes require an explicit completed risk assessment, "
+            "including when no high-risk surface applies"
+        )
+    matched = _matched_surfaces(normalized_lane, files, risks)
     required = bool(matched)
     bypass = _clean_text(bypass_reason)
     if bypass and not required:
         raise ReviewBeforeCiGateError("bypass_reason is only valid when the review gate is required")
+    if bypass and (normalized_lane != "direct-repair" or risks):
+        raise ReviewBeforeCiGateError(
+            "bypass_reason is valid only for an emergency direct-repair with no "
+            "declared high-risk surface"
+        )
     if bypass:
         return _gate(
             normalized_lane,
@@ -85,7 +118,7 @@ def evaluate_review_before_ci_gate(
             bypass_reason=None,
             files=files,
             matched=matched,
-            summary="run cheap local review/contract checks before handing off to expensive CI",
+            summary="run cheap local review/contract checks before expensive validation or CI",
         )
     if required:
         return _gate(
@@ -139,7 +172,9 @@ def _gate(
     )
 
 
-def _matched_surfaces(lane: str, files: Sequence[str]) -> list[str]:
+def _matched_surfaces(
+    lane: str, files: Sequence[str], risk_surfaces: Sequence[str]
+) -> list[str]:
     matched: set[str] = set()
     if lane in DOCS_GOVERNANCE_LANES:
         matched.add(f"lane:{lane}")
@@ -148,19 +183,41 @@ def _matched_surfaces(lane: str, files: Sequence[str]) -> list[str]:
             matched.add("surface:docs")
         if path.startswith(GOVERNANCE_PREFIXES):
             matched.add("surface:governance")
+    matched.update(f"risk:{surface}" for surface in risk_surfaces)
     return sorted(matched)
 
 
 def _required_checks(matched: Sequence[str]) -> list[str]:
     if not matched:
         return []
-    checks = [
-        "generate or preflight the PR body with scripts/pr_body_generator.py",
-        "run python3 scripts/docs_guard.py for docs/governance writeback drift",
-    ]
+    checks: list[str] = []
+    if any(item.startswith("lane:") or item.startswith("surface:") for item in matched):
+        checks.extend(
+            [
+                "generate or preflight the PR body with scripts/pr_body_generator.py",
+                "run python3 scripts/docs_guard.py for docs/governance writeback drift",
+            ]
+        )
     if any(item.startswith("surface:governance") or item == "lane:governance" for item in matched):
         checks.append("run targeted governance/contract tests for touched surfaces")
+    if any(item.startswith("risk:") for item in matched):
+        checks.extend(
+            [
+                "build the mechanism convergence packet (invariants, states, transitions, crash ordering, producers/consumers/recovery, locks, and test map)",
+                "run a fresh independent high-capability review of the local publishable SHA and convergence packet before selected expensive validation",
+            ]
+        )
     return checks
+
+
+def _normalize_risk_surfaces(values: Sequence[str]) -> list[str]:
+    risks = sorted({value.strip().lower() for value in values if value.strip()})
+    unknown = sorted(set(risks) - RISK_SURFACES)
+    if unknown:
+        raise ReviewBeforeCiGateError(
+            f"unknown risk surface(s): {', '.join(unknown)}; allowed: {', '.join(sorted(RISK_SURFACES))}"
+        )
+    return risks
 
 
 def _normalize_path(path: str) -> str:
@@ -185,6 +242,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--changed-file", action="append", default=[])
     parser.add_argument("--review-gate-complete", action="store_true")
     parser.add_argument("--bypass-reason")
+    parser.add_argument("--risk-surface", action="append", default=[])
+    parser.add_argument("--risk-assessment-complete", action="store_true")
     return parser
 
 
@@ -196,6 +255,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             changed_files=args.changed_file,
             review_gate_complete=args.review_gate_complete,
             bypass_reason=args.bypass_reason,
+            risk_surfaces=args.risk_surface,
+            risk_assessment_complete=args.risk_assessment_complete,
         )
     except ReviewBeforeCiGateError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), file=sys.stderr)
