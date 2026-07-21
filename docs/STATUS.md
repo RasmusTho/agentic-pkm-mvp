@@ -70,7 +70,7 @@ promote public internet readiness.
 
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
-- The runbook ensures `pytest -q -m "not pg and not alpha_llm"` plus curated fitness gates keep the SoT baseline stable before merges.
+- The runbook uses affected-subsystem PR tests plus curated fitness gates before merges; the leased full non-PG/alpha-excluded suite is reserved for an explicit contract or cross-system blast-radius escalation.
 - PR-unit test selection maps Heimdal/Mimer implementation, contract-doc, and test paths to the scoped `tests/heimdal` and `tests/knowledge_acquisition` suites; an unmapped changed surface fails selection before pytest rather than producing a false-green run.
 - The dormant instance-local multi-vault registry core lives in `app/instance/vault_registry.py` and
   is covered by the `vault` PR-unit suite through explicit ownership of `app/instance/**` and
@@ -140,7 +140,7 @@ governed by
 - Settings compiler scope: panel action catalog, watcher settings, and outbox paths now compile with provenance (path/mtime/sha) via `vault/@Settings/watchers.md`, `docs/settings/panel-actions.md`, `python -m app.cli settings-validate`, and `python -m app.cli settings-explain`.
 - Runtime-gating settings deltas from `settings/local.md` now route through the governed seam and emit `SettingsWriteReceipt`s when watcher-detected file edits change `enableVaultWatcher` or `enableAutoIndexing` (#2512).
 - Operator enablement signals: `python -m app.cli settings-explain` surfaces watcher auto-exec state, allowlist validity, provenance, and write-guard context; `python -m app.cli status` exposes the same gate, watcher automation counters, last tick skips, last-run skip reasons, and panel-action/compiler provenance (source paths, mtimes, combined digest). Treat `allowlist`, `dedup/skipped_*`, `panel_skipped_policy`, and `writes_allowed` as the safe-to-enable checklist, not just the raw `WATCHER_AUTO_EXEC` value.
-- Required tests: `ruff check app tests`, `mypy app`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`, plus `python -m app.cli settings-validate --json` and the new concurrency/promote/settings regression suites.
+- Required tests: `ruff check app tests`, `mypy app`, governing `Verify:` targets, and focused affected-subsystem tests; add `python -m app.cli settings-validate --json` when settings/runtime contracts change. The host-leased repo-wide non-PG suite is required only when the governing contract names it or cross-system blast radius cannot be covered by focused tests (see `docs/TESTING.md :: Required baseline checks`).
 - CI gate workflows: `.github/workflows/ci-smoke.yaml` is the enforced PR/push gate — smoke plus fitness-report summary parsing (including `CI SUMMARY GATES ok=<bool>`, exiting non-zero when `GATES.ok != true`), the subsystem-scoped not-pg unit-test lane with the repo-wide mypy gate, and the contract-validation job (import-linter, OpenAPI validation, YAML/JSON lint) gated by path filters so docs-only PRs stay light. `.github/workflows/integration-nightly.yaml` owns the heavy nightly lanes (full suite, PG contracts, k6 search load). The dispatch-only `ci.yml` and `ci-lite.yml` workflows were retired in #3892 after their live gates moved to those paths.
 
 ## v5.6 Closure and Post-v5.6 Follow-ups

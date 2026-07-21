@@ -13,11 +13,15 @@ If any escalation trigger applies, stop and read [`PR_ESCALATION_PATHS.md`](PR_E
 
 Fill these out before deciding whether the PR stays on the hot path:
 
-- `lane`: `docs` | `code` | `governance` | `maintenance` | `promotion`
+- `lane`: `docs-authoring` | `implementation` | `governance` | `direct-repair`
 - `risk`: `low` | `normal` | `high`
 - `touches_runtime`: `yes` | `no`
 - `touches_ci_or_skills`: `yes` | `no`
 - `closes_issue`: `yes` | `no`
+
+Promotion is not a PR hot-path lane. Route release-channel work through `prepare-promotion`,
+`execute-promotion`, `verify-promotion`, or `rollback-promotion` as applicable; those skills own its
+operator gates and evidence model.
 
 Default rule:
 - if the PR is low-risk and does not touch runtime, CI, skills, migrations, APIs, or public contracts, stay on the hot path
@@ -84,13 +88,30 @@ distinct open governing parent.
 
 ## Review-Before-CI
 
-For docs-authoring, governance, and direct-repair PRs, run the cheap local review gate before pushing
-or handing a new PR head to expensive GitHub CI:
+For every implementation, governance, and direct-repair PR, explicitly complete the TCD risk assessment before
+the cheap local review gate, even when no high-risk surface applies. Supply every applicable
+`--risk-surface`; omitting the option is not evidence that the change is low risk. High-risk work runs
+the gate before its first expensive validation as well as before push. Validation remains
+affected-subsystem scoped; high risk strengthens ordering and review, but does not by itself mandate
+a repo-wide full suite:
+
+```bash
+python3 scripts/review_before_ci_gate.py \
+  --lane implementation \
+  --changed-file app/example.py \
+  --risk-assessment-complete \
+  --risk-surface auth \
+  --review-gate-complete
+```
+
+For docs-authoring and governance PRs, run the cheap local review gate before pushing or handing a
+new PR head to expensive GitHub CI:
 
 ```bash
 python3 scripts/review_before_ci_gate.py \
   --lane governance \
   --changed-file docs/development/PR_HOT_PATH.md \
+  --risk-assessment-complete \
   --review-gate-complete
 ```
 
@@ -98,12 +119,14 @@ The gate is a local ordering check: it exposes whether PR-body preflight, docs g
 governance/contract review should run before CI waiting becomes the main feedback loop. It does not
 replace required GitHub checks, branch protection, or final review triage.
 
-Direct-repair or emergency paths may bypass the local gate only with an explicit reason:
+An emergency direct repair may bypass the local gate only after an explicit completed risk
+assessment finds no high-risk surface. A declared high-risk surface is never bypassable:
 
 ```bash
 python3 scripts/review_before_ci_gate.py \
   --lane direct-repair \
   --changed-file docs/development/PR_HOT_PATH.md \
+  --risk-assessment-complete \
   --bypass-reason "Emergency typo repair; receipt names skipped local gate."
 ```
 

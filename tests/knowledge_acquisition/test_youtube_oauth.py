@@ -420,6 +420,7 @@ def test_disconnect_revokes_without_deleting_artifacts(store, bindings, registry
     # Token record deleted; binding marked disconnected.
     assert store.has_record(binding_id) is False
     assert bindings.get(binding_id).reason_code == "auth_disconnected"
+    assert binder.status(binding_id)["reason_code"] == "auth_disconnected"
     # Dependent source disabled with auth_disconnected — but the row/cursor kept.
     disabled = registry.get(source.binding_id)
     assert disabled.enabled is False
@@ -428,6 +429,144 @@ def test_disconnect_revokes_without_deleting_artifacts(store, bindings, registry
     # Acquired artifacts are never deleted by a disconnect.
     assert raw_store.get_raw_record_by_content_identity("cid-artifact-1") is not None
     assert raw_store.all_raw_records()[0].id == raw_row.id
+
+
+# --- #3990 V1 safety floor --------------------------------------------------
+
+
+def test_connect_token_store_failure_does_not_create_connected_binding(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+
+    def _failed_put(_binding_id, _token):
+        raise OSError("synthetic encrypted-store failure")
+
+    monkeypatch.setattr(store, "put", _failed_put)
+
+    with pytest.raises(OSError, match="synthetic encrypted-store failure"):
+        _connect_device(binder)
+
+    assert bindings.list_all() == ()
+
+
+def test_failed_first_connect_status_is_not_connected_without_token_record(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+
+    def _failed_put(_binding_id, _token):
+        raise OSError("synthetic encrypted-store failure")
+
+    monkeypatch.setattr(store, "put", _failed_put)
+    with pytest.raises(OSError):
+        _connect_device(binder)
+
+    assert bindings.list_all() == ()
+
+    # Defensive read path: even a legacy or externally-created positive row
+    # cannot be positive authority without a readable encrypted token.
+    orphan = bindings.create(
+        provider_channel_id=SYNTH_CHANNEL_ID,
+        display_label=SYNTH_CHANNEL_TITLE,
+        scopes=[oauth.SCOPE],
+    )
+    status = binder.status(orphan.account_binding_id)
+    assert status["status"] == "degraded"
+    assert status["reason_code"] == "auth_missing"
+
+    def _failed_has_record(_binding_id):
+        raise OSError("synthetic unreadable token index")
+
+    monkeypatch.setattr(store, "has_record", _failed_has_record)
+    unreadable_status = binder.status(orphan.account_binding_id)
+    assert unreadable_status["status"] == "degraded"
+    assert unreadable_status["reason_code"] == "auth_key_missing"
+
+
+@pytest.mark.parametrize("provider_status", [0, 408, 429, 500, 503])
+def test_disconnect_preserves_token_when_provider_revoke_fails(
+    store, bindings, registry, monkeypatch, tmp_path, provider_status
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="inbox_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Inbox",
+        account_binding_id=binding_id,
+    )
+    source = registry.set_inbox(binding_id, source.binding_id)
+    cursor_before = dict(source.cursor)
+
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", secrets.token_hex(32))
+    from app.heimdal import raw_store
+
+    raw_store.reset_memory_raw_store()
+    key = raw_store.resolve_raw_store_key()
+    ciphertext, nonce = raw_store.encrypt_raw_bytes(b"acquired-evidence", key=key)
+    raw_store.insert_raw_record(
+        content_identity="cid-artifact-revoke-retry",
+        capture_chain=["youtube"],
+        sensor={"id": "yt"},
+        consent={"grant_ref": "g1"},
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref="k1",
+        source_path="mem://retry",
+    )
+
+    def _transient_revoke(_token):
+        raise oauth.OAuthProviderError(
+            status=provider_status, error_code="temporarily_unavailable"
+        )
+
+    monkeypatch.setattr(binder._client, "revoke", _transient_revoke)
+    result = binder.disconnect(binding_id)
+
+    assert result == {
+        "status": "degraded",
+        "reason_code": "api_unavailable",
+        "retryable": True,
+    }
+    assert store.get(binding_id) is not None
+    preserved_source = registry.get(source.binding_id)
+    assert preserved_source.enabled is True
+    assert preserved_source.cursor == cursor_before
+    assert preserved_source.last_error is None
+    assert raw_store.get_raw_record_by_content_identity("cid-artifact-revoke-retry") is not None
+
+
+def test_disconnect_permanent_provider_error_keeps_existing_local_teardown(
+    store, bindings, registry, monkeypatch
+):
+    provider = _Provider()
+    binder = _binder(provider, store, bindings, registry)
+    connected = _connect_device(binder)
+    binding_id = connected["account"]["binding_id"]
+    source = registry.register(
+        collection_kind="inbox_playlist",
+        collection_ref=SYNTH_PLAYLIST_REF,
+        title="Inbox",
+        account_binding_id=binding_id,
+    )
+    source = registry.set_inbox(binding_id, source.binding_id)
+
+    def _permanent_revoke(_token):
+        raise oauth.OAuthProviderError(status=400, error_code="invalid_request")
+
+    monkeypatch.setattr(binder._client, "revoke", _permanent_revoke)
+    result = binder.disconnect(binding_id)
+
+    assert result == {"status": "disconnected", "revoked": False, "sources_disabled": 1}
+    assert store.has_record(binding_id) is False
+    assert bindings.get(binding_id).reason_code == "auth_disconnected"
+    assert registry.get(source.binding_id).enabled is False
+    assert binder.status(binding_id)["reason_code"] == "auth_disconnected"
 
 
 # --- AC7 --------------------------------------------------------------------

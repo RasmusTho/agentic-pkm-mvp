@@ -189,3 +189,15 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** Two standard repairs refined PID filtering and passed synthetic `pgrep` rows locally, but the same 24 CI wrappers still failed because the shell inventory observed its own non-portable process mechanism.
 **Upstream artifact:** `tests/ops/test_instance_state_volume_contract.py` — deployment quiescence must use actual long-lived processes, synchronized real-probe races, and enumeration-failure tests rather than fake process rows.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused without a valid host-store cutover acknowledgement or explicit BuilderOps state path; convert this entry when the acknowledged host store is reachable.
+
+## 2026-07-20 — session RCA (auth/state review convergence)
+**Source:** human / learning-retrospective
+**Diverged:** A high-risk OAuth and credential-durability repair repeatedly passed focused tests, a full suite, publication, and CI before successive independent reviews found adjacent blockers in the same crash-ordering and compensation state machine.
+**Upstream artifact:** `AGENTS.md :: Total Cost of Development`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, and `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` — require a mechanism-level convergence packet and independent pre-expensive-gate review for high-risk stateful work, with a circuit breaker after multi-blocker or adjacent repeated findings.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement is absent.
+
+## 2026-07-20 — session RCA (host-global suite coordination)
+**Source:** human / learning-retrospective
+**Diverged:** Chat reservations and process polling did not prevent another worktree from starting a host-global non-PG full suite, wasting one exact-SHA proof and forcing quiet-period recovery.
+**Upstream artifact:** `AGENTS.md :: Parallel-agent execution`, `docs/development/DEV_WORKFLOW.md`, and `scripts/run_with_host_lease.py` — replace advisory chat coordination with an atomic repo-common kernel lease held for the complete host-global child process.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement is absent.

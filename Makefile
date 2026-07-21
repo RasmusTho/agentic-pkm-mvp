@@ -69,8 +69,14 @@ test:
 	if $(PYTHON) -c "import pytest_asyncio.plugin" >/dev/null 2>&1; then \
 		PYTEST_PLUGIN_ARGS="-p pytest_asyncio.plugin"; \
 	fi; \
+	if $(PYTHON) -c "import anyio.pytest_plugin" >/dev/null 2>&1; then \
+		PYTEST_PLUGIN_ARGS="$$PYTEST_PLUGIN_ARGS -p anyio.pytest_plugin"; \
+	fi; \
 	export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; \
-	$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib
+	GIT_SHA="$$(git rev-parse --short HEAD)"; \
+	python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
+		--execution-id "make-test:$$GIT_SHA:$$$$" --wait-seconds 900 -- \
+		$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib
 
 eval:
 	$(PYTHON) -m app.eval.run
@@ -117,8 +123,14 @@ smoke:
 	if $(PYTHON) -c "import pytest_asyncio.plugin" >/dev/null 2>&1; then \
 		PYTEST_PLUGIN_ARGS="$$PYTEST_PLUGIN_ARGS -p pytest_asyncio.plugin"; \
 	fi; \
+	if $(PYTHON) -c "import anyio.pytest_plugin" >/dev/null 2>&1; then \
+		PYTEST_PLUGIN_ARGS="$$PYTEST_PLUGIN_ARGS -p anyio.pytest_plugin"; \
+	fi; \
+	GIT_SHA="$$(git rev-parse --short HEAD)"; \
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
-	$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib -k "not slow and not e2e" $$XDIST_ARGS
+	python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
+		--execution-id "make-smoke:$$GIT_SHA:$$$$" --wait-seconds 900 -- \
+		$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib -k "not slow and not e2e" $$XDIST_ARGS
 	@if [ "$(SMOKE_E2E_WORKERS)" != "0" ]; then \
 		PYTEST_E2E_PLUGIN_ARGS=""; \
 		XDIST_E2E_ARGS=""; \
@@ -129,8 +141,14 @@ smoke:
 		if $(PYTHON) -c "import pytest_asyncio.plugin" >/dev/null 2>&1; then \
 			PYTEST_E2E_PLUGIN_ARGS="$$PYTEST_E2E_PLUGIN_ARGS -p pytest_asyncio.plugin"; \
 		fi; \
+		if $(PYTHON) -c "import anyio.pytest_plugin" >/dev/null 2>&1; then \
+			PYTEST_E2E_PLUGIN_ARGS="$$PYTEST_E2E_PLUGIN_ARGS -p anyio.pytest_plugin"; \
+		fi; \
+		GIT_SHA="$$(git rev-parse --short HEAD)"; \
 		PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
-		$(PYTHON) -m pytest $$PYTEST_E2E_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib -k "e2e and not slow" $$XDIST_E2E_ARGS ; \
+		python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
+			--execution-id "make-smoke-e2e:$$GIT_SHA:$$$$" --wait-seconds 900 -- \
+			$(PYTHON) -m pytest $$PYTEST_E2E_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib -k "e2e and not slow" $$XDIST_E2E_ARGS ; \
 	fi
 
 test-vault-init:

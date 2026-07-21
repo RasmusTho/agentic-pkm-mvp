@@ -7,6 +7,7 @@ prepare_instance_ownership_host_state_dir
 
 LOG_PATH="${LOG_PATH:-verification_log.txt}"
 REPORT_PATH="${REPORT_PATH:-verification_report.md}"
+GIT_SHA="$(git rev-parse --short HEAD)"
 
 mkdir -p "$(dirname "$LOG_PATH")" "$(dirname "$REPORT_PATH")" 2>/dev/null || true
 
@@ -335,7 +336,7 @@ else
   _record_fail "mypy failed"
 fi
 
-if _run "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m 'not pg'"; then
+if _run "python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id verify-runtime-chain:${GIT_SHA}:$$ --wait-seconds 900 -- env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m 'not pg'"; then
   :
 else
   section_g_ok=0
