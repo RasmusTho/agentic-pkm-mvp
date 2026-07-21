@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from app.builderops.control_plane.client import ClientConfig
+from app.builderops.control_plane.client import ClientConfig, StaleLeaseError
 from app.builderops.control_plane.client_cli import main
 
 
@@ -53,6 +53,26 @@ class _RecordingClient:
     def commit_record(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("commit_record", kwargs))
         return {"object_id": kwargs["record_id"], "state": kwargs["state"]}
+
+    def create_inquiry(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("create_inquiry", kwargs))
+        return {"object_id": kwargs["inquiry_id"], "state": kwargs["state"]}
+
+    def heartbeat_task(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("heartbeat_task", kwargs))
+        return {"result": {"state": "claimed"}}
+
+    def complete_task(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("complete_task", kwargs))
+        return {"result": {"state": "completed"}}
+
+    def commit_attempt(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("commit_attempt", kwargs))
+        return {"object_id": kwargs["attempt_id"], "state": kwargs["state"]}
+
+    def commit_promotion(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("commit_promotion", kwargs))
+        return {"object_id": kwargs["promotion_id"], "state": kwargs["status"]}
 
     def close(self) -> None:
         self.closed = True
@@ -170,10 +190,45 @@ def test_explicit_ttl_flag_wins_over_manifest_policy(tmp_path: Path, factory) ->
     assert client.calls[0][1]["ttl_seconds"] == 60
 
 
-def test_no_manifest_dir_skips_routing_and_uses_hardcoded_default(factory) -> None:
-    """Routing is opt-in: omitting --delivery-manifest-dir must not require a
-    manifest to exist anywhere, and the historical hardcoded default applies."""
-    exit_code = main(
+@pytest.mark.parametrize(
+    "command_args",
+    [
+        [
+            "record",
+            "--repository",
+            "RasmusTho/agentic-pkm-mvp",
+            "--scope",
+            "issue:3791",
+            "--stack",
+            "builderops-control-plane",
+            "--source-ref",
+            "github:issue:3791",
+            "--record-id",
+            "record-1",
+            "--record-type",
+            "LearningSignal",
+            "--state",
+            "active",
+            "--idempotency-key",
+            "record-1",
+        ],
+        [
+            "inquiry",
+            "--repository",
+            "RasmusTho/agentic-pkm-mvp",
+            "--scope",
+            "issue:3791",
+            "--stack",
+            "builderops-control-plane",
+            "--source-ref",
+            "github:issue:3791",
+            "--inquiry-id",
+            "inquiry-1",
+            "--state",
+            "active",
+            "--idempotency-key",
+            "inquiry-1",
+        ],
         [
             "task-claim",
             "--repository",
@@ -189,11 +244,41 @@ def test_no_manifest_dir_skips_routing_and_uses_hardcoded_default(factory) -> No
             "--idempotency-key",
             "claim-1",
         ],
-        client_factory=factory,
-    )
-    assert exit_code == 0
-    [client] = factory.created
-    assert client.calls[0][1]["ttl_seconds"] == 5400
+        [
+            "task-heartbeat", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3791",
+            "--stack", "builderops-control-plane", "--source-ref", "github:issue:3791",
+            "--lease", '{"repository":"rasmustho/agentic-pkm-mvp","resource_id":"issue-3791","holder":"client","fencing_token":1,"expires_at":"2026-07-17T00:00:00+00:00"}',
+            "--idempotency-key", "heartbeat-1",
+        ],
+        [
+            "task-complete", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3791",
+            "--stack", "builderops-control-plane", "--source-ref", "github:issue:3791",
+            "--lease", '{"repository":"rasmustho/agentic-pkm-mvp","resource_id":"issue-3791","holder":"client","fencing_token":1,"expires_at":"2026-07-17T00:00:00+00:00"}',
+            "--idempotency-key", "complete-1",
+        ],
+        [
+            "lease-claim", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3791",
+            "--stack", "builderops-control-plane", "--source-ref", "github:issue:3791",
+            "--resource-id", "promotion-1", "--idempotency-key", "lease-1",
+        ],
+        [
+            "attempt", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3791",
+            "--stack", "builderops-control-plane", "--source-ref", "github:issue:3791",
+            "--task-id", "issue-3791", "--attempt-id", "attempt-1", "--state", "started",
+            "--lease", '{"repository":"rasmustho/agentic-pkm-mvp","resource_id":"issue-3791","holder":"client","fencing_token":1,"expires_at":"2026-07-17T00:00:00+00:00"}',
+            "--idempotency-key", "attempt-1",
+        ],
+        [
+            "promotion", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3791",
+            "--stack", "builderops-control-plane", "--source-ref", "github:issue:3791",
+            "--promotion-id", "promotion-1", "--status", "prepared", "--idempotency-key", "promotion-1",
+        ],
+    ],
+)
+def test_mutating_commands_require_delivery_manifest_route(command_args: list[str], factory) -> None:
+    """Every real mutating CLI dispatch fails before client construction without a route."""
+    assert main(command_args, client_factory=factory) == 2
+    assert factory.created == []
 
 
 def test_missing_manifest_for_addressed_repo_fails_closed(tmp_path: Path, factory) -> None:
@@ -281,8 +366,15 @@ def test_manifest_dir_without_task_class_is_a_usage_error(tmp_path: Path, factor
 def test_malformed_repository_fails_closed_not_uncaught(factory) -> None:
     """H1 regression test: RepoRefError from _envelope()'s RepoRef.parse() must
     be caught as a fail-closed CLI error (exit 3), never an uncaught traceback."""
+    # Route configuration is supplied so the malformed RepoRef is the gate
+    # under test rather than the required manifest-dir check.
+    # A missing directory is not reached because RepoRef.parse happens first.
     exit_code = main(
         [
+            "--delivery-manifest-dir",
+            "/does-not-matter",
+            "--task-class",
+            "implementation",
             "record",
             "--repository",
             "not-a-valid-repo",
@@ -304,9 +396,60 @@ def test_malformed_repository_fails_closed_not_uncaught(factory) -> None:
         client_factory=factory,
     )
     assert exit_code == 3
+    assert factory.created == []
+
+
+def test_promotion_update_accepts_fenced_lease_and_rejects_stale_lease(
+    tmp_path: Path, factory
+) -> None:
+    manifest_dir = _manifest_dir(tmp_path)
+    args = [
+        "--delivery-manifest-dir", str(manifest_dir), "--task-class", "implementation",
+        "promotion", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3968",
+        "--stack", "builderops-control-plane", "--source-ref", "github:issue:3968",
+        "--promotion-id", "promotion-1", "--status", "approved", "--idempotency-key", "update-1",
+        "--lease", '{"repository":"rasmustho/agentic-pkm-mvp","resource_id":"promotion-1","holder":"client","fencing_token":2,"expires_at":"2026-07-17T00:00:00+00:00","lease_kind":"promotion"}',
+    ]
+    assert main(args, client_factory=factory) == 0
     [client] = factory.created
-    assert client.calls == []
-    assert client.closed is True
+    assert client.calls[0][0] == "commit_promotion"
+    assert client.calls[0][1]["lease"]["fencing_token"] == 2
+
+    class _StalePromotionClient(_RecordingClient):
+        def commit_promotion(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("commit_promotion", kwargs))
+            raise StaleLeaseError("StaleFencingToken")
+
+    stale_clients: list[_StalePromotionClient] = []
+
+    def stale_factory(config: ClientConfig) -> _StalePromotionClient:
+        client = _StalePromotionClient(config)
+        stale_clients.append(client)
+        return client
+
+    assert main(args, client_factory=stale_factory) == 3
+    assert stale_clients[0].calls[0][1]["lease"]["fencing_token"] == 2
+    assert stale_clients[0].closed is True
+
+    class _MissingLeaseClient(_RecordingClient):
+        def commit_promotion(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("commit_promotion", kwargs))
+            if kwargs["lease"] is None:
+                raise StaleLeaseError("LeaseRequired")
+            return super().commit_promotion(**kwargs)
+
+    missing_clients: list[_MissingLeaseClient] = []
+
+    def missing_factory(config: ClientConfig) -> _MissingLeaseClient:
+        client = _MissingLeaseClient(config)
+        missing_clients.append(client)
+        return client
+
+    missing_lease_args = [arg for arg in args if arg != "--lease"]
+    missing_lease_args.remove(args[-1])
+    assert main(missing_lease_args, client_factory=missing_factory) == 3
+    assert missing_clients[0].calls[0][1]["lease"] is None
+    assert missing_clients[0].closed is True
 
 
 def test_routing_not_engaged_for_read_only_commands(tmp_path: Path, factory) -> None:

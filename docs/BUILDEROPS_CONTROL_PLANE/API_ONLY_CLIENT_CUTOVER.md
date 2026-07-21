@@ -140,14 +140,16 @@ opt-in and the only `outbox:write` scope. With the service unavailable or the
 credential rejected, the client and wrapper fail closed with a non-zero exit and
 create no local SQLite/JSONL/JSON authority and no fabricated GitHub lease.
 
-The CLI's optional `--delivery-manifest-dir`/`--task-class` flags engage
-delivery-manifest `(RepoRef, stack, task-class)` routing
-(`app.builderops.control_plane.routing`) for a mutating command: when given,
-the addressed repository's manifest is loaded and its route resolved before
-dispatch (advisory request-shaping only, e.g. a `ttl_seconds` default — never
-privileged authority), and a missing/ambiguous manifest or route fails closed.
-Routing is opt-in; omitting both flags skips it entirely and uses the
-historical hardcoded defaults, matching this slice's non-authoritative scope.
+Every mutating CLI command requires `--delivery-manifest-dir` and
+`--task-class` and resolves delivery-manifest `(RepoRef, stack, task-class)`
+routing (`app.builderops.control_plane.routing`) before dispatch. Missing,
+ambiguous, stale, or cross-repository manifests/routes fail closed before a
+client is constructed. The resolved policy remains advisory request shaping
+(for example, a `ttl_seconds` default), never privileged authority; BCP-05
+still independently re-resolves protected-base policy and credential binding.
+Promotion updates pass the caller-supplied fenced `--lease` object through the
+same API boundary; the store rejects missing or stale lease evidence without a
+local or fabricated fallback.
 
 ## How to Verify (Pre-Merge)
 
