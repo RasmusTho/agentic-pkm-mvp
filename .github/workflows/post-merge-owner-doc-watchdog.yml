@@ -161,6 +161,13 @@ jobs:
               return JSON.stringify(value);
             };
             const canonicalSha256 = value => sha256(canonicalJson(value));
+            const matchesStoredBodyDigest = (body, storedDigest) => {
+              if (typeof storedDigest !== "string" || !/^[0-9a-f]{64}$/.test(storedDigest)) return false;
+              if (body.endsWith("\n\n")) return false;
+              return bodySha256(body) === storedDigest ||
+                (!body.endsWith("\n") &&
+                  sha256(`${body}\n`) === storedDigest);
+            };
             const commentReceipts = (comments, marker) => {
               const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
               const pattern = new RegExp(`${escaped}\\s*\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\``, "gm");
@@ -193,7 +200,6 @@ jobs:
               const supporting = receipt.authenticated_supporting_issues;
               const liveSupporting = receipt.live_supporting_issues;
               const liveAuthority = resolveIssueAuthority(livePr.body || "");
-              const digest = bodySha256(livePr.body || "");
               if (
                 !hasExactFields(receipt, AUTHORITY_FIELDS) ||
                 receipt.contract !== "verified_issue_set_merge_authority.v1" ||
@@ -220,7 +226,8 @@ jobs:
                 arraysEqual(closing, liveAuthority.closing_issues) &&
                 arraysEqual(liveSupporting, liveAuthority.supporting_issues) &&
                 supporting.every(number => liveAuthority.supporting_issues.includes(number)) &&
-                [receipt.body_sha256, receipt.neutralized_body_sha256].includes(digest);
+                [receipt.body_sha256, receipt.neutralized_body_sha256]
+                  .some(storedDigest => matchesStoredBodyDigest(livePr.body || "", storedDigest));
             };
 
             const resolveContinuousMergePhase = (comments, authorityReceipt, livePr) => {
@@ -274,7 +281,6 @@ jobs:
             };
 
             const resolveAuthorityReceipt = (comments, livePr, expectedRepository) => {
-              const digest = bodySha256(livePr.body || "");
               const receipts = [];
               for (const receipt of commentReceipts(comments, AUTHORITY_MARKER)) {
                 if (validAuthorityReceipt(receipt, livePr, expectedRepository)) {
@@ -283,7 +289,8 @@ jobs:
                 }
                 if (
                   hasCompleteMergedIdentity(livePr) &&
-                  ![receipt.body_sha256, receipt.neutralized_body_sha256].includes(digest) &&
+                  ![receipt.body_sha256, receipt.neutralized_body_sha256]
+                    .some(storedDigest => matchesStoredBodyDigest(livePr.body || "", storedDigest)) &&
                   validAuthorityReceipt(
                     receipt, livePr, expectedRepository, {requireLiveBody: false}
                   )
@@ -294,7 +301,8 @@ jobs:
               if (keys.size !== 1) return null;
               const authorityReceipt = receipts[receipts.length - 1];
               if (
-                ![authorityReceipt.body_sha256, authorityReceipt.neutralized_body_sha256].includes(digest) &&
+                ![authorityReceipt.body_sha256, authorityReceipt.neutralized_body_sha256]
+                  .some(storedDigest => matchesStoredBodyDigest(livePr.body || "", storedDigest)) &&
                 resolveContinuousMergePhase(comments, authorityReceipt, livePr) === null
               ) return null;
               return authorityReceipt;

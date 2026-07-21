@@ -362,6 +362,28 @@ def test_neutralized_pr_contract_canonicalizes_only_one_terminal_lf() -> None:
         )
 
 
+def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_terminal_lf() -> None:
+    pull_request, comment, receipt = _neutralized_authority_fixture()
+    body = str(pull_request["body"])
+    legacy = copy.deepcopy(receipt)
+    legacy["neutralized_body_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+    legacy_comment = copy.deepcopy(comment)
+    legacy_comment["body"] = (
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(legacy, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+    lf_less = {**pull_request, "body": body[:-1]}
+
+    assert _js_neutralized_merge_authority(
+        [legacy_comment], lf_less, str(legacy["repository"])
+    ) == legacy
+    for changed in (body, body + "\n", body[:-1] + " ", body[:-1] + "drift"):
+        assert _js_neutralized_merge_authority(
+            [legacy_comment], {**pull_request, "body": changed}, str(legacy["repository"])
+        ) is None
+
+
 def test_neutralized_pr_contract_rejects_forged_stale_missing_and_conflicting_authority() -> None:
     pull_request, comment, receipt = _neutralized_authority_fixture()
     repository = str(receipt["repository"])
@@ -400,7 +422,7 @@ def test_production_pr_contract_authenticates_neutralized_merge_authority() -> N
         "resolveNeutralizedMergeAuthority",
         "TRUSTED_ASSOCIATIONS",
         "receipt.head_sha === pullRequest.head?.sha",
-        "receipt.neutralized_body_sha256 === liveDigest",
+        "matchesStoredBodyDigest(liveBody, receipt.neutralized_body_sha256)",
         "new Set(valid.map(canonicalJson)).size !== 1",
         "one trusted, non-conflicting exact-head verified-merge authority receipt",
     ):

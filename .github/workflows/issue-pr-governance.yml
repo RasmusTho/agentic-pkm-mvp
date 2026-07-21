@@ -296,6 +296,13 @@ jobs:
               const canonicalBody = value.endsWith("\n") ? value.slice(0, -1) : value;
               return crypto.createHash("sha256").update(canonicalBody, "utf8").digest("hex");
             };
+            const matchesStoredBodyDigest = (body, storedDigest) => {
+              if (typeof storedDigest !== "string" || !/^[0-9a-f]{64}$/.test(storedDigest)) return false;
+              if (body.endsWith("\n\n")) return false;
+              return bodySha256(body) === storedDigest ||
+                (!body.endsWith("\n") &&
+                  crypto.createHash("sha256").update(`${body}\n`, "utf8").digest("hex") === storedDigest);
+            };
             const trustedAuthorityReceipts = comments => {
               const escaped = AUTHORITY_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
               const pattern = new RegExp(`${escaped}\\s*\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\``, "gm");
@@ -316,7 +323,6 @@ jobs:
             const resolveNeutralizedMergeAuthority = ({comments, issueAuthority, pullRequest, repository}) => {
               if (!issueAuthority.neutralizedValid) return null;
               const liveBody = pullRequest.body || "";
-              const liveDigest = bodySha256(liveBody);
               const valid = trustedAuthorityReceipts(comments).filter(receipt => {
                 const closing = receipt.closing_issues;
                 const authenticatedSupporting = receipt.authenticated_supporting_issues;
@@ -343,7 +349,7 @@ jobs:
                   typeof receipt.neutralized_body_sha256 === "string" &&
                   /^[0-9a-f]{64}$/.test(receipt.neutralized_body_sha256) &&
                   receipt.body_sha256 !== receipt.neutralized_body_sha256 &&
-                  receipt.neutralized_body_sha256 === liveDigest
+                  matchesStoredBodyDigest(liveBody, receipt.neutralized_body_sha256)
                 );
               });
               if (valid.length === 0 || new Set(valid.map(canonicalJson)).size !== 1) return null;

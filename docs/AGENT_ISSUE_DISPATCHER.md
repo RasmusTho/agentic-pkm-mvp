@@ -321,7 +321,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Verified-merge authority and phase body digests use one deterministic GitHub PR-body canonical
   form: remove at most one terminal LF before deriving or comparing the SHA-256 digest. This treats
   that terminal LF as equivalent to its absence; every other body byte and whitespace character
-  remains exact, and any substantive body drift fails closed.
+  remains exact, and any substantive body drift fails closed. A pre-#4010 authority receipt that
+  stored the raw digest of the same body with exactly one terminal LF may also authenticate when
+  GitHub returns the LF-less form. This legacy exception preserves the receipt identity, exact head,
+  issue sets, and repair budget; it never accepts a second LF, spaces, CRLF, or interior drift.
 - Mutable PR text is never merge-time closure authority. Immediately before merge, the verified
   flow re-reads the exact head, title, body, and GitHub `closingIssuesReferences`, replaces every
   authenticated closing keyword with evidence-only `Refs` plus a bounded

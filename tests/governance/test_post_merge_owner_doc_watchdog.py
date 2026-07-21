@@ -248,6 +248,30 @@ def test_watchdog_body_digest_canonicalizes_only_one_terminal_lf() -> None:
         )
 
 
+def test_watchdog_accepts_legacy_authority_receipt_only_for_one_terminal_lf() -> None:
+    original = _body()
+    comment = _authority_comment()
+    receipt = _receipt_payload(comment)
+    receipt["body_sha256"] = hashlib.sha256(original.encode()).hexdigest()
+    legacy_comment = {
+        **comment,
+        "body": "verified issue-set merge authority:\n```json\n"
+        + json.dumps(receipt, separators=(",", ":"), sort_keys=True)
+        + "\n```",
+    }
+
+    assert _node(
+        "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+        [legacy_comment],
+        _pr(original[:-1]),
+        REPOSITORY,
+    ) == receipt
+    for changed in (original, original + "\n", original[:-1] + " ", original[:-1] + "drift"):
+        assert _node(
+            "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+            [legacy_comment], _pr(changed), REPOSITORY,
+        ) is None
+
 def test_watchdog_rejects_forged_stale_or_conflicting_authority_receipts() -> None:
     untrusted = _authority_comment()
     untrusted["author_association"] = "NONE"

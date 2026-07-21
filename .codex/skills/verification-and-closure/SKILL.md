@@ -291,7 +291,10 @@ Verified-merge authority and phase body digests canonicalize GitHub PR-body stor
 most one terminal LF before digest derivation or comparison. That LF is equivalent to its absence;
 every other body byte and whitespace character remains exact, and substantive body drift fails
 closed. This digest equivalence does not relax any head, title, closing-set, authority-receipt, or
-phase-continuity gate below.
+phase-continuity gate below. For a pre-#4010 trusted authority receipt only, the stored raw digest
+of the otherwise identical body with exactly one terminal LF may authenticate when GitHub returns
+the LF-less form; preserve the receipt identity and repair budget, and reject a second LF, spaces,
+CRLF, interior drift, or every other receipt/live-state mismatch.
 
 1. freeze the authenticated v2 context (`run_id`, repository, PR, exact head, governing issue,
    `closing_issues`, durable `supporting_issues`, attempts, and 2+2 repair-budget projection); re-read

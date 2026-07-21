@@ -165,6 +165,103 @@ def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() 
         )
 
 
+def _legacy_authority_fixture() -> tuple[dict[str, object], dict[str, object], str, str]:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = copy.deepcopy(plan["authority_receipt"])
+    assert isinstance(authority, dict)
+    original = str(plan["original_body"])
+    neutralized = str(plan["neutralized_body"])
+    authority["body_sha256"] = hashlib.sha256(original.encode("utf-8")).hexdigest()
+    authority["neutralized_body_sha256"] = hashlib.sha256(
+        neutralized.encode("utf-8")
+    ).hexdigest()
+    return authority, _pr(neutralized[:-1]), original[:-1], neutralized[:-1]
+
+
+def test_legacy_authority_receipt_accepts_only_single_terminal_lf_digest_difference() -> None:
+    authority, neutral_pr, _, neutralized = _legacy_authority_fixture()
+    comment = _trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(authority, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+
+    assert resolve_verified_merge_authority_receipt(
+        [comment], pr=neutral_pr, repository=REPOSITORY
+    ) == authority
+
+    for body in (neutralized + "\n", neutralized + " ", neutralized + "\r\n", neutralized + "drift"):
+        assert resolve_verified_merge_authority_receipt(
+            [comment], pr=_pr(body), repository=REPOSITORY
+        ) is None
+    for mutated in (
+        {**neutral_pr, "head": {"sha": "b" * 40}},
+        {**neutral_pr, "number": 9999},
+    ):
+        assert resolve_verified_merge_authority_receipt(
+            [comment], pr=mutated, repository=REPOSITORY
+        ) is None
+    forged = {**comment, "author_association": "NONE"}
+    assert resolve_verified_merge_authority_receipt(
+        [forged], pr=neutral_pr, repository=REPOSITORY
+    ) is None
+
+
+def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> None:
+    authority, neutral_pr, _, _ = _legacy_authority_fixture()
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority, phase="prepared", pr=neutral_pr
+    )
+
+    assert prepared["phase_receipt"]["authority_sha256"] == hashlib.sha256(
+        json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert prepared["phase_receipt"]["body_sha256"] == authority["neutralized_body_sha256"]
+    assert prepared["phase_receipt"]["run_id"] == authority["run_id"]
+    assert prepared["phase_receipt"]["closed_issues"] == []
+
+
+def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
+    authority, neutral_pr, original, _ = _legacy_authority_fixture()
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority, phase="prepared", pr=neutral_pr
+    )
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-21T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    merged = build_verified_merge_phase(authority_receipt=authority, phase="merged", pr=merged_pr)
+    reconciled = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="reconciled",
+        pr=merged_pr,
+        closed_issues=[3820, 3823],
+    )
+    restored_pr = {**merged_pr, "body": original}
+    restored = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="restored",
+        pr=restored_pr,
+        closed_issues=[3820, 3823],
+    )
+    comments = [
+        _trusted_comment(str(item["phase_receipt_comment"]))
+        for item in (prepared, merged, reconciled, restored)
+    ]
+
+    assert resolve_verified_merge_phase(
+        comments, authority_receipt=authority, pr=restored_pr
+    ) == restored["phase_receipt"]
+    assert resolve_verified_merge_phase(
+        comments[1:], authority_receipt=authority, pr=restored_pr
+    ) is None
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

@@ -125,6 +125,26 @@ def _body_digest(body: str) -> str:
     return hashlib.sha256(canonical_body.encode("utf-8")).hexdigest()
 
 
+def _matches_stored_body_digest(body: str, stored_digest: object) -> bool:
+    """Accept a canonical digest or the one pre-#4010 stored LF form.
+
+    New receipts use :func:`_body_digest`.  A historical receipt may instead
+    have stored the raw digest of a body ending in exactly one LF, while GitHub
+    now returns that same body without the LF.  Do not turn this into trimming:
+    a second LF, whitespace, CRLF, and interior changes remain distinct.
+    """
+
+    if not isinstance(stored_digest, str) or _DIGEST_PATTERN.fullmatch(stored_digest) is None:
+        return False
+    if body.endswith("\n\n"):
+        return False
+    if _body_digest(body) == stored_digest:
+        return True
+    if body.endswith("\n"):
+        return False
+    return hashlib.sha256((body + "\n").encode("utf-8")).hexdigest() == stored_digest
+
+
 def _canonical_digest(value: Mapping[str, object]) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -205,11 +225,13 @@ def _valid_authority_receipt(
         authority is None
         or receipt.get("governing_issue") != authority.governing_issue
         or not isinstance(body, str)
-        or _body_digest(body)
-        not in {
-            receipt.get("body_sha256"),
-            receipt.get("neutralized_body_sha256"),
-        }
+        or not any(
+            _matches_stored_body_digest(body, digest)
+            for digest in (
+                receipt.get("body_sha256"),
+                receipt.get("neutralized_body_sha256"),
+            )
+        )
     ):
         return False
     try:
@@ -288,15 +310,16 @@ def resolve_verified_merge_authority_receipt(
     if _complete_merged_identity(pr):
         body = pr.get("body")
         if isinstance(body, str):
-            live_digest = _body_digest(body)
             valid.extend(
                 dict(receipt)
                 for receipt in receipts
-                if live_digest
-                not in {
-                    receipt.get("body_sha256"),
-                    receipt.get("neutralized_body_sha256"),
-                }
+                if not any(
+                    _matches_stored_body_digest(body, digest)
+                    for digest in (
+                        receipt.get("body_sha256"),
+                        receipt.get("neutralized_body_sha256"),
+                    )
+                )
                 and _valid_authority_receipt(
                     receipt,
                     pr=pr,
@@ -317,10 +340,13 @@ def resolve_verified_merge_authority_receipt(
     ):
         return None
     body = pr.get("body")
-    if isinstance(body, str) and _body_digest(body) not in {
-        authority_receipt.get("body_sha256"),
-        authority_receipt.get("neutralized_body_sha256"),
-    }:
+    if isinstance(body, str) and not any(
+        _matches_stored_body_digest(body, digest)
+        for digest in (
+            authority_receipt.get("body_sha256"),
+            authority_receipt.get("neutralized_body_sha256"),
+        )
+    ):
         if resolve_verified_merge_phase(
             comments,
             authority_receipt=authority_receipt,
@@ -440,7 +466,7 @@ def build_verified_merge_phase(
         or not isinstance(head, Mapping)
         or pr.get("number") != authority_receipt.get("pr_number")
         or head.get("sha") != authority_receipt.get("head_sha")
-        or _body_digest(body) != expected_body_digest
+        or not _matches_stored_body_digest(body, expected_body_digest)
         or (
             merged_phase
             and (
@@ -466,7 +492,7 @@ def build_verified_merge_phase(
         raise ValueError("verified merge phase live state is malformed")
     receipt = {
         "authority_sha256": _canonical_digest(authority_receipt),
-        "body_sha256": _body_digest(body),
+        "body_sha256": expected_body_digest,
         "closed_issues": list(closed),
         "contract": VERIFIED_MERGE_PHASE_CONTRACT,
         "head_sha": authority_receipt["head_sha"],
@@ -572,11 +598,16 @@ def resolve_verified_merge_phase(
     if highest is None:
         return None
     current_body = pr.get("body")
-    current_digest = _body_digest(current_body) if isinstance(current_body, str) else None
-    if current_digest not in {
-        authority_receipt.get("body_sha256"),
-        authority_receipt.get("neutralized_body_sha256"),
-    } and not (allow_merged_body_drift and _complete_merged_identity(pr)):
+    if (
+        not isinstance(current_body, str)
+        or not any(
+            _matches_stored_body_digest(current_body, digest)
+            for digest in (
+                authority_receipt.get("body_sha256"),
+                authority_receipt.get("neutralized_body_sha256"),
+            )
+        )
+    ) and not (allow_merged_body_drift and _complete_merged_identity(pr)):
         return None
     return highest
 
