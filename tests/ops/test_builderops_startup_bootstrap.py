@@ -4,9 +4,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -15,28 +13,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_cutover_ack(state_dir: Path) -> None:
-    from app.builderops import config as builderops_config
+    from app.builderops.cutover_evidence import build_receipt, write_receipt
+    from app.builderops.store import SqliteBuilderOpsStore
 
-    state_dir.mkdir(parents=True, exist_ok=True)
-    path = builderops_config.host_cutover_ack_path(state_dir)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": builderops_config.CUTOVER_ACK_SCHEMA,
-                "scope": "same-user-same-host",
-                "host_id": builderops_config.current_host_id(),
-                "user_id": builderops_config.current_user_id(),
-                "legacy_stores_reconciled": True,
-                "participating_repos": ["local/repo"],
-                "participating_roots": [str(Path.cwd().resolve())],
-                "inventory_epoch": str(uuid4()),
-                "actor": "operator-test",
-                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
-            }
-        ),
-        encoding="utf-8",
+    target = SqliteBuilderOpsStore(state_dir / "builderops.sqlite3")
+    target.initialize()
+    target.create_agent_worklog(
+        id="awl_startup_fixture_cutover",
+        summary="Startup fixture cutover evidence",
+        body="Non-empty fixture target for implicit readiness validation.",
+        task_context={"issue": "#3686"},
+        source_refs=[{"ref_type": "github_issue", "ref": "#3686"}],
+        created_by={"actor_type": "agent", "id": "startup-fixture"},
     )
-    path.chmod(0o600)
+    receipt = build_receipt(
+        state_dir=state_dir,
+        participants=[{"repository": "local/repo", "root": str(Path.cwd().resolve())}],
+        reconciliation=[],
+        actor="operator-test",
+    )
+    write_receipt(state_dir, receipt)
 
 
 def test_default_repos_include_agentic_and_bifrost() -> None:
