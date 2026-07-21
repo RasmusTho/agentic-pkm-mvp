@@ -107,6 +107,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/builderops/",
             "tests/dispatcher/",
             "tests/governance/",
+            # BuilderOps store-access inventory fitness. Keep this exact file
+            # owned without widening builder_system to all architecture tests.
+            "tests/architecture/test_builderops_store_boundary.py",
             "docs/builderops/",
             "importlinter.ini",
         ),
