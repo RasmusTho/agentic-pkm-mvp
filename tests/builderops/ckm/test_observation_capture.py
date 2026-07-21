@@ -23,6 +23,7 @@ from app.builderops.ckm.store import CkmStore
 
 OBSERVED_AT = "2026-07-22T10:00:00Z"
 SECRET = "customer Alice /vault/private/strategy.md citation-secret"
+SQLITE_SECRET = "raw-query=/vault/private/customer-A.md name=Alice payload=secret"
 
 
 def _store(tmp_path: Path) -> CkmStore:
@@ -59,6 +60,29 @@ def _rows(store: QueryObservationStore) -> list[sqlite3.Row]:
 
 def _fingerprint(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _assert_sqlite_error_redacted(error: QueryObservationError) -> None:
+    public_views = (
+        str(error),
+        repr(error),
+        repr(error.details),
+        json.dumps(error.to_dict(), sort_keys=True),
+    )
+    assert all(SQLITE_SECRET not in view for view in public_views)
+    assert error.details == {"error_class": "sqlite_failure"}
+    assert error.__cause__ is None
+
+
+def _inject_temp_trigger(monkeypatch, store: QueryObservationStore, sql: str) -> None:
+    original_connect = store._connect
+
+    def connect() -> sqlite3.Connection:
+        connection = original_connect()
+        connection.execute(sql)
+        return connection
+
+    monkeypatch.setattr(store, "_connect", connect)
 
 
 def _canonical_observation_table_ddl() -> str:
@@ -373,22 +397,145 @@ def test_observation_has_no_authority_or_ckm_side_effect(tmp_path: Path) -> None
     }
 
 
-def test_observation_failure_preserves_returned_query_semantics(tmp_path: Path) -> None:
+def test_observation_failure_preserves_returned_query_semantics(
+    tmp_path: Path, monkeypatch
+) -> None:
     ckm = _store(tmp_path)
     outcome = CkmQueryService(ckm.db_path).list_capabilities()
     returned = outcome.to_dict()
-    observations = QueryObservationStore(ckm.db_path)
-    observations.initialize()
-    with sqlite3.connect(observations.path) as connection:
-        connection.execute(
-            f"CREATE TRIGGER fail_observation BEFORE INSERT ON {OBSERVATION_TABLE} "
-            "BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+    capture_store = QueryObservationStore(tmp_path / "capture.sqlite")
+    capture_store.initialize()
+    _inject_temp_trigger(
+        monkeypatch,
+        capture_store,
+        f"CREATE TEMP TRIGGER fail_capture BEFORE INSERT ON {OBSERVATION_TABLE} "
+        f"BEGIN SELECT RAISE(ABORT, '{SQLITE_SECRET}'); END",
+    )
+    with pytest.raises(QueryObservationError) as capture_exc:
+        capture_store.capture(
+            outcome,
+            event_kind="supported_result",
+            metadata=_metadata(),
+            observed_at=OBSERVED_AT,
         )
-    with pytest.raises(QueryObservationError) as exc_info:
-        observations.capture(outcome, event_kind="supported_result", metadata=_metadata(), observed_at=OBSERVED_AT)
-    assert exc_info.value.code == "observation_persistence_failed"
+    assert capture_exc.value.code == "observation_persistence_failed"
+    _assert_sqlite_error_redacted(capture_exc.value)
     assert outcome.to_dict() == returned
-    assert _rows(observations) == []
+    assert _rows(capture_store) == []
+    assert SQLITE_SECRET.encode() not in capture_store.path.read_bytes()
+
+    with monkeypatch.context() as correction_patch:
+        correction_store = QueryObservationStore(tmp_path / "correction.sqlite")
+        original = correction_store.capture(
+            outcome,
+            event_kind="supported_result",
+            metadata=_metadata(),
+            observed_at=OBSERVED_AT,
+        )
+        _inject_temp_trigger(
+            correction_patch,
+            correction_store,
+            f"CREATE TEMP TRIGGER fail_correction BEFORE INSERT ON {OBSERVATION_TABLE} "
+            f"BEGIN SELECT RAISE(ABORT, '{SQLITE_SECRET}'); END",
+        )
+        with pytest.raises(QueryObservationError) as correction_exc:
+            correction_store.correct(
+                original.observation_id,
+                outcome,
+                event_kind="supported_result",
+                metadata=_metadata(latency_ms=120.0),
+                observed_at="2026-07-22T10:00:01Z",
+            )
+        assert correction_exc.value.code == "observation_persistence_failed"
+        _assert_sqlite_error_redacted(correction_exc.value)
+        correction_rows = _rows(correction_store)
+        assert len(correction_rows) == 1
+        assert correction_rows[0]["lifecycle"] == "retained"
+        assert SQLITE_SECRET.encode() not in correction_store.path.read_bytes()
+
+    for operation in ("prune", "delete"):
+        with monkeypatch.context() as lifecycle_patch:
+            lifecycle_store = QueryObservationStore(tmp_path / f"{operation}.sqlite")
+            receipt = lifecycle_store.capture(
+                outcome,
+                event_kind="supported_result",
+                metadata=_metadata(),
+                observed_at=OBSERVED_AT,
+            )
+            lifecycle = (
+                "operator_pruned" if operation == "prune" else "required_deletion"
+            )
+            _inject_temp_trigger(
+                lifecycle_patch,
+                lifecycle_store,
+                f"CREATE TEMP TRIGGER fail_{operation} BEFORE UPDATE ON "
+                f"{OBSERVATION_TABLE} WHEN NEW.lifecycle = '{lifecycle}' "
+                f"BEGIN SELECT RAISE(ABORT, '{SQLITE_SECRET}'); END",
+            )
+            with pytest.raises(QueryObservationError) as lifecycle_exc:
+                if operation == "prune":
+                    lifecycle_store.prune(
+                        [receipt.observation_id],
+                        reason="operator_pruned",
+                        at="2026-07-23T10:00:00Z",
+                        previewed_observation_ids=[receipt.observation_id],
+                    )
+                else:
+                    lifecycle_store.delete(
+                        receipt.observation_id, at="2026-07-23T10:00:00Z"
+                    )
+            assert lifecycle_exc.value.code == "observation_persistence_failed"
+            _assert_sqlite_error_redacted(lifecycle_exc.value)
+            lifecycle_rows = _rows(lifecycle_store)
+            assert len(lifecycle_rows) == 1
+            assert lifecycle_rows[0]["lifecycle"] == "retained"
+            assert lifecycle_rows[0]["observation_json"] is not None
+            assert SQLITE_SECRET.encode() not in lifecycle_store.path.read_bytes()
+
+    read_operations = (
+        ("storage", "observation_storage_usage_failed", lambda store: store.storage_usage()),
+        (
+            "replay",
+            "observation_replay_failed",
+            lambda store: store.replay("ckm_query_observation_safe"),
+        ),
+        (
+            "preview",
+            "observation_prune_preview_failed",
+            lambda store: store.preview_prune(now=OBSERVED_AT),
+        ),
+    )
+    for name, expected_code, operation in read_operations:
+        with monkeypatch.context() as read_patch:
+            read_store = QueryObservationStore(tmp_path / f"read-{name}.sqlite")
+            read_store.initialize()
+            read_patch.setattr(read_store, "initialize", lambda: None)
+
+            def fail_connect() -> sqlite3.Connection:
+                raise sqlite3.OperationalError(SQLITE_SECRET)
+
+            read_patch.setattr(read_store, "_connect", fail_connect)
+            with pytest.raises(QueryObservationError) as read_exc:
+                operation(read_store)
+            assert read_exc.value.code == expected_code
+            _assert_sqlite_error_redacted(read_exc.value)
+            assert SQLITE_SECRET.encode() not in read_store.path.read_bytes()
+
+    with monkeypatch.context() as initialize_patch:
+        initialize_store = QueryObservationStore(
+            tmp_path / "raw-path-private-customer-A.sqlite"
+        )
+
+        def fail_initialize_connect() -> sqlite3.Connection:
+            raise sqlite3.OperationalError(SQLITE_SECRET)
+
+        initialize_patch.setattr(
+            initialize_store, "_connect", fail_initialize_connect
+        )
+        with pytest.raises(QueryObservationError) as initialize_exc:
+            initialize_store.initialize()
+        assert initialize_exc.value.code == "observation_store_unsupported"
+        _assert_sqlite_error_redacted(initialize_exc.value)
 
 
 def test_accepted_question_records_authority_without_enabling_history(tmp_path: Path) -> None:

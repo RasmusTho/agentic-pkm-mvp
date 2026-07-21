@@ -48,6 +48,9 @@ PRUNE_LIFECYCLES = frozenset(
         "storage_count_and_byte_cap",
     }
 )
+LIFECYCLE_KINDS = PRUNE_LIFECYCLES | frozenset(
+    {"retained", "superseded", "required_deletion"}
+)
 QUERY_FAMILIES = frozenset(
     {
         "capability_list",
@@ -205,12 +208,12 @@ def _normalized_timestamp(value: str | None) -> str:
     else:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as exc:
+        except ValueError:
             raise QueryObservationError(
                 "invalid_observation",
                 "observed_at must be an ISO-8601 timestamp",
                 {},
-            ) from exc
+            ) from None
         if parsed.tzinfo is None:
             raise QueryObservationError(
                 "invalid_observation",
@@ -270,6 +273,10 @@ def _normalized_ddl(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip()).lower()
 
 
+def _sqlite_failure(code: str, message: str) -> QueryObservationError:
+    return QueryObservationError(code, message, {"error_class": "sqlite_failure"})
+
+
 class QueryObservationStore:
     """Versioned local evidence store beside, never inside, the CKM database."""
 
@@ -299,12 +306,11 @@ class QueryObservationStore:
                     )
                 self._preflight(connection)
                 connection.commit()
-        except sqlite3.Error as exc:
-            raise QueryObservationError(
+        except sqlite3.Error:
+            raise _sqlite_failure(
                 "observation_store_unsupported",
                 "query observation store could not be initialized safely",
-                {"reason": str(exc)},
-            ) from exc
+            ) from None
 
     @staticmethod
     def _preflight_table(connection: sqlite3.Connection) -> None:
@@ -325,10 +331,7 @@ class QueryObservationStore:
             raise QueryObservationError(
                 "observation_store_unsupported",
                 "query observation schema does not match version 1",
-                {
-                    "expected_columns": _COLUMN_CONTRACT,
-                    "actual_columns": actual_columns,
-                },
+                {"schema_component": "columns"},
             )
         ddl_row = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -378,10 +381,7 @@ class QueryObservationStore:
             raise QueryObservationError(
                 "observation_store_unsupported",
                 "query observation index set does not match version 1",
-                {
-                    "expected_indexes": sorted(_INDEX_CONTRACT),
-                    "actual_indexes": sorted(user_indexes),
-                },
+                {"schema_component": "indexes"},
             )
         for index_name, expected_columns in _INDEX_CONTRACT.items():
             index_row = user_indexes[index_name]
@@ -426,7 +426,7 @@ class QueryObservationStore:
             raise QueryObservationError(
                 "observation_store_unsupported",
                 "query observation store contains unsupported versions",
-                {"versions": unsupported},
+                {"schema_component": "row_versions"},
             )
         unknown_kinds = sorted(
             str(row[0])
@@ -439,7 +439,18 @@ class QueryObservationStore:
             raise QueryObservationError(
                 "observation_store_unsupported",
                 "query observation store contains unsupported event kinds",
-                {"event_kinds": unknown_kinds},
+                {"schema_component": "event_kinds"},
+            )
+        unknown_lifecycles = connection.execute(
+            f"SELECT 1 FROM {OBSERVATION_TABLE} WHERE lifecycle NOT IN "
+            f"({', '.join('?' for _ in LIFECYCLE_KINDS)}) LIMIT 1",
+            tuple(sorted(LIFECYCLE_KINDS)),
+        ).fetchone()
+        if unknown_lifecycles is not None:
+            raise QueryObservationError(
+                "observation_store_unsupported",
+                "query observation store contains unsupported lifecycle state",
+                {"schema_component": "lifecycle"},
             )
 
     def _prepare(
@@ -455,7 +466,7 @@ class QueryObservationStore:
             raise QueryObservationError(
                 "unsupported_observation_kind",
                 "unsupported query observation kind",
-                {"event_kind": event_kind},
+                {},
             )
         if metadata.query_family not in QUERY_FAMILIES:
             raise QueryObservationError(
@@ -710,29 +721,40 @@ class QueryObservationStore:
                 return receipt
         except QueryObservationError:
             raise
-        except sqlite3.Error as exc:
-            raise QueryObservationError(
+        except sqlite3.Error:
+            raise _sqlite_failure(
                 "observation_persistence_failed",
                 "query observation transaction failed",
-                {"reason": str(exc)},
-            ) from exc
+            ) from None
 
     def storage_usage(self) -> dict[str, int]:
         self.initialize()
-        with self._connect() as connection:
-            count, bytes_ = connection.execute(
-                f"SELECT COUNT(*), COALESCE(SUM({_PAYLOAD_BYTES_SQL}), 0) "
-                f"FROM {OBSERVATION_TABLE} WHERE observation_json IS NOT NULL"
-            ).fetchone()
+        try:
+            with self._connect() as connection:
+                count, bytes_ = connection.execute(
+                    f"SELECT COUNT(*), COALESCE(SUM({_PAYLOAD_BYTES_SQL}), 0) "
+                    f"FROM {OBSERVATION_TABLE} WHERE observation_json IS NOT NULL"
+                ).fetchone()
+        except sqlite3.Error:
+            raise _sqlite_failure(
+                "observation_storage_usage_failed",
+                "query observation storage usage could not be read",
+            ) from None
         return {"count": int(count), "bytes": int(bytes_)}
 
     def replay(self, observation_id: str) -> dict[str, Any]:
         self.initialize()
-        with self._connect() as connection:
-            row = connection.execute(
-                f"SELECT * FROM {OBSERVATION_TABLE} WHERE observation_id = ?",
-                (observation_id,),
-            ).fetchone()
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    f"SELECT * FROM {OBSERVATION_TABLE} WHERE observation_id = ?",
+                    (observation_id,),
+                ).fetchone()
+        except sqlite3.Error:
+            raise _sqlite_failure(
+                "observation_replay_failed",
+                "query observation could not be read for replay",
+            ) from None
         if row is None:
             raise QueryObservationError(
                 "missing_observation", "query observation is unknown", {}
@@ -745,10 +767,10 @@ class QueryObservationStore:
             )
         try:
             payload = json.loads(str(row["observation_json"]))
-        except json.JSONDecodeError as exc:
+        except json.JSONDecodeError:
             raise QueryObservationError(
                 "corrupt_observation", "query observation payload is corrupt", {}
-            ) from exc
+            ) from None
         semantic_record = {
             "schema_version": row["schema_version"],
             "event_kind": row["event_kind"],
@@ -782,12 +804,18 @@ class QueryObservationStore:
         if max_bytes is not None and max_bytes < 0:
             raise ValueError("max_bytes must be non-negative")
         current = _normalized_timestamp(now)
-        with self._connect() as connection:
-            rows = connection.execute(
-                f"SELECT observation_id, expires_at, {_PAYLOAD_BYTES_SQL} AS bytes "
-                f"FROM {OBSERVATION_TABLE} WHERE observation_json IS NOT NULL "
-                "ORDER BY observed_at, observation_id"
-            ).fetchall()
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"SELECT observation_id, expires_at, {_PAYLOAD_BYTES_SQL} AS bytes "
+                    f"FROM {OBSERVATION_TABLE} WHERE observation_json IS NOT NULL "
+                    "ORDER BY observed_at, observation_id"
+                ).fetchall()
+        except sqlite3.Error:
+            raise _sqlite_failure(
+                "observation_prune_preview_failed",
+                "query observation prune preview could not be read",
+            ) from None
         if earlier_than_365_days:
             return [
                 {
@@ -873,13 +901,13 @@ class QueryObservationStore:
                         raise QueryObservationError(
                             "retention_not_expired",
                             "query observation cannot expire before its retention cutoff",
-                            {"observation_id": observation_id},
+                            {},
                         )
                     if str(row["expires_at"]) > current and observation_id not in previewed:
                         raise QueryObservationError(
                             "prune_preview_required",
                             "early observation pruning requires explicit preview",
-                            {"observation_id": observation_id},
+                            {},
                         )
                     self._remove_payload(
                         connection, observation_id, lifecycle=reason, at=current
@@ -887,12 +915,11 @@ class QueryObservationStore:
                 connection.commit()
         except QueryObservationError:
             raise
-        except sqlite3.Error as exc:
-            raise QueryObservationError(
+        except sqlite3.Error:
+            raise _sqlite_failure(
                 "observation_persistence_failed",
                 "query observation pruning failed",
-                {"reason": str(exc)},
-            ) from exc
+            ) from None
 
     @staticmethod
     def _remove_payload(
@@ -945,12 +972,11 @@ class QueryObservationStore:
                 connection.commit()
         except QueryObservationError:
             raise
-        except sqlite3.Error as exc:
-            raise QueryObservationError(
+        except sqlite3.Error:
+            raise _sqlite_failure(
                 "observation_persistence_failed",
                 "query observation deletion failed",
-                {"reason": str(exc)},
-            ) from exc
+            ) from None
 
     def correct(
         self,
@@ -992,12 +1018,12 @@ class QueryObservationStore:
                 if prior["lifecycle"] == "superseded":
                     try:
                         marker = json.loads(str(prior["lifecycle_marker_json"]))
-                    except json.JSONDecodeError as exc:
+                    except json.JSONDecodeError:
                         raise QueryObservationError(
                             "observation_store_unsupported",
                             "query observation lifecycle marker is corrupt",
                             {},
-                        ) from exc
+                        ) from None
                     if not isinstance(marker, dict):
                         raise QueryObservationError(
                             "observation_store_unsupported",
@@ -1037,9 +1063,8 @@ class QueryObservationStore:
                 return receipt
         except QueryObservationError:
             raise
-        except sqlite3.Error as exc:
-            raise QueryObservationError(
+        except sqlite3.Error:
+            raise _sqlite_failure(
                 "observation_persistence_failed",
                 "query observation correction failed",
-                {"reason": str(exc)},
-            ) from exc
+            ) from None
