@@ -7,8 +7,9 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from app.builderops import cli as cli_module
 from app.builderops.cli import builderops
-from app.builderops.ckm.contracts import ACCESS_POLICY_VERSION, EFFECTIVE_AUDIENCE, REDACTION_PROFILE
+from app.builderops.ckm.contracts import ACCESS_POLICY_VERSION, EFFECTIVE_AUDIENCE, REDACTION_PROFILE, CkmContractError, ErrorEnvelope
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.store import CkmStore
 
@@ -81,7 +82,7 @@ def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:
     service = CkmQueryService(store.db_path, capture_limit=1)
     refusal = service.list_capabilities().to_dict()
     assert refusal["error"]["code"] == "snapshot_too_large" and "resources" not in refusal
-    for kwargs, code in (({"access_policy_version": "wrong"}, "unsupported_access_policy"), ({"ckm_schema_version": 999}, "unsupported_version"), ({"history_mode": "as_of"}, "unsupported_historical_semantics")):
+    for kwargs, code in (({"access_policy_version": "wrong"}, "unsupported_access_policy"), ({"ckm_schema_version": 999}, "unsupported_version"), ({"history_mode": "as_of"}, "unsupported_historical_semantics"), ({"filters": {"unsupported": "x"}}, "unsupported_filter")):
         payload = CkmQueryService(store.db_path).list_capabilities(**kwargs).to_dict()
         assert payload["error"]["code"] == code and "resources" not in payload
     original = sqlite3.connect
@@ -113,6 +114,8 @@ def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:
         _connection_factory=lambda uri: IncompleteConnection(original(uri, uri=True)),
     ).list_capabilities().to_dict()
     assert incomplete["error"]["code"] == "incomplete_snapshot" and "resources" not in incomplete
+    mixed = _mixed_epoch_payload(store.db_path)
+    assert mixed["error"]["code"] == "mixed_epoch" and "resources" not in mixed
 
 
 class _RowsCursor:
@@ -131,8 +134,7 @@ class _StateCursor:
         return self._row
 
 
-def test_mixed_epoch_snapshot_refuses_without_semantic_result(tmp_path: Path) -> None:
-    store, _, _ = _store(tmp_path)
+def _mixed_epoch_payload(db_path: Path) -> dict:
     original = sqlite3.connect
 
     class MixedEpochConnection:
@@ -158,10 +160,15 @@ def test_mixed_epoch_snapshot_refuses_without_semantic_result(tmp_path: Path) ->
                     return _StateCursor({"epoch": row["epoch"], "state_revision": int(row["state_revision"]) + 1})
             return cursor
 
-    payload = CkmQueryService(
-        store.db_path,
+    return CkmQueryService(
+        db_path,
         _connection_factory=lambda uri: MixedEpochConnection(original(uri, uri=True)),
     ).list_capabilities().to_dict()
+
+
+def test_mixed_epoch_snapshot_refuses_without_semantic_result(tmp_path: Path) -> None:
+    store, _, _ = _store(tmp_path)
+    payload = _mixed_epoch_payload(store.db_path)
     assert payload["error"]["code"] == "mixed_epoch" and "resources" not in payload
 
 
@@ -176,11 +183,39 @@ def test_missing_candidate_completeness_and_access_semantics(tmp_path: Path) -> 
     assert payload["snapshot"]["completeness"]["object_classes"][0]["included"] == 2
 
 
-def test_cli_json_uses_transport_neutral_service(tmp_path: Path) -> None:
+def test_cli_json_uses_transport_neutral_service(tmp_path: Path, monkeypatch) -> None:
     store, _, _ = _store(tmp_path)
-    result = CliRunner().invoke(builderops, ["--db-path", str(store.db_path), "ckm", "query"])
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["projection"]["authoritative"] is False
+    runner = CliRunner()
+    success = runner.invoke(builderops, ["--db-path", str(store.db_path), "ckm", "query"])
+    assert success.exit_code == 0, success.output
+    assert json.loads(success.output)["projection"]["authoritative"] is False
+    oversized = runner.invoke(builderops, ["--db-path", str(store.db_path), "ckm", "query", "--limit", "1"])
+    assert json.loads(oversized.output)["error"]["code"] == "snapshot_too_large"
+    missing = runner.invoke(builderops, ["--db-path", str(tmp_path / "missing.sqlite"), "ckm", "query"])
+    assert json.loads(missing.output)["error"]["code"] == "missing_store"
+    unsupported_path = tmp_path / "unsupported.sqlite"
+    sqlite3.connect(unsupported_path).close()
+    unsupported = runner.invoke(builderops, ["--db-path", str(unsupported_path), "ckm", "query"])
+    assert json.loads(unsupported.output)["error"]["code"] == "unsupported_store"
+
+    class RefusingService:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def list_capabilities(self):
+            return ErrorEnvelope(CkmContractError("unsupported_access_policy", "policy mismatch", {}))
+
+    monkeypatch.setattr(cli_module, "CkmQueryService", RefusingService)
+    policy = runner.invoke(builderops, ["--db-path", str(store.db_path), "ckm", "query"])
+    assert json.loads(policy.output)["error"]["code"] == "unsupported_access_policy"
+
+    class MixedEpochService(RefusingService):
+        def list_capabilities(self):
+            return ErrorEnvelope(CkmContractError("mixed_epoch", "mixed epoch", {}))
+
+    monkeypatch.setattr(cli_module, "CkmQueryService", MixedEpochService)
+    mixed = runner.invoke(builderops, ["--db-path", str(store.db_path), "ckm", "query"])
+    assert json.loads(mixed.output)["error"]["code"] == "mixed_epoch"
 
 
 def test_same_snapshot_query_and_versions_are_deterministic(tmp_path: Path) -> None:
