@@ -8,11 +8,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from click.testing import CliRunner
 
 import app.builderops.config as config
 import app.builderops.cutover_evidence as evidence
 from app.builderops.cutover_evidence import CutoverEvidenceError, build_receipt, discover_legacy_stores, write_receipt
 from app.builderops.store import SqliteBuilderOpsStore
+from app.builderops.cli import builderops
 
 
 def _target(state_dir: Path) -> None:
@@ -169,3 +171,44 @@ def test_cutover_producer_rejects_post_cutoff_inventory_without_stamping(tmp_pat
     assert not config.host_cutover_ack_path(state_dir).exists()
     with sqlite3.connect(f"file:{state_dir / 'builderops.sqlite3'}?mode=ro", uri=True) as conn:
         assert conn.execute("SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'").fetchone() is None
+
+
+def test_cutover_evidence_cli_rejects_db_override_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    default_state, override_state, root = tmp_path / "default", tmp_path / "override", tmp_path / "repo"
+    root.mkdir()
+    _target(default_state)
+    _target(override_state)
+    default_db, override_db = default_state / "builderops.sqlite3", override_state / "builderops.sqlite3"
+    before_default, before_override = default_db.read_bytes(), override_db.read_bytes()
+    participants = tmp_path / "participants.json"
+    reconciliation = tmp_path / "reconciliation.json"
+    participants.write_text(json.dumps([{"repository": "owner/repo", "root": str(root)}]), encoding="utf-8")
+    reconciliation.write_text(json.dumps([]), encoding="utf-8")
+    monkeypatch.setattr("app.builderops.cli.default_state_dir", lambda: default_state)
+    result = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(override_db),
+            "cutover-evidence",
+            "generate",
+            "--participants-file",
+            str(participants),
+            "--reconciliation-file",
+            str(reconciliation),
+            "--actor",
+            "operator",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--db-path is not allowed" in result.output
+    assert default_db.read_bytes() == before_default and override_db.read_bytes() == before_override
+    assert not config.host_cutover_ack_path(default_state).exists()
+    for db_path in (default_db, override_db):
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            marker = conn.execute(
+                "SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'"
+            ).fetchone()
+            assert marker is None

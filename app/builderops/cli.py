@@ -318,6 +318,11 @@ def cutover_evidence_generate(
     actor: str, as_json: bool,
 ) -> None:
     """Install evidence only after an existing non-empty target is verified."""
+    if (ctx.obj or {}).get("db_path") is not None:
+        raise click.ClickException(
+            "cutover-evidence generate only supports the implicit host-stable store; "
+            "--db-path is not allowed"
+        )
     try:
         participants = _load_json_value_file(participants_file, field="participants-file")
         reconciliation_payload = _load_json_value_file(reconciliation_file, field="reconciliation-file")

@@ -108,6 +108,8 @@ python -m app.builderops builderops cutover-evidence generate \
 The ordered participant/repository/root list is the explicit inventory boundary. The producer
 recursively discovers every legacy store beneath those roots, binds its identity and disposition,
 the actual host and numeric user, one reconciliation epoch, and an already-existing non-empty target.
+Because this producer governs the implicit host-stable store, the group-level CLI `--db-path`
+override is rejected before inspection or mutation.
 The validator recomputes those bindings before SQLite initialization; copied, stale, incomplete,
 post-epoch-mutated, or empty-target receipts fail closed.
 The payload schema is `builderops.host-store-cutover.v2`; the `host-store-cutover-v1.json`
