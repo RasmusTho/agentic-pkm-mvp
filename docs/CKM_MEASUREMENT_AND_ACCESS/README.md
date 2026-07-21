@@ -112,6 +112,23 @@ Dependency graph:
 
 `accepted observation evidence → future O2 proposal`
 
+## M1 delivered semantics
+
+M1 (#3779) supplies a small versioned registry of descriptive, snapshot-bound
+metric observations. Its outer measurement adapter retains a source payload
+only after the Q1 read result exists, together with bound watermarks,
+finding-evaluation material, and the observation receipt. Retention is a
+versioned 365-day policy with visible storage use, previewed early pruning,
+superseding correction, and non-content deletion markers. The public result
+keeps confirmed and candidate material separate and carries the vector,
+distribution, composition, citations, freshness, confidence, limitations,
+and Goodhart warnings beside an optional `human_advisory_only` aggregate.
+
+This does not establish a cadence, observation window, minimum snapshot
+count, M2 history, O2 automation, drift detection, federation, rankings, or
+machine decision authority. Those remain unresolved or out of scope until a
+new source-backed contract is accepted.
+
 ## Observation-gated future work
 
 - **M2 is not filed or Ready.** The accepted question set is limited to compatible sampled changes in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition. Filing still requires a costed smallest implementation, source authority, precise semantics, and verifiable refusal behavior. General bitemporality is not the answer.

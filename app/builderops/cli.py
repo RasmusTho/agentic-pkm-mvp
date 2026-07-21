@@ -46,6 +46,8 @@ from app.builderops.ckm.semantic import (
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.ckm.query_service import CkmQueryService
+from app.builderops.ckm.metrics import MetricRetentionStore, build_observation
+from app.builderops.ckm.contracts import CkmContractError, ResultEnvelope
 from app.builderops.config import BuilderOpsPaths, default_state_dir, load_paths
 from app.builderops.cutover_evidence import (
     CutoverEvidenceError,
@@ -622,6 +624,31 @@ def ckm_query(ctx: click.Context, public_id: str | None, limit: int) -> None:
     service = CkmQueryService(paths.db_path, capture_limit=limit)
     result = service.get_capability(public_id) if public_id else service.list_capabilities()
     click.echo(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
+
+
+@ckm.command("measure", help="Build a snapshot-bound descriptive CKM metric observation.")
+@click.option("--metric-id", default="capability_population", show_default=True)
+@click.option("--retain", "retain_sample", is_flag=True, help="Explicitly retain the returned snapshot and observation after the read completes.")
+@click.option("--limit", type=click.IntRange(1, 100000), default=500, show_default=True)
+@click.pass_context
+def ckm_measure(ctx: click.Context, metric_id: str, retain_sample: bool, limit: int) -> None:
+    """The optional retention write is deliberately after the Q1 result exists."""
+    paths = _effective_paths(ctx)
+    result = CkmQueryService(paths.db_path, capture_limit=limit).list_capabilities()
+    if not isinstance(result, ResultEnvelope):
+        click.echo(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
+        return
+    try:
+        observation = build_observation(result, metric_id=metric_id)
+        payload: dict[str, Any] = {"observation": observation}
+        if retain_sample:
+            retention_path = paths.db_path.with_name(f"{paths.db_path.stem}-metric-samples.sqlite")
+            sample = MetricRetentionStore(retention_path).retain(result, metric_id=metric_id)
+            payload["retained_sample"] = {"sample_id": sample.sample_id, "observation_id": sample.observation_id}
+            payload["storage"] = MetricRetentionStore(retention_path).storage_usage()
+    except CkmContractError as exc:
+        payload = {"error": exc.to_dict()}
+    click.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
 @ckm.command("project", help="Write one non-authoritative CKM Markdown projection.")
