@@ -11,6 +11,9 @@ test" requested by the issue #3791 review (finding S1).
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -433,7 +436,7 @@ def test_promotion_update_accepts_fenced_lease_and_rejects_stale_lease(
         "promotion", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3968",
         "--stack", "builderops-control-plane", "--source-ref", "github:issue:3968",
         "--promotion-id", "promotion-1", "--status", "approved", "--idempotency-key", "update-1",
-        "--lease", '{"repository":"rasmustho/agentic-pkm-mvp","resource_id":"promotion-1","holder":"client","fencing_token":2,"expires_at":"2026-07-17T00:00:00+00:00","lease_kind":"promotion"}',
+        "--lease", '{"repository":"rasmustho/agentic-pkm-mvp","resource_id":"promotion:promotion-1","holder":"client","fencing_token":2,"expires_at":"2026-07-17T00:00:00+00:00","lease_kind":"generic"}',
     ]
     assert main(args, client_factory=factory) == 0
     [client] = factory.created
@@ -475,6 +478,31 @@ def test_promotion_update_accepts_fenced_lease_and_rejects_stale_lease(
     assert main(missing_lease_args, client_factory=missing_factory) == 3
     assert missing_clients[0].calls[0][1]["lease"] is None
     assert missing_clients[0].closed is True
+
+
+def test_wrapper_mutation_injects_required_delivery_route(tmp_path: Path) -> None:
+    """The documented wrapper path carries the mandatory global route flags."""
+    manifest_dir = _manifest_dir(tmp_path)
+    root = Path(__file__).resolve().parents[3]
+    env = os.environ | {
+        "BUILDEROPS_PYTHON": sys.executable,
+        "BUILDEROPS_API_URL": "http://127.0.0.1:1",
+        "BUILDEROPS_API_TOKEN": "test-token",
+        "BUILDEROPS_DELIVERY_MANIFEST_DIR": str(manifest_dir),
+        "BUILDEROPS_TASK_CLASS": "implementation",
+    }
+    result = subprocess.run(
+        [
+            str(root / "scripts/builderops_api_client.sh"), "record",
+            "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3968",
+            "--stack", "builderops-control-plane", "--source-ref", "github:issue:3968",
+            "--record-id", "record-1", "--record-type", "LearningSignal", "--state", "active",
+            "--idempotency-key", "record-1",
+        ],
+        cwd=root, env=env, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 3
+    assert "ControlPlaneUnavailableError" in result.stderr
 
 
 def test_routing_not_engaged_for_read_only_commands(tmp_path: Path, factory) -> None:

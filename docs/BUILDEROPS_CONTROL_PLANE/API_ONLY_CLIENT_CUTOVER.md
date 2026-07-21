@@ -154,6 +154,10 @@ Promotion updates pass the caller-supplied fenced `--lease` object through the
 same API boundary; the store rejects missing or stale lease evidence without a
 local or fabricated fallback.
 
+The canonical `scripts/builderops_api_client.sh` wrapper supplies the required
+global route flags from host/worktree-owned `BUILDEROPS_DELIVERY_MANIFEST_DIR`
+and `BUILDEROPS_TASK_CLASS`; missing values fail closed before dispatch.
+
 ## How to Verify (Pre-Merge)
 
 - run client contract tests against a disposable BCP-02 service;

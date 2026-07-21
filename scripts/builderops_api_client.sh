@@ -23,6 +23,12 @@
 #     --record-id learning-3791 --record-type LearningSignal --state active \
 #     --idempotency-key record-learning-3791
 #
+# Mutations additionally require host/worktree-owned route configuration; the
+# wrapper injects it before the subcommand so callers cannot accidentally skip
+# the CLI's fail-closed manifest gate:
+#   BUILDEROPS_DELIVERY_MANIFEST_DIR — directory containing addressed-repo manifests
+#   BUILDEROPS_TASK_CLASS            — route task class (for example implementation)
+#
 # Credentials are host-owned and never inlined here or committed to the repo:
 #   BUILDEROPS_API_URL         — control-plane base URL (required), e.g.
 #                                https://<builderops-host>.<tailnet>.ts.net:<port>
@@ -55,4 +61,20 @@ if [ -z "${BUILDEROPS_API_URL:-}" ]; then
 fi
 
 cd "$APP_ROOT"
-exec "$PYTHON" -m app.builderops.control_plane "$@"
+case "${1:-}" in
+    status|receipt)
+        exec "$PYTHON" -m app.builderops.control_plane "$@"
+        ;;
+    "")
+        exec "$PYTHON" -m app.builderops.control_plane "$@"
+        ;;
+    *)
+        if [ -z "${BUILDEROPS_DELIVERY_MANIFEST_DIR:-}" ] || [ -z "${BUILDEROPS_TASK_CLASS:-}" ]; then
+            echo "ERROR: BuilderOps mutations require BUILDEROPS_DELIVERY_MANIFEST_DIR and BUILDEROPS_TASK_CLASS." >&2
+            exit 2
+        fi
+        exec "$PYTHON" -m app.builderops.control_plane \
+            --delivery-manifest-dir "$BUILDEROPS_DELIVERY_MANIFEST_DIR" \
+            --task-class "$BUILDEROPS_TASK_CLASS" "$@"
+        ;;
+esac
