@@ -307,6 +307,11 @@ def test_watchdog_accepts_legacy_authority_receipt_only_for_one_terminal_lf() ->
         "2026-07-21T18:16:34+02:00",
         "2026-07-21 16:16:34Z",
         "2026-07-21T16:16:34.000Z",
+        "2026-02-30T16:16:34Z",
+        "2025-02-29T16:16:34Z",
+        "2026-13-01T16:16:34Z",
+        "2026-07-00T16:16:34Z",
+        "2026-07-21T24:16:34Z",
     ):
         malformed_provenance = {
             **legacy_comment,
@@ -316,6 +321,15 @@ def test_watchdog_accepts_legacy_authority_receipt_only_for_one_terminal_lf() ->
             "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
             [malformed_provenance], _pr(original[:-1]), REPOSITORY,
         ) is None
+    valid_leap_day = {
+        **legacy_comment,
+        "created_at": "2024-02-29T16:16:34Z",
+        "updated_at": "2024-02-29T16:16:34Z",
+    }
+    assert _node(
+        "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+        [valid_leap_day], _pr(original[:-1]), REPOSITORY,
+    ) == receipt
 
     double_lf = original + "\n"
     canonical_receipt = _receipt_payload(comment)

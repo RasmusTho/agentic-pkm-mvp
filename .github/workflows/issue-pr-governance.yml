@@ -297,14 +297,22 @@ jobs:
               return crypto.createHash("sha256").update(canonicalBody, "utf8").digest("hex");
             };
             const LEGACY_TERMINAL_LF_CUTOFF = Date.parse("2026-07-21T16:32:11Z");
+            const canonicalUtcInstant = value => {
+              if (
+                typeof value !== "string" ||
+                !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/.test(value) ||
+                value.startsWith("0000-")
+              ) return null;
+              const instant = Date.parse(value);
+              return Number.isFinite(instant) &&
+                new Date(instant).toISOString() === `${value.slice(0, -1)}.000Z`
+                ? instant
+                : null;
+            };
             const legacyAuthorityEligible = comment => {
-              const canonicalUtc = value =>
-                typeof value === "string" &&
-                /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/.test(value);
-              if (!canonicalUtc(comment.created_at) || !canonicalUtc(comment.updated_at)) return false;
-              const created = Date.parse(comment.created_at);
-              const updated = Date.parse(comment.updated_at);
-              return Number.isFinite(created) && Number.isFinite(updated) &&
+              const created = canonicalUtcInstant(comment.created_at);
+              const updated = canonicalUtcInstant(comment.updated_at);
+              return created !== null && updated !== null &&
                 created <= updated &&
                 created < LEGACY_TERMINAL_LF_CUTOFF && updated < LEGACY_TERMINAL_LF_CUTOFF;
             };

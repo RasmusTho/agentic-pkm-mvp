@@ -229,6 +229,11 @@ def test_legacy_authority_receipt_accepts_only_single_terminal_lf_digest_differe
         "2026-07-21T18:16:34+02:00",
         "2026-07-21 16:16:34Z",
         "2026-07-21T16:16:34.000Z",
+        "2026-02-30T16:16:34Z",
+        "2025-02-29T16:16:34Z",
+        "2026-13-01T16:16:34Z",
+        "2026-07-00T16:16:34Z",
+        "2026-07-21T24:16:34Z",
     ):
         malformed_provenance = {
             **comment,
@@ -237,6 +242,14 @@ def test_legacy_authority_receipt_accepts_only_single_terminal_lf_digest_differe
         assert resolve_verified_merge_authority_receipt(
             [malformed_provenance], pr=neutral_pr, repository=REPOSITORY
         ) is None
+    valid_leap_day = {
+        **comment,
+        "created_at": "2024-02-29T16:16:34Z",
+        "updated_at": "2024-02-29T16:16:34Z",
+    }
+    assert resolve_verified_merge_authority_receipt(
+        [valid_leap_day], pr=neutral_pr, repository=REPOSITORY
+    ) == authority
 
     crlf_body = neutralized + "\r"
     crlf_authority = copy.deepcopy(authority)

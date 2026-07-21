@@ -415,6 +415,11 @@ def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_t
         "2026-07-21T18:16:34+02:00",
         "2026-07-21 16:16:34Z",
         "2026-07-21T16:16:34.000Z",
+        "2026-02-30T16:16:34Z",
+        "2025-02-29T16:16:34Z",
+        "2026-13-01T16:16:34Z",
+        "2026-07-00T16:16:34Z",
+        "2026-07-21T24:16:34Z",
     ):
         malformed_provenance = {
             **legacy_comment,
@@ -423,6 +428,14 @@ def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_t
         assert _js_neutralized_merge_authority(
             [malformed_provenance], lf_less, str(legacy["repository"])
         ) is None
+    valid_leap_day = {
+        **legacy_comment,
+        "created_at": "2024-02-29T16:16:34Z",
+        "updated_at": "2024-02-29T16:16:34Z",
+    }
+    assert _js_neutralized_merge_authority(
+        [valid_leap_day], lf_less, str(legacy["repository"])
+    ) == legacy
 
     double_lf = body + "\n"
     canonical_double_lf = copy.deepcopy(receipt)
