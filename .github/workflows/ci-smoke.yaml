@@ -294,6 +294,8 @@ jobs:
               environment:
                 WORKER_LOG_HEARTBEAT_SECONDS: "${WORKER_LOG_HEARTBEAT_SECONDS}"
           YAML
+          source scripts/lib/instance_ownership_host_state.sh
+          prepare_instance_ownership_host_state_dir
           compose_files="-f docker-compose.yaml -f /tmp/docker-compose.worker-ci.yaml"
           cleanup() {
             rc=$?
@@ -312,6 +314,13 @@ jobs:
             exit "$rc"
           }
           trap cleanup EXIT
+
+          # MVR-01B: consumers fail loud unless the launcher prepared the
+          # instance-state layout. Run the exact production producer, like
+          # start_full_system.sh / deploy_channel.sh do.
+          source scripts/lib/instance_state_deployment.sh
+          run_ci_compose() { docker compose $compose_files "$@"; }
+          prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
 
           docker compose $compose_files up -d --build worker
 
@@ -433,6 +442,8 @@ jobs:
           cache/
           EOF
 
+          source scripts/lib/instance_ownership_host_state.sh
+          prepare_instance_ownership_host_state_dir
           compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
           cleanup() {
             rc=$?
@@ -457,6 +468,11 @@ jobs:
             exit "$rc"
           }
           trap cleanup EXIT
+
+          # MVR-01B: run the exact production launcher producer before raw compose up.
+          source scripts/lib/instance_state_deployment.sh
+          run_ci_compose() { docker compose $compose_files "$@"; }
+          prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
 
           docker compose $compose_files up -d --build db api watcher worker
           LOG_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.log" \
