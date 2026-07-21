@@ -431,7 +431,7 @@ def test_malformed_repository_fails_closed_not_uncaught(factory) -> None:
     assert factory.created == []
 
 
-def test_promotion_update_accepts_fenced_lease_and_rejects_stale_lease(
+def test_promotion_cli_forwards_fenced_lease_and_typed_errors(
     tmp_path: Path, factory
 ) -> None:
     manifest_dir = _manifest_dir(tmp_path)
@@ -484,7 +484,7 @@ def test_promotion_update_accepts_fenced_lease_and_rejects_stale_lease(
     assert missing_clients[0].closed is True
 
 
-def test_promotion_update_real_cli_client_service_store_path(tmp_path: Path) -> None:
+def test_promotion_update_accepts_fenced_lease_and_rejects_stale_lease(tmp_path: Path) -> None:
     """Real CLI -> authenticated client -> service -> store fencing regression."""
     class Store:
         epoch = 1
