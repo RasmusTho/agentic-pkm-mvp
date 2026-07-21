@@ -283,9 +283,9 @@ def poll_source(
     if current is None:
         raise KeyError(f"no such binding: {binding.binding_id}")
 
-    if binding.collection_kind != V1_COLLECTION_KIND:
+    if current.collection_kind != V1_COLLECTION_KIND:
         raise V1InboxConfigurationError("V1 sync accepts only one inbox_playlist")
-    if not binding.account_binding_id:
+    if not current.account_binding_id:
         return _degraded_result(
             current,
             registry=registry,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -226,6 +227,27 @@ def test_v1_selects_exactly_one_enabled_inbox(outbox: FakeOutboxConn) -> None:
     rows = registry.list_for_account(account)
     assert selected.binding_id == same.binding_id
     assert [(row.collection_ref, row.enabled) for row in rows] == [(PLAYLIST_A, True)]
+
+    liked = registry.register(
+        collection_kind="liked_videos",
+        collection_ref="LL",
+        account_binding_id=account,
+        title="Liked Videos",
+    )
+    api = StubApiClient(_page(_item("pli-liked", VIDEO_A)))
+    forged_inbox_snapshot = replace(liked, collection_kind="inbox_playlist")
+    with pytest.raises(V1InboxConfigurationError, match="only one inbox_playlist"):
+        poll_source(
+            forged_inbox_snapshot,
+            api_client=api,
+            requests=AcquisitionRequests.for_runtime(),
+            registry=registry,
+        )
+    assert api.calls == []
+    stored_liked = registry.get(liked.binding_id)
+    assert stored_liked is not None
+    assert stored_liked.cursor == {}
+    assert stored_liked.last_success_at is None
 
 
 def test_new_inbox_item_enqueues_once_at_production_call_site(
