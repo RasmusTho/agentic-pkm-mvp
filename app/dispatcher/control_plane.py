@@ -272,11 +272,13 @@ def transition(store: SqliteStore, paths: DispatcherPaths, mode: str, *, activat
     with store._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT value FROM dispatcher_meta WHERE key = ?", (STATE_KEY,)).fetchone()
-        current = {"mode": "normal", "revision": 0} if row is None else json.loads(row["value"])
+        current: dict[str, Any] = (
+            {"mode": "normal", "revision": 0} if row is None else json.loads(row["value"])
+        )
         if current.get("revision") != expected_revision:
             conn.rollback()
             raise ValueError("Control-plane state changed concurrently; re-read status before retrying")
-        if mode not in _ALLOWED.get(current.get("mode"), set()):
+        if mode not in _ALLOWED.get(current.get("mode", ""), set()):
             conn.rollback()
             raise ValueError(f"Invalid control-plane transition: {current.get('mode')} -> {mode}")
         if mode == "degraded" and proof["ok"]:

@@ -6,9 +6,14 @@ REGISTERED_HEAL_TRANSITIONS``) -- heal-on-read is legal only when declared,
 per ``docs/architecture/formal-model.md`` §3 invariant Q4 and
 ``docs/testing/invariant-synthesis-2026-07.md :: P-3``.
 
-Method: enumerate every GET route DYNAMICALLY from the real FastAPI route
-table (``app.api.app.app.routes`` -- not a static list, so a new route cannot
-silently escape classification, mirroring the #2773 no-silent-cap precedent),
+Method: enumerate every GET route DYNAMICALLY from the real FastAPI app's
+OpenAPI schema (``app.api.app.app.openapi()`` -- not a static list, so a new
+route cannot silently escape classification, mirroring the #2773
+no-silent-cap precedent; walking ``app.routes`` directly is deliberately
+avoided here because Starlette wraps ``include_router``-registered
+sub-routers in an internal representation that varies across versions,
+which silently drops most routes from a naive ``isinstance(route, Route)``
+walk on newer Starlette -- exactly the silent cap this property forbids),
 call each route through a real ``TestClient`` with spy wrappers on the two
 durable-write primitives P-3's registered heals actually reach
 (``WriteSpy`` / ``spy_on_durable_writes`` in ``_machinery.py``), across fixture
@@ -35,12 +40,12 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.routing import Route
 
 from app.api.app import app
 from app.health_contract import WRITE_BLOCKED_STATES
 from app.write_guard import DEFAULT_WRITE_GUARD
 
+from tests._route_introspection import openapi_paths
 from tests.api._vault_test_helpers import bind_initialized_vault
 from tests.properties._machinery import (
     REGISTERED_HEAL_TRANSITIONS,
@@ -53,20 +58,16 @@ from tests.properties._machinery import (
 # ---------------------------------------------------------------------------
 
 
-def _enumerate_get_routes() -> list[Route]:
-    """Every GET route on the real, fully-configured production app.
+def _enumerate_get_routes() -> list[str]:
+    """Every GET path on the real, fully-configured production app.
 
-    Reads ``app.routes`` fresh at call time (not a module-level constant)
+    Reads the OpenAPI schema fresh at call time (not a module-level constant)
     so a route registered after import is still picked up by any caller that
     re-invokes this function -- the route table itself is the generator, per
     the property spec ("enumerated from the FastAPI app's route table --
     dynamic, so a new route cannot silently escape").
     """
-    return [
-        route
-        for route in app.routes
-        if isinstance(route, Route) and route.methods and "GET" in route.methods
-    ]
+    return [path for path, operations in openapi_paths(app).items() if "get" in operations]
 
 
 # A small per-route argument map for the handful of GET routes that require a
@@ -85,10 +86,9 @@ _ROUTE_PARAMS: dict[str, dict[str, Any]] = {
 }
 
 
-def _call_route(client: TestClient, route: Route) -> Any:
+def _call_route(client: TestClient, path: str) -> Any:
     """Invoke one GET route with sensible placeholder args, tolerating any
     response status -- the property is about writes, not response shape."""
-    path = route.path
     kwargs = dict(_ROUTE_PARAMS.get(path, {}))
     path_params = {k: v for k, v in kwargs.items() if k != "params"}
     query_params = kwargs.get("params", {})
@@ -185,17 +185,17 @@ def test_get_routes_do_not_write_durably(
         )
 
     client = TestClient(app)
-    routes = _enumerate_get_routes()
-    assert routes, "expected at least one GET route on the real app"
+    paths = _enumerate_get_routes()
+    assert paths, "expected at least one GET route on the real app"
 
     spy = WriteSpy()
     with spy_on_durable_writes(monkeypatch, spy):
-        for route in routes:
+        for path in paths:
             # Response status is deliberately not asserted -- a 404/422/200
             # must all show the same write-purity property. Network/setup
             # errors surfacing as 5xx still must not have produced an
             # unregistered write, so no status filtering happens here.
-            _call_route(client, route)
+            _call_route(client, path)
 
     unregistered = spy.seams_hit() - set(REGISTERED_HEAL_TRANSITIONS)
     assert not unregistered, (
