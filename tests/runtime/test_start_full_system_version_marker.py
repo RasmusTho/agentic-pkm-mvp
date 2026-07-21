@@ -15,6 +15,7 @@ from tests.helpers.runtime_start_harness import (
     RuntimeStartHarnessTimeout,
     run_runtime_start,
 )
+from tests.helpers import runtime_start_harness
 
 pytestmark = pytest.mark.not_pg
 
@@ -326,6 +327,36 @@ Path(os.environ["STARTUP_HARNESS_PROGRESS_PATH"]).write_text(
     child_pid = int(progress_file.read_text(encoding="utf-8").strip().split("=", 1)[1])
     with pytest.raises(ProcessLookupError):
         os.kill(child_pid, 0)
+
+
+@pytest.mark.parametrize(
+    ("ps_output", "expected_exists"),
+    [
+        (" 101 4242 Z\n 102 4242 Z+\n", False),
+        (" 101 4242 Z\n 102 4242 S\n", True),
+    ],
+)
+def test_runtime_start_harness_treats_zombie_only_process_groups_as_exited(
+    monkeypatch: pytest.MonkeyPatch,
+    ps_output: str,
+    expected_exists: bool,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert command == ["ps", "-axo", "pid=,pgid=,stat="]
+        assert check is True
+        assert capture_output is True
+        assert text is True
+        return subprocess.CompletedProcess(command, 0, stdout=ps_output, stderr="")
+
+    monkeypatch.setattr(runtime_start_harness.subprocess, "run", fake_run)
+
+    assert runtime_start_harness._process_group_exists(4242) is expected_exists
 
 
 def test_runtime_start_harness_fails_loud_when_progress_stalls(tmp_path: Path) -> None:

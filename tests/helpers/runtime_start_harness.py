@@ -65,7 +65,36 @@ def _progress_tail(path: Path) -> str:
         return ""
 
 
+def _process_group_member_stats(process_group_id: int) -> list[str] | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,pgid=,stat="],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    stats: list[str] = []
+    for line in result.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) < 3:
+            continue
+        try:
+            pgid = int(fields[1])
+        except ValueError:
+            continue
+        if pgid == process_group_id:
+            stats.append(fields[2])
+    return stats
+
+
 def _process_group_exists(process_group_id: int) -> bool:
+    member_stats = _process_group_member_stats(process_group_id)
+    if member_stats is not None:
+        return any("Z" not in stat for stat in member_stats)
+
     try:
         os.killpg(process_group_id, 0)
     except ProcessLookupError:
