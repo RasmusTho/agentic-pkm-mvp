@@ -1,4 +1,10 @@
 services:
+  instance-state-init:
+    volumes:
+      - "runtime-tmp:/app/tmp-test"
+    environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
+
   migrate:
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
@@ -26,6 +32,7 @@ services:
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       API_HEALTHCHECK_URL: http://host.docker.internal:18002/readyz
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
@@ -50,6 +57,7 @@ services:
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
@@ -70,6 +78,7 @@ services:
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
@@ -90,6 +99,7 @@ services:
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test

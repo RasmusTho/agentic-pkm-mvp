@@ -144,6 +144,7 @@ def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
 
     env = os.environ.copy()
     env["LLM_PROVIDER"] = "synthetic-base-provider"
+    env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = "/tmp/agentic-pkm-test-instance-ownership"
     result = subprocess.run(
         [
             "docker",

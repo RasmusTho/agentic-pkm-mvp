@@ -172,6 +172,24 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 
 --- retro 2026-06-07: applied 5/5 proposals ---
 
+## 2026-07-19 — #3854 (Deployment ACs lacked production call-site evidence)
+**Source:** verification-and-closure clean review round 1
+**Diverged:** The Issue named deploy/start wrapper behavior, but all 19 `Verify:` targets passed while final export/import, backup/restore, and host-global legacy-owner bootstrap remained helper-only with no production call sites.
+**Upstream artifact:** `.codex/skills/_shared/ISSUE_CONTRACT.md` — require a production producer/call-site test when an acceptance criterion names deployment, startup, migration, or another concrete producer boundary.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused and neither `BUILDEROPS_DB_PATH` nor `BUILDEROPS_STATE_DIR` is configured; convert this entry when the acknowledged host store is reachable.
+
+## 2026-07-19 — #3854 (Bash command-substitution PID inheritance)
+**Source:** gh-fix-ci
+**Diverged:** Repair attempt 1 assumed `$$` identified the command-substitution probe, but Bash preserves the parent `$$` while `BASHPID` identifies the probe shell, so CI counted the probe as an independent deployment launcher.
+**Upstream artifact:** `tests/ops/test_instance_state_volume_contract.py` — production deployment-wrapper probe tests must exercise controller, command-substitution, independent-live, and racing process rows behaviorally under CI-shaped argv.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because no valid host-store cutover acknowledgement or explicit BuilderOps state path is configured; convert this entry when the acknowledged host store is reachable.
+
+## 2026-07-19 — #3854 (Synthetic process rows hid a self-observing inventory)
+**Source:** gh-fix-ci strongest repair escalation
+**Diverged:** Two standard repairs refined PID filtering and passed synthetic `pgrep` rows locally, but the same 24 CI wrappers still failed because the shell inventory observed its own non-portable process mechanism.
+**Upstream artifact:** `tests/ops/test_instance_state_volume_contract.py` — deployment quiescence must use actual long-lived processes, synchronized real-probe races, and enumeration-failure tests rather than fake process rows.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused without a valid host-store cutover acknowledgement or explicit BuilderOps state path; convert this entry when the acknowledged host store is reachable.
+
 ## 2026-07-20 — session RCA (auth/state review convergence)
 **Source:** human / learning-retrospective
 **Diverged:** A high-risk OAuth and credential-durability repair repeatedly passed focused tests, a full suite, publication, and CI before successive independent reviews found adjacent blockers in the same crash-ordering and compensation state machine.

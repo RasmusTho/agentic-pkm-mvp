@@ -1,9 +1,9 @@
 # Multi-vault runtime selection
 
-State: Active future-state capability specification. Parent validation hub **#2143** remains
-blocked and must never be claimed as an implementation issue. The 17 executable children are filed
-as **#3853–#3869**; only #3853 is initially pickup-ready. No text in this directory claims that
-multi-vault runtime behavior is shipped.
+State: Active capability specification with the MVR-01A/01B mechanical substrate delivered.
+Parent validation hub **#2143** remains blocked and must never be claimed as an implementation
+issue. The 17 executable children are filed as **#3853–#3869**. The 01B substrate does not activate
+multi-vault runtime authority; #3855 (01C) and the remaining children still govern that cutover.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -88,19 +88,20 @@ only on that fixed root behind mutation-denying ingress; a native or channel run
 fenced remains stopped. Missing inventory, a racing writer, ambiguous ownership, or duplicate roots
 blocks every MVR-01 claim rather than letting an upgraded channel race an old image.
 
-Before the first recreate that introduces this volume, the deploy/startup migration gate resolves
-the legacy path and records a preliminary fingerprint inside the still-running old API container.
-It then acquires the channel deployment fence, rejects and drains every registry mutation producer,
-stops the old API, exports the **final post-stop** file with mode `0600` to channel-scoped host
-staging, and validates its fingerprint/schema again. The fence prevents any old writer from
-restarting through import; a changed final fingerprint or unfenced writer aborts rather than using
-a pre-quiescence snapshot. If no old container exists, the gate may proceed only when it proves the
-legacy source itself is durable and unchanged under the fence or no legacy registry ever existed.
-The new-image one-shot migrator mounts `instance-state`, atomically imports the staged payload and
-records source fingerprint/provenance. It never deletes an independently durable legacy source; the
-staged copy remains through cross-process verification and is removed only after that verification
-succeeds. A missing export, conflicting populated destination, or unreadable/ambiguous source
-blocks recreate/import rather than booting an empty registry.
+Before recreate, both canonical wrappers invoke one new-image deployment producer. It resolves the
+legacy path on the shared runtime volume, records a diagnostic fingerprint, installs the durable
+channel restart fence, and stops API, worker, watcher, and Heimdal. The stopped finalizer then
+exports the **final post-stop** file, validates its fingerprint again, and imports it on a first
+volume or preserves it beside an established dormant registry. Before any init, lease, fence, or
+writer stop, the production wrapper derives the complete dev/test/prod/native legacy-owner set from
+canonical channel/runtime env files, stopped or running Compose service config plus scalar stores,
+the native scalar store, and the governed caller binding. Two identical probes create a private
+baseline; after lease-bound quiescence is proven, two more probes must reproduce it exactly before
+the wrapper marks the inventory drained and seeds every owner. A missing, changed, ambiguous, or
+cross-domain-overlapping source fails closed rather than being silently omitted. The fence prevents
+upgraded consumers from restarting through a failed post-stop validation or import; a changed final
+fingerprint, missing inventory, missing established ledger/key, or unfenced finalizer also aborts.
+The independently durable legacy source is never deleted.
 
 All registry-backed mutation uses one store transaction contract: an exclusive OS file lock on a
 sidecar in the shared volume, reload plus monotonic schema revision/CAS validation, write to a
@@ -111,6 +112,18 @@ this contract; worker/watcher/Heimdal readers do not invent independent writers.
 Promotion/startup preflight must prove the volume, ownership, identical resolved path, and lock
 semantics across processes before recreate. Post-recreate verification must prove the same
 registry revision from API, worker, watcher, and Heimdal capture watcher.
+
+The shipped MVR-01B boundary installs that mechanical substrate without changing production
+authority. Compose provides one project-scoped `instance-state` volume to API, worker, watcher,
+and Heimdal capture watcher, while `/app/instance-ownership` is a private host-global ledger/key
+surface shared across channels. Each consumer fail-exits through the same startup preflight and
+resolves `/app/instance-state/agentic-pkm/vault-registry.md`; the root-ownership bootstrap producer,
+final post-quiescence legacy export/import, optional stopped restore, checksum-verified
+registry/ledger/key backup, root-overlap fence, and recoverable transfer/removal lineage are
+present through both production wrappers. The prepared
+registry remains `authority: dormant`: production reads still use the legacy scalar app-local
+store, every second-registration producer and lifecycle mutation stays capability-gated, and only
+MVR-01C may install the rollback gateway and perform authority cutover.
 
 `app/vault/app_local.py` moves to `app/instance/vault_registry.py` when the registry becomes
 first-class. The old import path remains a bounded compatibility re-export until the final

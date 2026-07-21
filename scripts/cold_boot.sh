@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "scripts/lib/instance_ownership_host_state.sh"
+prepare_instance_ownership_host_state_dir
 
 startup_status_path="$ROOT/tmp/startup_status.json"
 runtime_env_path="${RUNTIME_ENV_PATH:-}"

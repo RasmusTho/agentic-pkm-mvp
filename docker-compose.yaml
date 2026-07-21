@@ -68,6 +68,42 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # MVR-01B durable mechanical state producer. The channel registry uses a
+  # project-scoped named volume; the ownership ledger uses one host bind shared
+  # across dev/test/prod. Run as root only to establish private ownership, then
+  # every long-lived consumer runs its own fail-loud preflight as LOCAL_UID.
+  instance-state-init:
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+        BUILT_AT: ${BUILT_AT:-unknown}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    user: "0:0"
+    volumes:
+      - "instance-state:/app/instance-state"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
+        target: /app/instance-ownership
+        bind:
+          create_host_path: false
+      - "runtime-tmp:/app/tmp"
+      - "/Users:/Users"
+      - "/Volumes:/Volumes"
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        test -d /app/instance-state -a -d /app/instance-ownership &&
+        chown -R "$${LOCAL_UID}:$${LOCAL_GID}" /app/instance-state /app/instance-ownership &&
+        chmod 0700 /app/instance-state /app/instance-ownership
+    environment:
+      LOCAL_UID: ${LOCAL_UID:-0}
+      LOCAL_GID: ${LOCAL_GID:-0}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
+    restart: "no"
+
   api:
     build:
       context: .
@@ -121,8 +157,29 @@ services:
       # move under /app/tmp-test (docker-compose.test.yml), which overrides
       # this mount target to the same volume.
       - "runtime-tmp:/app/tmp"
-    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && bash /app/scripts/start_api.sh"]
+      - "instance-state:/app/instance-state"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
+        target: /app/instance-ownership
+        bind:
+          create_host_path: false
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        mkdir -p /app/tmp &&
+        if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
+          python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer api;
+        elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
+        else
+          echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
+        fi &&
+        exec bash /app/scripts/start_api.sh
     environment:
+      INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
@@ -159,6 +216,8 @@ services:
       # run_migrations.sh idempotently after the migrate one-shot completed.
       migrate:
         condition: service_completed_successfully
+      instance-state-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python - <<'PY'\nimport os, urllib.request, sys\ntry:\n    urllib.request.urlopen(os.environ['API_HEALTHCHECK_URL'], timeout=2)\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
@@ -194,8 +253,29 @@ services:
       # for the full rationale. Same named volume so worker's heartbeat/outbox
       # writes land where the api/watcher containers can see them.
       - "runtime-tmp:/app/tmp"
-    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.workers.outbox_worker"]
+      - "instance-state:/app/instance-state"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
+        target: /app/instance-ownership
+        bind:
+          create_host_path: false
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        mkdir -p /app/tmp &&
+        if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
+          python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer worker;
+        elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
+        else
+          echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
+        fi &&
+        exec python -m app.workers.outbox_worker
     environment:
+      INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
@@ -213,6 +293,8 @@ services:
       # must exist before boot. The bounded bootstrap retry loop remains as
       # defense-in-depth only; this ordering is the actual guarantee.
       migrate:
+        condition: service_completed_successfully
+      instance-state-init:
         condition: service_completed_successfully
     restart: unless-stopped
     init: true
@@ -250,8 +332,29 @@ services:
       # for the full rationale. Same named volume so watcher's heartbeat/state
       # writes land where the api/worker containers can see them.
       - "runtime-tmp:/app/tmp"
-    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli watcher run"]
+      - "instance-state:/app/instance-state"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
+        target: /app/instance-ownership
+        bind:
+          create_host_path: false
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        mkdir -p /app/tmp &&
+        if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
+          python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer watcher;
+        elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
+        else
+          echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
+        fi &&
+        exec python -m app.cli watcher run
     environment:
+      - INSTANCE_STATE_LEGACY_ROLLBACK=${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      - DESIGN_HANDOFF_APP_LOCAL_SETTINGS=${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
       - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
       - VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-}
@@ -267,6 +370,8 @@ services:
         condition: service_healthy
       # Watcher emits outbox rows; gate on the migrated schema like worker/api.
       migrate:
+        condition: service_completed_successfully
+      instance-state-init:
         condition: service_completed_successfully
     restart: unless-stopped
     init: true
@@ -303,13 +408,37 @@ services:
       - "/Users:/Users"
       - "/Volumes:/Volumes"
       - "runtime-tmp:/app/tmp"
-    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli heimdal capture-watch"]
+      - "instance-state:/app/instance-state"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
+        target: /app/instance-ownership
+        bind:
+          create_host_path: false
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        mkdir -p /app/tmp &&
+        if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
+          python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer heimdal-capture-watch;
+        elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
+        else
+          echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
+        fi &&
+        exec python -m app.cli heimdal capture-watch
+    environment:
+      INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      instance-state-init:
         condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
@@ -356,3 +485,6 @@ volumes:
   # compose project (pkm-dev, pkm-test, pkm-prod), so dev/test/prod each get
   # their own isolated volume instance automatically.
   runtime-tmp:
+  # Durable channel-scoped MVR-01B registry state. Compose project namespacing
+  # keeps dev/test/prod isolated while container recreation preserves state.
+  instance-state:

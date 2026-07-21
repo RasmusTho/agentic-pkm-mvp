@@ -60,3 +60,8 @@ volumes:
   pgdata_prod:
     external: true
     name: pkm-prod_pgdata
+  # Protected from ordinary project teardown; provisioned idempotently by the
+  # canonical prod startup/deploy wrappers before Compose evaluates `up`.
+  instance-state:
+    external: true
+    name: pkm-prod_instance-state

@@ -39,6 +39,9 @@ def _merged_compose(
     env["WATCHER_ENABLE"] = "1" if explicit_vault is None else "0"
     env["WATCHER_VAULT_PATH"] = "/hostile-inherited-vault"
     env["WATCHER_RUNTIME_ENV_FILE"] = str(runtime_env)
+    env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(
+        runtime_env.parent / "instance-ownership"
+    )
 
     command = [
         "docker",

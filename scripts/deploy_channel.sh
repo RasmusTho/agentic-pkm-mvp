@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
+source "${ROOT}/scripts/lib/instance_state_deployment.sh"
 PYTHON="${PYTHON:-}"
 if [ -z "${PYTHON}" ]; then
   if [ -x "${ROOT}/.venv/bin/python" ]; then
@@ -308,6 +309,17 @@ compose() {
     "$@"
 }
 
+ensure_prod_instance_state_volume() {
+  if [ "${channel}" != "prod" ]; then
+    return 0
+  fi
+  if docker volume inspect pkm-prod_instance-state >/dev/null 2>&1; then
+    return 0
+  fi
+  docker volume create --label agentic-pkm.surface=instance-state \
+    pkm-prod_instance-state >/dev/null
+}
+
 wait_json_ok() {
   local url="$1" deadline body
   deadline=$((SECONDS + health_timeout))
@@ -411,7 +423,7 @@ rollback_failed_startup() {
       # interrupted deploy's ambiguous migration state.
       rm -f "${migration_pending_file}"
     fi
-    if ! compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
+    if ! INSTANCE_STATE_LEGACY_ROLLBACK=1 compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
   else
@@ -721,11 +733,22 @@ if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   exit 86
 fi
 
+prepare_instance_ownership_host_state_dir
+
+if [ "${action}" = "rollback" ]; then
+  INSTANCE_STATE_LEGACY_ROLLBACK=1
+else
+  INSTANCE_STATE_LEGACY_ROLLBACK=0
+fi
+export INSTANCE_STATE_LEGACY_ROLLBACK
+
 # Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
 # the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
 if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
   prod_pending_retry_preflight || exit 87
 fi
+
+ensure_prod_instance_state_volume
 
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
@@ -751,6 +774,14 @@ postdeploy_smoke_gate() {
 
 run_postmutation_gate "image pull failed" \
   compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+if [ "${action}" = "deploy" ]; then
+  if prepare_instance_state_deployment compose "${channel}"; then
+    :
+  else
+    instance_state_rc=$?
+    exit "${instance_state_rc}"
+  fi
+fi
 run_postmutation_gate "migration execution failed" apply_changed_migrations || exit $?
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?

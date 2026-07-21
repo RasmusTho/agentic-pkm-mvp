@@ -62,6 +62,14 @@ call sites. Even after delivery, selection does not determine content authority:
 each selected binding independently, and topology-derived browser fields retain the explicit
 source/authority/provenance/degradation requirements above.
 
+MVR-01B has shipped the non-authoritative topology-safety substrate: a durable per-channel registry
+store shared by every container consumer, a host-global canonical-root ownership ledger/key, and
+recoverable registration/transfer/removal lineage. That substrate prevents one physical content
+root (or an overlapping ancestor/descendant alias) from becoming active in different channel
+ownership domains, while preserving nested child-vault traversal boundaries within one channel.
+It does not change the runtime topology authority decision: the registry is still dormant,
+production reads remain on the legacy scalar selection, and MVR-01C is the sole cutover owner.
+
 Single-vault remains the floor throughout the migration. No-vault and one-vault states stay valid,
 and an invalid explicit selection must fail closed rather than fall back silently to another
 registry member, CWD, or `./vault`.

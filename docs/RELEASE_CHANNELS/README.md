@@ -98,16 +98,41 @@ The channel is the operational identity; the environment is the runtime selector
 
 ### Multi-vault registry rollout state
 
-The codebase contains a dormant, versioned instance-vault registry boundary under
-`app.instance.vault_registry`; the legacy scalar app-local store remains authoritative for every
-release channel. This first slice supplies private atomic persistence, locking/CAS, migration and
-recovery behavior for validation, including prepared/committed restart recovery and physical-root
-alias rejection, but it does not authorize channel storage cutover or a second production
-registration.
+Each channel now has a protected named `instance-state` volume mounted at `/app/instance-state` in
+API, worker, watcher, and Heimdal capture watcher; prod's `pkm-prod_instance-state` volume is
+external and the canonical prod startup/deploy wrappers provision it idempotently. All four
+consumers fail-exit through one resolved-path/permissions preflight before starting and use
+`/app/instance-state/agentic-pkm/vault-registry.md`. A separate private host bind at
+`/app/instance-ownership` carries the HMAC-keyed canonical-root ledger shared across dev/test/prod,
+preventing equal or overlapping content roots from becoming active in different channels. Canonical
+wrappers resolve its source to one absolute, checkout-independent host-state path before Compose
+interpolation; checkout-relative fallbacks are forbidden, and every consumer rejects an active
+host-global deployment lease regardless of which channel owns it.
 
-No release-channel procedure may treat that dormant file as authoritative until MVR-01B has
-installed the protected per-channel instance-state volume plus rollback exporter/transformer and
-MVR-01C has passed the previous-image guard and atomically activated the new authority floor.
+MVR-01B also wires the canonical deploy and start wrappers to one host-global-leased and
+channel-fenced producer. Before any init or mutation, it derives dev/test/prod/native legacy owners
+from canonical channel/runtime env files, stopped or running Compose writer config and scalar
+stores, the native scalar store, and the governed caller binding; two identical snapshots are
+required to create the private baseline. Before recreate it then installs the host lease and restart
+fence, stops API, worker, watcher, and Heimdal, probes dev/test/prod/native consumers twice, and
+durably proves quiescence. The owner producer must reproduce its baseline twice after that stop
+before marking it drained. A missing or racing source, or an equal/nested root across owner domains,
+fails closed before partial ledger seeding; a post-stop failure leaves the fence in place. While
+stopped the finalizer captures the final legacy scalar payload, imports or preserves it on the
+durable volume, verifies the private production-derived owner inventory, seeds the shared ledger,
+optionally restores a verified backup, and creates the next registry/ledger/key backup. The fence is
+removed only after that sequence succeeds; consumer preflight rejects a missing mount, missing
+established state, incomplete owner bootstrap, or surviving fence without creating replacement
+state. An explicitly selected rollback image that predates the runtime preflight module may pass
+only the Compose-owned compatibility guard and only when the host-global lease and every channel
+restart fence are absent; module absence during normal startup or deploy remains a fail-closed
+error.
+
+Those recovery facilities do not authorize cutover. The registry remains `authority: dormant`, the
+legacy scalar app-local store remains authoritative in every channel, and second-registration,
+transfer, relocation, and removal producers remain sealed. No release procedure may retire the
+durable legacy source or treat prepared registry state as authoritative until MVR-01C passes the
+previous-image guard and atomically installs the new authority floor.
 
 ## Invariants (MUST hold)
 
