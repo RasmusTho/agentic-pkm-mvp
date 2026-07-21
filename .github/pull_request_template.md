@@ -65,8 +65,8 @@ Implementation lane:
 - [ ] `ruff check app tests`
 - [ ] If files under `app/` or `tests/` changed, lint output from `ruff check app tests` is included below or a tooling limitation is stated.
 - [ ] `mypy app`
-- [ ] `pytest -q -m "not pg"`
-- [ ] Additional targeted checks run as needed
+- [ ] Governing `Verify:` targets and affected-subsystem tests passed
+- [ ] If the contract or cross-system blast radius requires the repo-wide non-PG suite, it ran through `scripts/run_with_host_lease.py`; otherwise the focused-scope rationale is recorded below
 
 Docs authoring lane:
 - [ ] Docs/governance checks run as appropriate for the touched surfaces

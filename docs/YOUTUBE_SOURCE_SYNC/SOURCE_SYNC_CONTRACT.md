@@ -180,8 +180,24 @@ store *path*, local Takeout import path. Candidate posture (`requires_review: tr
 by WriteGuard + durable settings receipt). Each runtime-gating key is accepted only from its
 registered owner file (`youtube.md` for the shared master switch, `local.md` for the machine-local
 runner switch); a cross-file override is ignored with a `SettingsValidationError` and no success
-receipt. Validation errors degrade to defaults with a `SettingsValidationError`, never silently
-apply. Effective values, scope, and source file are shown by the capability doctor
+receipt. Runtime consumers use `SettingsService.resolve_accepted_runtime_gating`, which derives
+accepted state for the two issue-authorized YouTube gates from identity-bound durable
+governed-write receipts in serialized durable append order, deduplicated by validated operation
+identity, and fails closed to the registered default;
+raw `SettingsService.resolve` remains the operator/provenance view and is not a runtime-gating
+authority accessor. Deleting an owner file is a governed reset to its registered default; a failed
+or deferred reset remains pending for retry, and deletion of the vault-local owner retains its
+accepted identity only while the surviving vault owner still proves the same vault. A git-synced
+arrival replays through the same local gate with `surface='sync'` and `actor='sync'`, never as a
+local human receipt. The watcher identifies that production provenance only when the exact observed
+bytes match the clean tracked Git snapshot and remain unchanged through durable acceptance; watcher
+state advances only that accepted digest, so a later generation remains pending rather than being
+marked seen. Durable receipts carry the registered owner filename, never the vault path.
+Modified/untracked, raced, receipt-failed, or non-Git observations remain local or deferred rather
+than receiving stale sync attribution.
+Validation errors degrade to defaults with a
+`SettingsValidationError`, never silently apply. Effective values, scope, and source file are
+shown by the capability doctor
 (`youtube-sync doctor`) via `EffectiveSetting` provenance.
 
 ## Secrets and private bindings (YSS-02)
@@ -200,9 +216,12 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
 - Redaction: all sync surfaces route through redaction-aware serialization; field names carry
   `token`/`secret`/`credential` tokens so existing key-name redactors match. Exception text from
   the OAuth/HTTP layer is sanitized (status + class, never response bodies that may echo tokens).
-- Disconnect revokes at the provider (`oauth2.googleapis.com/revoke`), deletes the token record,
-  and disables dependent sources with `auth_disconnected` — acquired artifacts, raw records, and
-  receipts are never deleted.
+- Disconnect revokes at the provider (`oauth2.googleapis.com/revoke`). A transport/408/429/5xx
+  failure retains the encrypted token as retry authority, returns a sanitized retryable/degraded
+  result with the existing `api_unavailable` reason code, and leaves dependent sources, cursors,
+  acquired artifacts, raw records, and receipts
+  unchanged. Success or permanent provider rejection deletes the token record and disables
+  dependent sources with `auth_disconnected`; acquired artifacts are never deleted.
 
 ## Egress posture (YSS-02/03/07/08)
 

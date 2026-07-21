@@ -1,0 +1,235 @@
+"""Effective Compose regressions for governed base runtime env values (#3885)."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+
+import pytest
+
+from app.release_channels.channel_isolation_preflight import _load_compose
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BASE_COMPOSE = REPO_ROOT / "docker-compose.yaml"
+COMPOSE_HELPER = REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
+IMAGE_SHA = "f" * 40
+
+WATCHER_GOVERNED_KEYS = {
+    "WATCHER_STATE_DIR",
+    "WATCHER_MAX_SCANNED_FILES_PER_TICK",
+}
+CAPTURE_GOVERNED_KEYS = {
+    "HEIMDAL_CAPTURE_WATCH_DIR",
+    "HEIMDAL_CAPTURE_INTERVAL_SECONDS",
+    "HEIMDAL_RAW_STORE_KEY",
+}
+
+requires_docker = pytest.mark.skipif(
+    shutil.which("docker") is None,
+    reason="docker executable not found on PATH",
+)
+
+
+def _environment(service: dict[str, object]) -> dict[str, str]:
+    environment = service.get("environment") or {}
+    if isinstance(environment, dict):
+        return {str(key): str(value) for key, value in environment.items()}
+    assert isinstance(environment, list)
+    normalized: dict[str, str] = {}
+    for entry in environment:
+        key, separator, value = str(entry).partition("=")
+        normalized[key] = value if separator else ""
+    return normalized
+
+
+def _render_channel_with_synthetic_runtime_env(
+    tmp_path: Path,
+    *,
+    channel: str,
+    no_vault: bool = False,
+) -> dict[str, object]:
+    assert channel in {"prod", "test"}
+    runtime_dir = "tmp-test" if channel == "test" else "tmp"
+    compose_overlay = f"docker-compose.{channel}.yml"
+    synthetic_root = tmp_path / "synthetic-repo"
+    (synthetic_root / "config").mkdir(parents=True)
+    (synthetic_root / runtime_dir).mkdir()
+    for relative_path in (
+        "docker-compose.yaml",
+        compose_overlay,
+        "config/runtime.defaults.env",
+    ):
+        source = REPO_ROOT / relative_path
+        destination = synthetic_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    runtime_env = synthetic_root / runtime_dir / "runtime.env"
+    if no_vault:
+        export_env = os.environ.copy()
+        export_env.pop("VAULT_ROOT", None)
+        export_env.pop("VAULT_HOST_ROOT", None)
+        export_env["NO_VAULT_MODE"] = "1"
+        export_env["RUNTIME_ENV_PATH"] = str(runtime_env)
+        export_env["LLM_PROVIDER"] = "synthetic-no-vault-provider"
+        subprocess.run(
+            ["bash", str(REPO_ROOT / "scripts/export_runtime_env.sh")],
+            cwd=REPO_ROOT,
+            env=export_env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    else:
+        runtime_lines = [
+            "LLM_PROVIDER=synthetic-provider",
+            "HEIMDAL_CAPTURE_WATCH_DIR=/synthetic/capture/inbox",
+            "HEIMDAL_CAPTURE_INTERVAL_SECONDS=17",
+            f"HEIMDAL_RAW_STORE_KEY={'a' * 64}",
+        ]
+        runtime_env.write_text(
+            "\n".join(runtime_lines) + "\n", encoding="utf-8"
+        )
+    channel_env = tmp_path / f"{channel}.env"
+    channel_env.write_text(
+        "APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\n"
+        f"APP_IMAGE_TAG={IMAGE_SHA}\n",
+        encoding="utf-8",
+    )
+
+    command = "\n".join(
+        (
+            "set -euo pipefail",
+            f"source {shlex.quote(str(COMPOSE_HELPER))}",
+            "deploy_channel_compose "
+            f"{shlex.quote(str(synthetic_root))} {channel} {compose_overlay} "
+            f"pkm-{channel}-issue-3885 {shlex.quote(str(channel_env))} "
+            "config --format json",
+        )
+    )
+    env = os.environ.copy()
+    env["WATCHER_RUNTIME_ENV_FILE"] = str(tmp_path / "hostile-runtime.env")
+    env["LLM_PROVIDER"] = "hostile-parent-provider"
+    for key in WATCHER_GOVERNED_KEYS | CAPTURE_GOVERNED_KEYS:
+        env[key] = f"hostile-parent-{key.lower()}"
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=synthetic_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_base_services_do_not_shadow_governed_runtime_env_keys() -> None:
+    services = _load_compose(BASE_COMPOSE)["services"]
+    watcher_environment = _environment(services["watcher"])
+    capture_environment = _environment(services["heimdal-capture-watch"])
+
+    assert WATCHER_GOVERNED_KEYS.isdisjoint(watcher_environment)
+    assert CAPTURE_GOVERNED_KEYS.isdisjoint(capture_environment)
+
+
+@requires_docker
+def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
+    watcher = _load_compose(BASE_COMPOSE)["services"]["watcher"]
+    assert _environment(watcher)["LLM_PROVIDER"] == "${LLM_PROVIDER}"
+
+    env = os.environ.copy()
+    env["LLM_PROVIDER"] = "synthetic-base-provider"
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(BASE_COMPOSE),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    services = json.loads(result.stdout)["services"]
+    assert isinstance(services, dict)
+
+    assert _environment(services["watcher"])["LLM_PROVIDER"] == (
+        "synthetic-base-provider"
+    )
+
+
+@requires_docker
+def test_prod_watcher_effective_render_preserves_runtime_env_and_defaults(
+    tmp_path: Path,
+) -> None:
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="prod"
+    )
+    services = rendered["services"]
+    assert isinstance(services, dict)
+    watcher = _environment(services["watcher"])
+
+    assert watcher["LLM_PROVIDER"] == "synthetic-provider"
+    assert watcher["WATCHER_STATE_DIR"] == "tmp"
+    assert watcher["WATCHER_MAX_SCANNED_FILES_PER_TICK"] == "500"
+
+
+@requires_docker
+def test_prod_image_only_pin_no_vault_render_preserves_exported_provider(
+    tmp_path: Path,
+) -> None:
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="prod", no_vault=True
+    )
+    services = rendered["services"]
+    assert isinstance(services, dict)
+
+    for service_name in ("api", "worker", "watcher"):
+        service_environment = _environment(services[service_name])
+        assert service_environment["LLM_PROVIDER"] == "synthetic-no-vault-provider"
+        assert service_environment["LLM_PROVIDER_ENFORCE"] == "1"
+    assert _environment(services["watcher"])["WATCHER_ENABLE"] == "0"
+
+
+@requires_docker
+def test_prod_capture_watch_effective_render_preserves_runtime_env_values(
+    tmp_path: Path,
+) -> None:
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="prod"
+    )
+    services = rendered["services"]
+    assert isinstance(services, dict)
+    capture = _environment(services["heimdal-capture-watch"])
+
+    assert capture["HEIMDAL_CAPTURE_WATCH_DIR"] == "/synthetic/capture/inbox"
+    assert capture["HEIMDAL_CAPTURE_INTERVAL_SECONDS"] == "17"
+    assert capture["HEIMDAL_RAW_STORE_KEY"] == "a" * 64
+
+
+@requires_docker
+def test_test_deploy_render_uses_channel_runtime_env_default(
+    tmp_path: Path,
+) -> None:
+    rendered = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="test"
+    )
+    services = rendered["services"]
+    assert isinstance(services, dict)
+    watcher = _environment(services["watcher"])
+    capture = _environment(services["heimdal-capture-watch"])
+
+    assert watcher["LLM_PROVIDER"] == "mock"
+    assert capture["HEIMDAL_CAPTURE_WATCH_DIR"] == "/synthetic/capture/inbox"
+    assert capture["HEIMDAL_CAPTURE_INTERVAL_SECONDS"] == "17"
+    assert capture["HEIMDAL_RAW_STORE_KEY"] == "a" * 64

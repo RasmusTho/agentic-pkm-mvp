@@ -16,7 +16,7 @@ State: SoT v5.5 baseline (descriptive, opt-in). Eval suites are optional and may
   - **promptfoo** for prompt/agent scenario testing and red-teaming (optional CLI tool).
 
 ## How eval fits into the test pyramid
-- Classic tests: unit/contract/e2e run via `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`.
+- Classic tests: unit/contract/e2e run via `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha>:eval-baseline --wait-seconds 900 -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m "not pg"`.
 - LLM-eval tests: marked with `@pytest.mark.eval` and **not** included in the fast/default suites.
 - Eval tests may call LLMs and can be slower/$$; run them explicitly when validating ASK/retrieval quality.
 

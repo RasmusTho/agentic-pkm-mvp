@@ -21,8 +21,15 @@ from unittest.mock import patch
 import pytest
 
 from app.knowledge_acquisition.source_registry import VALID_ACQUISITION_MODES
+from app.receipts.settings_receipts import query_settings_receipts
 from app.vault.manager import VaultContext
-from app.vault.settings_service import RUNTIME_GATING_SETTINGS, SettingsService, SettingsWriteError
+from app.vault.markdown_settings import MarkdownSettingsStore
+from app.vault.settings_service import (
+    ACCEPTED_RUNTIME_GATING_SETTINGS,
+    RUNTIME_GATING_SETTINGS,
+    SettingsService,
+    SettingsWriteError,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -74,10 +81,183 @@ def test_subscription_default_policy_matches_registry_contract() -> None:
     assert frozenset(definition.allowed_values) == VALID_ACQUISITION_MODES
 
 
+def test_runtime_gating_accessor_rejects_unaccepted_disk_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raw owner-file input is not runtime-trusted until the governed seam accepts it."""
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+
+    _write(settings_dir / "youtube.md", "---\nscope: vault-shared\nyoutubeSync.enabled: true\n---\n")
+    service = SettingsService()
+
+    # ``resolve`` remains the operator/provenance view; runtime callers use
+    # the accepted accessor and must not trust a first-seen disk value.
+    assert service.resolve(context).settings["youtubeSync.enabled"].value is True
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is False
+
+    service.update_setting(context, "youtubeSync.enabled", True, surface="api", actor="human")
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is True
+
+
+def test_runtime_gating_receipt_identity_path_only_does_not_cross_vault_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    _write(settings_dir / "youtube.md", "---\nscope: vault-shared\nyoutubeSync.enabled: true\n---\n")
+
+    first = VaultContext(
+        status="selected",
+        active_vault_id="vault-first",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="local-first",
+    )
+    second_generation_same_path = VaultContext(
+        status="selected",
+        active_vault_id="vault-second",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="local-second",
+    )
+    service = SettingsService()
+
+    service.update_setting(first, "youtubeSync.enabled", True, surface="api", actor="human")
+
+    assert service.resolve_accepted_runtime_gating(first)["youtubeSync.enabled"].value is True
+    assert (
+        service.resolve_accepted_runtime_gating(second_generation_same_path)[
+            "youtubeSync.enabled"
+        ].value
+        is False
+    )
+
+
+def test_runtime_gating_current_consumers_bypass_accessor_scope_is_yss_only(
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
+
+    assert set(SettingsService().resolve_accepted_runtime_gating(context)) == set(
+        ACCEPTED_RUNTIME_GATING_SETTINGS
+    )
+    assert ACCEPTED_RUNTIME_GATING_SETTINGS == frozenset(
+        {"youtubeSync.enabled", "youtubeSync.runnerEnabled"}
+    )
+
+
+def test_accepted_runtime_receipt_best_effort_after_write_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    _write(settings_dir / "youtube.md", "---\nscope: vault-shared\nyoutubeSync.enabled: false\n---\n")
+
+    def _fail_receipt(_receipt: object) -> None:
+        raise RuntimeError("synthetic durable sink failure")
+
+    monkeypatch.setattr(
+        "app.vault.settings_service.emit_durable_settings_write_receipt_once",
+        _fail_receipt,
+    )
+    service = SettingsService()
+
+    with pytest.raises(SettingsWriteError, match="not durably accepted"):
+        service.update_setting(
+            context,
+            "youtubeSync.enabled",
+            True,
+            surface="api",
+            actor="human",
+        )
+
+    # The raw file may have been written, but success was not reported and the
+    # runtime projection remains fail-closed because no durable acceptance
+    # receipt exists.
+    assert service.resolve(context).settings["youtubeSync.enabled"].value is True
+    assert service.resolve_accepted_runtime_gating(context)["youtubeSync.enabled"].value is False
+
+
+def test_runtime_acceptance_receipt_uses_non_sensitive_owner_identifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    _write(
+        settings_dir / "youtube.md",
+        "---\nscope: vault-shared\nyoutubeSync.enabled: false\n---\n",
+    )
+
+    _effective, receipt = SettingsService().update_setting(
+        context,
+        "youtubeSync.enabled",
+        True,
+        surface="api",
+        actor="human",
+    )
+
+    assert receipt.file == "youtube.md"
+    assert str(vault_root) not in outbox_path.read_text(encoding="utf-8")
+    rows = query_settings_receipts(outbox_path=outbox_path).rows
+    assert [(row.key, row.file) for row in rows] == [
+        ("youtubeSync.enabled", "youtube.md")
+    ]
+    assert (
+        SettingsService().resolve_accepted_runtime_gating(context)[
+            "youtubeSync.enabled"
+        ].value
+        is True
+    )
+
+
 def test_defaults_scopes_provenance_and_gated_writes(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     settings_dir = _init_minimal_vault(vault_root)
-    context = VaultContext(status="selected", active_vault_path=str(vault_root), settings_path=str(settings_dir))
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
     service = SettingsService()
 
     # --- 1. Defaults resolve built-in when youtube.md/local.md carry no override ---
@@ -203,7 +383,13 @@ def test_bounded_youtube_numeric_settings_reject_non_finite_non_integer_values(
     """Resolution and the production write seam share finite-int validation."""
     vault_root = tmp_path / "vault"
     settings_dir = _init_minimal_vault(vault_root)
-    context = VaultContext(status="selected", active_vault_path=str(vault_root), settings_path=str(settings_dir))
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
     service = SettingsService()
     youtube_md = settings_dir / "youtube.md"
 
@@ -226,7 +412,13 @@ def test_update_setting_scaffolds_missing_youtube_settings_file(tmp_path: Path) 
 
     vault_root = tmp_path / "vault"
     settings_dir = _init_minimal_vault(vault_root)
-    context = VaultContext(status="selected", active_vault_path=str(vault_root), settings_path=str(settings_dir))
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
     service = SettingsService()
     youtube_md = settings_dir / "youtube.md"
     assert not youtube_md.exists()
@@ -282,6 +474,45 @@ def test_update_setting_scaffolds_missing_youtube_settings_file(tmp_path: Path) 
     ):
         service.update_setting(context, "youtubeSync.runnerEnabled", True, surface="cli", actor="human")
     assert not local_md.exists()
+
+
+def test_settings_scaffold_toctou_overwrite_preserves_concurrent_owner_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RacingStore(MarkdownSettingsStore):
+        def write_missing(self, path: Path, frontmatter: object, body: str) -> bool:
+            del frontmatter, body
+            path.write_text(
+                "---\nscope: vault-shared\nyoutubeSync.captionsEnabled: false\n"
+                "ownerSentinel: preserve-me\n---\n# Concurrent owner\n",
+                encoding="utf-8",
+            )
+            return False
+
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_minimal_vault(vault_root)
+    context = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+        local_instance_id="l1",
+    )
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    service = SettingsService(markdown_store=RacingStore())
+
+    service.update_setting(
+        context,
+        "youtubeSync.captionsEnabled",
+        True,
+        surface="api",
+        actor="human",
+    )
+
+    document = MarkdownSettingsStore().read(settings_dir / "youtube.md")
+    assert document.frontmatter["ownerSentinel"] == "preserve-me"
+    assert document.frontmatter["youtubeSync.captionsEnabled"] is True
+    assert document.body.strip() == "# Concurrent owner"
 
 
 def test_static_shared_settings_scaffold_is_guarded_for_legacy_paths_file(tmp_path: Path) -> None:

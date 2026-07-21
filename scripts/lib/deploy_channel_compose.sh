@@ -40,6 +40,18 @@ raise SystemExit(
 PY
 }
 
+_deploy_channel_needs_dev_capture_secret() {
+  local channel="${1:?channel required}"
+  shift
+  [ "${channel}" = "dev" ] || return 1
+  [ "${1:-}" = "up" ] || return 1
+  local arg
+  for arg in "$@"; do
+    [ "${arg}" = "heimdal-capture-watch" ] && return 0
+  done
+  return 1
+}
+
 deploy_channel_compose() {
   local root="${1:?repo root required}"
   local channel="${2:?channel required}"
@@ -48,24 +60,39 @@ deploy_channel_compose() {
   local channel_env_file="${5:?channel env file required}"
   shift 5
 
-  local runtime_env_ref runtime_env_file vault_host_root vault_container_root
+  local runtime_env_ref runtime_env_file llm_provider runtime_llm_provider
+  local vault_host_root vault_container_root
   local -a compose_args
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
   # Resolve the governed runtime env file path. It is used below ONLY to read
-  # VAULT_HOST_ROOT for the overlay decision and to pin WATCHER_RUNTIME_ENV_FILE
-  # for the service `env_file:` layer. It is NEVER passed to Compose as a CLI
-  # `--env-file`: that would expose its DSNs and other values to Compose
-  # interpolation (#3875 — a previous dead `env_args` block here looked like it
-  # did exactly that; do not reintroduce it).
+  # VAULT_HOST_ROOT for the overlay decision, to pin WATCHER_RUNTIME_ENV_FILE
+  # for the service `env_file:` layer, and to resolve the non-secret
+  # LLM_PROVIDER selector. It is NEVER passed to Compose as a CLI `--env-file`:
+  # that would expose its DSNs and other values to Compose interpolation (#3875
+  # — a previous dead `env_args` block here looked like it did exactly that; do
+  # not reintroduce it).
   runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
-  runtime_env_file=""
-  if [ -n "${runtime_env_ref}" ]; then
-    case "${runtime_env_ref}" in
-      /*) runtime_env_file="${runtime_env_ref}" ;;
-      ./*) runtime_env_file="${root}/${runtime_env_ref#./}" ;;
-      *) runtime_env_file="${root}/${runtime_env_ref}" ;;
+  if [ -z "${runtime_env_ref}" ]; then
+    case "${channel}" in
+      test) runtime_env_ref="./tmp-test/runtime.env" ;;
+      *) runtime_env_ref="./tmp/runtime.env" ;;
     esac
+  fi
+  runtime_env_file=""
+  case "${runtime_env_ref}" in
+    /*) runtime_env_file="${runtime_env_ref}" ;;
+    ./*) runtime_env_file="${root}/${runtime_env_ref#./}" ;;
+    *) runtime_env_file="${root}/${runtime_env_ref}" ;;
+  esac
+
+  llm_provider="$(_deploy_channel_env_value "${channel_env_file}" LLM_PROVIDER)"
+  runtime_llm_provider=""
+  if [ -n "${runtime_env_file}" ] && [ -f "${runtime_env_file}" ]; then
+    runtime_llm_provider="$(_deploy_channel_env_value "${runtime_env_file}" LLM_PROVIDER)"
+  fi
+  if [ -n "${runtime_llm_provider}" ]; then
+    llm_provider="${runtime_llm_provider}"
   fi
 
   vault_host_root="$(_deploy_channel_env_value "${channel_env_file}" VAULT_HOST_ROOT)"
@@ -91,14 +118,15 @@ deploy_channel_compose() {
     cd "${root}" || exit 1
 
     # Compose gives the caller shell precedence over --env-file values. Pin the
-    # two governed selectors here so a stale parent shell cannot swap the
-    # selected runtime env or vault after the overlay decision above. The
-    # runtime env itself stays a service env_file; passing it as a CLI
-    # --env-file would expose its DSNs and other values to Compose interpolation.
-    if [ -n "${runtime_env_ref}" ]; then
-      export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
+    # governed selectors here so a stale parent shell cannot swap the selected
+    # runtime env, provider selector, or vault after the decisions above. The
+    # runtime env itself stays a service env_file; passing it as a CLI --env-file
+    # would expose its DSNs and other values to Compose interpolation.
+    export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
+    if [ -n "${llm_provider}" ]; then
+      export LLM_PROVIDER="${llm_provider}"
     else
-      unset WATCHER_RUNTIME_ENV_FILE
+      unset LLM_PROVIDER
     fi
     if [ -n "${vault_host_root}" ]; then
       export VAULT_HOST_ROOT="${vault_host_root}"
@@ -108,10 +136,22 @@ deploy_channel_compose() {
       unset DEPLOY_VAULT_CONTAINER_ROOT
     fi
 
-    docker compose \
-      --env-file "${channel_env_file}" \
-      "${compose_args[@]}" \
-      -p "${compose_project}" \
+    local -a compose_command
+    compose_command=(
+      docker compose
+      --env-file "${channel_env_file}"
+      "${compose_args[@]}"
+      -p "${compose_project}"
       "$@"
+    )
+
+    if _deploy_channel_needs_dev_capture_secret "${channel}" "$@"; then
+      "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap \
+        --channel "${channel}" \
+        --consumer heimdal-capture-watch \
+        -- "${compose_command[@]}"
+    else
+      "${compose_command[@]}"
+    fi
   )
 }

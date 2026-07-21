@@ -171,3 +171,15 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: the BuilderOps CLI cannot import `app` in this environment (`app.config.llm` import chain fails). Convert this entry to a `LearningSignal` when the store is reachable.
 
 --- retro 2026-06-07: applied 5/5 proposals ---
+
+## 2026-07-20 — session RCA (auth/state review convergence)
+**Source:** human / learning-retrospective
+**Diverged:** A high-risk OAuth and credential-durability repair repeatedly passed focused tests, a full suite, publication, and CI before successive independent reviews found adjacent blockers in the same crash-ordering and compensation state machine.
+**Upstream artifact:** `AGENTS.md :: Total Cost of Development`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, and `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` — require a mechanism-level convergence packet and independent pre-expensive-gate review for high-risk stateful work, with a circuit breaker after multi-blocker or adjacent repeated findings.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement is absent.
+
+## 2026-07-20 — session RCA (host-global suite coordination)
+**Source:** human / learning-retrospective
+**Diverged:** Chat reservations and process polling did not prevent another worktree from starting a host-global non-PG full suite, wasting one exact-SHA proof and forcing quiet-period recovery.
+**Upstream artifact:** `AGENTS.md :: Parallel-agent execution`, `docs/development/DEV_WORKFLOW.md`, and `scripts/run_with_host_lease.py` — replace advisory chat coordination with an atomic repo-common kernel lease held for the complete host-global child process.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement is absent.

@@ -169,27 +169,63 @@ Commit message must:
 
 Re-run the pre-push phase of `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` (same preflight command as above, same fallback) — the commit you just made could be on the wrong branch if the workspace drifted between the gates. If the gate fails at pre-push: stop, do not push, relocate the commit to the correct branch (e.g. cherry-pick onto `$EXPECTED_BRANCH` and reset the drifted branch), and re-run both gates.
 
-### Review-Before-CI Gate — Pre-Push for Docs/Governance (mandatory before Step 5)
+### Review-Before-CI Gate — Before expensive validation and pre-push (mandatory when triggered)
 
 For docs-authoring, governance, and direct-repair PRs, run the cheap local review/contract gate before
-the push creates or updates an expensive GitHub CI head. This is a local ordering gate only; it does
+the push creates or updates an expensive GitHub CI head. For implementation, governance, or direct-repair work
+touching auth, security, data, migrations, concurrency, external APIs, credential durability, or an
+explicit state machine, run the same gate before the first expensive validation as well as before
+push. Every implementation, governance, and direct-repair lane must explicitly attest that its TCD risk assessment is complete,
+including when the resulting risk-surface set is empty; supply every applicable risk surface. This local ordering gate does
 not replace required GitHub checks, branch protection, or final review triage.
 
-Use `--review-gate-complete` only after the PR body preflight, docs guard, and targeted
-governance/contract checks for the touched surfaces have run. If an emergency direct repair must
-bypass this local gate, use `--bypass-reason` and name the bypass in the PR/issue receipt.
+Use `--review-gate-complete` only after the checks returned by the script have run. For a high-risk
+implementation, governance, or direct repair this means a mechanism convergence packet plus a fresh independent high-capability
+review of the local publishable SHA before the selected expensive validation; see
+`AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. If an emergency direct
+repair with no declared high-risk surface must bypass this local gate, use `--bypass-reason` and name
+the bypass in the PR/issue receipt. A declared high-risk surface is never bypassable.
 
 ```bash
 PR_LANE="<implementation|docs-authoring|governance|direct-repair>"
-if [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
+TCD_RISK_SURFACES="<space-separated applicable surfaces, or empty>"
+if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
   # Portable read loop, not `mapfile`/`readarray` (bash 4+ only) — macOS ships bash 3.2.
   review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
+  if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
+    review_gate_args+=(--risk-assessment-complete)
+  fi
   while IFS= read -r file; do
     [ -n "$file" ] && review_gate_args+=(--changed-file "$file")
   done < <(git diff --name-only origin/main...HEAD)
+  for risk_surface in $TCD_RISK_SURFACES; do
+    review_gate_args+=(--risk-surface "$risk_surface")
+  done
   python3 scripts/review_before_ci_gate.py "${review_gate_args[@]}" || exit 1
 fi
 ```
+
+Allowed risk-surface values are: auth, security, data, migration, concurrency, external-api,
+credential-durability, and state-machine. After a multi-blocker or adjacent
+repeat finding in one mechanism, do not set `--review-gate-complete` again until the low-convergence
+circuit breaker in `verification-and-closure` has produced and reviewed a new convergence packet.
+
+For any implementation, governance, or direct-repair lane with a declared high-risk surface, the
+executable order is mandatory and fail-closed:
+
+1. Run focused local checks and prepare the mechanism convergence packet.
+2. Commit the local publishable SHA and obtain the fresh independent high-capability review.
+3. Only after that review passes, run the proportionate validation selected by the governing
+   contract and affected subsystem. A repo-wide full suite is not automatic: require it only when
+   the Issue/owner doc names it or the changed behavior has cross-system blast radius. When it is
+   required, run it through the host lease from
+   `docs/development/DEV_WORKFLOW.md :: Validation baseline` and use the publishable SHA in the
+   execution id. Governance-only changes default to targeted governance/contract tests plus their
+   lint/docs checks.
+4. Re-run the branch-truth pre-push gate and the `review_before_ci_gate.py` command above against
+   the still-unchanged SHA. A changed SHA invalidates both the review and validation evidence and
+   restarts this sequence.
+5. Push only after all four preceding steps pass. Never proceed directly from review to push.
 
 ### Step 5: Push Branch
 

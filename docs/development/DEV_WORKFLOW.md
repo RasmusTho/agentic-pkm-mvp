@@ -66,16 +66,26 @@ Practical rule:
 - Code-affecting changes:
   - `ruff check app tests`
   - `mypy app`
-  - `pytest -q -m "not pg"`
+  - run the governing Issue's `Verify:` targets and the affected subsystem's focused tests
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
-Run narrower or broader suites when the touched area requires it.
+Escalate to the repo-wide non-PG suite only when the governing Issue/owner document names it or the
+change has cross-system blast radius that focused subsystem tests cannot cover:
+
+`python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m "not pg"`
+
+The full non-PG suite is host-global. The wrapper above holds an atomic repo-common kernel lock for
+the entire child process and releases it automatically when the process exits. A chat handshake,
+process census, or quiet-period check is useful diagnosis but is not mutual exclusion. If the lock
+is already held, do not start another suite and do not kill the holder; retry only with bounded wait
+or after the holder's receipt shows terminal state.
 
 Enforcement note:
-- The command list above is a required pre-merge gate, not advisory.
+- The applicable command list above is a required pre-merge gate, not advisory; do not substitute a
+  repo-wide suite for identifying and running the affected subsystem's verification targets.
 - Any PR that changes files under `app/` or `tests/` must run the repo-standard lint gate, currently `ruff check app tests`, before merge.
-- Docs-only PRs can keep validation lightweight and should not run full smoke by default unless their touched surface requires it.
+- Docs and governance PRs keep validation focused and do not run full smoke by default unless their touched surface requires it.
 - When `app/` or `tests/` changed, include the `ruff check app tests` output or an explicit tooling limitation in the PR body.
 - If CI is not currently blocking these checks, treat merge as blocked until either:
   - the checks pass locally and evidence is attached to the PR, or
@@ -85,8 +95,9 @@ Enforcement note:
 ### CI / validation expectations
 
 The CI workflow runs a non-required `Unit tests (not pg)` check automatically on `pull_request`.
-That check executes `pytest -q -m "not pg"` without a Postgres
-service so unit regressions are visible before merge.
+That check uses `scripts/select_pr_tests.py` to execute affected-subsystem pytest targets without a
+Postgres service, so relevant unit regressions are visible before merge without paying for the
+repo-wide suite on every PR.
 
 This PR check is intentionally non-required until it has been observed green on real PRs. Promoting
 the check to a required branch-protection gate, or adding `pg`-marked tests with a Postgres service
@@ -141,6 +152,7 @@ Governance lane is the separate PR path for bounded repository-governance change
 Use this lane only when:
 
 - changed files stay inside approved governance surfaces:
+  - `README.md`
   - `docs/**`
   - `AGENTS.md`
   - `CLAUDE.md`
@@ -149,14 +161,40 @@ Use this lane only when:
   - `.codex/agents/**`
   - `.codex/config.toml`
   - `.github/github-governance.yml`
-  - `.github/ISSUE_TEMPLATE/*.yml`
+  - `.github/ISSUE_TEMPLATE/**`
   - `.github/pull_request_template.md`
   - `.github/workflows/issue-pr-governance.yml`
+  - `Makefile`
   - `scripts/docs_guard.py`
+  - `scripts/install_skills.sh`
+  - `scripts/agent_workspace_preflight.sh`
+  - `scripts/agent_workspace_cleanup.sh`
+  - `scripts/git_hygiene.py`
+  - `scripts/git_hygiene_preflight.py`
+  - `scripts/git_hygiene_janitor.py`
+  - `scripts/issue_pickup_claim.sh`
+  - `scripts/reconcile_project_status.py`
+  - `scripts/pr_body_generator.py`
+  - `scripts/py312_smoke_test.sh`
   - `scripts/await_pr_checks.sh`
+  - `scripts/review_before_ci_gate.py`
+  - `scripts/run_with_host_lease.py`
+  - `scripts/verify_runtime_chain.sh`
+  - `scripts/validate_source_anchors.py`
+  - `scripts/validate_issue_readiness.py`
   - `companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`
+  - `tests/ops/test_git_hygiene.py`
   - `tests/architecture/test_agent_skill_entrypoints.py`
+  - `tests/architecture/test_pr_hot_path_governance.py`
   - `tests/governance/test_codex_agents_contract.py`
+  - `tests/governance/test_issue_pr_governance.py`
+  - `tests/ops/test_project_status_reconcile.py`
+  - `tests/ops/test_review_before_ci_gate.py`
+  - `tests/ops/test_host_global_lease.py`
+  - `tests/scripts/test_validate_issue_readiness.py`
+  - `tests/scripts/test_pr_body_generator.py`
+  - `tests/fixtures/issue_readiness/**`
+  - `tests/fixtures/pr_body_generator/**`
 - the PR is limited to repo governance, agent workflow, or lightweight enforcement
 - the PR does not change product/runtime implementation or shipped feature behavior
 

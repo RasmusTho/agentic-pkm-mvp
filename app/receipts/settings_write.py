@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import fcntl
 from contextlib import contextmanager
 from contextvars import ContextVar
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,12 @@ _NEW_VALUE_UNSET = object()
 _old_value_override: ContextVar[Any] = ContextVar(
     "settings_receipt_old_value",
     default=_OLD_VALUE_UNSET,
+)
+_acceptance_precondition_override: ContextVar[Callable[[], None] | None] = (
+    ContextVar(
+        "settings_receipt_acceptance_precondition",
+        default=None,
+    )
 )
 
 
@@ -67,6 +74,8 @@ class SettingsWriteReceipt:
     old_value: Any = None
     new_value: Any = field(default=_NEW_VALUE_UNSET, repr=False)
     operation_id: str | None = None
+    vault_id: str | None = None
+    local_instance_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.new_value is _NEW_VALUE_UNSET:
@@ -95,6 +104,8 @@ def emit_settings_write_receipt(
                 "surface": receipt.surface,
                 "actor": receipt.actor,
                 "operation_id": receipt.operation_id,
+                "vault_id": receipt.vault_id,
+                "local_instance_id": receipt.local_instance_id,
                 "timestamp": receipt.timestamp,
                 "is_runtime_gating": receipt.is_runtime_gating,
             },
@@ -195,6 +206,8 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
                         "actor": receipt.actor,
                         "timestamp": receipt.timestamp,
                         "is_runtime_gating": receipt.is_runtime_gating,
+                        "vault_id": receipt.vault_id,
+                        "local_instance_id": receipt.local_instance_id,
                     }.items()
                 )
                 if exact_match:
@@ -209,6 +222,46 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
         _confirm_file_and_parent_durable(outbox_path)
         return True
     return False
+
+
+def emit_durable_settings_write_receipt_once(
+    receipt: SettingsWriteReceipt,
+    *,
+    acceptance_precondition: Callable[[], None] | None = None,
+) -> None:
+    """Durably append and read back one operation-scoped receipt exactly once.
+
+    The sibling lock serializes check-and-append across settings writers.  If a
+    prior attempt appended the exact receipt but failed while confirming parent
+    durability, the retry observes and re-confirms that record instead of
+    creating a second accepted operation.
+    """
+
+    if not receipt.operation_id:
+        raise ValueError("durable receipt emission requires operation_id")
+
+    from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
+
+    outbox_path = get_index_outbox_path()
+    outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = outbox_path.with_name(f".{outbox_path.name}.settings-receipt.lock")
+    with lock_path.open("a+b") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            if durable_settings_write_receipt_exists(receipt):
+                return
+            if acceptance_precondition is not None:
+                acceptance_precondition()
+            try:
+                emit_settings_write_receipt(receipt, require_durable=True)
+            except ReceiptDurabilityUncertainError:
+                if durable_settings_write_receipt_exists(receipt):
+                    return
+                raise
+            if not durable_settings_write_receipt_exists(receipt):
+                raise RuntimeError("durable settings receipt readback failed")
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 def emit_settings_write_receipts_for_changes(
@@ -263,6 +316,23 @@ def resolve_settings_receipt_old_value(default: Any) -> Any:
     return default if value is _OLD_VALUE_UNSET else value
 
 
+@contextmanager
+def settings_receipt_acceptance_precondition(
+    precondition: Callable[[], None] | None,
+) -> Iterator[None]:
+    """Bind an optimistic generation check to the durable receipt boundary."""
+
+    token = _acceptance_precondition_override.set(precondition)
+    try:
+        yield
+    finally:
+        _acceptance_precondition_override.reset(token)
+
+
+def resolve_settings_receipt_acceptance_precondition() -> Callable[[], None] | None:
+    return _acceptance_precondition_override.get()
+
+
 def _flatten(values: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
     flattened: dict[str, Any] = {}
     for key, value in values.items():
@@ -277,8 +347,11 @@ def _flatten(values: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
 __all__ = [
     "SettingsWriteReceipt",
     "durable_settings_write_receipt_exists",
+    "emit_durable_settings_write_receipt_once",
     "emit_settings_write_receipt",
     "emit_settings_write_receipts_for_changes",
+    "resolve_settings_receipt_acceptance_precondition",
     "resolve_settings_receipt_old_value",
+    "settings_receipt_acceptance_precondition",
     "settings_receipt_old_value",
 ]
