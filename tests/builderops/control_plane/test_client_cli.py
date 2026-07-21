@@ -488,7 +488,7 @@ def test_promotion_update_real_cli_client_service_store_path(tmp_path: Path) -> 
     """Real CLI -> authenticated client -> service -> store fencing regression."""
     class Store:
         epoch = 1
-        calls: list[str] = []
+        def __init__(self): self.calls: list[str] = []
         def readiness(self): return {"authority_epoch": 1, "schema_version": 1}
         def commit_promotion(self, **kw):
             self.calls.append(kw["status"])
@@ -544,6 +544,14 @@ def test_wrapper_mutation_injects_required_delivery_route(tmp_path: Path) -> Non
     )
     assert result.returncode == 3
     assert "ControlPlaneUnavailableError" in result.stderr
+
+
+def test_wrapper_help_does_not_require_delivery_route() -> None:
+    root = Path(__file__).resolve().parents[3]
+    env = os.environ | {"BUILDEROPS_PYTHON": sys.executable, "BUILDEROPS_API_URL": "http://127.0.0.1:1"}
+    result = subprocess.run([str(root / "scripts/builderops_api_client.sh"), "--help"], cwd=root, env=env, text=True, capture_output=True, check=False)
+    assert result.returncode == 0
+    assert "BUILDEROPS_DELIVERY_MANIFEST_DIR" not in result.stderr
 
 
 def test_routing_not_engaged_for_read_only_commands(tmp_path: Path, factory) -> None:
