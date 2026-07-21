@@ -224,6 +224,19 @@ def test_legacy_authority_receipt_accepts_only_single_terminal_lf_digest_differe
     assert resolve_verified_merge_authority_receipt(
         [post_cutoff], pr=neutral_pr, repository=REPOSITORY
     ) is None
+    for noncanonical_timestamp in (
+        "2026-07-21T16:16:34",
+        "2026-07-21T18:16:34+02:00",
+        "2026-07-21 16:16:34Z",
+        "2026-07-21T16:16:34.000Z",
+    ):
+        malformed_provenance = {
+            **comment,
+            "updated_at": noncanonical_timestamp,
+        }
+        assert resolve_verified_merge_authority_receipt(
+            [malformed_provenance], pr=neutral_pr, repository=REPOSITORY
+        ) is None
 
     crlf_body = neutralized + "\r"
     crlf_authority = copy.deepcopy(authority)

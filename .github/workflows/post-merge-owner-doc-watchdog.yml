@@ -163,8 +163,12 @@ jobs:
             const canonicalSha256 = value => sha256(canonicalJson(value));
             const LEGACY_TERMINAL_LF_CUTOFF = Date.parse("2026-07-21T16:32:11Z");
             const legacyAuthorityEligible = comment => {
-              const created = Date.parse(comment.created_at || "");
-              const updated = Date.parse(comment.updated_at || "");
+              const canonicalUtc = value =>
+                typeof value === "string" &&
+                /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/.test(value);
+              if (!canonicalUtc(comment.created_at) || !canonicalUtc(comment.updated_at)) return false;
+              const created = Date.parse(comment.created_at);
+              const updated = Date.parse(comment.updated_at);
               return Number.isFinite(created) && Number.isFinite(updated) &&
                 created <= updated &&
                 created < LEGACY_TERMINAL_LF_CUTOFF && updated < LEGACY_TERMINAL_LF_CUTOFF;

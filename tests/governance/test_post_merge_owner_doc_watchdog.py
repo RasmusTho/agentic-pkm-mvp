@@ -302,6 +302,20 @@ def test_watchdog_accepts_legacy_authority_receipt_only_for_one_terminal_lf() ->
         "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
         [post_cutoff], _pr(original[:-1]), REPOSITORY,
     ) is None
+    for noncanonical_timestamp in (
+        "2026-07-21T16:16:34",
+        "2026-07-21T18:16:34+02:00",
+        "2026-07-21 16:16:34Z",
+        "2026-07-21T16:16:34.000Z",
+    ):
+        malformed_provenance = {
+            **legacy_comment,
+            "updated_at": noncanonical_timestamp,
+        }
+        assert _node(
+            "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+            [malformed_provenance], _pr(original[:-1]), REPOSITORY,
+        ) is None
 
     double_lf = original + "\n"
     canonical_receipt = _receipt_payload(comment)

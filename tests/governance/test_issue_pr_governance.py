@@ -410,6 +410,19 @@ def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_t
     assert _js_neutralized_merge_authority(
         [post_cutoff], lf_less, str(legacy["repository"])
     ) is None
+    for noncanonical_timestamp in (
+        "2026-07-21T16:16:34",
+        "2026-07-21T18:16:34+02:00",
+        "2026-07-21 16:16:34Z",
+        "2026-07-21T16:16:34.000Z",
+    ):
+        malformed_provenance = {
+            **legacy_comment,
+            "updated_at": noncanonical_timestamp,
+        }
+        assert _js_neutralized_merge_authority(
+            [malformed_provenance], lf_less, str(legacy["repository"])
+        ) is None
 
     double_lf = body + "\n"
     canonical_double_lf = copy.deepcopy(receipt)

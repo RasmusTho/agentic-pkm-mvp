@@ -33,6 +33,9 @@ VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
 _CONTEXT_CONTRACT = "verification_closer_dispatch_context.v2"
 _SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 _DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
+_CANONICAL_UTC_TIMESTAMP_PATTERN = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+)
 _TRUSTED_AUTHOR_ASSOCIATIONS: Final = frozenset(
     {"OWNER", "MEMBER", "COLLABORATOR"}
 )
@@ -171,10 +174,15 @@ def _legacy_terminal_lf_provenance(comment: Mapping[str, object]) -> bool:
     timestamps: list[datetime] = []
     for field in ("created_at", "updated_at"):
         value = comment.get(field)
-        if not isinstance(value, str) or not value.endswith("Z"):
+        if (
+            not isinstance(value, str)
+            or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(value) is None
+        ):
             return False
         try:
-            parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
         except ValueError:
             return False
         timestamps.append(parsed)
