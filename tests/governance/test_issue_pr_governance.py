@@ -498,6 +498,42 @@ def test_production_pr_contract_authenticates_neutralized_merge_authority() -> N
         assert fragment in workflow
 
 
+def _read_base_side_recovery() -> str:
+    return (REPO_ROOT / "scripts/base_side_pr_contract_recovery.js").read_text(encoding="utf-8")
+
+
+def test_base_side_pr_contract_recovery_accepts_only_legacy_prepared_immutable_context() -> None:
+    recovery = _read_base_side_recovery()
+    assert 'prNumber: 4052' in recovery
+    assert 'head: "a159571da2ce9068131810aedc1ea05107d7bfaf"' in recovery
+    assert 'receipt.phase === "prepared"' in recovery
+    assert "requireUniquePreparedPhase(comments, authority)" in recovery
+
+
+def test_base_side_pr_contract_recovery_binds_live_exact_head_and_receipts() -> None:
+    recovery = _read_base_side_recovery()
+    for fragment in ("pullRequest.head?.sha !== TARGET.head", "pullRequest.title !== TARGET.title", "closingIssuesReferences(first:20)", "resolveNeutralizedMergeAuthority({ comments, issueAuthority, pullRequest, repository })", "receipt.authority_sha256 === authoritySha", "receipt.body_sha256 === authority.neutralized_body_sha256", "canonicalJson(receipt) !== canonicalJson(authority)"):
+        assert fragment in recovery
+
+
+def test_base_side_pr_contract_recovery_rejects_noneligible_or_drifted_contexts() -> None:
+    recovery = _read_base_side_recovery()
+    for fragment in ("recovery must execute from the current default-branch head", "live closing references are not empty", "authority receipt is missing, forged, stale, or conflicting", "prepared phase is missing, stale, forged, conflicting, or non-continuous", 'pullRequest.state !== "open"', "pullRequest.head?.repo?.full_name !== TARGET.repository"):
+        assert fragment in recovery
+
+
+def test_base_side_pr_contract_recovery_publishes_only_scoped_auditable_equivalent_check() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/base-side-pr-contract-recovery.yml").read_text(encoding="utf-8")
+    recovery = _read_base_side_recovery()
+    assert "checks: write" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert 'name: "pr-contract"' in recovery
+    assert "head_sha: TARGET.head" in recovery
+    assert "base-side-pr-contract-recovery:${authority.run_id}:${TARGET.head}" in recovery
+    assert "/statuses" not in recovery
+    assert 'method: "PATCH"' not in recovery
+
+
 @pytest.mark.parametrize("separator", [",", ", ", ",\t", ", \t\t"])
 def test_verified_merge_neutralized_separator_grammar_matches_javascript_and_python(
     separator: str,
