@@ -19,6 +19,7 @@ def _result(tmp_path: Path):
     store.ensure_schema()
     store.upsert_capability(identity_key="confirmed", name="Confirmed", definition="x", lifecycle="confirmed", existence_provenance="fixture")
     store.upsert_capability(identity_key="candidate", name="Candidate", definition="x", lifecycle="candidate", existence_provenance="fixture")
+    store.set_watermark("repo", "commit:fixture")
     payload = CkmQueryService(store.db_path).list_capabilities()
     assert not isinstance(payload, ErrorEnvelope)
     return payload
@@ -128,12 +129,24 @@ def test_retained_sample_correction_and_deletion_preserve_lifecycle_truth(tmp_pa
 def test_correction_payloads_remain_accounted_and_policy_prunable(tmp_path: Path) -> None:
     retained = MetricRetentionStore(tmp_path / "correction-accounting.sqlite")
     result = _result(tmp_path)
-    original = retained.retain(result, retained_at="2025-01-01T00:00:00Z")
+    original = retained.retain(
+        result,
+        finding_evaluations={"finding": "original-bound-content"},
+        retained_at="2025-01-01T00:00:00Z",
+    )
     corrected = retained.correct(
-        original.sample_id, result, retained_at="2025-01-02T00:00:00Z"
+        original.sample_id,
+        result,
+        finding_evaluations={"finding": "corrected-bound-content"},
+        retained_at="2025-01-02T00:00:00Z",
     )
     usage = retained.storage_usage()
     assert usage["count"] == 2 and usage["bytes"] > 0
+    with sqlite3.connect(retained.path) as conn:
+        expected_bytes = conn.execute(
+            "SELECT SUM(length(source_payload) + length(observation_json) + length(source_digest) + length(watermarks_json) + length(finding_evaluations_json)) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL"
+        ).fetchone()[0]
+    assert usage["bytes"] == expected_bytes
 
     cap_preview = retained.preview_prune(
         now="2025-01-03T00:00:00Z",
@@ -161,8 +174,8 @@ def test_correction_payloads_remain_accounted_and_policy_prunable(tmp_path: Path
             retained.replay(sample_id)
         assert exc.value.code == "source_unavailable"
     with sqlite3.connect(retained.path) as conn:
-        lifecycle_json, observation_json = conn.execute(
-            "SELECT lifecycle_marker_json, observation_json FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+        lifecycle_json, observation_json, source_payload, source_digest, watermarks_json, evaluations_json = conn.execute(
+            "SELECT lifecycle_marker_json, observation_json, source_payload, source_digest, watermarks_json, finding_evaluations_json FROM ckm_metric_sample_v1 WHERE sample_id = ?",
             (original.sample_id,),
         ).fetchone()
     marker = json.loads(lifecycle_json)
@@ -172,6 +185,26 @@ def test_correction_payloads_remain_accounted_and_policy_prunable(tmp_path: Path
         "observation_id": original.observation_id,
         "payload_removed": True,
     }
+    assert source_payload is None
+    assert source_digest == ""
+    assert json.loads(watermarks_json) == {}
+    assert json.loads(evaluations_json) == {}
+    with sqlite3.connect(retained.path) as conn:
+        pruned_content = conn.execute(
+            "SELECT sample_id, source_payload, source_digest, observation_json, watermarks_json, finding_evaluations_json FROM ckm_metric_sample_v1 ORDER BY sample_id"
+        ).fetchall()
+    expected_observations = {
+        original.sample_id: original.observation_id,
+        corrected.sample_id: corrected.observation_id,
+    }
+    for sample_id, payload, digest, observation, watermarks, evaluations in pruned_content:
+        assert payload is None and digest == ""
+        assert json.loads(observation) == {
+            "observation_id": expected_observations[sample_id],
+            "payload_removed": True,
+        }
+        assert json.loads(watermarks) == {}
+        assert json.loads(evaluations) == {}
 
 
 def test_observation_is_deterministic_for_same_snapshot_and_definition(tmp_path: Path) -> None:

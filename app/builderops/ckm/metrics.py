@@ -167,7 +167,7 @@ class MetricRetentionStore:
     def storage_usage(self) -> dict[str, int]:
         self.initialize()
         with sqlite3.connect(self.path) as conn:
-            count, bytes_ = conn.execute("SELECT COUNT(*), COALESCE(SUM(length(source_payload) + length(observation_json)), 0) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL").fetchone()
+            count, bytes_ = conn.execute("SELECT COUNT(*), COALESCE(SUM(length(source_payload) + length(observation_json) + length(source_digest) + length(watermarks_json) + length(finding_evaluations_json)), 0) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL").fetchone()
         return {"count": int(count), "bytes": int(bytes_)}
 
     def preview_prune(self, *, now: str, earlier_than_365_days: bool = False, max_count: int | None = None, max_bytes: int | None = None) -> list[dict[str, Any]]:
@@ -177,7 +177,7 @@ class MetricRetentionStore:
         if max_bytes is not None and max_bytes < 0:
             raise ValueError("max_bytes must be non-negative")
         with sqlite3.connect(self.path) as conn:
-            rows = conn.execute("SELECT sample_id, retained_at, expires_at, length(source_payload) + length(observation_json) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL ORDER BY retained_at, sample_id").fetchall()
+            rows = conn.execute("SELECT sample_id, retained_at, expires_at, length(source_payload) + length(observation_json) + length(source_digest) + length(watermarks_json) + length(finding_evaluations_json) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL ORDER BY retained_at, sample_id").fetchall()
         if earlier_than_365_days:
             return [{"sample_id": row[0], "reason": "explicit_operator_prune_preview"} for row in rows]
         selected: dict[str, str] = {
@@ -220,7 +220,7 @@ class MetricRetentionStore:
                     raise CkmContractError("prune_preview_required", "early payload pruning requires an explicit operator preview", {"sample_id": sample_id})
                 marker = {"event": reason, "payload_removed": True, "at": at, "prior_marker": json.loads(row[2])}
                 observation_marker = {"observation_id": row[4], "payload_removed": True}
-                conn.execute("UPDATE ckm_metric_sample_v1 SET source_payload = NULL, observation_json = ?, lifecycle = ?, lifecycle_marker_json = ?, deleted_at = ? WHERE sample_id = ? AND source_payload IS NOT NULL", (canonical_json(observation_marker), reason, canonical_json(marker), at, sample_id))
+                conn.execute("UPDATE ckm_metric_sample_v1 SET source_payload = NULL, source_digest = '', observation_json = ?, watermarks_json = '{}', finding_evaluations_json = '{}', lifecycle = ?, lifecycle_marker_json = ?, deleted_at = ? WHERE sample_id = ? AND source_payload IS NOT NULL", (canonical_json(observation_marker), reason, canonical_json(marker), at, sample_id))
 
     def correct(self, sample_id: str, result: ResultEnvelope, *, finding_evaluations: Mapping[str, Any] | None = None, retained_at: str | None = None) -> RetainedSample:
         self.initialize()
