@@ -163,18 +163,30 @@ def _reconciliation(
 ) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         raise CutoverEvidenceError("reconciliation report must contain a store list")
-    reported: dict[str, dict[str, Any]] = {}
+    expected = {item["path"] for item in inventory}
+    normalized: dict[str, tuple[Mapping[str, Any], str]] = {}
+    for item in raw:
+        if not isinstance(item, Mapping) or not isinstance(item.get("path"), str) or not isinstance(item.get("disposition"), str):
+            raise CutoverEvidenceError("reconciliation report entry is invalid")
+        path, disposition = str(Path(item["path"]).resolve()), item["disposition"]
+        if path not in expected:
+            raise CutoverEvidenceError(
+                "reconciliation report path is outside the discovered legacy inventory"
+            )
+        if disposition not in {"migrated", "retained"} or path in normalized:
+            raise CutoverEvidenceError("reconciliation disposition is invalid")
+        normalized[path] = (item, disposition)
+    if set(normalized) != expected:
+        raise CutoverEvidenceError("reconciliation report does not account for every discovered legacy store")
+
     target_records = (
         {(item["id"], item["payload_sha256"]) for item in _records(target_path)}
         if verify_migrated_target
         else set()
     )
-    for item in raw:
-        if not isinstance(item, Mapping) or not isinstance(item.get("path"), str) or not isinstance(item.get("disposition"), str):
-            raise CutoverEvidenceError("reconciliation report entry is invalid")
-        path, disposition = str(Path(item["path"]).resolve()), item["disposition"]
-        if disposition not in {"migrated", "retained"} or path in reported:
-            raise CutoverEvidenceError("reconciliation disposition is invalid")
+    reported: dict[str, dict[str, Any]] = {}
+    for path in sorted(normalized):
+        item, disposition = normalized[path]
         source = _records(Path(path))
         source_digest = hashlib.sha256(_canonical(source)).hexdigest()
         if item.get("source_records_sha256") not in {None, source_digest}:
@@ -182,9 +194,6 @@ def _reconciliation(
         if disposition == "migrated" and verify_migrated_target and not {(row["id"], row["payload_sha256"]) for row in source}.issubset(target_records):
             raise CutoverEvidenceError("migrated legacy records are not accounted for in target")
         reported[path] = {"path": path, "disposition": disposition, "source_records_sha256": source_digest, "source_record_count": len(source)}
-    expected = {item["path"] for item in inventory}
-    if set(reported) != expected:
-        raise CutoverEvidenceError("reconciliation report does not account for every discovered legacy store")
     return [reported[path] for path in sorted(reported)]
 
 

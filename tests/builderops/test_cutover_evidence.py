@@ -173,6 +173,31 @@ def test_cutover_producer_rejects_post_cutoff_inventory_without_stamping(tmp_pat
         assert conn.execute("SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'").fetchone() is None
 
 
+def test_reconciliation_rejects_external_report_path_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    participant_root = tmp_path / "repo"
+    participant_root.mkdir()
+    expected_path = participant_root / "runtime" / "builderops" / "builderops.sqlite3"
+    external_path = tmp_path / "external.sqlite3"
+    external_path.write_bytes(b"external")
+    opened: list[Path] = []
+    monkeypatch.setattr(evidence, "_records", lambda path: opened.append(path))
+
+    with pytest.raises(
+        CutoverEvidenceError,
+        match="outside the discovered legacy inventory",
+    ):
+        evidence._reconciliation(
+            [{"path": str(external_path), "disposition": "retained"}],
+            [{"path": str(expected_path.resolve())}],
+            tmp_path / "target.sqlite3",
+            verify_migrated_target=True,
+        )
+
+    assert not opened
+
+
 def test_cutover_producer_rejects_target_inside_vault_before_inspection_or_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

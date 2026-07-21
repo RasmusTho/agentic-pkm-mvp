@@ -114,6 +114,8 @@ override is rejected before inspection or mutation.
 The producer also applies the shared vault-confinement guard to the implicit target path before
 legacy-store inventory, target inspection, marker stamping, or receipt creation. A target beneath
 `BUILDEROPS_VAULT_ROOT` therefore fails without mutating the database or receipt location.
+Implicit path loading applies that same guard before reading the receipt or opening the target, so
+a previously valid target later confined beneath the vault is rejected without inspection.
 The validator recomputes those bindings before SQLite initialization; copied, stale, incomplete,
 post-epoch-mutated, or empty-target receipts fail closed.
 The payload schema is `builderops.host-store-cutover.v2`; the `host-store-cutover-v1.json`
@@ -142,7 +144,8 @@ filename is intentionally retained as the compatibility location for the prior m
 After the operator has stopped BuilderOps writers and reconciled every discovered legacy store, the
 producer recursively inventories the ordered `participants` roots without following symlinks,
 verifies the supplied reconciliation report against that inventory and the existing non-empty
-target, stamps the target, and creates the owner-only `0600`, non-symlink receipt. Each participant
+target, stamps the target, and creates the owner-only `0600`, non-symlink receipt. A report path
+outside the discovered inventory is rejected before its records are opened. Each participant
 contains its repository identity and one unique, resolved absolute root. Receipt validation accepts
 a current working directory equal to or descended from exactly one declared root; an unrelated or
 ambiguously nested participant location fails closed.

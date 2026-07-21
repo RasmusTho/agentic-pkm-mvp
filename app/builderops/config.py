@@ -50,6 +50,8 @@ def load_paths(
     configured_db_path = (
         raw_db_path if raw_db_path is not None and raw_db_path.strip() else None
     )
+    vault_value = src.get("BUILDEROPS_VAULT_ROOT", "").strip()
+    vault_root = Path(vault_value).expanduser() if vault_value else None
     exact_db_path = (
         db_path_override if db_path_override is not None else configured_db_path
     )
@@ -59,6 +61,10 @@ def load_paths(
         state_dir = Path(exact_db_path).expanduser().parent
     else:
         state_dir = default_state_dir()
+        validate_db_path_outside_vault(
+            state_dir / DEFAULT_DB_NAME,
+            vault_root=vault_root,
+        )
         _validate_host_cutover_ack(state_dir)
     db_path = (
         db_path_override.expanduser()
@@ -69,8 +75,6 @@ def load_paths(
             else state_dir / DEFAULT_DB_NAME
         ).expanduser()
     )
-    vault_value = src.get("BUILDEROPS_VAULT_ROOT", "").strip()
-    vault_root = Path(vault_value).expanduser() if vault_value else None
     paths = BuilderOpsPaths(
         state_dir=state_dir,
         db_path=db_path,

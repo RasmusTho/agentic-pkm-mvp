@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 import app.builderops.config as builderops_config
+import app.builderops.cutover_evidence as cutover_evidence
 from app.builderops.store import SqliteBuilderOpsStore
 from app.builderops.cutover_evidence import CutoverEvidenceError, build_receipt, discover_legacy_stores, write_receipt
 
@@ -112,9 +113,32 @@ def test_host_stable_default_still_confined_outside_vault(
         lambda: state_dir,
     )
     _write_cutover_ack(state_dir, roots=[Path.cwd()])
+    db_path = state_dir / "builderops.sqlite3"
+    receipt_path = builderops_config.host_cutover_ack_path(state_dir)
+    before_db, before_receipt = db_path.read_bytes(), receipt_path.read_bytes()
+    receipt_reads: list[Path] = []
+    target_opens: list[object] = []
+    original_read_text = Path.read_text
+
+    def guarded_read_text(path: Path, *args: object, **kwargs: object) -> str:
+        if path == receipt_path:
+            receipt_reads.append(path)
+            pytest.fail("vault-confined receipt was read before path preflight")
+        return original_read_text(path, *args, **kwargs)
+
+    def guarded_connect(*args: object, **kwargs: object) -> object:
+        target_opens.append((args, kwargs))
+        pytest.fail("vault-confined target was opened before path preflight")
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    monkeypatch.setattr(cutover_evidence.sqlite3, "connect", guarded_connect)
 
     with pytest.raises(ValueError, match="outside BUILDEROPS_VAULT_ROOT"):
         builderops_config.load_paths({"BUILDEROPS_VAULT_ROOT": str(vault)})
+
+    assert not receipt_reads and not target_opens
+    assert db_path.read_bytes() == before_db
+    assert receipt_path.read_bytes() == before_receipt
 
 
 def test_explicit_overrides_unchanged(tmp_path: Path) -> None:
