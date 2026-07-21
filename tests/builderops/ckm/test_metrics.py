@@ -14,12 +14,12 @@ from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.store import CkmStore
 
 
-def _result(tmp_path: Path):
+def _result(tmp_path: Path, *, watermark: str = "commit:fixture"):
     store = CkmStore(tmp_path / "ckm.sqlite")
     store.ensure_schema()
     store.upsert_capability(identity_key="confirmed", name="Confirmed", definition="x", lifecycle="confirmed", existence_provenance="fixture")
     store.upsert_capability(identity_key="candidate", name="Candidate", definition="x", lifecycle="candidate", existence_provenance="fixture")
-    store.set_watermark("repo", "commit:fixture")
+    store.set_watermark("repo", watermark)
     payload = CkmQueryService(store.db_path).list_capabilities()
     assert not isinstance(payload, ErrorEnvelope)
     return payload
@@ -113,6 +113,31 @@ def test_retained_samples_apply_storage_accounting_and_pruning_policy(tmp_path: 
     assert retained.preview_prune(now="2026-01-02T00:00:00Z", earlier_than_365_days=True) == [{"sample_id": sample.sample_id, "reason": "explicit_operator_prune_preview"}]
 
 
+def test_storage_usage_and_byte_cap_use_exact_utf8_bytes(tmp_path: Path) -> None:
+    retained = MetricRetentionStore(tmp_path / "utf8-accounting.sqlite")
+    sample = retained.retain(
+        _result(tmp_path, watermark="commit:åäö🚀"),
+        finding_evaluations={"finding": "åäö🚀"},
+        retained_at="2026-01-01T00:00:00Z",
+    )
+    with sqlite3.connect(retained.path) as conn:
+        source, observation, digest, watermarks, evaluations = conn.execute(
+            "SELECT source_payload, observation_json, source_digest, watermarks_json, finding_evaluations_json FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+            (sample.sample_id,),
+        ).fetchone()
+    expected_bytes = len(source) + sum(
+        len(value.encode("utf-8"))
+        for value in (observation, digest, watermarks, evaluations)
+    )
+    assert retained.storage_usage() == {"count": 1, "bytes": expected_bytes}
+    assert retained.preview_prune(
+        now="2026-01-02T00:00:00Z", max_bytes=expected_bytes
+    ) == []
+    assert retained.preview_prune(
+        now="2026-01-02T00:00:00Z", max_bytes=expected_bytes - 1
+    ) == [{"sample_id": sample.sample_id, "reason": "storage_byte_cap"}]
+
+
 def test_retained_sample_correction_and_deletion_preserve_lifecycle_truth(tmp_path: Path) -> None:
     retained = MetricRetentionStore(tmp_path / "metrics.sqlite")
     first = retained.retain(_result(tmp_path), retained_at="2026-07-21T00:00:00Z")
@@ -144,7 +169,7 @@ def test_correction_payloads_remain_accounted_and_policy_prunable(tmp_path: Path
     assert usage["count"] == 2 and usage["bytes"] > 0
     with sqlite3.connect(retained.path) as conn:
         expected_bytes = conn.execute(
-            "SELECT SUM(length(source_payload) + length(observation_json) + length(source_digest) + length(watermarks_json) + length(finding_evaluations_json)) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL"
+            "SELECT SUM(length(source_payload) + length(CAST(observation_json AS BLOB)) + length(CAST(source_digest AS BLOB)) + length(CAST(watermarks_json AS BLOB)) + length(CAST(finding_evaluations_json AS BLOB))) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL"
         ).fetchone()[0]
     assert usage["bytes"] == expected_bytes
 

@@ -21,6 +21,15 @@ METRIC_REGISTRY_VERSION = 1
 RETENTION_POLICY_VERSION = "ckm-metric-sample-retention-v1"
 RETENTION_DAYS = 365
 _VOLATILE_FIELDS = frozenset({"generated_at"})
+_CONTENT_BYTES_SQL = " + ".join(
+    (
+        "COALESCE(length(source_payload), 0)",
+        "COALESCE(length(CAST(observation_json AS BLOB)), 0)",
+        "COALESCE(length(CAST(source_digest AS BLOB)), 0)",
+        "COALESCE(length(CAST(watermarks_json AS BLOB)), 0)",
+        "COALESCE(length(CAST(finding_evaluations_json AS BLOB)), 0)",
+    )
+)
 
 
 def _utc_now() -> str:
@@ -167,7 +176,7 @@ class MetricRetentionStore:
     def storage_usage(self) -> dict[str, int]:
         self.initialize()
         with sqlite3.connect(self.path) as conn:
-            count, bytes_ = conn.execute("SELECT COUNT(*), COALESCE(SUM(length(source_payload) + length(observation_json) + length(source_digest) + length(watermarks_json) + length(finding_evaluations_json)), 0) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL").fetchone()
+            count, bytes_ = conn.execute(f"SELECT COUNT(*), COALESCE(SUM({_CONTENT_BYTES_SQL}), 0) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL").fetchone()
         return {"count": int(count), "bytes": int(bytes_)}
 
     def preview_prune(self, *, now: str, earlier_than_365_days: bool = False, max_count: int | None = None, max_bytes: int | None = None) -> list[dict[str, Any]]:
@@ -177,7 +186,7 @@ class MetricRetentionStore:
         if max_bytes is not None and max_bytes < 0:
             raise ValueError("max_bytes must be non-negative")
         with sqlite3.connect(self.path) as conn:
-            rows = conn.execute("SELECT sample_id, retained_at, expires_at, length(source_payload) + length(observation_json) + length(source_digest) + length(watermarks_json) + length(finding_evaluations_json) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL ORDER BY retained_at, sample_id").fetchall()
+            rows = conn.execute(f"SELECT sample_id, retained_at, expires_at, {_CONTENT_BYTES_SQL} FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL ORDER BY retained_at, sample_id").fetchall()
         if earlier_than_365_days:
             return [{"sample_id": row[0], "reason": "explicit_operator_prune_preview"} for row in rows]
         selected: dict[str, str] = {
