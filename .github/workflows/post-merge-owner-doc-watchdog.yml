@@ -161,12 +161,20 @@ jobs:
               return JSON.stringify(value);
             };
             const canonicalSha256 = value => sha256(canonicalJson(value));
-            const matchesStoredBodyDigest = (body, storedDigest) => {
+            const LEGACY_TERMINAL_LF_CUTOFF = Date.parse("2026-07-21T16:32:11Z");
+            const legacyAuthorityEligible = comment => {
+              const created = Date.parse(comment.created_at || "");
+              const updated = Date.parse(comment.updated_at || "");
+              return Number.isFinite(created) && Number.isFinite(updated) &&
+                created <= updated &&
+                created < LEGACY_TERMINAL_LF_CUTOFF && updated < LEGACY_TERMINAL_LF_CUTOFF;
+            };
+            const rawTerminalLfDigest = body => sha256(`${body}\n`);
+            const matchesStoredBodyDigest = (body, storedDigest, {allowLegacy = false} = {}) => {
               if (typeof storedDigest !== "string" || !/^[0-9a-f]{64}$/.test(storedDigest)) return false;
-              if (body.endsWith("\n\n")) return false;
-              return bodySha256(body) === storedDigest ||
-                (!body.endsWith("\n") &&
-                  sha256(`${body}\n`) === storedDigest);
+              if (bodySha256(body) === storedDigest) return true;
+              return allowLegacy && !body.endsWith("\n") && !body.includes("\r") &&
+                rawTerminalLfDigest(body) === storedDigest;
             };
             const commentReceipts = (comments, marker) => {
               const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -194,7 +202,8 @@ jobs:
               typeof livePr.merge_commit_sha === "string" && /^[0-9a-f]{40}$/.test(livePr.merge_commit_sha);
 
             const validAuthorityReceipt = (
-              receipt, livePr, expectedRepository, {requireLiveBody = true} = {}
+              receipt, livePr, expectedRepository,
+              {requireLiveBody = true, allowLegacy = false} = {}
             ) => {
               const closing = receipt.closing_issues;
               const supporting = receipt.authenticated_supporting_issues;
@@ -227,7 +236,9 @@ jobs:
                 arraysEqual(liveSupporting, liveAuthority.supporting_issues) &&
                 supporting.every(number => liveAuthority.supporting_issues.includes(number)) &&
                 [receipt.body_sha256, receipt.neutralized_body_sha256]
-                  .some(storedDigest => matchesStoredBodyDigest(livePr.body || "", storedDigest));
+                  .some(storedDigest => matchesStoredBodyDigest(
+                    livePr.body || "", storedDigest, {allowLegacy}
+                  ));
             };
 
             const resolveContinuousMergePhase = (comments, authorityReceipt, livePr) => {
@@ -282,15 +293,27 @@ jobs:
 
             const resolveAuthorityReceipt = (comments, livePr, expectedRepository) => {
               const receipts = [];
-              for (const receipt of commentReceipts(comments, AUTHORITY_MARKER)) {
-                if (validAuthorityReceipt(receipt, livePr, expectedRepository)) {
+              for (const comment of comments) {
+                const parsed = commentReceipts([comment], AUTHORITY_MARKER);
+                if (parsed.length !== 1) continue;
+                const receipt = parsed[0];
+                const allowLegacy = legacyAuthorityEligible(comment);
+                if (validAuthorityReceipt(
+                  receipt, livePr, expectedRepository, {allowLegacy}
+                )) {
                   receipts.push(receipt);
                   continue;
                 }
                 if (
                   hasCompleteMergedIdentity(livePr) &&
                   ![receipt.body_sha256, receipt.neutralized_body_sha256]
-                    .some(storedDigest => matchesStoredBodyDigest(livePr.body || "", storedDigest)) &&
+                    .some(storedDigest => matchesStoredBodyDigest(
+                      livePr.body || "", storedDigest, {allowLegacy}
+                    )) &&
+                  ![receipt.body_sha256, receipt.neutralized_body_sha256]
+                    .some(storedDigest => !livePr.body?.endsWith("\n") &&
+                      !(livePr.body || "").includes("\r") &&
+                      rawTerminalLfDigest(livePr.body || "") === storedDigest) &&
                   validAuthorityReceipt(
                     receipt, livePr, expectedRepository, {requireLiveBody: false}
                   )
@@ -300,9 +323,16 @@ jobs:
               const keys = new Set(receipts.map(canonicalSha256));
               if (keys.size !== 1) return null;
               const authorityReceipt = receipts[receipts.length - 1];
+              const allowLegacy = comments.some(comment =>
+                legacyAuthorityEligible(comment) &&
+                commentReceipts([comment], AUTHORITY_MARKER)
+                  .some(receipt => canonicalSha256(receipt) === canonicalSha256(authorityReceipt))
+              );
               if (
                 ![authorityReceipt.body_sha256, authorityReceipt.neutralized_body_sha256]
-                  .some(storedDigest => matchesStoredBodyDigest(livePr.body || "", storedDigest)) &&
+                  .some(storedDigest => matchesStoredBodyDigest(
+                    livePr.body || "", storedDigest, {allowLegacy}
+                  )) &&
                 resolveContinuousMergePhase(comments, authorityReceipt, livePr) === null
               ) return null;
               return authorityReceipt;

@@ -30,6 +30,7 @@ def _issue_numbers(path: Path | None) -> list[int]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authority-json", type=Path, required=True)
+    parser.add_argument("--authority-comment-json", type=Path)
     parser.add_argument(
         "--phase",
         choices=("prepared", "merged", "reconciled", "restored"),
@@ -46,6 +47,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     result = build_verified_merge_phase(
         authority_receipt=_mapping(args.authority_json),
+        authority_comment=(
+            _mapping(args.authority_comment_json)
+            if args.authority_comment_json is not None
+            else None
+        ),
         phase=args.phase,
         pr=_mapping(args.pr_json),
         closed_issues=_issue_numbers(args.closed_issues_json),

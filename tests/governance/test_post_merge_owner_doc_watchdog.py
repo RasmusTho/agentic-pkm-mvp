@@ -258,6 +258,8 @@ def test_watchdog_accepts_legacy_authority_receipt_only_for_one_terminal_lf() ->
         "body": "verified issue-set merge authority:\n```json\n"
         + json.dumps(receipt, separators=(",", ":"), sort_keys=True)
         + "\n```",
+        "created_at": "2026-07-21T16:16:34Z",
+        "updated_at": "2026-07-21T16:16:34Z",
     }
 
     assert _node(
@@ -266,11 +268,54 @@ def test_watchdog_accepts_legacy_authority_receipt_only_for_one_terminal_lf() ->
         _pr(original[:-1]),
         REPOSITORY,
     ) == receipt
-    for changed in (original, original + "\n", original[:-1] + " ", original[:-1] + "drift"):
+    for changed in (original, original[:-1] + " ", original[:-1] + "drift"):
         assert _node(
             "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
             [legacy_comment], _pr(changed), REPOSITORY,
         ) is None
+    assert _node(
+        "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+        [legacy_comment], _pr(original + "\n"), REPOSITORY,
+    ) == receipt
+
+    for crlf_body in (original[:-1] + "\r", original[:-1].replace("Refs", "Refs\r", 1)):
+        crlf_receipt = dict(receipt)
+        crlf_receipt["body_sha256"] = hashlib.sha256(
+            (crlf_body + "\n").encode()
+        ).hexdigest()
+        crlf_comment = {
+            **legacy_comment,
+            "body": "verified issue-set merge authority:\n```json\n"
+            + json.dumps(crlf_receipt, separators=(",", ":"), sort_keys=True)
+            + "\n```",
+        }
+        assert _node(
+            "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+            [crlf_comment], _pr(crlf_body), REPOSITORY,
+        ) is None
+    post_cutoff = {
+        **legacy_comment,
+        "created_at": "2026-07-21T16:32:11Z",
+        "updated_at": "2026-07-21T16:32:11Z",
+    }
+    assert _node(
+        "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+        [post_cutoff], _pr(original[:-1]), REPOSITORY,
+    ) is None
+
+    double_lf = original + "\n"
+    canonical_receipt = _receipt_payload(comment)
+    canonical_receipt["body_sha256"] = _verified_merge_body_digest(double_lf)
+    canonical_comment = {
+        **comment,
+        "body": "verified issue-set merge authority:\n```json\n"
+        + json.dumps(canonical_receipt, separators=(",", ":"), sort_keys=True)
+        + "\n```",
+    }
+    assert _node(
+        "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+        [canonical_comment], _pr(double_lf), REPOSITORY,
+    ) == canonical_receipt
 
 def test_watchdog_rejects_forged_stale_or_conflicting_authority_receipts() -> None:
     untrusted = _authority_comment()

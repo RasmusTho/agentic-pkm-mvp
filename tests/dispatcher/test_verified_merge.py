@@ -76,6 +76,15 @@ def _trusted_comment(body: str) -> dict[str, object]:
     return {"author_association": "COLLABORATOR", "body": body}
 
 
+def _legacy_trusted_comment(body: str) -> dict[str, object]:
+    return {
+        "author_association": "COLLABORATOR",
+        "body": body,
+        "created_at": "2026-07-21T16:16:34Z",
+        "updated_at": "2026-07-21T16:16:34Z",
+    }
+
+
 def test_prepare_verified_merge_neutralizes_closers_and_preserves_authority() -> None:
     plan = prepare_verified_merge(
         context=_context(),
@@ -182,7 +191,7 @@ def _legacy_authority_fixture() -> tuple[dict[str, object], dict[str, object], s
 
 def test_legacy_authority_receipt_accepts_only_single_terminal_lf_digest_difference() -> None:
     authority, neutral_pr, _, neutralized = _legacy_authority_fixture()
-    comment = _trusted_comment(
+    comment = _legacy_trusted_comment(
         "verified issue-set merge authority:\n```json\n"
         + json.dumps(authority, sort_keys=True, separators=(",", ":"))
         + "\n```"
@@ -207,12 +216,42 @@ def test_legacy_authority_receipt_accepts_only_single_terminal_lf_digest_differe
     assert resolve_verified_merge_authority_receipt(
         [forged], pr=neutral_pr, repository=REPOSITORY
     ) is None
+    post_cutoff = {
+        **comment,
+        "created_at": "2026-07-21T16:32:11Z",
+        "updated_at": "2026-07-21T16:32:11Z",
+    }
+    assert resolve_verified_merge_authority_receipt(
+        [post_cutoff], pr=neutral_pr, repository=REPOSITORY
+    ) is None
+
+    crlf_body = neutralized + "\r"
+    crlf_authority = copy.deepcopy(authority)
+    crlf_authority["neutralized_body_sha256"] = hashlib.sha256(
+        (crlf_body + "\n").encode()
+    ).hexdigest()
+    crlf_comment = _legacy_trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(crlf_authority, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+    assert resolve_verified_merge_authority_receipt(
+        [crlf_comment], pr=_pr(crlf_body), repository=REPOSITORY
+    ) is None
 
 
 def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> None:
-    authority, neutral_pr, _, _ = _legacy_authority_fixture()
+    authority, neutral_pr, _, neutralized = _legacy_authority_fixture()
+    authority_comment = _legacy_trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(authority, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
     prepared = build_verified_merge_phase(
-        authority_receipt=authority, phase="prepared", pr=neutral_pr
+        authority_receipt=authority,
+        authority_comment=authority_comment,
+        phase="prepared",
+        pr=neutral_pr,
     )
 
     assert prepared["phase_receipt"]["authority_sha256"] == hashlib.sha256(
@@ -222,11 +261,50 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
     assert prepared["phase_receipt"]["run_id"] == authority["run_id"]
     assert prepared["phase_receipt"]["closed_issues"] == []
 
+    post_cutoff = {
+        **authority_comment,
+        "created_at": "2026-07-21T16:32:11Z",
+        "updated_at": "2026-07-21T16:32:11Z",
+    }
+    with pytest.raises(ValueError, match="live state is malformed"):
+        build_verified_merge_phase(
+            authority_receipt=authority,
+            authority_comment=post_cutoff,
+            phase="prepared",
+            pr=neutral_pr,
+        )
+
+    for cr_body in (neutralized + "\r", neutralized.replace("Refs", "Refs\r", 1)):
+        cr_authority = copy.deepcopy(authority)
+        cr_authority["neutralized_body_sha256"] = hashlib.sha256(
+            (cr_body + "\n").encode()
+        ).hexdigest()
+        cr_comment = _legacy_trusted_comment(
+            "verified issue-set merge authority:\n```json\n"
+            + json.dumps(cr_authority, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        )
+        with pytest.raises(ValueError, match="live state is malformed"):
+            build_verified_merge_phase(
+                authority_receipt=cr_authority,
+                authority_comment=cr_comment,
+                phase="prepared",
+                pr=_pr(cr_body),
+            )
+
 
 def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
     authority, neutral_pr, original, _ = _legacy_authority_fixture()
+    authority_comment = _legacy_trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(authority, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
     prepared = build_verified_merge_phase(
-        authority_receipt=authority, phase="prepared", pr=neutral_pr
+        authority_receipt=authority,
+        authority_comment=authority_comment,
+        phase="prepared",
+        pr=neutral_pr,
     )
     merged_pr = {
         **neutral_pr,
@@ -235,9 +313,15 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         "merged_at": "2026-07-21T10:00:00Z",
         "merge_commit_sha": "b" * 40,
     }
-    merged = build_verified_merge_phase(authority_receipt=authority, phase="merged", pr=merged_pr)
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        authority_comment=authority_comment,
+        phase="merged",
+        pr=merged_pr,
+    )
     reconciled = build_verified_merge_phase(
         authority_receipt=authority,
+        authority_comment=authority_comment,
         phase="reconciled",
         pr=merged_pr,
         closed_issues=[3820, 3823],
@@ -245,6 +329,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
     restored_pr = {**merged_pr, "body": original}
     restored = build_verified_merge_phase(
         authority_receipt=authority,
+        authority_comment=authority_comment,
         phase="restored",
         pr=restored_pr,
         closed_issues=[3820, 3823],
@@ -253,13 +338,39 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         _trusted_comment(str(item["phase_receipt_comment"]))
         for item in (prepared, merged, reconciled, restored)
     ]
+    comments.insert(0, authority_comment)
 
     assert resolve_verified_merge_phase(
         comments, authority_receipt=authority, pr=restored_pr
     ) == restored["phase_receipt"]
     assert resolve_verified_merge_phase(
-        comments[1:], authority_receipt=authority, pr=restored_pr
+        comments[:1] + comments[2:], authority_receipt=authority, pr=restored_pr
     ) is None
+
+
+def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() -> None:
+    original = _body() + "\n"
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(original), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    restored_pr = {
+        **_pr(original),
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-21T17:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+
+    restored = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="restored",
+        pr=restored_pr,
+        closed_issues=[3820, 3823],
+    )
+
+    assert restored["phase_receipt"]["body_sha256"] == authority["body_sha256"]
 
 
 @pytest.mark.parametrize(

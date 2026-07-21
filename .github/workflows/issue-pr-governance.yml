@@ -296,12 +296,21 @@ jobs:
               const canonicalBody = value.endsWith("\n") ? value.slice(0, -1) : value;
               return crypto.createHash("sha256").update(canonicalBody, "utf8").digest("hex");
             };
-            const matchesStoredBodyDigest = (body, storedDigest) => {
+            const LEGACY_TERMINAL_LF_CUTOFF = Date.parse("2026-07-21T16:32:11Z");
+            const legacyAuthorityEligible = comment => {
+              const created = Date.parse(comment.created_at || "");
+              const updated = Date.parse(comment.updated_at || "");
+              return Number.isFinite(created) && Number.isFinite(updated) &&
+                created <= updated &&
+                created < LEGACY_TERMINAL_LF_CUTOFF && updated < LEGACY_TERMINAL_LF_CUTOFF;
+            };
+            const rawTerminalLfDigest = body =>
+              crypto.createHash("sha256").update(`${body}\n`, "utf8").digest("hex");
+            const matchesStoredBodyDigest = (body, storedDigest, {allowLegacy = false} = {}) => {
               if (typeof storedDigest !== "string" || !/^[0-9a-f]{64}$/.test(storedDigest)) return false;
-              if (body.endsWith("\n\n")) return false;
-              return bodySha256(body) === storedDigest ||
-                (!body.endsWith("\n") &&
-                  crypto.createHash("sha256").update(`${body}\n`, "utf8").digest("hex") === storedDigest);
+              if (bodySha256(body) === storedDigest) return true;
+              return allowLegacy && !body.endsWith("\n") && !body.includes("\r") &&
+                rawTerminalLfDigest(body) === storedDigest;
             };
             const trustedAuthorityReceipts = comments => {
               const escaped = AUTHORITY_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -314,7 +323,7 @@ jobs:
                 try {
                   const receipt = JSON.parse(matches[0][1]);
                   if (receipt !== null && typeof receipt === "object" && !Array.isArray(receipt)) {
-                    receipts.push(receipt);
+                    receipts.push({receipt, allowLegacy: legacyAuthorityEligible(comment)});
                   }
                 } catch {}
               }
@@ -323,7 +332,8 @@ jobs:
             const resolveNeutralizedMergeAuthority = ({comments, issueAuthority, pullRequest, repository}) => {
               if (!issueAuthority.neutralizedValid) return null;
               const liveBody = pullRequest.body || "";
-              const valid = trustedAuthorityReceipts(comments).filter(receipt => {
+              const valid = trustedAuthorityReceipts(comments).filter(entry => {
+                const {receipt, allowLegacy} = entry;
                 const closing = receipt.closing_issues;
                 const authenticatedSupporting = receipt.authenticated_supporting_issues;
                 const liveSupporting = receipt.live_supporting_issues;
@@ -349,11 +359,13 @@ jobs:
                   typeof receipt.neutralized_body_sha256 === "string" &&
                   /^[0-9a-f]{64}$/.test(receipt.neutralized_body_sha256) &&
                   receipt.body_sha256 !== receipt.neutralized_body_sha256 &&
-                  matchesStoredBodyDigest(liveBody, receipt.neutralized_body_sha256)
+                  matchesStoredBodyDigest(
+                    liveBody, receipt.neutralized_body_sha256, {allowLegacy}
+                  )
                 );
               });
-              if (valid.length === 0 || new Set(valid.map(canonicalJson)).size !== 1) return null;
-              return valid[valid.length - 1];
+              if (valid.length === 0 || new Set(valid.map(entry => canonicalJson(entry.receipt))).size !== 1) return null;
+              return valid[valid.length - 1].receipt;
             };
             // neutralized-authority-validator:end
             const issueAuthority = classifyIssueAuthority(body);
