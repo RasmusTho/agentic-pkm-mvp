@@ -145,3 +145,56 @@ def test_answered_rung_advances_schedule_like_dismissal() -> None:
     due = next_pending_revisit(decision, today=date(2026, 2, 12), outcome_records=outcomes)
     assert due is not None
     assert due.rung_index == 1
+
+
+def test_actioned_rungs_match_on_decision_uuid_not_re_minted_object_id() -> None:
+    """AC4/AC6: an actioned rung recorded under a prior decision_object_id must
+    stay actioned after the runtime object id is re-minted (same decision_uuid).
+
+    The dual-identity model exists so a Postgres rebuild can re-link a decision
+    whose runtime id was re-minted; matching on decision_object_id would let an
+    already-dismissed/answered rung resurface as pending.
+    """
+    from app.calibration.scheduler import next_pending_revisit
+
+    shared_uuid = str(uuid4())
+    decision = {
+        "decision_object_id": str(uuid4()),  # freshly re-minted runtime id
+        "decision_uuid": shared_uuid,
+        "title": "Use the canonical store",
+        "decided_on": date(2026, 1, 1).isoformat(),
+    }
+    stale_object_id = str(uuid4())  # the id in force when the rung was actioned
+
+    # Outcome path: rung 0 answered earlier under the stale object id.
+    due_outcome = next_pending_revisit(
+        decision,
+        today=date(2026, 7, 1),
+        outcome_records=[
+            {
+                "decision_object_id": stale_object_id,
+                "decision_uuid": shared_uuid,
+                "rung_index": 0,
+                "outcome": "held",
+                "created_at": "2026-01-15T00:00:00+00:00",
+            }
+        ],
+    )
+    assert due_outcome is not None
+    assert due_outcome.rung_index == 1  # rung 0 stays actioned, not resurfaced
+
+    # Dismissal path: rung 0 dismissed earlier under the stale object id.
+    due_dismissal = next_pending_revisit(
+        decision,
+        today=date(2026, 7, 1),
+        dismissal_records=[
+            {
+                "decision_object_id": stale_object_id,
+                "decision_uuid": shared_uuid,
+                "rung_index": 0,
+                "created_at": "2026-01-15T00:00:00+00:00",
+            }
+        ],
+    )
+    assert due_dismissal is not None
+    assert due_dismissal.rung_index == 1

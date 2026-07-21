@@ -67,10 +67,14 @@ def _actioned_rungs(
 ) -> set[int]:
     actioned: set[int] = set()
     for record in records:
-        if (
-            str(record.get("decision_object_id")) != str(decision.decision_object_id)
-            or str(record.get("decision_uuid")) != str(decision.decision_uuid)
-        ):
+        # Match on the durable ``decision_uuid`` only, never the re-mintable
+        # ``decision_object_id``. The dual-identity model exists precisely so a
+        # Postgres rebuild can re-link a decision whose runtime id was re-minted
+        # (see DECISION_CALIBRATION/DEFINE_OUTCOME_RECEIPT_MODEL.md), and the
+        # sibling dedup functions (_existing_receipt / _existing_dismissal) key on
+        # decision_uuid + rung_index alone. Requiring decision_object_id here would
+        # let an actioned rung resurface once the object id changes.
+        if str(record.get("decision_uuid")) != str(decision.decision_uuid):
             continue
         rung_index = record.get("rung_index")
         if isinstance(rung_index, int) and not isinstance(rung_index, bool) and rung_index >= 0:
