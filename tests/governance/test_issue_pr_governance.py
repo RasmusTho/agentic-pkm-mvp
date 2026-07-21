@@ -31,10 +31,24 @@ _BUILDEROPS_ROUTING_FIELDS = (
     ),
     re.compile(r"(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)", re.IGNORECASE),
 )
+
+
+def test_pr_contract_requires_one_bounded_final_review_declaration() -> None:
+    workflow = (
+        REPO_ROOT / ".github/workflows/issue-pr-governance.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "finalReviewRoundLines.length !== 1" in workflow
+    assert "validFinalReviewRoundLines.length !== 1" in workflow
+    assert "Final-Review-Rounds: 1` or `Final-Review-Rounds: 2" in workflow
+
+
 _TIER1_LANE_REGEX = re.compile(
     r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
     re.IGNORECASE | re.MULTILINE,
 )
+
+
 def _read_workflow() -> str:
     return (REPO_ROOT / ".github/workflows/issue-pr-governance.yml").read_text(
         encoding="utf-8"

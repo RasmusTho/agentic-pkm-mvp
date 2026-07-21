@@ -188,13 +188,21 @@ class VerificationAgentLoop:
             and isinstance(row["receipt"], Mapping)
             and row["receipt"].get("reviewed_attempt_id") == latest["attempt_id"]
         ]
-        if reviews and reviews[-1]["outcome"] == "blocking":
-            raise ValueError("blocking review requires repair before another review")
-        if len(reviews) >= 2:
-            raise ValueError("independent clean re-review budget is complete")
         normalized = outcome.lower()
         if normalized not in {"blocking", "clean"}:
             raise ValueError("review outcome must be blocking or clean")
+        same_blocking_round = bool(
+            reviews
+            and reviews[-1]["outcome"] == "blocking"
+            and normalized == "blocking"
+            and reviews[-1]["session_id"] == session_id
+            and reviews[-1]["failure_domain"] == failure_domain
+            and reviews[-1]["mechanism_id"] == mechanism_id
+        )
+        if reviews and reviews[-1]["outcome"] == "blocking" and not same_blocking_round:
+            raise ValueError("blocking review requires repair before another review")
+        if len(reviews) >= 2 and normalized == "clean":
+            raise ValueError("independent clean re-review budget is complete")
         ordinal = self.ledger.record_attempt(
             self.run_id,
             "review",
@@ -305,8 +313,6 @@ class VerificationAgentLoop:
                     normalized = outcome.lower()
                     if normalized not in {"blocking", "clean"}:
                         raise ValueError("review outcome must be blocking or clean")
-                    if any(row["session_id"] == session_id for row in working):
-                        raise ValueError("independent re-review requires a fresh session")
                     repairs = [
                         row
                         for row in working
@@ -326,9 +332,28 @@ class VerificationAgentLoop:
                         and row["receipt"].get("reviewed_attempt_id")
                         == latest["attempt_id"]
                     ]
-                    if reviews and reviews[-1]["outcome"] == "blocking":
+                    last_review_receipt = (
+                        reviews[-1].get("receipt") if reviews else None
+                    )
+                    same_blocking_round = bool(
+                        reviews
+                        and reviews[-1]["outcome"] == "blocking"
+                        and normalized == "blocking"
+                        and reviews[-1]["session_id"] == session_id
+                        and isinstance(last_review_receipt, Mapping)
+                        and last_review_receipt.get("failure_domain")
+                        == event.get("failure_domain")
+                        and last_review_receipt.get("mechanism_id")
+                        == event.get("mechanism_id")
+                    )
+                    reused_session = any(
+                        row["session_id"] == session_id for row in working
+                    )
+                    if reused_session and not same_blocking_round:
+                        raise ValueError("independent re-review requires a fresh session")
+                    if reviews and reviews[-1]["outcome"] == "blocking" and not same_blocking_round:
                         raise ValueError("blocking review requires repair before another review")
-                    if len(reviews) >= 2:
+                    if len(reviews) >= 2 and normalized == "clean":
                         raise ValueError("independent clean re-review budget is complete")
                     kind = "review"
                     outcome = normalized

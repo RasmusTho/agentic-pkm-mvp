@@ -30,6 +30,7 @@ CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
 def _canonical_v1_request(*, supporting_issues: list[int]) -> dict[str, object]:
     payload = request()
     payload["contract_version"] = "verification_dispatch_request.v1"
+    payload.pop("final_review_rounds")
     payload["supporting_issues"] = supporting_issues
     payload.pop("closing_issues")
     source_workflow = dict(payload["source_workflow"])
@@ -162,6 +163,7 @@ def _live_observed_request(state, payload: dict[str, object]):
         observed_linked_issue=payload["linked_issue"],
         observed_closing_issues=tuple(closing),
         observed_supporting_issues=tuple(supporting),
+        observed_final_review_rounds=payload["final_review_rounds"],
         canonical_chain_token=token,
     )
 
@@ -181,6 +183,21 @@ def test_verification_request_rejects_non_ci_smoke_source_identity(tmp_path) -> 
 
     with pytest.raises(ValueError, match="malformed verification source identity"):
         ledger(tmp_path).ingest(payload)
+
+
+def test_verification_request_rejects_boolean_final_review_rounds_before_persistence(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    payload = request()
+    payload["final_review_rounds"] = True
+
+    with pytest.raises(
+        ValueError, match="verification final review rounds are malformed"
+    ):
+        state.ingest(payload)
+
+    assert state.list() == []
 
 
 @pytest.mark.parametrize(
@@ -941,6 +958,7 @@ def test_same_head_v2_recovery_rejects_changed_live_closing_authority(
         observed_linked_issue=compatible["linked_issue"],
         observed_closing_issues=(3626,),
         observed_supporting_issues=(3626,),
+        observed_final_review_rounds=compatible["final_review_rounds"],
         canonical_chain_token=state.canonical_chain_token(authenticated),
     )
     before = state.get(run_id)

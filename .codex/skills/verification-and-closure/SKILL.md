@@ -207,17 +207,27 @@ than independent re-review.
   that finding as resolved. Do not rely on the fixing agent's own read of the diff as the verdict.
 - A **trivial** fix (single-line wording/doc/formatting, no logic change) may be self-verified against
   the current head SHA without a full re-run.
-- **Stop condition:** the gate passes once a round comes back clean (no new findings). For PRs touching
-  security, data, migration, auth, concurrency, external-API, credential-durability, or explicit
-  state-machine surfaces (`AGENTS.md :: Total Cost of Development` escalation tier), require 2
-  consecutive clean rounds before passing.
+- **Stop condition:** the gate passes once a round comes back clean (no new findings). One clean,
+  independent final review is the default. Require a second consecutive clean round only when either
+  (a) the PR changes a runtime surface on a declared high-risk TCD category (security, data,
+  migration, auth, concurrency, external-API, credential-durability, or explicit state-machine surfaces),
+  or (b) the
+  low-convergence circuit breaker below was triggered for the same mechanism/domain key. A
+  governance, docs, skill, or test-enforcement change carrying a high-risk label alone does not
+  qualify as a runtime surface.
+- Before publication, record that decision in the canonical PR body as exactly
+  `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2`. Use `2` for the declared high-risk runtime
+  case above. The verification-dispatch producer authenticates this v3 field from the live PR and
+  every normal, post-launch, and crash-recovery live-truth fence must match it before the durable
+  closure ledger can proceed; changing prose or coordinator output cannot lower it.
 - **Low-convergence circuit breaker:** if one round reports two or more blockers in the same
   stateful mechanism, or a later round finds an adjacent blocker in a mechanism already repaired,
   stop point-fixing and do not start another expensive validation or publish another head. Build the mechanism
   convergence packet and run the independent pre-expensive-gate review defined in
   `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
   sequence only after that review is clean. Preserve the existing mechanism/domain binding and
-  attempt count; this replan does not reset budget or reduce the final two-clean-round requirement.
+  attempt count; this replan does not reset budget and requires the second final clean round only
+  for that triggered mechanism/domain key.
 - Repair budget is per stable failure mechanism and failure domain: two standard repair attempts
   followed, when needed, by two strongest-capability repair attempts for that same key. The closed
   domains are review/code correctness, static-quality, lease/concurrency, and

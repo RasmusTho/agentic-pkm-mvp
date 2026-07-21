@@ -60,6 +60,7 @@ class PRBodyInputs:
     sbs_impact: Mapping[str, str]
     owner_doc_resolution: str
     validation: tuple[str, ...]
+    final_review_rounds: int = 1
     issue_number: int | None = None
     builderops_records: str | None = None
     builderops_reason: str | None = None
@@ -78,7 +79,7 @@ def generate_pr_body(inputs: PRBodyInputs) -> str:
     if inputs.lane == "direct-repair":
         sections.append(_direct_repair_section(inputs))
     sections.extend([
-        _change_lane_section(inputs.lane),
+        _change_lane_section(inputs.lane, inputs.final_review_rounds),
         _linked_issue_section(inputs.issue_number),
         _sbs_impact_section(inputs.sbs_impact),
         _owner_doc_section(inputs),
@@ -115,6 +116,7 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
         owner_doc_resolution=str(data.get("owner_doc_resolution", "")),
         owner_doc_followup_issue=_optional_text(data.get("owner_doc_followup_issue")),
         validation=tuple(str(item) for item in validation),
+        final_review_rounds=int(data.get("final_review_rounds", 1)),
         builderops_records=_optional_text(data.get("builderops_records")),
         builderops_reason=_optional_text(data.get("builderops_reason")),
         notes=str(data.get("notes", "None.")),
@@ -129,6 +131,8 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
         raise PRBodyGeneratorError(f"lane must be one of: {', '.join(sorted(LANES))}")
     if inputs.issue_number is not None and inputs.issue_number <= 0:
         raise PRBodyGeneratorError("issue_number must be positive")
+    if inputs.final_review_rounds not in {1, 2}:
+        raise PRBodyGeneratorError("final_review_rounds must be 1 or 2")
     if inputs.lane == "implementation" and inputs.issue_number is None:
         raise PRBodyGeneratorError("implementation lane requires issue_number")
     if inputs.lane == "direct-repair":
@@ -159,12 +163,14 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
         _require_text(inputs.builderops_reason, "builderops_reason")
 
 
-def _change_lane_section(lane: str) -> str:
+def _change_lane_section(lane: str, final_review_rounds: int) -> str:
     return "\n".join([
         "## Change Lane",
         f"- [{'x' if lane == 'implementation' else ' '}] Implementation lane",
         f"- [{'x' if lane == 'docs-authoring' else ' '}] Docs authoring lane",
         f"- [{'x' if lane == 'governance' else ' '}] Governance lane",
+        "",
+        f"Final-Review-Rounds: {final_review_rounds}",
     ])
 
 
@@ -314,6 +320,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--owner-doc-resolution", choices=sorted(OWNER_DOC_RESOLUTIONS))
     parser.add_argument("--owner-doc-followup-issue")
     parser.add_argument("--validation", action="append", default=[])
+    parser.add_argument("--final-review-rounds", type=int, choices=(1, 2), default=1)
     parser.add_argument("--builderops-records")
     parser.add_argument("--builderops-reason")
     parser.add_argument("--notes", default="None.")
@@ -339,6 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 owner_doc_resolution=args.owner_doc_resolution or "",
                 owner_doc_followup_issue=args.owner_doc_followup_issue,
                 validation=tuple(args.validation),
+                final_review_rounds=args.final_review_rounds,
                 builderops_records=args.builderops_records,
                 builderops_reason=args.builderops_reason,
                 notes=args.notes,

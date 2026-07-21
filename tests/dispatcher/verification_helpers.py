@@ -27,7 +27,7 @@ def downgrade_verification_schema_to_v3(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE dispatcher_meta SET value='3' WHERE key='schema_version'")
 
 
-def request(head: str = HEAD) -> dict[str, object]:
+def request(head: str = HEAD, *, final_review_rounds: int = 1) -> dict[str, object]:
     result = build_request(
         event={
             "repository": {"full_name": REPO},
@@ -45,7 +45,10 @@ def request(head: str = HEAD) -> dict[str, object]:
         pr={
             "number": 3603,
             "state": "open",
-            "body": "Governing-Issue: #3603\n\nFixes #3603",
+            "body": (
+                "Governing-Issue: #3603\n\nFixes #3603\n\n"
+                f"Final-Review-Rounds: {final_review_rounds}"
+            ),
             "base": {"ref": "main"},
             "head": {"ref": "codex/issue-3603", "sha": head},
             "live_closing_issues": [
@@ -68,6 +71,7 @@ def pre_trust_request(head: str = HEAD) -> dict[str, object]:
         "name": "CI",
     }
     result["contract_version"] = "verification_dispatch_request.v1"
+    result.pop("final_review_rounds")
     identity = {
         "contract_version": result["contract_version"],
         "head_sha": result["current_head_sha"],
@@ -98,6 +102,7 @@ def b4e2310_pre_trust_request(head: str = HEAD) -> dict[str, object]:
         "name": "CI",
     }
     result["contract_version"] = "verification_dispatch_request.v1"
+    result.pop("final_review_rounds")
     identity = {
         "contract_version": result["contract_version"],
         "head_sha": result["current_head_sha"],

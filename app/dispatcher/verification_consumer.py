@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 import jsonschema
 
 from app.dispatcher.verification_dispatch import (
+    CONTRACT_VERSION,
     VerificationBackoffPending,
     VerificationDispatchLedger,
     VerificationRun,
@@ -51,6 +52,7 @@ from app.dispatcher.verification_agent_loop import (
 from app.dispatcher.verification_contract import (
     IssueAuthority,
     has_closing_issue_attempt,
+    resolve_final_review_rounds,
     resolve_issue_authority,
     resolve_neutralized_issue_authority,
 )
@@ -456,10 +458,10 @@ def validate_verification_closer_receipt(
             "only a needs_human receipt may carry a Human Exception packet"
         )
     if receipt.get("verdict") == "delivered" and (
-        not isinstance(review_events, list) or len(review_events) < 2
+        not isinstance(review_events, list) or len(review_events) < 1
     ):
         raise jsonschema.ValidationError(
-            "a delivered receipt requires at least two review events"
+            "a delivered receipt requires at least one review event"
         )
     if not isinstance(review_events, list):
         return
@@ -2825,6 +2827,16 @@ def _governing_contract_matches(run: VerificationRun, pr_body: object) -> bool:
     )
 
 
+def _final_review_authority_matches(
+    run: VerificationRun, pr_body: object
+) -> bool:
+    if run.request.get("contract_version") != CONTRACT_VERSION:
+        return True
+    return resolve_final_review_rounds(pr_body) == run.request.get(
+        "final_review_rounds"
+    )
+
+
 def live_truth_rejection(
     run: VerificationRun,
     pr: Mapping[str, object],
@@ -2842,6 +2854,8 @@ def live_truth_rejection(
         return "stale_head"
     if not _governing_contract_matches(run, pr.get("body")):
         return "governing_issue_mismatch"
+    if not _final_review_authority_matches(run, pr.get("body")):
+        return "final_review_authority_mismatch"
     return _checks_rejection(
         checks, expected_head_sha=expected_head_sha or run.head_sha
     )
@@ -2891,6 +2905,8 @@ def delivered_live_truth_rejection(
         return "stale_head"
     if not _governing_contract_matches(run, pr.get("body")):
         return "governing_issue_mismatch"
+    if not _final_review_authority_matches(run, pr.get("body")):
+        return "final_review_authority_mismatch"
     if (
         pr.get("state") != "closed"
         or pr.get("merged") is not True
@@ -3775,7 +3791,7 @@ class VerificationConsumer:
                 lease_id=lease_id,
             )
         except ValueError as exc:
-            if "two fresh clean reviews" not in str(exc):
+            if "required fresh clean review rounds" not in str(exc):
                 raise
             return self.ledger.terminal(
                 claimed.run_id,
@@ -3826,6 +3842,9 @@ class VerificationConsumer:
                     if issue_authority is not None
                     else None
                 ),
+                observed_final_review_rounds=resolve_final_review_rounds(
+                    intake_pr.get("body")
+                ),
                 canonical_chain_token=canonical_chain_token,
             )
         run = self.ledger.ingest(request)
@@ -3854,6 +3873,17 @@ class VerificationConsumer:
                 preloaded_pr = self.truth.pull_request(
                     run.repository, run.pr_number
                 )
+                if not _final_review_authority_matches(
+                    run, preloaded_pr.get("body")
+                ):
+                    return self.ledger.supersede_unclaimed(
+                        run.run_id,
+                        {
+                            "outcome": "noop",
+                            "reason": "final_review_authority_mismatch",
+                        },
+                        reason="final_review_authority_mismatch",
+                    )
                 if preloaded_pr.get("merged") is True:
                     return self._recover_merged_run(run, preloaded_pr)
                 if resolve_neutralized_issue_authority(
@@ -4423,7 +4453,7 @@ class VerificationConsumer:
                 claimed.run_id, status, dict(receipt), holder=self.holder, lease_id=lease_id
             )
         except ValueError as exc:
-            if status != "completed" or "two fresh clean reviews" not in str(exc):
+            if status != "completed" or "required fresh clean review rounds" not in str(exc):
                 raise
             return self.ledger.terminal(
                 claimed.run_id, "failed", dict(receipt), reason="closure_gate_not_proven",
@@ -4451,6 +4481,11 @@ class VerificationConsumer:
             raise ValueError("verification run is no longer resumable: malformed_pr")
         if observed_head != run.head_sha:
             raise ValueError("verification run is no longer resumable: stale_head")
+        if not _final_review_authority_matches(run, pr.get("body")):
+            raise ValueError(
+                "verification run is no longer resumable: "
+                "final_review_authority_mismatch"
+            )
         if pr.get("merged") is True:
             return self._recover_merged_run(run, pr)
         if resolve_neutralized_issue_authority(pr.get("body")) is not None:

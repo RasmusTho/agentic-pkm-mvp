@@ -183,6 +183,7 @@ def _write_v1_empty_supporting_v3_state(
     original = VerificationDispatchLedger(store).ingest(verification_request())
     legacy_request = verification_request()
     legacy_request["contract_version"] = "verification_dispatch_request.v1"
+    legacy_request.pop("final_review_rounds")
     legacy_request.pop("closing_issues")
     source_workflow = dict(legacy_request["source_workflow"])
     source_workflow["name"] = "CI"
