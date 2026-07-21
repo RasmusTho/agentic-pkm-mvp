@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from app.builderops.control_plane.auth import CredentialRegistry
 from app.builderops.control_plane.client import BuilderOpsControlPlaneClient, ClientConfig, StaleLeaseError
 from app.builderops.control_plane.client_cli import main
-from app.builderops.control_plane.models import AuthorityObjectResult, Lease, LeaseRequired, StaleFencingToken
+from app.builderops.control_plane.models import AuthorityObjectResult, LeaseRequired, StaleFencingToken
 from app.builderops.control_plane.service import create_app
 
 
