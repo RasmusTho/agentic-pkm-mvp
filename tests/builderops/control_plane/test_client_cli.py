@@ -18,9 +18,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
-from app.builderops.control_plane.client import ClientConfig, StaleLeaseError
+from app.builderops.control_plane.auth import CredentialRegistry
+from app.builderops.control_plane.client import BuilderOpsControlPlaneClient, ClientConfig, StaleLeaseError
 from app.builderops.control_plane.client_cli import main
+from app.builderops.control_plane.models import AuthorityObjectResult, Lease, LeaseRequired, StaleFencingToken
+from app.builderops.control_plane.service import create_app
 
 
 class _RecordingClient:
@@ -478,6 +482,43 @@ def test_promotion_update_accepts_fenced_lease_and_rejects_stale_lease(
     assert main(missing_lease_args, client_factory=missing_factory) == 3
     assert missing_clients[0].calls[0][1]["lease"] is None
     assert missing_clients[0].closed is True
+
+
+def test_promotion_update_real_cli_client_service_store_path(tmp_path: Path) -> None:
+    """Real CLI -> authenticated client -> service -> store fencing regression."""
+    class Store:
+        epoch = 1
+        calls: list[str] = []
+        def readiness(self): return {"authority_epoch": 1, "schema_version": 1}
+        def commit_promotion(self, **kw):
+            self.calls.append(kw["status"])
+            lease = kw["lease"]
+            if kw["status"] == "prepared":
+                return AuthorityObjectResult(kw["envelope"].repository, "promotion", "p1", "prepared", 1, "0/1")
+            if lease is None: raise LeaseRequired("promotion update requires a fenced lease")
+            if lease.lease_kind != "generic" or lease.resource_id != "promotion:p1": raise StaleFencingToken("wrong promotion lease")
+            if lease.fencing_token != 2: raise StaleFencingToken("stale promotion lease")
+            return AuthorityObjectResult(kw["envelope"].repository, "promotion", "p1", "approved", 2, "0/2")
+    secret = tmp_path / "token"; secret.write_text("client-token\n")
+    manifest = tmp_path / "credentials.json"; manifest.write_text(json.dumps({"credentials":[{"id":"c","principal":"client","secret_ref":"host-secret:client","secret_file":str(secret),"scopes":["status:read","promotions:write"],"repositories":["RasmusTho/agentic-pkm-mvp"],"rotation_generation":1}]}))
+    store = Store()
+    transport = TestClient(create_app(store=store, credentials=CredentialRegistry(manifest)))
+    route_dir = _manifest_dir(tmp_path)
+    def factory(config: ClientConfig):
+        client = BuilderOpsControlPlaneClient(ClientConfig(config.base_url, "client-token"), http_client=transport, max_retries=0)
+        # The focused store implements the promotion port only; pin the epoch as
+        # a preceding authenticated status read would, so the regression drives
+        # the real CLI/client/service/store promotion path.
+        client._pinned_epoch = 1
+        return client
+    base = ["--delivery-manifest-dir",str(route_dir),"--task-class","implementation","promotion","--repository","RasmusTho/agentic-pkm-mvp","--scope","issue:3968","--stack","builderops-control-plane","--source-ref","github:issue:3968","--promotion-id","p1","--idempotency-key","p"]
+    assert main(base + ["--status","prepared"], client_factory=factory) == 0
+    lease = '{"resource_id":"promotion:p1","holder":"client","fencing_token":2,"expires_at":"2026-07-21T12:00:00+00:00","lease_kind":"generic"}'
+    assert main(base + ["--status","approved","--lease",lease], client_factory=factory) == 0
+    assert main(base + ["--status","approved"], client_factory=factory) == 3
+    stale = lease.replace('"fencing_token":2', '"fencing_token":1')
+    assert main(base + ["--status","approved","--lease",stale], client_factory=factory) == 3
+    assert store.calls == ["prepared", "approved", "approved", "approved"]
 
 
 def test_wrapper_mutation_injects_required_delivery_route(tmp_path: Path) -> None:
