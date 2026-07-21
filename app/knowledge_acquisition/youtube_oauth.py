@@ -745,15 +745,16 @@ class YouTubeAccountBinder:
                 {"status": "absent", "reason_code": "auth_missing", "scopes": [], "token_store": "encrypted"}
             )
         state, reason_code = binding.state, binding.reason_code
-        try:
-            if not self._store.has_record(binding_id):
-                state, reason_code = "degraded", "auth_missing"
-            else:
-                token = self._store.get(binding_id)
-                if token is None:
+        if state == "connected":
+            try:
+                if not self._store.has_record(binding_id):
                     state, reason_code = "degraded", "auth_missing"
-        except Exception:  # fail closed without exposing store/decryption detail
-            state, reason_code = "degraded", "auth_key_missing"
+                else:
+                    token = self._store.get(binding_id)
+                    if token is None:
+                        state, reason_code = "degraded", "auth_missing"
+            except Exception:  # fail closed without exposing store/decryption detail
+                state, reason_code = "degraded", "auth_key_missing"
         return redact(
             {
                 "status": state,
@@ -796,7 +797,7 @@ class YouTubeAccountBinder:
                         return redact(
                             {
                                 "status": "degraded",
-                                "reason_code": "provider_revoke_retryable",
+                                "reason_code": "api_unavailable",
                                 "retryable": True,
                             }
                         )

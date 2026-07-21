@@ -218,7 +218,8 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   the OAuth/HTTP layer is sanitized (status + class, never response bodies that may echo tokens).
 - Disconnect revokes at the provider (`oauth2.googleapis.com/revoke`). A transport/408/429/5xx
   failure retains the encrypted token as retry authority, returns a sanitized retryable/degraded
-  result, and leaves dependent sources, cursors, acquired artifacts, raw records, and receipts
+  result with the existing `api_unavailable` reason code, and leaves dependent sources, cursors,
+  acquired artifacts, raw records, and receipts
   unchanged. Success or permanent provider rejection deletes the token record and disables
   dependent sources with `auth_disconnected`; acquired artifacts are never deleted.
 

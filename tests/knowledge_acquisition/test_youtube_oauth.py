@@ -420,6 +420,7 @@ def test_disconnect_revokes_without_deleting_artifacts(store, bindings, registry
     # Token record deleted; binding marked disconnected.
     assert store.has_record(binding_id) is False
     assert bindings.get(binding_id).reason_code == "auth_disconnected"
+    assert binder.status(binding_id)["reason_code"] == "auth_disconnected"
     # Dependent source disabled with auth_disconnected — but the row/cursor kept.
     disabled = registry.get(source.binding_id)
     assert disabled.enabled is False
@@ -529,7 +530,7 @@ def test_disconnect_preserves_token_when_provider_revoke_fails(
 
     assert result == {
         "status": "degraded",
-        "reason_code": "provider_revoke_retryable",
+        "reason_code": "api_unavailable",
         "retryable": True,
     }
     assert store.get(binding_id) is not None
@@ -565,6 +566,7 @@ def test_disconnect_permanent_provider_error_keeps_existing_local_teardown(
     assert store.has_record(binding_id) is False
     assert bindings.get(binding_id).reason_code == "auth_disconnected"
     assert registry.get(source.binding_id).enabled is False
+    assert binder.status(binding_id)["reason_code"] == "auth_disconnected"
 
 
 # --- AC7 --------------------------------------------------------------------

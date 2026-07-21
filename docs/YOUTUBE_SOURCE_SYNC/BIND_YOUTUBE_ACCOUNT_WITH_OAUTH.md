@@ -42,8 +42,8 @@ touch the repo, vault, settings values, logs, events, or receipts.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
    reason codes on the binding and dependent sources (INV-YSS-4). `disconnect()` revokes at
    `oauth2.googleapis.com/revoke`; a transport/408/429/5xx failure returns a sanitized retryable
-   degraded result and retains encrypted token authority without changing sources or acquired
-   artifacts. Success or permanent provider rejection deletes the token record and disables
+   `api_unavailable` degraded result and retains encrypted token authority without changing sources
+   or acquired artifacts. Success or permanent provider rejection deletes the token record and disables
    dependent sources with `auth_disconnected`. `reconnect()` re-runs consent onto the
    same binding when the provider channel id matches.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + error
