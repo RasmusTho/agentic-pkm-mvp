@@ -294,6 +294,13 @@ jobs:
               environment:
                 WORKER_LOG_HEARTBEAT_SECONDS: "${WORKER_LOG_HEARTBEAT_SECONDS}"
           YAML
+          # MVR-01B launcher contract part 3/3: every compose invocation in this
+          # step (including raw `up` and its instance-state-init dependency)
+          # must chown/run as the runner identity, or the init service's
+          # compose default LOCAL_UID:-0 root-owns the host bind and the next
+          # step's chmod fails EPERM.
+          export LOCAL_UID="$(id -u)"
+          export LOCAL_GID="$(id -g)"
           source scripts/lib/instance_ownership_host_state.sh
           prepare_instance_ownership_host_state_dir
           compose_files="-f docker-compose.yaml -f /tmp/docker-compose.worker-ci.yaml"
@@ -442,6 +449,13 @@ jobs:
           cache/
           EOF
 
+          # MVR-01B launcher contract part 3/3: every compose invocation in this
+          # step (including raw `up` and its instance-state-init dependency)
+          # must chown/run as the runner identity, or the init service's
+          # compose default LOCAL_UID:-0 root-owns the host bind and the next
+          # step's chmod fails EPERM.
+          export LOCAL_UID="$(id -u)"
+          export LOCAL_GID="$(id -g)"
           source scripts/lib/instance_ownership_host_state.sh
           prepare_instance_ownership_host_state_dir
           compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
