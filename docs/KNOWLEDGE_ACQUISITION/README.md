@@ -166,5 +166,5 @@ lands in the existing triage flow), the platform contracts are proven before any
 - No auto-promotion of anything, ever (triage policy governs).
 - No new storage, index, or event substrate.
 - No commercial transcript/ingestion API dependency (see research memo §Commercial services).
-- No claim that any of this is shipped; current shipped reality is only what
-  `RESEARCH_2026-07.md` §Existing assets describes.
+- No shipped claim beyond the explicitly delivered rows above and their linked owner documents;
+  all broader platform/spec language remains target state until its own issue is delivered.

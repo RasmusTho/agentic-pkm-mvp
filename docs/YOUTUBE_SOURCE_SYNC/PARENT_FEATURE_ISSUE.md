@@ -1,92 +1,71 @@
-State: Filed — mirrors live parent feature issue #3915 (open validation hub, `agent:blocked` while children #3916–#3926 are outstanding; filed 2026-07-17).
+State: Mirrors live parent feature issue #3915 after the pragmatic V1 re-contract of 2026-07-21.
 Doc role: Parent feature issue mirror
-Authority: None of its own — GitHub issue #3915 is the live validation hub; this file mirrors it for repo-local readers.
+Authority: GitHub issue #3915 is the live validation hub; this file is a repo-local mirror only.
 
-# Parent Feature Issue — YouTube Source Sync
+# Parent Feature Issue — YouTube Source Sync V1
 
-Title: `feature: YouTube source sync — OAuth inbox playlist, continuous discovery, subscriptions (KAP Phase 4)`
+Title: `feature: YouTube source sync V1 — OAuth Inbox playlist → review candidates`
 
-Labels: `type:task`, `prio:high`, `agent:blocked` (validation hub while children are open).
+## Outcome
 
-## Context
+One operator can connect one YouTube account, select exactly one ordinary owned playlist as the
+Inbox, invoke one manual sync, inspect connected/degraded state plus last success and a sanitized
+latest error, and receive review-required draft candidates for newly discovered videos. The route
+never promotes external content directly into knowledge.
 
-Knowledge Acquisition Platform Phase 4 (`docs/KNOWLEDGE_ACQUISITION/README.md :: Phasing`) —
-continuous discovery — instantiated for YouTube per the owner directive of 2026-07-16 recorded in
-`docs/YOUTUBE_SOURCE_SYNC/README.md :: Decision record`. The specification directory
-`docs/YOUTUBE_SOURCE_SYNC/` is the source of truth; this issue is the live validation hub.
+No automatic cadence is claimed because the shipped runtime has no ordinary reusable cadence hook
+for this adapter. Scheduling, leases, multi-playlist product support, Liked Videos,
+subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, full-media storage, and generalized
+recovery remain deferred.
 
-## Scope
+## Active delivery set
 
-The capability outcome in `docs/YOUTUBE_SOURCE_SYNC/README.md :: Outcome` — not one PR. Children
-deliver bounded slices; this issue collects validation receipts and the final live-acceptance run.
+| Work | Issue / PR | Result |
+| --- | --- | --- |
+| Registry/settings, OAuth, Data API, acquisition queue | #3916–#3919 | Delivered reusable foundations |
+| OAuth safety floor | #3990 / PR #4030 | Delivered: token-first connection authority and transient revoke retry preservation |
+| One-Inbox manual sync | #3920 / PR #4014 | Final V1 slice: request-before-cursor, sanitized status, review-required candidate proof |
 
-## Source Anchors
+The former YSS-06..11 issues and #3993 are deferred traceability records, not active V1 children or
+pickup candidates. They require a fresh owner directive and bounded re-contract before work resumes.
 
+## Acceptance criteria
+
+- One account connects and selects one Inbox without exposing credentials.
+  Verify: merged #3990 OAuth safety tests plus
+  `tests/knowledge_acquisition/test_playlist_discovery.py::test_v1_selects_exactly_one_enabled_inbox`.
+- A manual sync turns new Inbox items with available material into review-required draft
+  candidates, never knowledge.
+  Verify: `test_new_inbox_item_enqueues_once_at_production_call_site` and
+  `test_inbox_sync_produces_review_required_candidate_never_knowledge` in
+  `tests/knowledge_acquisition/test_playlist_discovery.py`.
+- OAuth/API/network/persistence failures remain honest and secret-free.
+  Verify: merged #3990 status/disconnect tests plus
+  `test_failed_poll_never_reports_empty_success`, `test_enqueue_failure_blocks_cursor_prefix`, and
+  `test_registry_persistence_failures_are_sanitized`.
+- The minimal operator route exposes connection, last success, and latest sanitized error.
+  Verify: `test_v1_status_reports_connection_last_success_and_sanitized_error` and
+  `test_manual_inbox_sync_uses_production_poll_route`.
+
+## Safety and authority
+
+- OAuth credentials stay in the existing encrypted local token store and never enter repository,
+  vault, log, event, receipt, exception, or status output.
+- The token store is positive connection authority; the binding is configuration/status projection.
+- Every acquisition outcome stays `authority.requires_review: true`, `review_state: draft`, and
+  `triage_state: captured` until a separate human-governed promotion path acts.
+- Official Google OAuth and YouTube Data API boundaries only; no cookies or scraping.
+
+## Validation and closure
+
+Child delivery receipts accumulate on live #3915. After PR #4014 passes exact-head CI and two clean
+independent reviews, verification explicitly closes #3920, records its child receipt, validates the
+four parent criteria above against #3990 and #3920 evidence, and closes #3915 through
+`docs/development/PARENT_ISSUE_CLOSURE.md`. Deferred records stay untouched.
+
+## Source anchors
+
+- live GitHub parent #3915, owner directive 2026-07-21
 - `docs/YOUTUBE_SOURCE_SYNC/README.md :: Outcome`
-- `docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md` (all sections)
-- `docs/KNOWLEDGE_ACQUISITION/README.md :: Phasing` (Phase 4 row)
+- `docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Shipped V1 product boundary`
 - `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Discovery`
-
-## SBS Impact
-
-- Primary subsystem: EBF (acquisition-source discovery adapters; class 11 extension — authenticated read-only discovery surface)
-- Secondary subsystem(s): PDM (registry/queue/state tables via migrations), DRI (rebuildable sync state), OEF (health/receipts/counters), CAO/HKA/SIP/GOV unchanged (existing governed candidate writeback only)
-- Write class: mechanical durable (machine-side tables + governed candidate notes through the existing KA-05 seam)
-- Authority impact: none — candidates stay review-required; no promotion path touched
-- Persistence impact: new rebuildable-class tables (source registry, acquisition requests, sync state) via forward-only Alembic migrations
-- Derived/rebuildable impact: all sync state re-derivable from source + queue; raw/derived KA artifacts unchanged
-- Human knowledge impact: none directly; more review-required candidates enter triage at `captured`
-- Memory impact: none
-- Retrieval/context impact: none (indexing remains #2314's boundary)
-- Sync/deployment impact: watcher-hosted sub-tick (no new service); per-channel isolation via existing DB/vault separation
-- External boundary impact: adds OAuth (device/loopback) + YouTube Data API v3 + channel RSS to the declared egress posture; cookies remain banned
-- New or changed contract: `docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md` (new); `YOUTUBE_SOURCE_SPEC.md :: Discovery` revised by owner directive
-- Owner-doc impact: will-update-in-children (KA README/spec State lines per slice; ARCHITECTURE/STATUS only after live acceptance)
-- Transition debt impact: no effect
-- Fitness rule impact: strengthens (new enforcement tests at production call sites for lease, gates, and posture markers)
-- Boundary risk: OAuth secret handling and provider egress — mitigated by INV-YSS-4/5 and the secret-provisioning boundary
-
-## Constraints
-
-- Everything in `docs/YOUTUBE_SOURCE_SYNC/README.md :: Cross-Task Invariants / Interaction Safety` (INV-YSS-1..9).
-- KAP ends at `candidate`; no auto-promotion; posture markers unconditional.
-- No Heimdal observation-log writes; no new event substrate; no cookies for any YouTube surface.
-- No new runtime dependencies; no personal identifiers in code/fixtures/docs.
-
-## Acceptance Criteria
-
-The capability acceptance criteria in `docs/YOUTUBE_SOURCE_SYNC/README.md :: Capability
-acceptance criteria` (each with its Verify target), plus the completed
-`OPERATOR_RUNBOOK.md :: Live acceptance` checklist recorded as a receipt on this issue.
-
-## Implementation Tasks
-
-`docs/YOUTUBE_SOURCE_SYNC/README.md :: Implementation tasks and execution order` — eleven bounded
-task files, YSS-01..YSS-11, filed as child issues in dependency order.
-
-## Verification Path
-
-Per-child test suites named in each task file; full `not pg` suite on hot-path slices; `ruff` +
-`mypy` per the validation baseline; child PRs post receipts here.
-
-## Validation / Acceptance Path
-
-Child receipts accumulate here → live acceptance on the operator runtime host (test channel)
-(`OPERATOR_RUNBOOK.md :: Live acceptance`) → owner-doc promotion (ARCHITECTURE/STATUS) only after
-that run passes. Items not live-verifiable while the runtime host is offline remain unchecked here and
-block only the *shipped-operator-verified* claim, not child merges.
-
-## Out of Scope
-
-Full-media archival engine (separate `agent:needs-human` issue — ToS/rights review), Watch
-Later/Watch History, other source instances, embedding/indexing (#2314).
-
-## Suggested Validation
-
-- `pytest -q tests/knowledge_acquisition -m "not pg"` plus each child's named suites
-- `python -m app.cli youtube-sync doctor --json` on the test channel after promotion
-
-## Source Docs
-
-- `docs/YOUTUBE_SOURCE_SYNC/` (this directory)
-- `docs/KNOWLEDGE_ACQUISITION/README.md`, `YOUTUBE_SOURCE_SPEC.md`, `SOURCE_PLUGIN_CONTRACT.md`, `REFINEMENT_PIPELINE_CONTRACT.md`

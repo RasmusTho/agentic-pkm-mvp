@@ -4,7 +4,7 @@ Authority: Owns the YouTube source-sync capability design — account binding, s
 Owner: Architecture / knowledge acquisition
 Temporal class: strategic
 Review cadence: event-driven (task merge, YouTube API surface change)
-Last reviewed: 2026-07-16
+Last reviewed: 2026-07-21
 
 # YouTube Source Sync
 

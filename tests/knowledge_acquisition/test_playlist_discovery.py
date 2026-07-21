@@ -14,6 +14,7 @@ from app import objects as object_store_module
 from app.agent_memory import materialization
 from app.knowledge_acquisition import acquisition_requests as request_module
 from app.knowledge_acquisition import playlist_discovery as discovery_module
+from app.knowledge_acquisition import source_registry as registry_module
 from app.knowledge_acquisition import youtube_plugin as plugin
 from app.knowledge_acquisition.acquisition_requests import (
     YOUTUBE_SOURCE_DISCOVERED_TOPIC,
@@ -367,7 +368,7 @@ def test_failed_poll_never_reports_empty_success(
 
 
 def test_v1_status_reports_connection_last_success_and_sanitized_error(
-    outbox: FakeOutboxConn,
+    outbox: FakeOutboxConn, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     del outbox
     account = str(uuid.uuid4())
@@ -394,13 +395,16 @@ def test_v1_status_reports_connection_last_success_and_sanitized_error(
     assert connected_status["last_success_at"] is not None
     assert connected_status["latest_error"] is None
 
+    changed_success_at = connected_status["last_success_at"]
+    monkeypatch.setattr(registry_module, "_now_iso", lambda: "2099-01-02T03:04:05+00:00")
     api.result = NotModified(etag='"etag-1"')
     no_change = service.sync_now()
     no_change_status = service.status()
     assert no_change["status"] == "connected"
     assert no_change["not_modified"] is True
     assert no_change_status["status"] == "connected"
-    assert no_change_status["last_success_at"] is not None
+    assert no_change_status["last_success_at"] == "2099-01-02T03:04:05+00:00"
+    assert no_change_status["last_success_at"] != changed_success_at
     assert no_change_status["latest_error"] is None
 
 
