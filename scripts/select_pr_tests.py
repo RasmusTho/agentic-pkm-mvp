@@ -566,7 +566,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "ops_deploy",
-        ("scripts/", "ops/", "config/deploy/", "tests/scripts/", "tests/deploy/"),
+        (
+            "scripts/",
+            "ops/",
+            "config/deploy/",
+            "tests/scripts/",
+            "tests/deploy/",
+            "tests/helpers/runtime_start_harness.py",
+            "tests/runtime/test_start_full_system_version_marker.py",
+        ),
         ("tests/ops", "tests/scripts", "tests/deploy"),
     ),
     (
