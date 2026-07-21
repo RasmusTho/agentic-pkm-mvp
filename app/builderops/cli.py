@@ -46,7 +46,12 @@ from app.builderops.ckm.semantic import (
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.ckm.query_service import CkmQueryService
-from app.builderops.config import BuilderOpsPaths, load_paths
+from app.builderops.config import BuilderOpsPaths, default_state_dir, load_paths
+from app.builderops.cutover_evidence import (
+    CutoverEvidenceError,
+    build_receipt as build_cutover_receipt,
+    write_receipt as write_cutover_receipt,
+)
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
     build_evidence_bridge_report,
@@ -296,6 +301,41 @@ def _effective_paths(ctx: click.Context) -> BuilderOpsPaths:
         return load_paths(db_path_override=obj.get("db_path"))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+@builderops.group("cutover-evidence", help="Produce fail-closed host-store cutover evidence.")
+def cutover_evidence() -> None:
+    """Evidence production only; it does not migrate data or stop writers."""
+
+
+@cutover_evidence.command("generate", help="Inventory declared roots and install a bound receipt.")
+@click.option("--participants-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--reconciliation-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--actor", required=True, help="Operator identity recorded in the receipt.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def cutover_evidence_generate(
+    ctx: click.Context, participants_file: Path, reconciliation_file: Path,
+    actor: str, as_json: bool,
+) -> None:
+    """Install evidence only after an existing non-empty target is verified."""
+    if (ctx.obj or {}).get("db_path") is not None:
+        raise click.ClickException(
+            "cutover-evidence generate only supports the implicit host-stable store; "
+            "--db-path is not allowed"
+        )
+    try:
+        participants = _load_json_value_file(participants_file, field="participants-file")
+        reconciliation_payload = _load_json_value_file(reconciliation_file, field="reconciliation-file")
+        reconciliation = reconciliation_payload.get("stores") if isinstance(reconciliation_payload, dict) else reconciliation_payload
+        receipt = build_cutover_receipt(
+            state_dir=default_state_dir(), participants=participants, reconciliation=reconciliation,
+            actor=actor,
+        )
+        path = write_cutover_receipt(default_state_dir(), receipt)
+    except (CutoverEvidenceError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit({"receipt_path": str(path), "receipt": receipt}, as_json)
 
 
 def _model_inquiry_service(ctx: click.Context) -> ModelInquiryService:

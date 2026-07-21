@@ -64,6 +64,7 @@ VAULT_STORE_ALLOWLIST: frozenset[str] = frozenset(
         "app/builderops/cli.py",  # legacy Vault CLI (this session's own coordination path)
         "app/builderops/boundary.py",  # local Vault HTTP/tool boundary (#1503), Product-adjacent
         "app/builderops/completeness_report.py",  # read-only Vault inventory report
+        "app/builderops/cutover_evidence.py",  # #3686 audited one-time receipt producer/validator
         "app/builderops/ckm/store.py",  # CKM receipt store built on the Vault store
         "app/builderops/ckm/query_service.py",  # CKM projection-only read path: I-MA11 requires direct SQLite mode=ro
     }

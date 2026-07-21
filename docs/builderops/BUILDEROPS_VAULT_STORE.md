@@ -85,8 +85,9 @@ Override mechanisms:
 - `BUILDEROPS_STATE_DIR` sets the BuilderOps state directory. The default database name remains
   `builderops.sqlite3`.
 - `BUILDEROPS_DB_PATH` sets the exact SQLite database path.
-- CLI commands also accept `--db-path` for explicit one-command override, which is the preferred
-  test path.
+- CLI commands generally accept `--db-path` for an explicit one-command override, which is the
+  preferred test path. The `cutover-evidence generate` producer is the exception: it rejects this
+  override because it can produce evidence only for the implicit host-stable store.
 - API/tool callers may set `builderops_db_path` through tool settings or `BUILDEROPS_DB_PATH`
   through the environment; see `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`.
 
@@ -96,7 +97,29 @@ Existing legacy stores under `<checkout>/runtime/builderops/` are not migrated, 
 silently treated as the consolidated store by this code change. Absence of a legacy store in the
 current repository is not evidence that other participating repositories have no legacy state.
 With neither store override set, path loading therefore fails before opening or initializing the
-host-stable database unless the operator has installed this host-level acknowledgement:
+host-stable database unless the operator has installed the supported producer-generated receipt.
+The receipt is created (without running live cutover) with:
+
+```text
+python -m app.builderops builderops cutover-evidence generate \
+  --participants-file participants.json --reconciliation-file reconciliation.json \
+  --actor <operator> --json
+```
+
+The ordered participant/repository/root list is the explicit inventory boundary. The producer
+recursively discovers every legacy store beneath those roots, binds its identity and disposition,
+the actual host and numeric user, one reconciliation epoch, and an already-existing non-empty target.
+Because this producer governs the implicit host-stable store, the group-level CLI `--db-path`
+override is rejected before inspection or mutation.
+The producer also applies the shared vault-confinement guard to the implicit target path before
+legacy-store inventory, target inspection, marker stamping, or receipt creation. A target beneath
+`BUILDEROPS_VAULT_ROOT` therefore fails without mutating the database or receipt location.
+Implicit path loading applies that same guard before reading the receipt or opening the target, so
+a previously valid target later confined beneath the vault is rejected without inspection.
+The validator recomputes those bindings before SQLite initialization; copied, stale, incomplete,
+post-epoch-mutated, or empty-target receipts fail closed.
+The payload schema is `builderops.host-store-cutover.v2`; the `host-store-cutover-v1.json`
+filename is intentionally retained as the compatibility location for the prior marker.
 
 ```text
 ~/.local/state/builderops/host-store-cutover-v1.json
@@ -104,39 +127,46 @@ host-stable database unless the operator has installed this host-level acknowled
 
 ```json
 {
-  "schema_version": "builderops.host-store-cutover.v1",
+  "schema_version": "builderops.host-store-cutover.v2",
   "scope": "same-user-same-host",
   "host_id": "actual local hostname",
   "user_id": "actual local numeric uid",
-  "legacy_stores_reconciled": true,
-  "participating_repos": ["owner/repo-a", "owner/repo-b"],
-  "participating_roots": ["/absolute/repo-a", "/absolute/repo-b"],
-  "inventory_epoch": "7afaf9af-b94f-4b5e-8242-c3cb45fc70fb",
+  "participants": [{"repository": "owner/repo-a", "root": "/absolute/repo-a"}],
+  "reconciliation_epoch": "7afaf9af-b94f-4b5e-8242-c3cb45fc70fb",
   "actor": "operator identity",
-  "acknowledged_at": "2026-07-15T00:00:00Z"
+  "reconciled_at": "2026-07-15T00:00:00Z",
+  "legacy_store_inventory": [],
+  "reconciliation": [],
+  "target_store": {"path": "/absolute/state/builderops.sqlite3", "record_count": 1}
 }
 ```
 
-The operator creates this owner-only `0600`, non-symlink marker only after stopping BuilderOps writers, inventorying
-every participating repository on the host, and reconciling or explicitly retaining its legacy
-stores. The marker is bound to the actual hostname and numeric UID. `participating_repos` names
-the bounded logical inventory; `participating_roots` lists the same number of unique, resolved,
-absolute local roots in matching inventory order, and the current working directory must equal one
-of those exact roots. Every listed root is recursively inventoried for nested
-`runtime/builderops/builderops.sqlite3` stores without following symlinks, so a broad secondary
-root cannot hide a newer nested legacy store. The UUID
-`inventory_epoch` and timezone-aware timestamp identify the
-reconciliation pass. A future timestamp, a legacy DB written after that pass, a copied host/user
-identity, an unlisted current root, wrong ownership/mode, or a missing/malformed field fails before
-the consolidated DB is opened. Error text remains privacy-safe; host paths and contents are not
-printed.
+After the operator has stopped BuilderOps writers and reconciled every discovered legacy store, the
+producer recursively inventories the ordered `participants` roots without following symlinks,
+verifies the supplied reconciliation report against that inventory and the existing non-empty
+target, stamps the target, and creates the owner-only `0600`, non-symlink receipt. A report path
+outside the discovered inventory is rejected before its records are opened. Each participant
+contains its repository identity and one unique, resolved absolute root. Receipt validation accepts
+a current working directory equal to or descended from exactly one declared root; an unrelated or
+ambiguously nested participant location fails closed.
 
-`BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, and CLI `--db-path` bypass the acknowledgement gate.
-Environment overrides must be non-blank after trimming; blank values are treated as absent and
-therefore follow the acknowledged implicit host-store path.
-They remain the operator path for keeping the current store pinned before cutover and selecting the
-reconciled store during cutover. This PR does not create the acknowledgement, inventory repos,
-reconcile records, migrate data, stop writers, or perform the live cutover.
+The deterministic `reconciliation_epoch` is derived from the actual host and numeric user, ordered
+participants, complete legacy-store inventory, reconciliation report, and target identity. The
+receipt binds the inventory and report with `inventory_sha256` and `reconciliation_sha256`, binds
+the target path and identity, and carries a whole-receipt digest. The target marker binds that same
+identity and epoch to an evidence digest of the receipt. Validation recomputes these bindings and
+the inventory before the implicit database can be initialized; a future cutoff, post-cutoff legacy
+write, copied host/user identity, incomplete report, changed target marker, invalid ownership or
+mode, or malformed field fails closed. Error text remains privacy-safe; host paths and contents are
+not printed.
+
+Non-blank `BUILDEROPS_DB_PATH` and `BUILDEROPS_STATE_DIR` values bypass the receipt gate during
+normal store selection, as does CLI `--db-path` for commands that support it. Blank environment
+values are treated as absent and therefore follow the receipt-gated implicit host-store path. The
+`cutover-evidence generate` command rejects CLI `--db-path` before inspection or mutation. These
+overrides remain the operator path for pinning the current store before cutover and selecting the
+reconciled store during cutover. The producer is evidence-only: it does not stop writers, migrate
+or reconcile records, or perform the live cutover.
 
 Default home-directory resolution is lazy. An absolute explicit DB/state/CLI override therefore
 continues to work in hostless automation where no user home can be resolved.

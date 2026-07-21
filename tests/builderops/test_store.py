@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
 import app.builderops.config as builderops_config
 from app.builderops.models import BuilderOpsLeaseError
 from app.builderops.store import SqliteBuilderOpsStore
+from app.builderops.cutover_evidence import build_receipt, write_receipt
 
 
 def test_default_store_leases_coordinate_across_cwd(
@@ -27,25 +25,19 @@ def test_default_store_leases_coordinate_across_cwd(
     first_cwd.mkdir()
     second_cwd.mkdir()
     state_dir.mkdir(parents=True)
-    ack_path = builderops_config.host_cutover_ack_path(state_dir)
-    ack_path.write_text(
-        json.dumps(
-            {
-                "schema_version": builderops_config.CUTOVER_ACK_SCHEMA,
-                "scope": "same-user-same-host",
-                "host_id": builderops_config.current_host_id(),
-                "user_id": builderops_config.current_user_id(),
-                "legacy_stores_reconciled": True,
-                "participating_repos": ["repo-a", "repo-b"],
-                "participating_roots": [str(first_cwd), str(second_cwd)],
-                "inventory_epoch": str(uuid4()),
-                "actor": "operator-test",
-                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
-            }
-        ),
-        encoding="utf-8",
+    seeded = SqliteBuilderOpsStore(state_dir / "builderops.sqlite3")
+    seeded.initialize()
+    seeded.create_agent_worklog(
+        id="awl_seed", summary="seed", body="seed", task_context={},
+        source_refs=[{"ref_type": "github_issue", "ref": "#3686"}],
+        created_by={"actor_type": "agent", "id": "seed"},
     )
-    ack_path.chmod(0o600)
+    receipt = build_receipt(
+        state_dir=state_dir,
+        participants=[{"repository": "repo-a", "root": str(first_cwd)}, {"repository": "repo-b", "root": str(second_cwd)}],
+        reconciliation=[], actor="operator-test",
+    )
+    write_receipt(state_dir, receipt)
 
     monkeypatch.chdir(first_cwd)
     first_store = SqliteBuilderOpsStore(builderops_config.load_paths({}).db_path)
