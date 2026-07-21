@@ -131,7 +131,7 @@ class CkmQueryService:
         read_set = {"capability": tuple(item.public_id for item in resources)}
         completeness = CompletenessManifest((ObjectClassCompleteness("capability", included=len(resources), filtered=(total - len(resources)) if public_id else 0),), complete=True)
         watermarks = {str(row["source"]): str(row["value"]) for row in conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source")}
-        provenance = tuple({"source_ref": item.provenance[0]["source_ref"]} for item in resources) or ({"source_ref": "ckm:empty"},)
+        provenance = tuple({"source_ref": item.provenance[0]["source_ref"]} for item in resources)
         # Taxonomy identity belongs to the state, not to one query subset.
         # In particular, exact lookup and complete capture at the same revision
         # must bind the same taxonomy digest.

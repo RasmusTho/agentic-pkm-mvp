@@ -181,6 +181,12 @@ def test_missing_candidate_completeness_and_access_semantics(tmp_path: Path) -> 
     assert resources[confirmed.public_id]["values"]["assessment"]["state"] == "unassessed"
     assert resources[confirmed.public_id]["values"]["boundary_ref"]["state"] == "missing"
     assert payload["snapshot"]["completeness"]["object_classes"][0]["included"] == 2
+    empty = CkmStore(tmp_path / "empty.sqlite")
+    empty.ensure_schema()
+    empty_payload = CkmQueryService(empty.db_path).list_capabilities().to_dict()
+    assert empty_payload["resources"] == []
+    assert empty_payload["snapshot"]["completeness"]["complete"] is True
+    assert empty_payload["snapshot"]["provenance"] == []
 
 
 def test_cli_json_uses_transport_neutral_service(tmp_path: Path, monkeypatch) -> None:
@@ -221,7 +227,11 @@ def test_cli_json_uses_transport_neutral_service(tmp_path: Path, monkeypatch) ->
 def test_same_snapshot_query_and_versions_are_deterministic(tmp_path: Path) -> None:
     store, _, _ = _store(tmp_path)
     service = CkmQueryService(store.db_path)
-    assert json.dumps(service.list_capabilities().to_dict(), sort_keys=True) == json.dumps(service.list_capabilities().to_dict(), sort_keys=True)
+    runner = CliRunner()
+    first = runner.invoke(builderops, ["--db-path", str(store.db_path), "ckm", "query"])
+    second = runner.invoke(builderops, ["--db-path", str(store.db_path), "ckm", "query"])
+    assert first.exit_code == second.exit_code == 0
+    assert first.output == second.output
     before = service.list_capabilities().to_dict()["snapshot"]["taxonomy_digest"]
     store.upsert_capability(identity_key="seed:topology", name="topology", definition="x", lifecycle="confirmed", existence_provenance="test")
     assert service.list_capabilities().to_dict()["snapshot"]["taxonomy_digest"] != before
