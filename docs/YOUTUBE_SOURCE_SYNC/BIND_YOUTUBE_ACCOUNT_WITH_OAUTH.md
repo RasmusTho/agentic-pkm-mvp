@@ -41,8 +41,10 @@ touch the repo, vault, settings values, logs, events, or receipts.
    boundary); their *values* are never persisted or printed.
 4. **Degradation + lifecycle:** revoked/expired/invalid_grant map to `auth_revoked`/`auth_expired`
    reason codes on the binding and dependent sources (INV-YSS-4). `disconnect()` revokes at
-   `oauth2.googleapis.com/revoke`, deletes the token record, disables dependent sources with
-   `auth_disconnected` — and deletes no acquired artifacts. `reconnect()` re-runs consent onto the
+   `oauth2.googleapis.com/revoke`; a transport/408/429/5xx failure returns a sanitized retryable
+   `api_unavailable` degraded result and retains encrypted token authority without changing sources
+   or acquired artifacts. Success or permanent provider rejection deletes the token record and disables
+   dependent sources with `auth_disconnected`. `reconnect()` re-runs consent onto the
    same binding when the provider channel id matches.
 5. Redaction: all exception/log/serialization paths sanitize provider responses (status + error
    class only); no token, code, or client secret in any emitted string.
@@ -84,6 +86,9 @@ cursors and mass-noop the queue).
 - [ ] Disconnect revokes, removes the token record, disables dependent sources with
       `auth_disconnected`, and leaves acquired artifacts/raw records untouched.
       Verify: `tests/knowledge_acquisition/test_youtube_oauth.py::test_disconnect_revokes_without_deleting_artifacts`
+- [ ] Transient provider revoke failure retains encrypted retry authority and leaves source
+      cursors and acquired artifacts untouched; permanent provider rejection keeps local teardown.
+      Verify: `tests/knowledge_acquisition/test_youtube_oauth.py::test_disconnect_preserves_token_when_provider_revoke_fails` and `tests/knowledge_acquisition/test_youtube_oauth.py::test_disconnect_permanent_provider_error_keeps_existing_local_teardown`
 - [ ] Scope requested is exactly `youtube.readonly` (enforcement asserted at the request-building
       production call site).
       Verify: `tests/knowledge_acquisition/test_youtube_oauth.py::test_minimal_scope_requested_at_call_site`

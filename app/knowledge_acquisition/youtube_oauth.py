@@ -27,8 +27,9 @@ the secret-bearing dataclasses, provider-error sanitization (HTTP status + the
 Auth degradation (INV-YSS-4): a revoked/expired grant or a missing token-store
 key degrades the binding and its dependent authenticated sources with a legible
 reason code, mutates no source cursor, and never records an auth failure as an
-empty-success. Disconnect revokes at the provider, deletes the token record,
-and disables dependent sources -- never an acquired artifact.
+empty-success. Disconnect retains encrypted retry authority on transient
+provider failure; after success or permanent rejection it deletes the token
+record and disables dependent sources -- never an acquired artifact.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ import logging
 import os
 import secrets
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -53,7 +55,6 @@ from app.knowledge_acquisition.youtube_token_store import (
     StoredToken,
     TokenStoreKeyMissingError,
     YouTubeTokenStore,
-    resolve_token_store_key,
 )
 
 _log = logging.getLogger(__name__)
@@ -120,6 +121,12 @@ class OAuthProviderError(RuntimeError):
         self.status = status
         self.error_code = error_code
         super().__init__(f"OAuth provider error: HTTP {status} ({error_code or 'unknown'})")
+
+
+def _provider_error_is_transient(error: OAuthProviderError) -> bool:
+    """Whether a revoke failure leaves the provider outcome retryable."""
+
+    return error.status == 0 or error.status in {408, 429} or error.status >= 500
 
 
 class DeviceAuthorizationPending(RuntimeError):
@@ -670,7 +677,8 @@ class YouTubeAccountBinder:
             # carry one.
             raise OAuthProviderError(status=200, error_code="missing_refresh_token")
         identity = self._identity(bundle.access_token)
-        binding = self._resolve_binding(identity, reconnect_binding_id)
+        binding = self._resolve_existing_binding(identity, reconnect_binding_id)
+        binding_id = binding.account_binding_id if binding is not None else str(uuid.uuid4())
         token = StoredToken(
             refresh_token=bundle.refresh_token,
             access_token=bundle.access_token,
@@ -679,7 +687,17 @@ class YouTubeAccountBinder:
             obtained_at=_now_iso(),
             provider_channel_id=identity.channel_id,
         )
-        self._store.put(binding.account_binding_id, token)
+        # The encrypted token is positive connection authority.  Persist it
+        # before creating a new binding row so a failed store write cannot
+        # leave a connected projection with no credential behind it (#3990).
+        self._store.put(binding_id, token)
+        if binding is None:
+            binding = self._bindings.create(
+                provider_channel_id=identity.channel_id,
+                display_label=identity.channel_title,
+                scopes=[SCOPE],
+                account_binding_id=binding_id,
+            )
         if binding.state != "connected" or binding.reason_code is not None:
             binding = self._bindings.set_state(
                 binding.account_binding_id, state="connected", reason_code=None
@@ -695,7 +713,9 @@ class YouTubeAccountBinder:
             }
         )
 
-    def _resolve_binding(self, identity: ChannelIdentity, reconnect_binding_id: str | None) -> AccountBinding:
+    def _resolve_existing_binding(
+        self, identity: ChannelIdentity, reconnect_binding_id: str | None
+    ) -> AccountBinding | None:
         if reconnect_binding_id is not None:
             target = self._bindings.get(reconnect_binding_id)
             if target is None:
@@ -708,11 +728,7 @@ class YouTubeAccountBinder:
         existing = self._bindings.get_by_channel_id(identity.channel_id)
         if existing is not None:
             return existing
-        return self._bindings.create(
-            provider_channel_id=identity.channel_id,
-            display_label=identity.channel_title,
-            scopes=[SCOPE],
-        )
+        return None
 
     # -- status ---------------------------------------------------------------
 
@@ -729,10 +745,15 @@ class YouTubeAccountBinder:
                 {"status": "absent", "reason_code": "auth_missing", "scopes": [], "token_store": "encrypted"}
             )
         state, reason_code = binding.state, binding.reason_code
-        if self._store.has_record(binding_id):
+        if state == "connected":
             try:
-                resolve_token_store_key()
-            except TokenStoreKeyMissingError:
+                if not self._store.has_record(binding_id):
+                    state, reason_code = "degraded", "auth_missing"
+                else:
+                    token = self._store.get(binding_id)
+                    if token is None:
+                        state, reason_code = "degraded", "auth_missing"
+            except Exception:  # fail closed without exposing store/decryption detail
                 state, reason_code = "degraded", "auth_key_missing"
         return redact(
             {
@@ -746,8 +767,11 @@ class YouTubeAccountBinder:
     # -- disconnect -----------------------------------------------------------
 
     def disconnect(self, binding_id: str) -> dict[str, Any]:
-        """Revoke at the provider, delete the token record, disable dependent
-        sources with ``auth_disconnected`` -- and delete no acquired artifacts.
+        """Revoke, retaining retry authority on transient provider failure.
+
+        Success or permanent rejection deletes the token record and disables
+        dependent sources with ``auth_disconnected``. Acquired artifacts are
+        never deleted.
         """
         binding = self._bindings.get(binding_id)
         if binding is None:
@@ -764,8 +788,19 @@ class YouTubeAccountBinder:
                 try:
                     self._client.revoke(revocation_token)
                     revoked = True
-                except OAuthProviderError:
-                    revoked = False  # provider revoke failed; local disconnect still proceeds
+                except OAuthProviderError as exc:
+                    # The provider outcome is indeterminate.  Keep the local
+                    # encrypted credential as retry authority and leave all
+                    # source/candidate state untouched; a later ordinary
+                    # disconnect or reconnect may retry safely.
+                    if _provider_error_is_transient(exc):
+                        return redact(
+                            {
+                                "status": "degraded",
+                                "reason_code": "api_unavailable",
+                                "retryable": True,
+                            }
+                        )
 
         self._store.delete(binding_id)
         self._bindings.set_state(binding_id, state="degraded", reason_code="auth_disconnected")
