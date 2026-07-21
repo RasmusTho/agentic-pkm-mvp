@@ -1,4 +1,4 @@
-State: Normative shared contract for the YouTube Source Sync capability (target-state until child issues deliver it; each section names its consuming tasks).
+State: Partially implemented normative contract. `Shipped V1 product boundary` is current-state authority; broader sections remain target state until their deferred child issues are freshly re-contracted and delivered.
 Doc role: Capability contract
 Authority: Owns the source-registry shape, AcquisitionRequest contract, cursor discipline, sync event topics/payloads, settings keys and scopes, reason-code taxonomy, quota accounting, and the media-retention policy for this capability. Subordinate to `docs/EVENTS.md` (envelope/idempotency), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md` (settings scopes), and `docs/SECURITY.md` (secret baseline).
 
@@ -6,6 +6,20 @@ Authority: Owns the source-registry shape, AcquisitionRequest contract, cursor d
 
 Task files in this directory reference these sections instead of restating them. Field names are
 normative; storage column names may differ only where a store port requires it, never in meaning.
+
+## Shipped V1 product boundary (owner directive 2026-07-21)
+
+The current product route is deliberately smaller than this directory's future-facing data
+shapes: one OAuth account, exactly one enabled `inbox_playlist`, one explicit manual sync call,
+and minimal connected/degraded status with `last_success_at` and one sanitized latest error.
+The registry may retain already-delivered generic row vocabulary as internal/future-compatible
+shape, but V1 configuration and polling expose no owned/public/unlisted/Liked multi-playlist,
+subscription, RSS, Takeout, backfill, filter, analytics, broad CLI/UI, or full-media outcome.
+There is no V1 scheduler or lease protocol. Every acquired result remains a review-required draft
+candidate and is never automatically promoted into knowledge.
+V1 uses the existing acquisition lineage events; it does not introduce per-run sync receipt
+events or their cursor/outbox atomicity machinery. The broader event table below remains target
+state for deferred operational work.
 
 ## Source registry (YSS-01; read by YSS-03..11)
 
@@ -62,6 +76,9 @@ Defaults: playlist-shaped sources (`inbox_playlist`, `owned_playlist`, `liked_vi
 stamped into requests; a policy change bumps it, which changes request identity for *future*
 discoveries only (no retroactive re-acquisition without explicit backfill).
 
+Only `acquire_transcript` is reachable through the shipped V1 Inbox operator route. The other
+stored modes remain future-facing registry vocabulary and do not expand the V1 product contract.
+
 ## AcquisitionRequest (YSS-04; produced by YSS-05/07/08, drained by YSS-06)
 
 Source-independent durable work item. **Identity:** `request_id = uuid5(namespace,
@@ -105,12 +122,12 @@ State rules:
 Cursors are opaque per-adapter JSON in the registry row, durable in the channel DB, and advanced
 only under INV-YSS-1 (*request-before-cursor*):
 
-- **API playlist adapter (YSS-05):** cursor records the frontier of playlist items already
-  disposed (durable request or traced rejection). A poll pages `playlistItems.list`
-  (`maxResults=50`, `If-None-Match` ETag) newest-first until it reaches only-known items or the
-  bounded page cap; unknown items get requests *before* the cursor frontier moves. An ETag `304`
-  is a successful no-change poll (updates `last_success_at`, nothing else). A poll that fails
-  (auth/API/network) mutates neither cursor nor known-set and records `last_error` (INV-YSS-4).
+- **V1 Inbox adapter (YSS-05):** cursor records playlist items already covered by durable
+  requests. The existing client returns its bounded newest-first `playlistItems.list` result;
+  unknown items get requests *before* the cursor moves. An ETag `304` is a successful no-change
+  poll (updates `last_success_at`, nothing else). A poll that fails (auth/API/network/persistence)
+  mutates neither cursor nor known-set, records a sanitized `last_error`, and emits no false
+  completion (INV-YSS-4). Historical enumeration/backfill remains deferred.
 - **RSS channel adapter (YSS-07):** cursor is newest-published-seen per feed plus recent entry ids;
   the ~15-entry RSS window bounds incremental reach — anything past the window is backfill's job.
 - **Backfill (YSS-08):** does not use the incremental cursor; it enumerates via yt-dlp
@@ -118,6 +135,9 @@ only under INV-YSS-1 (*request-before-cursor*):
   requests/dispositions, and enqueues only the gap. It never rewinds an incremental cursor.
 
 ## Event topics (YSS-04/05/06; schemas registered per KERNEL-08)
+
+Only the source-discovery and acquisition topics in this table are shipped for V1. The per-run
+`youtube.sync.*` rows remain target state for the deferred operational capability.
 
 All on the canonical DB outbox via `write_outbox_event` with `derive_idempotency_key` — never the
 Heimdal observation log, never embedding payloads. Versioned schemas under
@@ -149,7 +169,7 @@ substrate (the `settings_receipts`/`promotion_receipts` pattern).
 `source_unsupported` (Watch Later / Watch History), `writeguard_blocked`, `pipeline_dead_letter`,
 `policy_unsupported` (queued acquisition mode/depth has no delivered production path),
 `paused_global`, `paused_source`, `runner_offline` (staleness derived, not self-reported),
-`media_policy_disabled`. UI copy maps these through the Companion UI's single degraded-copy module;
+`media_policy_disabled`, `inbox_missing` (the V1 operator route has no enabled Inbox). UI copy maps these through the Companion UI's single degraded-copy module;
 unknown codes fail closed to the generic degraded message.
 
 ## Settings model (YSS-01; surfaces in YSS-10/11)
@@ -247,9 +267,9 @@ make misconfiguration visible, not to micro-optimize.
 ## Retry and backoff (YSS-04/06)
 
 Exponential backoff with jitter per failing unit (source poll or request attempt): base 60 s,
-factor 4, cap 6 h, reason-coded. `quota_exhausted` backs off to the next quota window. Manual
-"Sync now" performs one immediate safe attempt regardless of backoff (lease-guarded, never
-parallel to a running poll of the same source) — it resets no counters on failure. Attempts
+factor 4, cap 6 h, reason-coded. `quota_exhausted` backs off to the next quota window. The V1
+`sync_now` route performs one immediate synchronous attempt and resets no counters on
+failure. Lease-guarding against a future scheduled runner remains deferred to YSS-06. Attempts
 exhaust into `dead_lettered` only for per-item terminal outcomes (default max 8 attempts);
 source-level degradation never dead-letters items that were never attempted.
 

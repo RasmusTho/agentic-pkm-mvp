@@ -24,6 +24,7 @@ from tests.knowledge_acquisition._source_registry_contract import (
     assert_duplicate_binding_refused,
     assert_invalid_interval_and_policy_fail_loud,
     assert_memory_json_isolation,
+    assert_inbox_poll_outcomes,
     assert_provenance_is_strict_portable_json,
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
@@ -87,3 +88,7 @@ def test_memory_json_isolation_matches_postgres_contract() -> None:
 
 def test_provenance_is_strict_portable_json_memory() -> None:
     assert_provenance_is_strict_portable_json(_make_registry)
+
+
+def test_inbox_poll_outcomes_memory() -> None:
+    assert_inbox_poll_outcomes(_make_registry)

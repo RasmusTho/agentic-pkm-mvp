@@ -52,11 +52,11 @@ memory backend must never be a lesser contract than Postgres):
   ``collection_kind``, ``collection_ref``, ``account_binding_id``), cursor,
   and policy are untouched.
 
-Cursor discipline, request-queue draining, and scheduling are explicitly OUT
-OF SCOPE for this slice (YSS-04/05/06/07) -- this module ships the row shape
-(``cursor``, ``last_attempt_at``, ``last_success_at``, ``last_error`` all
-present and correctly defaulted) without exposing mutation methods for them;
-later slices add those call sites against this same table.
+YSS-05 adds narrow poll-outcome methods on this same row:
+successful discovery publishes cursor + success timestamps atomically, while
+degradation updates attempt/error fields without touching cursor state. Queue
+draining, scheduling, and leases remain explicitly out of scope here
+(YSS-04/YSS-06).
 """
 
 from __future__ import annotations
@@ -583,6 +583,48 @@ class _MemorySourceRegistryBackend:
             self._rows[binding_id] = updated
             return _copy_binding(updated)
 
+    def record_poll_success(
+        self,
+        binding_id: str,
+        *,
+        cursor: dict[str, Any],
+    ) -> SourceBinding:
+        with self._lock:
+            row = self._rows.get(binding_id)
+            if row is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            now = _now_iso()
+            updated = replace(
+                row,
+                cursor=deepcopy(cursor),
+                last_attempt_at=now,
+                last_success_at=now,
+                last_error=None,
+                updated_at=now,
+            )
+            self._rows[binding_id] = updated
+            return _copy_binding(updated)
+
+    def record_poll_failure(
+        self,
+        binding_id: str,
+        *,
+        last_error: dict[str, Any],
+    ) -> SourceBinding:
+        with self._lock:
+            row = self._rows.get(binding_id)
+            if row is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            now = _now_iso()
+            updated = replace(
+                row,
+                last_attempt_at=now,
+                last_error=deepcopy(last_error),
+                updated_at=now,
+            )
+            self._rows[binding_id] = updated
+            return _copy_binding(updated)
+
     def clear(self) -> None:
         with self._lock:
             self._rows.clear()
@@ -999,6 +1041,66 @@ class _PgSourceRegistryBackend:
         assert result is not None  # just wrote it
         return result
 
+    def record_poll_success(
+        self,
+        binding_id: str,
+        *,
+        cursor: dict[str, Any],
+    ) -> SourceBinding:
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            now = _now_iso()
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {_TABLE}
+                SET cursor = %s::jsonb,
+                    last_attempt_at = %s::timestamptz,
+                    last_success_at = %s::timestamptz,
+                    last_error = NULL,
+                    updated_at = %s::timestamptz
+                WHERE binding_id = %s
+                RETURNING {_COLUMNS_SQL}
+                """,
+                (json.dumps(cursor), now, now, now, binding_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            return _row_to_binding(row)
+        finally:
+            conn.close()
+
+    def record_poll_failure(
+        self,
+        binding_id: str,
+        *,
+        last_error: dict[str, Any],
+    ) -> SourceBinding:
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            now = _now_iso()
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {_TABLE}
+                SET last_attempt_at = %s::timestamptz,
+                    last_error = %s::jsonb,
+                    updated_at = %s::timestamptz
+                WHERE binding_id = %s
+                RETURNING {_COLUMNS_SQL}
+                """,
+                (now, json.dumps(last_error), now, binding_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            return _row_to_binding(row)
+        finally:
+            conn.close()
+
 
 # --- Service layer -------------------------------------------------------
 
@@ -1147,6 +1249,39 @@ class SourceRegistry:
 
     def list_for_account(self, account_binding_id: str | None) -> tuple[SourceBinding, ...]:
         return self._backend.list_for_account(_normalize_account_binding_id(account_binding_id))
+
+    def record_poll_success(
+        self,
+        binding_id: str,
+        *,
+        cursor: dict[str, Any],
+    ) -> SourceBinding:
+        """Atomically publish a successful poll outcome.
+
+        ``cursor`` is accepted only after the caller has durably disposed every
+        newly covered item. V1 exposes one synchronous manual poll path;
+        scheduling, leases, and concurrent-run reconciliation remain deferred.
+        """
+        stored_cursor = _portable_json_copy(cursor, field="cursor")
+        if not isinstance(stored_cursor, dict):
+            raise SourceRegistryValidationError("cursor must be a JSON object")
+        return self._backend.record_poll_success(
+            binding_id,
+            cursor=stored_cursor,
+        )
+
+    def record_poll_failure(
+        self,
+        binding_id: str,
+        *,
+        reason_code: str,
+        detail: Any = None,
+    ) -> SourceBinding:
+        """Record a degraded poll without touching its cursor/known set."""
+        return self._backend.record_poll_failure(
+            binding_id,
+            last_error=_build_last_error(reason_code, detail),
+        )
 
     def record_source_degradation(
         self, binding_id: str, *, reason_code: str, detail: Any = None

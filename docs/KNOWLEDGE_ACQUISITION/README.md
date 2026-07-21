@@ -155,7 +155,7 @@ own `SBS Impact` block per `SBS_OPERATING_MODEL.md` §5 (Definition of Ready).
 | 1 | Platform contracts (this directory) | PR #2786 |
 | 2 | Vertical slice: one explicit YouTube URL → metadata → caption-first transcript → normalized artifact → one extractor → candidate + companion note, replayable | filed: #2795 + #2796–#2801; KA-01 (#2796) delivered (PR #2928), KA-02 (#2797) delivered (PR #2931, captionless ASR fallback), KA-03 (#2798) delivered (normalize stage), KA-04 (#2799) delivered (extraction registry + summary extractor), KA-05 (#2800) delivered (candidate writeback), KA-06 (#2801) delivered (stage events + item-scoped dead-letters + no-egress replay); acquisition entrypoint for a NEW URL delivered (#3106, `acquire-youtube` CLI command); TCD-routed per task spec |
 | 3 | Generalize: second source (e.g. podcast RSS or local media file) implements `SOURCE_PLUGIN_CONTRACT` unchanged | issues after Phase 2 acceptance |
-| 4 | Continuous discovery: subscription/playlist sync, scheduling, dedup at scale | specification filed: `docs/YOUTUBE_SOURCE_SYNC/`; **YSS-01 delivered repository-verifiably** (#3916 / PR #3931, source registry + settings model). YSS-02..YSS-11 and parent #3915 operator/live-capability acceptance remain pending; OAuth `youtube.readonly` inbox/playlist discovery + Takeout/RSS subscriptions follow the 2026-07-16 owner directive in `YOUTUBE_SOURCE_SPEC.md` §Discovery. |
+| 4 | Continuous discovery | **Pragmatic V1 delivered by #3915:** one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required candidates. Registry/OAuth/API/queue foundations are delivered by YSS-01..04; the Inbox route is #3920 / PR #4014. Scheduling, multi-playlist product sync, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain deferred. |
 
 Phase 2 is the TCD milestone: if the slice holds (provenance preserved, replay succeeds, candidate
 lands in the existing triage flow), the platform contracts are proven before any breadth is built.
@@ -166,5 +166,5 @@ lands in the existing triage flow), the platform contracts are proven before any
 - No auto-promotion of anything, ever (triage policy governs).
 - No new storage, index, or event substrate.
 - No commercial transcript/ingestion API dependency (see research memo §Commercial services).
-- No claim that any of this is shipped; current shipped reality is only what
-  `RESEARCH_2026-07.md` §Existing assets describes.
+- No shipped claim beyond the explicitly delivered rows above and their linked owner documents;
+  all broader platform/spec language remains target state until its own issue is delivered.
