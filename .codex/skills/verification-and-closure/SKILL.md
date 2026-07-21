@@ -298,6 +298,15 @@ the LF-less form when the authenticated comment `created_at` and `updated_at` bo
 remain valid; the legacy fallback rejects any CR/CRLF, spaces, interior drift, post-cutoff receipt,
 or other receipt/live-state mismatch. Preserve receipt identity, phase continuity, and repair budget.
 
+For the singular pre-#4010 immutable PR #4052 compatibility deadlock, current-main/base-side
+recovery may attach an additional auditable `pr-contract` result only after re-reading repository,
+PR, fixed head, title, canonical neutralized body, empty closing links, issue sets, unique trusted
+authority receipt, continuous `prepared` phase, and unchanged repair budget. It uses the current-main
+validator and fails closed for mutable/foreign/unprepared, stale/forged/conflicting, noncanonical, or
+drifted contexts. It is not a branch-protection waiver: it neither replaces unrelated checks nor
+merges, restores closers, posts phases, closes issues, or changes dispatcher accounting. Hand the
+same exact head back to the ordinary verified-merge sequence below.
+
 1. freeze the authenticated v2 context (`run_id`, repository, PR, exact head, governing issue,
    `closing_issues`, durable `supporting_issues`, attempts, and 2+2 repair-budget projection); re-read
    the live PR title/body/head and GitHub `closingIssuesReferences`, and reject any mismatch or title

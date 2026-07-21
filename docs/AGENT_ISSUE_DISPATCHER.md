@@ -344,6 +344,15 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   PR is merged but incomplete, recovery re-authenticates the exact merge commit, authority receipt,
   checks, repair-budget policy, and highest continuous phase, then resumes at the first missing
   phase. Neither path resets attempts, durable supporting authority, or the 2+2 budget.
+- A narrow current-main/base-side recovery exists only for the pre-#4010 immutable PR #4052 head
+  after a live-neutralized PR independently re-reads one unique trusted exact-head authority receipt
+  and one continuous `prepared` phase. It uses the current-main `pr-contract` semantics and attaches
+  an additional auditable `pr-contract` result only to that exact head after binding repository, PR,
+  title, canonical body, empty closing links, governing/closing/supporting sets, authority/phase
+  identity, and unchanged repair budget. It is not a waiver or generic status API: mutable, foreign,
+  unprepared, stale/forged/conflicting, drifted, live-closer, and noncanonical contexts fail closed
+  without a result. Handoff remains the ordinary verified-merge flow; recovery does not merge, close,
+  restore closers, rewrite receipts, or change dispatcher accounting.
 - Post-merge reconciliation explicitly closes every and only the authenticated closing set, restores
   the authenticated original body, and proves exact closure attribution before terminal delivery.
   Candidate enumeration reads the bounded repository issue-event feed through REST, proves its

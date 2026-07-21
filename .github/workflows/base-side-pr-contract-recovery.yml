@@ -1,0 +1,24 @@
+name: Base-side pr-contract recovery
+on:
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: Immutable legacy PR number (only 4052 is authorized)
+        required: true
+        type: string
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+jobs:
+  recover:
+    if: github.repository == 'RasmusTho/agentic-pkm-mvp'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Authenticate and attach exact-head pr-contract recovery result
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RECOVERY_PR_NUMBER: ${{ inputs.pull_number }}
+        run: node scripts/base_side_pr_contract_recovery.js

@@ -498,6 +498,122 @@ def test_production_pr_contract_authenticates_neutralized_merge_authority() -> N
         assert fragment in workflow
 
 
+def _read_base_side_recovery() -> str:
+    return (REPO_ROOT / "scripts/base_side_pr_contract_recovery.js").read_text(encoding="utf-8")
+
+
+def test_base_side_pr_contract_recovery_accepts_only_legacy_prepared_immutable_context() -> None:
+    recovery = _read_base_side_recovery()
+    assert 'prNumber: 4052' in recovery
+    assert 'head: "a159571da2ce9068131810aedc1ea05107d7bfaf"' in recovery
+    assert 'receipt.phase === "prepared"' in recovery
+    assert "requireUniquePreparedPhase(comments, authority)" in recovery
+
+
+def test_base_side_pr_contract_recovery_binds_live_exact_head_and_receipts() -> None:
+    recovery = _read_base_side_recovery()
+    for fragment in ("pullRequest.head?.sha !== TARGET.head", "pullRequest.title !== TARGET.title", "closingIssuesReferences(first:20)", "resolveNeutralizedMergeAuthority({comments, issueAuthority, pullRequest, repository: TARGET.repository})", "receipt.authority_sha256 === authoritySha", "receipt.body_sha256 === authority.neutralized_body_sha256", "canonicalJson(authorityRecords[0].receipt) !== canonicalJson(authority)"):
+        assert fragment in recovery
+
+
+def test_base_side_pr_contract_recovery_rejects_noneligible_or_drifted_contexts() -> None:
+    recovery = _read_base_side_recovery()
+    for fragment in ("repository default branch drifted from main", "recovery must execute from the current default-branch head", "live closing references are not empty", "authority receipt is missing, forged, stale, or conflicting", "prepared phase is missing, stale, forged, conflicting, or non-continuous", 'pullRequest.state !== "open"', "pullRequest.head?.repo?.full_name !== TARGET.repository", "pullRequest.base?.repo?.full_name !== TARGET.repository", "pullRequest.base?.ref !== TARGET.defaultBranch"):
+        assert fragment in recovery
+
+
+def test_base_side_pr_contract_recovery_publishes_only_scoped_auditable_equivalent_check() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/base-side-pr-contract-recovery.yml").read_text(encoding="utf-8")
+    recovery = _read_base_side_recovery()
+    assert "checks: write" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert 'name: "pr-contract"' in recovery
+    assert "head_sha: reread.pull_request.head.sha" in recovery
+    assert "base-side-pr-contract-recovery:${authority.run_id}:${reread.pull_request.head.sha}" in recovery
+    assert "/statuses" not in recovery
+    assert 'method: "PATCH"' not in recovery
+    action_refs = re.findall(r"^\s*- uses:\s*([^\s#]+)", workflow, re.MULTILINE)
+    assert action_refs
+    assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref) for ref in action_refs)
+
+
+def test_base_side_pr_contract_recovery_posts_nothing_when_snapshot_mutates() -> None:
+    recovery_path = REPO_ROOT / "scripts/base_side_pr_contract_recovery.js"
+    script = r"""
+const {publishStableSnapshot} = require(process.argv[1]);
+const base = {
+  default_branch: "main", default_branch_sha: "a".repeat(40),
+  pull_request: {number: 4052, state: "open", draft: false, title: "title", body: "body",
+    head: {sha: "b".repeat(40), ref: "head", repository: "RasmusTho/agentic-pkm-mvp"},
+    base: {sha: "c".repeat(40), ref: "main", repository: "RasmusTho/agentic-pkm-mvp"}},
+  closing_issues: [],
+  authority: {comment: {id: 1, actor: "owner", association: "OWNER", created_at: "2026-07-21T00:00:00Z", updated_at: "2026-07-21T00:00:00Z"}, receipt: {run_id: "run", repair_budget: {policy_version: "v2"}}},
+  phase: {comment: {id: 2, actor: "owner", association: "OWNER", created_at: "2026-07-21T00:00:01Z", updated_at: "2026-07-21T00:00:01Z"}, receipt: {run_id: "run", phase: "prepared"}}
+};
+const paths = JSON.parse(process.argv[2]);
+(async () => {
+  const results = [];
+  for (const path of paths) {
+    const second = JSON.parse(JSON.stringify(base));
+    let cursor = second;
+    for (const key of path.slice(0, -1)) cursor = cursor[key];
+    cursor[path.at(-1)] = typeof cursor[path.at(-1)] === "string" ? `${cursor[path.at(-1)]}-drift` : [4056];
+    let reads = 0, posts = 0, failed = false;
+    const capture = async () => (++reads === 1 ? base : second);
+    const request = async (method, url) => { if (method === "POST" && url.endsWith("/check-runs")) posts += 1; };
+    try { await publishStableSnapshot({request, env: {}, capture}); } catch (_) { failed = true; }
+    results.push({path, posts, failed});
+  }
+  process.stdout.write(JSON.stringify(results));
+})();
+"""
+    mutation_paths = [
+        ["default_branch_sha"], ["pull_request", "title"],
+        ["closing_issues"], ["pull_request", "body"],
+        ["pull_request", "head", "sha"], ["pull_request", "base", "ref"],
+        ["authority", "comment", "updated_at"],
+        ["authority", "receipt", "repair_budget"],
+        ["phase", "comment", "actor"], ["phase", "receipt", "phase"],
+    ]
+    completed = subprocess.run(
+        ["node", "-e", script, str(recovery_path), json.dumps(mutation_paths)],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    results = json.loads(completed.stdout)
+    assert all(result["failed"] and result["posts"] == 0 for result in results)
+
+
+def test_base_side_pr_contract_recovery_rejects_default_or_pr_base_retarget() -> None:
+    recovery_path = REPO_ROOT / "scripts/base_side_pr_contract_recovery.js"
+    script = r"""
+const {requireExactBaseIdentity} = require(process.argv[1]);
+const repo = {default_branch: "main"};
+const branch = {commit: {sha: "c".repeat(40)}};
+const pr = {number: 4052, state: "open", draft: false,
+  title: "Fix CKM metric schema bundle refusal",
+  head: {sha: "a159571da2ce9068131810aedc1ea05107d7bfaf", repo: {full_name: "RasmusTho/agentic-pkm-mvp"}},
+  base: {ref: "main", repo: {full_name: "RasmusTho/agentic-pkm-mvp"}}};
+const env = {GITHUB_REF: "refs/heads/main", GITHUB_SHA: "c".repeat(40)};
+const candidates = [
+  [{...repo, default_branch: "trunk"}, pr],
+  [repo, {...pr, base: {...pr.base, ref: "stable"}}],
+  [repo, {...pr, base: {...pr.base, repo: {full_name: "foreign/repo"}}}],
+];
+const rejected = candidates.map(([candidateRepo, candidatePr]) => {
+  try { requireExactBaseIdentity(candidateRepo, branch, candidatePr, env); return false; }
+  catch (_) { return true; }
+});
+process.stdout.write(JSON.stringify(rejected));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script, str(recovery_path)],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == [True, True, True]
+
+
 @pytest.mark.parametrize("separator", [",", ", ", ",\t", ", \t\t"])
 def test_verified_merge_neutralized_separator_grammar_matches_javascript_and_python(
     separator: str,
