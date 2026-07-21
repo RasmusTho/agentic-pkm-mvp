@@ -61,7 +61,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Before process start, the launcher rejects output schemas outside the Codex Structured Outputs
   subset (including conditional composition and object fields that are not required). The provider
   schema keeps optional values explicitly nullable; local semantic validation still fail-closes a
-  delivered receipt without two review events or a repair/blocking-review event without its stable
+  delivered receipt without a review event or a repair/blocking-review event without its stable
   finding, closed failure-domain, and mechanism identity.
 - Artifact ingestion independently authenticates both producer runs before download, dispatcher
   persistence, or any target-PR read. The artifact uploader run must be the completed/successful
@@ -123,8 +123,14 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   is classified while streaming so a later `turn.failed` event cannot erase the earlier signal,
   while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
   rate-limit backoff. Terminal completion
-  additionally requires two fresh clean
-  review receipts after the final durable repair attempt. For `v2` runs, repair budget is per stable
+  additionally enforces the authenticated v3 `final_review_rounds` value from the live PR's unique
+  `Final-Review-Rounds: 1|2` declaration. The normal value is one; declared high-risk runtime work
+  uses two. Intake, post-launch delivery validation, artifact replay, explicit restart, and
+  neutralized or merged crash recovery all re-check that live authority before proceeding.
+  Independently, the ledger raises the requirement to two when it detects low convergence
+  for the same stable mechanism/domain key: two distinct blockers in one review session or an
+  adjacent blocker after repair. Pre-v3 executable requests retain their conservative two-round
+  behavior. Repair budget is per stable
   failure mechanism and failure domain: two standard repair attempts followed, when needed, by two
   strongest-capability repair attempts for the same key. The closed domains are
   `review_code_correctness`, `static_quality`, `lease_concurrency`, and
@@ -145,7 +151,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
   rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
   invalid review or repair events cannot strand coordinator authority or consume a partial budget;
-  a no-repair delivery still requires two distinct clean review sessions.
+  a normal v3 no-repair delivery requires one distinct clean review session. An authenticated
+  two-round declaration or a ledger-visible low-convergence condition requires two fresh sessions.
   The minimal coordinator context and CLI status expose only policy version plus a bounded,
   most-recent-first list of sanitized mechanism/domain keys and used/remaining
   standard/escalated counts. Total and omitted counts make any truncation explicit; finding
@@ -288,7 +295,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   select `needs_human` or create an exception packet.
 - The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
   the separate current head only under the exact active lease after a fresh GitHub read proves that
-  exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
+  exact live PR head; terminal delivery records the verified head after the required clean review
+  rounds on it: one for a normal v3 request, two for an authenticated two-round declaration or
+  ledger-visible low convergence on the final key.
   A later artifact for that repaired head reuses the same active repository/PR/governing-issue run
   instead of opening an empty verification chain, so redispatch cannot reset prior attempts or the
   run's policy-specific repair budget and independent fresh-review accounting. A mismatched head or governing
@@ -302,7 +311,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 **Verified issue-set merge and exact closure: SHIPPED IN REPO**
 
-- Verification dispatch request v2 binds one non-empty, sorted set of at most 10 closing issues to
+- Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
+  one authenticated `final_review_rounds` value to
   the exact repository, PR, and head. `supporting_authority_json` is durable, cumulative evidence
   authority across restart and takeover, but supporting issues grant no closure authority unless
   they are also named in the exact `closing_authority_json` set. A trusted collaborator-authored

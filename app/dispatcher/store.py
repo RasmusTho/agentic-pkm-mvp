@@ -323,7 +323,10 @@ def _verification_closing_authority_migration(row: sqlite3.Row) -> str:
     version = request.get("contract_version")
     closing = request.get("closing_issues")
     if (
-        version != "verification_dispatch_request.v2"
+        version not in {
+            "verification_dispatch_request.v2",
+            "verification_dispatch_request.v3",
+        }
         or not isinstance(closing, list)
         or not closing
         or any(not _positive_int(issue) for issue in closing)

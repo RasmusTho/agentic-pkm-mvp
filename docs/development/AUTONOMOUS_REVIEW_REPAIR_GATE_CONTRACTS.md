@@ -292,8 +292,11 @@ Maximum attempts:
   and failure domain before capability escalation. At most two strongest-capability
   repair attempts then remain for that same key. Exhaustion triggers classifier-based
   repair triage; it does not create a Human Exception.
-- A high-risk PR needs two clean review rounds only when the governing
-  verification skill or human reviewer requires it.
+- One clean independent final review is the default. A second clean round is required only for a
+  PR that changes a runtime surface on a declared high-risk category, or after the low-convergence
+  circuit breaker has triggered for the same mechanism/domain key. A governance, docs, skill, or
+  test-enforcement change does not require a second round merely because it carries a high-risk
+  label.
 - Cosmetic or receipt-only corrections do not reset the substantive attempt
   counter.
 

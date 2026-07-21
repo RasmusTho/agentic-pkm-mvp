@@ -339,12 +339,52 @@ def eligible_pr(**updates):
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
         "merge_commit_sha": None,
         "title": "dispatcher: verify and close issue set",
-        "body": "Governing-Issue: #3603\n\nFixes #3603",
+        "body": (
+            "Governing-Issue: #3603\n\nFixes #3603\n\n"
+            "Final-Review-Rounds: 1"
+        ),
         "base": {"ref": "main", "repo": {"full_name": REPO}},
         "head": {"ref": "branch", "sha": HEAD},
     }
     value.update(updates)
     return value
+
+
+@pytest.mark.parametrize(
+    ("artifact_rounds", "body"),
+    [
+        (1, "Governing-Issue: #3603\nFixes #3603\nFinal-Review-Rounds: 2"),
+        (2, "Governing-Issue: #3603\nFixes #3603\nFinal-Review-Rounds: 1"),
+        (1, "Governing-Issue: #3603\nFixes #3603"),
+        (
+            1,
+            "Governing-Issue: #3603\nFixes #3603\n"
+            "Final-Review-Rounds: 1\nFinal-Review-Rounds: 2",
+        ),
+    ],
+)
+def test_live_final_review_authority_drift_fails_before_ledger_mutation(
+    tmp_path,
+    artifact_rounds: int,
+    body: str,
+) -> None:
+    state = ledger(tmp_path)
+    authenticated = _authenticated_verification_request(
+        request(final_review_rounds=artifact_rounds)
+    )
+
+    with pytest.raises(
+        ValueError, match="verification live final-review authority mismatch"
+    ):
+        VerificationConsumer(
+            state,
+            Truth(eligible_pr(body=body), GREEN),
+            Auth(),
+            Launcher(),
+            "host",
+        ).consume(authenticated)
+
+    assert state.list() == []
 
 
 def test_live_governing_issue_drift_fails_closed_before_launch(tmp_path) -> None:
@@ -367,7 +407,10 @@ def test_supporting_issue_addition_during_repair_preserves_governing_authority(
     dispatch_request = request()
     dispatch_request["supporting_issues"] = [3626]
     pr = eligible_pr(
-        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\nRefs #3745"
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\nRefs #3745\n"
+            "Final-Review-Rounds: 1"
+        )
     )
 
     result = VerificationConsumer(
@@ -494,6 +537,67 @@ def test_post_launch_check_error_preserves_verification_anchor(tmp_path) -> None
     assert final.status == "needs_human"
     assert [row["kind"] for row in state.attempts(final.run_id)] == ["verification"]
     assert [call[1] for call in launcher.calls] == [None, "01900000-0000-7000-8000-000000000001"]
+
+
+@pytest.mark.parametrize(
+    "drifted_body",
+    [
+        "Governing-Issue: #3603\nFixes #3603\nFinal-Review-Rounds: 2",
+        "Governing-Issue: #3603\nFixes #3603",
+        (
+            "Governing-Issue: #3603\nFixes #3603\n"
+            "Final-Review-Rounds: 1\nFinal-Review-Rounds: 2"
+        ),
+    ],
+)
+def test_post_launch_live_truth_rejects_final_review_authority_drift(
+    tmp_path,
+    drifted_body: str,
+) -> None:
+    class DriftingTruth(Truth):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.pull_calls = 0
+
+        def pull_request(self, repository, pr_number):
+            self.pull_calls += 1
+            if self.pull_calls >= 3:
+                self._last_pr = eligible_pr(body=drifted_body)
+                return self._last_pr
+            return super().pull_request(repository, pr_number)
+
+    state = ledger(tmp_path)
+    launcher = Launcher()
+    result = VerificationConsumer(
+        state, DriftingTruth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_final_review_authority_mismatch"
+    assert len(launcher.calls) == 1
+    assert [row["kind"] for row in state.attempts(result.run_id)] == [
+        "verification"
+    ]
+
+
+def test_delivered_post_launch_truth_rejects_final_review_authority_drift(
+    tmp_path,
+) -> None:
+    drifted = merged_pr(
+        body="Governing-Issue: #3603\nFixes #3603\nFinal-Review-Rounds: 2"
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        TransitionTruth(drifted),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_live_truth_final_review_authority_mismatch"
+    assert result.verified_head_sha is None
 
 
 def test_post_merge_terminal_read_outage_replays_exact_delivered_receipt(
@@ -659,8 +763,8 @@ def test_delivered_receipt_rejects_merge_authority_with_stale_repair_budget(
     assert result.verified_head_sha is None
 
 
-def _expired_running_verification(state):
-    run = state.ingest(request())
+def _expired_running_verification(state, *, final_review_rounds: int = 1):
+    run = state.ingest(request(final_review_rounds=final_review_rounds))
     claimed = state.claim(run.run_id, "crashed-host")
     running = state.start(
         run.run_id,
@@ -680,6 +784,89 @@ def _expired_running_verification(state):
         )
         conn.commit()
     return running
+
+
+@pytest.mark.parametrize(
+    ("artifact_rounds", "body"),
+    [
+        (1, "Governing-Issue: #3603\nFixes #3603\nFinal-Review-Rounds: 2"),
+        (2, "Governing-Issue: #3603\nFixes #3603\nFinal-Review-Rounds: 1"),
+        (1, "Governing-Issue: #3603\nFixes #3603"),
+        (
+            1,
+            "Governing-Issue: #3603\nFixes #3603\n"
+            "Final-Review-Rounds: 1\nFinal-Review-Rounds: 2",
+        ),
+    ],
+)
+def test_recover_rejects_final_review_authority_drift_without_mutation(
+    tmp_path,
+    artifact_rounds: int,
+    body: str,
+) -> None:
+    state = ledger(tmp_path)
+    running = _expired_running_verification(
+        state, final_review_rounds=artifact_rounds
+    )
+    before = state.get(running.run_id)
+    launcher = Launcher()
+
+    with pytest.raises(
+        ValueError,
+        match="verification run is no longer resumable: final_review_authority_mismatch",
+    ):
+        VerificationConsumer(
+            state,
+            Truth(eligible_pr(body=body), GREEN),
+            Auth(),
+            launcher,
+            "replacement",
+        ).recover(running.run_id)
+
+    assert state.get(running.run_id) == before
+    assert launcher.calls == []
+
+
+@pytest.mark.parametrize("entrypoint", ["consume", "recover"])
+@pytest.mark.parametrize("recovery_shape", ["open-neutralized", "merged"])
+def test_merge_recovery_rejects_final_review_authority_drift(
+    tmp_path,
+    recovery_shape: str,
+    entrypoint: str,
+) -> None:
+    state = ledger(tmp_path)
+    running = _expired_running_verification(state)
+    plan = _merge_plan(HEAD)
+    body_key = "neutralized_body" if recovery_shape == "open-neutralized" else "original_body"
+    drifted_body = str(plan[body_key]).replace(
+        "Final-Review-Rounds: 1", "Final-Review-Rounds: 2"
+    )
+    live_pr = (
+        eligible_pr(body=drifted_body)
+        if recovery_shape == "open-neutralized"
+        else merged_pr(body=drifted_body)
+    )
+
+    consumer = VerificationConsumer(
+        state,
+        Truth(live_pr, GREEN),
+        Auth(),
+        Launcher(),
+        "replacement",
+    )
+    if entrypoint == "recover":
+        with pytest.raises(
+            ValueError,
+            match=(
+                "verification run is no longer resumable: "
+                "final_review_authority_mismatch"
+            ),
+        ):
+            consumer.recover(running.run_id)
+    else:
+        result = consumer.consume(request())
+        assert result.status == "superseded"
+        assert result.stop_reason == "final_review_authority_mismatch"
 
 
 def _open_neutralized_recovery_evidence(*, merge_commit_sha: object = None):
@@ -1050,7 +1237,10 @@ def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
         phase="prepared",
         pr=neutral_pr,
     )
-    raced_body = "Governing-Issue: #3603\n\nRefs #3603\nFixes #4999"
+    raced_body = (
+        "Governing-Issue: #3603\n\nRefs #3603\nFixes #4999\n\n"
+        "Final-Review-Rounds: 1"
+    )
     crashed_pr = merged_pr(body=raced_body)
 
     class RecoveryTruth(Truth):
@@ -1255,7 +1445,9 @@ def _verification_run_id() -> str:
 def _merge_plan(
     head_sha: str,
     *,
-    body: str = "Governing-Issue: #3603\n\nFixes #3603",
+    body: str = (
+        "Governing-Issue: #3603\n\nFixes #3603\n\nFinal-Review-Rounds: 1"
+    ),
     authenticated_supporting: tuple[int, ...] = (),
     repair_budget: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
@@ -1302,7 +1494,8 @@ def _merge_comments(
     plan = _merge_plan(
         head_sha,
         body=(
-            "Governing-Issue: #3603\n\nFixes #3603"
+            "Governing-Issue: #3603\n\nFixes #3603\n\n"
+            "Final-Review-Rounds: 1"
             if "Verified-Closing-Issues:" in body
             else body
         ),
@@ -3292,6 +3485,7 @@ def test_pending_request_rejects_workflow_run_mismatch() -> None:
 def test_pending_request_rejects_v1_empty_supporting_closure_authority() -> None:
     payload = artifact_request()
     payload["contract_version"] = "verification_dispatch_request.v1"
+    payload.pop("final_review_rounds")
     payload.pop("closing_issues")
     assert payload["supporting_issues"] == []
     identity = {
@@ -3358,7 +3552,7 @@ def test_multi_issue_context_separates_parent_closure_and_evidence_authority(
     pr = eligible_pr(
         body=(
             "Governing-Issue: #3603\n\nRefs #3705\n"
-            "Fixes #3626\nCloses #3698"
+            "Fixes #3626\nCloses #3698\nFinal-Review-Rounds: 1"
         )
     )
     launcher = Launcher()
@@ -3609,7 +3803,12 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
     ]
     original_head = HEAD
     truth = Truth(
-        eligible_pr(body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"),
+        eligible_pr(
+            body=(
+                "Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\n"
+                "Final-Review-Rounds: 1"
+            )
+        ),
         GREEN,
     )
 
@@ -3620,7 +3819,8 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
             truth.pr = eligible_pr(
                 body=(
                     "Governing-Issue: #3603\n\nRefs #3603\n"
-                    "Fixes #3603\nRefs #3626\nRefs #3745"
+                    "Fixes #3603\nRefs #3626\nRefs #3745\n"
+                    "Final-Review-Rounds: 1"
                 ),
                 head={"ref": "branch", "sha": new_head},
             )
@@ -4074,12 +4274,15 @@ def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None
     dispatch_request = request()
     dispatch_request["supporting_issues"] = [3626]
     original_pr = eligible_pr(
-        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\n"
+            "Final-Review-Rounds: 1"
+        )
     )
     terminal_pr = merged_pr(
         body=(
             "Governing-Issue: #3603\n\nRefs #3603\n"
-            "Fixes #3603\nRefs #3626\nRefs #3745"
+            "Fixes #3603\nRefs #3626\nRefs #3745\nFinal-Review-Rounds: 1"
         )
     )
     truth = TransitionTruth(
@@ -4106,11 +4309,14 @@ def test_same_head_live_supporting_add_remove_is_never_dispatched(
     added = eligible_pr(
         body=(
             "Governing-Issue: #3603\n\nFixes #3603\n"
-            "Refs #3626\nRefs #9999"
+            "Refs #3626\nRefs #9999\nFinal-Review-Rounds: 1"
         )
     )
     terminal = merged_pr(
-        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\n"
+            "Final-Review-Rounds: 1"
+        )
     )
     truth = TransitionTruth(
         terminal, authenticated_supporting=(3626,)
@@ -5560,7 +5766,7 @@ def test_production_receipt_schema_uses_codex_subset_and_preserves_semantics() -
     verification_consumer.validate_verification_closer_receipt(valid, schema)
 
     without_reviews = dict(valid, review_events=None)
-    with pytest.raises(jsonschema.ValidationError, match="two review events"):
+    with pytest.raises(jsonschema.ValidationError, match="one review event"):
         verification_consumer.validate_verification_closer_receipt(without_reviews, schema)
 
     repair_without_finding = dict(valid)

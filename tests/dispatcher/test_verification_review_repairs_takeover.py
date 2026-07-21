@@ -388,6 +388,7 @@ def _live_observed_artifact(
             if observed_supporting_issues is not None
             else tuple(supporting)
         ),
+        observed_final_review_rounds=payload["final_review_rounds"],
         canonical_chain_token=canonical_chain_token,
     )
 
@@ -899,6 +900,7 @@ def test_backoff_head_rebind_rejects_untrusted_or_premature_transition(
             observed_linked_issue=payload["linked_issue"],
             observed_closing_issues=tuple(payload["closing_issues"]),
             observed_supporting_issues=(),
+            observed_final_review_rounds=payload["final_review_rounds"],
             canonical_chain_token=token,
         )
     else:
@@ -1570,7 +1572,10 @@ def test_live_supporting_authority_drift_rejects_takeover_before_mutation(
     authenticated = source.pending_requests(REPO)[0]
     live_pr = eligible_pr(
         head={"ref": "branch", "sha": REPAIRED_HEAD},
-        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626",
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\n"
+            "Final-Review-Rounds: 1"
+        ),
     )
     before = _durable_verification_snapshot(state, run_id)
     launcher = Launcher()
@@ -1596,7 +1601,12 @@ def test_live_supporting_authority_drift_rejects_takeover_before_mutation(
             "stale_head",
         ),
         (
-            eligible_pr(body="Governing-Issue: #999999\n\nFixes #999999"),
+            eligible_pr(
+                body=(
+                    "Governing-Issue: #999999\n\nFixes #999999\n"
+                    "Final-Review-Rounds: 1"
+                )
+            ),
             "governing_issue_mismatch",
         ),
     ],

@@ -140,7 +140,7 @@ def test_completed_rechecks_closure_evidence_after_same_token_head_rebind(
     assert not worker.is_alive()
     error = outcome.get("error")
     assert isinstance(error, ValueError), outcome
-    assert "two fresh clean reviews" in str(error)
+    assert "required fresh clean review rounds" in str(error)
     assert "result" not in outcome
     run = state.get(run_id)
     assert run is not None

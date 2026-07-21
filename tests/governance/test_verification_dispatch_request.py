@@ -44,7 +44,10 @@ def _pr(*, head_sha: str = HEAD_SHA, state: str = "open") -> dict[str, object]:
     return {
         "number": 3602,
         "state": state,
-        "body": "Governing-Issue: #3602\n\nFixes #3602",
+        "body": (
+            "Governing-Issue: #3602\n\nFixes #3602\n\n"
+            "Final-Review-Rounds: 1"
+        ),
         "base": {"ref": "main"},
         "head": {"ref": "codex/issue-3602", "sha": head_sha},
         "live_closing_issues": [
@@ -64,7 +67,8 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
     assert first == second
     assert first is not None
     assert first == json.loads(json.dumps(first, sort_keys=True))
-    assert first["contract_version"] == "verification_dispatch_request.v2"
+    assert first["contract_version"] == "verification_dispatch_request.v3"
+    assert first["final_review_rounds"] == 1
     assert first["closing_issues"] == [3602]
     assert first["stage"] == "verification"
     assert first["repository"] == REPOSITORY
@@ -89,6 +93,31 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
     assert len(first["idempotency_key"]) == 64
 
 
+def test_explicit_two_round_declaration_is_authenticated_into_request() -> None:
+    pr = _pr()
+    pr["body"] = str(pr["body"]).replace(
+        "Final-Review-Rounds: 1", "Final-Review-Rounds: 2"
+    )
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert request is not None
+    assert request["final_review_rounds"] == 2
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    ["Final-Review-Rounds: 3", "Final-Review-Rounds: 1\nFinal-Review-Rounds: 2"],
+)
+def test_ambiguous_or_malformed_declaration_emits_no_request(
+    declaration: str,
+) -> None:
+    pr = _pr()
+    pr["body"] = str(pr["body"]).replace("Final-Review-Rounds: 1", declaration)
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert request is None
+
+
 def test_non_eligible_events_are_noops() -> None:
     assert build_request(event=_event(conclusion="failure"), pr=_pr(), issue=_issue()) is None
     assert build_request(event=_event(conclusion="cancelled"), pr=_pr(), issue=_issue()) is None
@@ -105,7 +134,8 @@ def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
     pr = _pr()
     pr["body"] = (
         "Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\n"
-        "Fixes #3698\nFixes #3699\nFixes #3700\nFixes #3705"
+        "Fixes #3698\nFixes #3699\nFixes #3700\nFixes #3705\n"
+        "Final-Review-Rounds: 1"
     )
     pr["live_closing_issues"] = [
         {"number": number, "repository": REPOSITORY}
@@ -126,6 +156,7 @@ def test_over_limit_closing_set_emits_no_dispatch_request() -> None:
     pr["body"] = "\n".join(
         ["Governing-Issue: #3602"]
         + [f"Fixes #{number}" for number in closing]
+        + ["Final-Review-Rounds: 1"]
     )
     pr["live_closing_issues"] = [
         {"number": number, "repository": REPOSITORY} for number in closing
@@ -191,6 +222,7 @@ def test_ten_live_closing_links_emit_request_without_extra_graphql_page() -> Non
     pr["body"] = "\n".join(
         ["Governing-Issue: #3602"]
         + [f"Fixes #{number}" for number in closing]
+        + ["Final-Review-Rounds: 1"]
     )
     pr["live_closing_issues"] = [
         {"number": number, "repository": REPOSITORY} for number in closing
@@ -204,7 +236,10 @@ def test_ten_live_closing_links_emit_request_without_extra_graphql_page() -> Non
 
 def test_crlf_authority_is_canonicalized_before_request_emission() -> None:
     pr = _pr()
-    pr["body"] = "Governing-Issue: #3602\r\nRefs #3603\r\nFixes #3602\r\n"
+    pr["body"] = (
+        "Governing-Issue: #3602\r\nRefs #3603\r\nFixes #3602\r\n"
+        "Final-Review-Rounds: 1\r\n"
+    )
 
     request = build_request(event=_event(), pr=pr, issue=_issue())
 
@@ -291,7 +326,8 @@ def test_github_closing_keyword_variants_bind_exact_closure_authority() -> None:
     pr = _pr()
     pr["body"] = (
         "Governing-Issue: #3602\nFix #3602\nFixed: #3603\n"
-        "Closed #3604\nResolve: #3605\nResolved #3606"
+        "Closed #3604\nResolve: #3605\nResolved #3606\n"
+        "Final-Review-Rounds: 1"
     )
     pr["live_closing_issues"] = [
         {"number": number, "repository": REPOSITORY}
