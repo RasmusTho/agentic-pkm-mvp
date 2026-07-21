@@ -114,7 +114,15 @@ def _live_closing_issues(value: object, *, repository: str) -> tuple[int, ...]:
 
 
 def _body_digest(body: str) -> str:
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    """Digest the GitHub PR-body form used by verified-merge authority.
+
+    GitHub may persist a body without one terminal LF that was present when the
+    authority receipt was prepared.  That sole representation difference is
+    equivalent here; all other bytes, including whitespace, remain exact.
+    """
+
+    canonical_body = body[:-1] if body.endswith("\n") else body
+    return hashlib.sha256(canonical_body.encode("utf-8")).hexdigest()
 
 
 def _canonical_digest(value: Mapping[str, object]) -> str:

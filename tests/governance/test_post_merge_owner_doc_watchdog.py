@@ -46,6 +46,11 @@ def _body() -> str:
     )
 
 
+def _verified_merge_body_digest(body: str) -> str:
+    canonical_body = body[:-1] if body.endswith("\n") else body
+    return hashlib.sha256(canonical_body.encode()).hexdigest()
+
+
 def _authority_comment(body: str | None = None) -> dict[str, object]:
     original = _body() if body is None else body
     neutralized = original.replace("Fixes #3820", "Refs #3820").replace(
@@ -53,13 +58,13 @@ def _authority_comment(body: str | None = None) -> dict[str, object]:
     ) + "Verified-Closing-Issues: #3820, #3823\n"
     receipt = {
         "authenticated_supporting_issues": [3820, 3823],
-        "body_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        "body_sha256": _verified_merge_body_digest(original),
         "closing_issues": [3820, 3823],
         "contract": "verified_issue_set_merge_authority.v1",
         "governing_issue": 3821,
         "head_sha": HEAD,
         "live_supporting_issues": [3820, 3823],
-        "neutralized_body_sha256": hashlib.sha256(neutralized.encode()).hexdigest(),
+        "neutralized_body_sha256": _verified_merge_body_digest(neutralized),
         "pr_number": 3822,
         "repair_budget": {"policy_version": "v2", "mechanisms": []},
         "repository": REPOSITORY,
@@ -211,6 +216,36 @@ def test_watchdog_accepts_authenticated_receipt_for_original_or_neutral_body() -
         )
         assert result["closing_issues"] == [3820, 3823]
         assert result["repair_budget"]["policy_version"] == "v2"
+
+
+def test_watchdog_body_digest_canonicalizes_only_one_terminal_lf() -> None:
+    original = _body()
+    comment = _authority_comment()
+    assert original.endswith("\n")
+
+    for equivalent_body in (original, original[:-1]):
+        result = _node(
+            "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+            [comment],
+            _pr(equivalent_body),
+            REPOSITORY,
+        )
+        assert result["closing_issues"] == [3820, 3823]
+
+    for changed_body in (
+        original + "\n",
+        original + " ",
+        original + "substantive drift",
+    ):
+        assert (
+            _node(
+                "resolveAuthorityReceipt(inputs[0], inputs[1], inputs[2])",
+                [comment],
+                _pr(changed_body),
+                REPOSITORY,
+            )
+            is None
+        )
 
 
 def test_watchdog_rejects_forged_stale_or_conflicting_authority_receipts() -> None:

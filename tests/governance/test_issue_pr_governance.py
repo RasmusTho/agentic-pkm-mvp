@@ -55,6 +55,11 @@ def _read_workflow() -> str:
     )
 
 
+def _verified_merge_body_digest(body: str) -> str:
+    canonical_body = body[:-1] if body.endswith("\n") else body
+    return hashlib.sha256(canonical_body.encode()).hexdigest()
+
+
 def _js_issue_authority(body: str) -> dict[str, object]:
     workflow = _read_workflow()
     classifier = workflow.split("// authority-classifier:start", 1)[1].split(
@@ -141,13 +146,13 @@ def _neutralized_authority_fixture() -> tuple[
     )
     receipt = {
         "authenticated_supporting_issues": [3820],
-        "body_sha256": hashlib.sha256(original.encode()).hexdigest(),
+        "body_sha256": _verified_merge_body_digest(original),
         "closing_issues": [3820],
         "contract": "verified_issue_set_merge_authority.v1",
         "governing_issue": 3821,
         "head_sha": head,
         "live_supporting_issues": [3820, 3900],
-        "neutralized_body_sha256": hashlib.sha256(neutralized.encode()).hexdigest(),
+        "neutralized_body_sha256": _verified_merge_body_digest(neutralized),
         "pr_number": 3822,
         "repair_budget": {"policy_version": "v2", "mechanisms": []},
         "repository": repository,
@@ -333,6 +338,28 @@ def test_neutralized_pr_contract_requires_trusted_exact_head_authority_receipt()
     )
 
     assert resolved == receipt
+
+
+def test_neutralized_pr_contract_canonicalizes_only_one_terminal_lf() -> None:
+    pull_request, comment, receipt = _neutralized_authority_fixture()
+    repository = str(receipt["repository"])
+    body = str(pull_request["body"])
+    assert body.endswith("\n")
+
+    for equivalent_body in (body, body[:-1]):
+        candidate = {**pull_request, "body": equivalent_body}
+        assert _js_neutralized_merge_authority(
+            [comment], candidate, repository
+        ) == receipt
+
+    for changed_body in (body + "\n", body + " ", body + "substantive drift"):
+        substantive_drift = {**pull_request, "body": changed_body}
+        assert (
+            _js_neutralized_merge_authority(
+                [comment], substantive_drift, repository
+            )
+            is None
+        )
 
 
 def test_neutralized_pr_contract_rejects_forged_stale_missing_and_conflicting_authority() -> None:

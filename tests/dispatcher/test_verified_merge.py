@@ -100,13 +100,69 @@ def test_prepare_verified_merge_neutralizes_closers_and_preserves_authority() ->
     assert receipt["live_supporting_issues"] == [3820, 3823, 3900]
     assert receipt["repair_budget"] == _context()["repair_budget"]
     assert receipt["body_sha256"] == hashlib.sha256(
-        _body().encode("utf-8")
+        _body()[:-1].encode("utf-8")
     ).hexdigest()
     assert plan["authority_receipt_comment"].startswith(
         "verified issue-set merge authority:\n```json\n"
     )
     assert "Fixes" not in plan["fixed_commit_title"]
     assert "Closes" not in plan["fixed_commit_message"]
+
+
+def test_verified_merge_body_digest_canonicalizes_terminal_newline() -> None:
+    with_terminal_lf = _body()
+    without_terminal_lf = with_terminal_lf[:-1]
+
+    with_lf_plan = prepare_verified_merge(
+        context=_context(), pr=_pr(with_terminal_lf), live_closing_issues=[3820, 3823]
+    )
+    without_lf_plan = prepare_verified_merge(
+        context=_context(), pr=_pr(without_terminal_lf), live_closing_issues=[3820, 3823]
+    )
+
+    assert (
+        with_lf_plan["authority_receipt"]["body_sha256"]
+        == without_lf_plan["authority_receipt"]["body_sha256"]
+    )
+    assert (
+        with_lf_plan["authority_receipt"]["neutralized_body_sha256"]
+        == without_lf_plan["authority_receipt"]["neutralized_body_sha256"]
+    )
+
+
+def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutralized_body = str(plan["neutralized_body"])
+    assert neutralized_body.endswith("\n")
+    neutralized_without_terminal_lf = neutralized_body[:-1]
+
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=_pr(neutralized_without_terminal_lf),
+    )
+
+    assert prepared["phase_receipt"]["head_sha"] == HEAD
+    assert prepared["phase_receipt"]["closed_issues"] == []
+
+
+def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() -> None:
+    plan = prepare_verified_merge(
+        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+
+    with pytest.raises(ValueError, match="live state is malformed"):
+        build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="prepared",
+            pr=_pr(str(plan["neutralized_body"]) + "substantive drift"),
+        )
 
 
 @pytest.mark.parametrize(

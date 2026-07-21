@@ -318,6 +318,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   they are also named in the exact `closing_authority_json` set. A trusted collaborator-authored
   `verified_issue_set_merge_authority.v1` receipt binds the run, governing issue, exact closing and
   supporting sets, original and neutralized body digests, and current repair-budget projection.
+- Verified-merge authority and phase body digests use one deterministic GitHub PR-body canonical
+  form: remove at most one terminal LF before deriving or comparing the SHA-256 digest. This treats
+  that terminal LF as equivalent to its absence; every other body byte and whitespace character
+  remains exact, and any substantive body drift fails closed.
 - Mutable PR text is never merge-time closure authority. Immediately before merge, the verified
   flow re-reads the exact head, title, body, and GitHub `closingIssuesReferences`, replaces every
   authenticated closing keyword with evidence-only `Refs` plus a bounded

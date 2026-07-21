@@ -118,7 +118,11 @@ jobs:
               return lines.length === 1 && exact.length === 1 ? Number(exact[0][1]) : null;
             };
 
-            const bodySha256 = (body) => crypto.createHash("sha256").update(body, "utf8").digest("hex");
+            const sha256 = value => crypto.createHash("sha256").update(value, "utf8").digest("hex");
+            const bodySha256 = body => {
+              const canonicalBody = body.endsWith("\n") ? body.slice(0, -1) : body;
+              return sha256(canonicalBody);
+            };
 
             const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
             const AUTHORITY_MARKER = "verified issue-set merge authority:";
@@ -156,7 +160,7 @@ jobs:
               }
               return JSON.stringify(value);
             };
-            const canonicalSha256 = value => bodySha256(canonicalJson(value));
+            const canonicalSha256 = value => sha256(canonicalJson(value));
             const commentReceipts = (comments, marker) => {
               const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
               const pattern = new RegExp(`${escaped}\\s*\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\``, "gm");
