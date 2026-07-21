@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -80,22 +81,44 @@ HUMAN_AUTHORITIES = frozenset({"owner_accepted", "governance_accepted"})
 SOURCE_AUTHORITY_KINDS = frozenset(
     {"github_issue", "builderops_inquiry", "owner_decision"}
 )
-_REQUIRED_COLUMNS = frozenset(
-    {
-        "observation_id",
-        "schema_version",
-        "event_kind",
-        "observation_json",
-        "semantic_digest",
-        "policy_version",
-        "observed_at",
-        "expires_at",
-        "lifecycle",
-        "lifecycle_marker_json",
-        "supersedes_observation_id",
-        "deleted_at",
-    }
+_COLUMN_CONTRACT = (
+    ("observation_id", "TEXT", 1, None, 1),
+    ("schema_version", "INTEGER", 1, None, 0),
+    ("event_kind", "TEXT", 1, None, 0),
+    ("observation_json", "TEXT", 0, None, 0),
+    ("semantic_digest", "TEXT", 1, None, 0),
+    ("policy_version", "TEXT", 1, None, 0),
+    ("observed_at", "TEXT", 1, None, 0),
+    ("expires_at", "TEXT", 1, None, 0),
+    ("lifecycle", "TEXT", 1, None, 0),
+    ("lifecycle_marker_json", "TEXT", 1, None, 0),
+    ("supersedes_observation_id", "TEXT", 0, None, 0),
+    ("deleted_at", "TEXT", 0, None, 0),
 )
+_TABLE_DDL = f"""
+CREATE TABLE {OBSERVATION_TABLE} (
+    observation_id TEXT PRIMARY KEY NOT NULL,
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    event_kind TEXT NOT NULL,
+    observation_json TEXT,
+    semantic_digest TEXT NOT NULL,
+    policy_version TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    lifecycle TEXT NOT NULL,
+    lifecycle_marker_json TEXT NOT NULL,
+    supersedes_observation_id TEXT,
+    deleted_at TEXT
+)
+"""
+_INDEX_CONTRACT = {
+    "idx_ckm_query_observation_expiry": ("expires_at", "observation_id"),
+    "idx_ckm_query_observation_lifecycle": (
+        "lifecycle",
+        "observed_at",
+        "observation_id",
+    ),
+}
 _PAYLOAD_BYTES_SQL = (
     "COALESCE(length(CAST(observation_json AS BLOB)), 0) + "
     "COALESCE(length(CAST(semantic_digest AS BLOB)), 0)"
@@ -244,6 +267,10 @@ def _validate_digest(value: str | None, *, field_name: str) -> None:
         )
 
 
+def _normalized_ddl(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
 class QueryObservationStore:
     """Versioned local evidence store beside, never inside, the CKM database."""
 
@@ -261,33 +288,17 @@ class QueryObservationStore:
         try:
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS {OBSERVATION_TABLE} (
-                        observation_id TEXT PRIMARY KEY,
-                        schema_version INTEGER NOT NULL CHECK (schema_version = 1),
-                        event_kind TEXT NOT NULL,
-                        observation_json TEXT,
-                        semantic_digest TEXT NOT NULL,
-                        policy_version TEXT NOT NULL,
-                        observed_at TEXT NOT NULL,
-                        expires_at TEXT NOT NULL,
-                        lifecycle TEXT NOT NULL,
-                        lifecycle_marker_json TEXT NOT NULL,
-                        supersedes_observation_id TEXT,
-                        deleted_at TEXT
+                create_table = _TABLE_DDL.replace(
+                    "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1
+                )
+                connection.execute(create_table)
+                self._preflight_table(connection)
+                for index_name, columns in _INDEX_CONTRACT.items():
+                    connection.execute(
+                        f"CREATE INDEX IF NOT EXISTS {index_name} "
+                        f"ON {OBSERVATION_TABLE}({', '.join(columns)})"
                     )
-                    """
-                )
                 self._preflight(connection)
-                connection.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_ckm_query_observation_expiry "
-                    f"ON {OBSERVATION_TABLE}(expires_at, observation_id)"
-                )
-                connection.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_ckm_query_observation_lifecycle "
-                    f"ON {OBSERVATION_TABLE}(lifecycle, observed_at, observation_id)"
-                )
                 connection.commit()
         except sqlite3.Error as exc:
             raise QueryObservationError(
@@ -297,24 +308,112 @@ class QueryObservationStore:
             ) from exc
 
     @staticmethod
-    def _preflight(connection: sqlite3.Connection) -> None:
-        columns = {
-            str(row["name"])
-            for row in connection.execute(
-                f"PRAGMA table_info({OBSERVATION_TABLE})"
-            ).fetchall()
-        }
-        missing = sorted(_REQUIRED_COLUMNS - columns)
-        unexpected = sorted(columns - _REQUIRED_COLUMNS)
-        if missing or unexpected:
+    def _preflight_table(connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            f"PRAGMA table_info({OBSERVATION_TABLE})"
+        ).fetchall()
+        actual_columns = tuple(
+            (
+                str(row["name"]),
+                str(row["type"]).upper(),
+                int(row["notnull"]),
+                row["dflt_value"],
+                int(row["pk"]),
+            )
+            for row in rows
+        )
+        if actual_columns != _COLUMN_CONTRACT:
             raise QueryObservationError(
                 "observation_store_unsupported",
                 "query observation schema does not match version 1",
                 {
-                    "missing_columns": missing,
-                    "unexpected_columns": unexpected,
+                    "expected_columns": _COLUMN_CONTRACT,
+                    "actual_columns": actual_columns,
                 },
             )
+        ddl_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (OBSERVATION_TABLE,),
+        ).fetchone()
+        actual_ddl = "" if ddl_row is None or ddl_row["sql"] is None else str(ddl_row["sql"])
+        if _normalized_ddl(actual_ddl) != _normalized_ddl(_TABLE_DDL):
+            raise QueryObservationError(
+                "observation_store_unsupported",
+                "query observation table constraints do not match version 1",
+                {},
+            )
+
+    @classmethod
+    def _preflight(cls, connection: sqlite3.Connection) -> None:
+        cls._preflight_table(connection)
+        index_rows = connection.execute(
+            f"PRAGMA index_list({OBSERVATION_TABLE})"
+        ).fetchall()
+        primary_indexes = [row for row in index_rows if row["origin"] == "pk"]
+        if (
+            len(primary_indexes) != 1
+            or int(primary_indexes[0]["unique"]) != 1
+            or int(primary_indexes[0]["partial"]) != 0
+        ):
+            raise QueryObservationError(
+                "observation_store_unsupported",
+                "query observation primary-key index does not match version 1",
+                {},
+            )
+        primary_columns = tuple(
+            str(row["name"])
+            for row in connection.execute(
+                f"PRAGMA index_info({primary_indexes[0]['name']})"
+            ).fetchall()
+        )
+        if primary_columns != ("observation_id",):
+            raise QueryObservationError(
+                "observation_store_unsupported",
+                "query observation primary-key columns do not match version 1",
+                {},
+            )
+        user_indexes = {
+            str(row["name"]): row for row in index_rows if row["origin"] == "c"
+        }
+        if set(user_indexes) != set(_INDEX_CONTRACT):
+            raise QueryObservationError(
+                "observation_store_unsupported",
+                "query observation index set does not match version 1",
+                {
+                    "expected_indexes": sorted(_INDEX_CONTRACT),
+                    "actual_indexes": sorted(user_indexes),
+                },
+            )
+        for index_name, expected_columns in _INDEX_CONTRACT.items():
+            index_row = user_indexes[index_name]
+            actual_columns = tuple(
+                str(row["name"])
+                for row in connection.execute(
+                    f"PRAGMA index_info({index_name})"
+                ).fetchall()
+            )
+            ddl_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                (index_name,),
+            ).fetchone()
+            actual_ddl = (
+                "" if ddl_row is None or ddl_row["sql"] is None else str(ddl_row["sql"])
+            )
+            expected_ddl = (
+                f"CREATE INDEX {index_name} ON {OBSERVATION_TABLE}"
+                f"({', '.join(expected_columns)})"
+            )
+            if (
+                int(index_row["unique"]) != 0
+                or int(index_row["partial"]) != 0
+                or actual_columns != expected_columns
+                or _normalized_ddl(actual_ddl) != _normalized_ddl(expected_ddl)
+            ):
+                raise QueryObservationError(
+                    "observation_store_unsupported",
+                    "query observation index definition does not match version 1",
+                    {"index": index_name},
+                )
         rows = connection.execute(
             f"SELECT DISTINCT schema_version, policy_version FROM {OBSERVATION_TABLE}"
         ).fetchall()

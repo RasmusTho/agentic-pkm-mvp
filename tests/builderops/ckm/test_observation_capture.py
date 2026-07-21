@@ -61,6 +61,43 @@ def _fingerprint(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _canonical_observation_table_ddl() -> str:
+    return f"""
+        CREATE TABLE {OBSERVATION_TABLE} (
+            observation_id TEXT PRIMARY KEY NOT NULL,
+            schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+            event_kind TEXT NOT NULL,
+            observation_json TEXT,
+            semantic_digest TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            lifecycle TEXT NOT NULL,
+            lifecycle_marker_json TEXT NOT NULL,
+            supersedes_observation_id TEXT,
+            deleted_at TEXT
+        )
+    """
+
+
+def _assert_schema_refused(ckm_path: Path, ddl: str) -> QueryObservationError:
+    observation_path = observation_store_path(ckm_path)
+    with sqlite3.connect(observation_path) as connection:
+        connection.execute("CREATE TABLE unrelated (value TEXT)")
+        connection.execute(ddl)
+    with pytest.raises(QueryObservationError) as exc_info:
+        QueryObservationStore(ckm_path).initialize()
+    assert exc_info.value.code == "observation_store_unsupported"
+    with sqlite3.connect(observation_path) as connection:
+        assert connection.execute(
+            f"SELECT COUNT(*) FROM {OBSERVATION_TABLE}"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM unrelated"
+        ).fetchone()[0] == 0
+    return exc_info.value
+
+
 def test_query_observation_schema_excludes_sensitive_payloads(tmp_path: Path) -> None:
     ckm = _store(tmp_path)
     outcome = CkmQueryService(ckm.db_path).list_capabilities()
@@ -93,13 +130,47 @@ def test_query_observation_schema_excludes_sensitive_payloads(tmp_path: Path) ->
     assert row["schema_version"] == OBSERVATION_SCHEMA_VERSION
     assert row["policy_version"] == RETENTION_POLICY_VERSION
 
-    malformed_ckm = tmp_path / "malformed.sqlite"
-    malformed_path = observation_store_path(malformed_ckm)
-    with sqlite3.connect(malformed_path) as connection:
-        connection.execute(f"CREATE TABLE {OBSERVATION_TABLE} (observation_id TEXT)")
-    with pytest.raises(QueryObservationError, match="does not match version 1") as exc_info:
-        QueryObservationStore(malformed_ckm).initialize()
-    assert exc_info.value.code == "observation_store_unsupported"
+    all_text_columns = ", ".join(
+        f"{name} TEXT"
+        for name in (
+            "observation_id",
+            "schema_version",
+            "event_kind",
+            "observation_json",
+            "semantic_digest",
+            "policy_version",
+            "observed_at",
+            "expires_at",
+            "lifecycle",
+            "lifecycle_marker_json",
+            "supersedes_observation_id",
+            "deleted_at",
+        )
+    )
+    _assert_schema_refused(
+        tmp_path / "all-text.sqlite",
+        f"CREATE TABLE {OBSERVATION_TABLE} ({all_text_columns})",
+    )
+    _assert_schema_refused(
+        tmp_path / "no-primary-key.sqlite",
+        _canonical_observation_table_ddl().replace(
+            "observation_id TEXT PRIMARY KEY NOT NULL",
+            "observation_id TEXT NOT NULL",
+        ),
+    )
+    _assert_schema_refused(
+        tmp_path / "nullable-columns.sqlite",
+        _canonical_observation_table_ddl().replace(" NOT NULL", ""),
+    )
+    missing_check = _assert_schema_refused(
+        tmp_path / "no-check.sqlite",
+        _canonical_observation_table_ddl().replace(
+            " CHECK (schema_version = 1)", ""
+        ),
+    )
+    assert missing_check.message == (
+        "query observation table constraints do not match version 1"
+    )
 
     extra_ckm = tmp_path / "extra.sqlite"
     extra = QueryObservationStore(extra_ckm)
@@ -109,10 +180,58 @@ def test_query_observation_schema_excludes_sensitive_payloads(tmp_path: Path) ->
     with pytest.raises(QueryObservationError) as extra_exc:
         extra.initialize()
     assert extra_exc.value.code == "observation_store_unsupported"
-    assert extra_exc.value.details == {
-        "missing_columns": [],
-        "unexpected_columns": ["raw_query"],
+
+    missing_indexes_ckm = tmp_path / "missing-indexes.sqlite"
+    missing_indexes = QueryObservationStore(missing_indexes_ckm)
+    with sqlite3.connect(missing_indexes.path) as connection:
+        connection.execute("CREATE TABLE unrelated (value TEXT)")
+        connection.execute(_canonical_observation_table_ddl())
+    missing_indexes.initialize()
+    with sqlite3.connect(missing_indexes.path) as connection:
+        index_names = {
+            row[1]
+            for row in connection.execute(
+                f"PRAGMA index_list({OBSERVATION_TABLE})"
+            ).fetchall()
+            if row[3] == "c"
+        }
+        assert index_names == {
+            "idx_ckm_query_observation_expiry",
+            "idx_ckm_query_observation_lifecycle",
+        }
+        assert connection.execute(
+            "SELECT COUNT(*) FROM unrelated"
+        ).fetchone()[0] == 0
+    additive_first = missing_indexes.capture(
+        outcome,
+        event_kind="supported_result",
+        metadata=_metadata(),
+        observed_at=OBSERVED_AT,
+    )
+    additive_retry = missing_indexes.capture(
+        outcome,
+        event_kind="supported_result",
+        metadata=_metadata(),
+        observed_at=OBSERVED_AT,
+    )
+    assert additive_retry == additive_first
+    assert len(_rows(missing_indexes)) == 1
+
+    wrong_index_ckm = tmp_path / "wrong-index.sqlite"
+    wrong_index = QueryObservationStore(wrong_index_ckm)
+    with sqlite3.connect(wrong_index.path) as connection:
+        connection.execute(_canonical_observation_table_ddl())
+        connection.execute(
+            f"CREATE INDEX idx_ckm_query_observation_expiry "
+            f"ON {OBSERVATION_TABLE}(observation_id, expires_at)"
+        )
+    with pytest.raises(QueryObservationError) as wrong_index_exc:
+        wrong_index.initialize()
+    assert wrong_index_exc.value.code == "observation_store_unsupported"
+    assert wrong_index_exc.value.details == {
+        "index": "idx_ckm_query_observation_expiry"
     }
+    assert _rows(wrong_index) == []
 
 
 def test_supported_refused_and_accepted_question_events_are_distinct(tmp_path: Path) -> None:
