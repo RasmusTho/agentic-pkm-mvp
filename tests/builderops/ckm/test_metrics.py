@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 
 import pytest
 from click.testing import CliRunner
@@ -46,6 +47,38 @@ def test_explicit_retention_runs_outside_read_path_and_binds_source_sample(tmp_p
     sample = retained.retain(result, finding_evaluations={"finding": "bound"}, retained_at="2026-07-21T00:00:00Z")
     replay = retained.replay(sample.sample_id)
     assert replay["snapshot"]["watermarks"] == result.to_dict()["snapshot"]["watermarks"]
+
+
+def test_retention_identity_binds_finding_evaluations_and_is_idempotent(tmp_path: Path) -> None:
+    retained = MetricRetentionStore(tmp_path / "metrics.sqlite")
+    result = _result(tmp_path)
+    first = retained.retain(result, finding_evaluations={"finding": "first"}, retained_at="2026-07-21T00:00:00Z")
+    identical = retained.retain(result, finding_evaluations={"finding": "first"}, retained_at="2026-07-21T00:00:00Z")
+    changed = retained.retain(result, finding_evaluations={"finding": "changed"}, retained_at="2026-07-21T00:00:00Z")
+    assert identical.sample_id == first.sample_id
+    assert changed.sample_id != first.sample_id
+    assert retained.storage_usage()["count"] == 2
+    with sqlite3.connect(retained.path) as conn:
+        evaluations = dict(
+            conn.execute(
+                "SELECT sample_id, finding_evaluations_json FROM ckm_metric_sample_v1"
+            ).fetchall()
+        )
+    assert evaluations[first.sample_id] == '{"finding":"first"}'
+    assert evaluations[changed.sample_id] == '{"finding":"changed"}'
+
+
+def test_replay_refuses_tampered_retained_source(tmp_path: Path) -> None:
+    retained = MetricRetentionStore(tmp_path / "metrics.sqlite")
+    sample = retained.retain(_result(tmp_path), retained_at="2026-07-21T00:00:00Z")
+    with sqlite3.connect(retained.path) as conn:
+        conn.execute(
+            "UPDATE ckm_metric_sample_v1 SET source_payload = ? WHERE sample_id = ?",
+            (b'{"tampered":true}', sample.sample_id),
+        )
+    with pytest.raises(CkmContractError) as exc:
+        retained.replay(sample.sample_id)
+    assert exc.value.code == "tampered_retained_source"
 
 
 def test_retained_samples_apply_storage_accounting_and_pruning_policy(tmp_path: Path) -> None:

@@ -153,12 +153,15 @@ class MetricRetentionStore:
         observation = build_observation(result, metric_id=metric_id, generated_at=retained_at)
         source = result.to_dict()
         source_bytes = canonical_json(source).encode("utf-8")
+        source_digest = canonical_digest(source)
+        evaluations_json = canonical_json(dict(finding_evaluations or {}))
+        evaluations_digest = canonical_digest(dict(finding_evaluations or {}))
         retained = retained_at or _utc_now()
         expires = (datetime.fromisoformat(retained.replace("Z", "+00:00")) + timedelta(days=RETENTION_DAYS)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        sample_id = f"ckm_sample_{canonical_digest({'observation': observation['observation_id'], 'source': source['snapshot']['snapshot_digest'], 'retained_at': retained, 'supersedes': supersedes_sample_id})[:24]}"
+        sample_id = f"ckm_sample_{canonical_digest({'observation': observation['observation_id'], 'source': source_digest, 'finding_evaluations': evaluations_digest, 'retained_at': retained, 'supersedes': supersedes_sample_id})[:24]}"
         marker = {"event": "retained", "payload_removed": False, "policy_version": RETENTION_POLICY_VERSION}
         with sqlite3.connect(self.path) as conn:
-            conn.execute("INSERT OR IGNORE INTO ckm_metric_sample_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (sample_id, observation["observation_id"], canonical_json(observation), source_bytes, source["snapshot"]["snapshot_digest"], canonical_json(source["snapshot"]["watermarks"]), canonical_json(dict(finding_evaluations or {})), RETENTION_POLICY_VERSION, retained, expires, "retained", canonical_json(marker), supersedes_sample_id, None))
+            conn.execute("INSERT OR IGNORE INTO ckm_metric_sample_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (sample_id, observation["observation_id"], canonical_json(observation), source_bytes, source_digest, canonical_json(source["snapshot"]["watermarks"]), evaluations_json, RETENTION_POLICY_VERSION, retained, expires, "retained", canonical_json(marker), supersedes_sample_id, None))
         return RetainedSample(sample_id, observation["observation_id"], "retained", True)
 
     def storage_usage(self) -> dict[str, int]:
@@ -202,9 +205,15 @@ class MetricRetentionStore:
     def replay(self, sample_id: str) -> dict[str, Any]:
         self.initialize()
         with sqlite3.connect(self.path) as conn:
-            row = conn.execute("SELECT source_payload, lifecycle, lifecycle_marker_json FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
+            row = conn.execute("SELECT source_payload, source_digest, lifecycle, lifecycle_marker_json FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
         if row is None:
             raise CkmContractError("missing_retained_sample", "retained metric sample is unknown", {"sample_id": sample_id})
         if row[0] is None:
-            raise CkmContractError("source_unavailable", "retained source payload is unavailable", {"sample_id": sample_id, "lifecycle": row[1], "marker": json.loads(row[2])})
-        return json.loads(bytes(row[0]).decode("utf-8"))
+            raise CkmContractError("source_unavailable", "retained source payload is unavailable", {"sample_id": sample_id, "lifecycle": row[2], "marker": json.loads(row[3])})
+        try:
+            payload = json.loads(bytes(row[0]).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CkmContractError("tampered_retained_source", "retained source payload failed integrity verification", {"sample_id": sample_id}) from exc
+        if canonical_digest(payload) != row[1]:
+            raise CkmContractError("tampered_retained_source", "retained source payload failed integrity verification", {"sample_id": sample_id})
+        return payload
