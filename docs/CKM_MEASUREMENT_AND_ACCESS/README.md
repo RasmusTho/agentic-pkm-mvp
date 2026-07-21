@@ -124,12 +124,14 @@ a typed refusal without a partial semantic result.
 
 Composite indexes support the live predicates and are installed by both new-
 store bootstrap and existing-store `ensure_schema()` migration. Projection and
-overview rendering use one read-only batch with a constant statement plan;
-rendering performs a bounded fail-loud schema preflight and cannot initialize or
-migrate a missing or outdated store. Write/CLI producers remain responsible for
-explicit schema setup before producing generated files. This delivery does not
-add pagination, arbitrary filters or sorting, ranking, HTTP/UI, metrics, or
-observation semantics.
+overview rendering use one explicit read-only SQLite snapshot transaction with
+a constant statement plan. The batch binds and rechecks CKM epoch/revision/schema
+identity plus database-file identity, and it refuses before materialization when
+any declared object-class or aggregate capture bound is exceeded. Rendering also
+performs a fail-loud schema preflight and cannot initialize or migrate a missing
+or outdated store. Write/CLI producers remain responsible for explicit schema
+setup before producing generated files. This delivery does not add pagination,
+arbitrary filters or sorting, ranking, HTTP/UI, metrics, or observation semantics.
 
 ## M1 delivered semantics
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from app.builderops.ckm.overview_html import render_overview_html
 from app.builderops.ckm.projections import render_projection
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.schema import CKM_REQUIRED_QUERY_INDEXES
-from app.builderops.ckm.store import CkmStore
+from app.builderops.ckm.store import CkmProjectionCaptureError, CkmStore
 from tests.builderops.ckm.test_query_service import _mixed_epoch_payload
 
 
@@ -124,6 +125,114 @@ def test_projection_consumers_do_not_regress_to_n_plus_one(tmp_path: Path) -> No
     with pytest.raises(CkmValidationError, match="unsupported state row"):
         render_overview_html(outdated)
     assert outdated.db_path.read_bytes() == before
+
+
+def test_projection_batch_snapshot_prevents_concurrent_revision_mix(
+    tmp_path: Path,
+) -> None:
+    store, capabilities, _, _ = _populated(tmp_path)
+    wal_keeper = sqlite3.connect(store.db_path)
+    assert wal_keeper.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    wal_keeper.execute("UPDATE ckm_state SET updated_at = updated_at WHERE singleton = 1")
+    wal_keeper.commit()
+    original = store._readonly_connect
+    writer_done = threading.Event()
+    writer_errors: list[Exception] = []
+    writer_started = False
+
+    def write_revision() -> None:
+        try:
+            with sqlite3.connect(store.db_path, timeout=5) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE ckm_state SET state_revision = state_revision + 1 "
+                    "WHERE singleton = 1"
+                )
+                conn.commit()
+        except Exception as exc:  # pragma: no cover - asserted below
+            writer_errors.append(exc)
+        finally:
+            writer_done.set()
+
+    def traced() -> sqlite3.Connection:
+        conn = original()
+
+        def on_statement(statement: str) -> None:
+            nonlocal writer_started
+            if writer_started or not statement.startswith("SELECT * FROM ckm_capability"):
+                return
+            writer_started = True
+            threading.Thread(target=write_revision, daemon=True).start()
+            assert writer_done.wait(timeout=2)
+
+        conn.set_trace_callback(on_statement)
+        return conn
+
+    store._readonly_connect = traced  # type: ignore[method-assign]
+    batch = store.load_projection_batch()
+    assert not writer_errors
+    assert batch.capabilities == tuple(
+        sorted(capabilities, key=lambda item: (item.name, item.id))
+    )
+    assert store.load_projection_batch().state_identity.state_revision == (
+        batch.state_identity.state_revision + 1
+    )
+    wal_keeper.close()
+
+
+def test_projection_batch_refuses_mixed_database_identity(tmp_path: Path) -> None:
+    store, _, _, _ = _populated(tmp_path / "original")
+    replacement, _, _, _ = _populated(tmp_path / "replacement")
+    original = store._readonly_connect
+    replaced = False
+
+    def traced() -> sqlite3.Connection:
+        conn = original()
+
+        def on_statement(statement: str) -> None:
+            nonlocal replaced
+            if replaced or not statement.startswith("SELECT * FROM ckm_capability"):
+                return
+            replaced = True
+            replacement.db_path.replace(store.db_path)
+
+        conn.set_trace_callback(on_statement)
+        return conn
+
+    store._readonly_connect = traced  # type: ignore[method-assign]
+    with pytest.raises(CkmProjectionCaptureError) as refusal:
+        store.load_projection_batch()
+    assert refusal.value.code == "mixed_epoch"
+    assert "identity changed" in str(refusal.value)
+
+
+def test_projection_batch_refuses_over_bound_before_materialization(
+    tmp_path: Path,
+) -> None:
+    store, _, _, _ = _populated(tmp_path, count=4)
+    statements: list[str] = []
+    original = store._readonly_connect
+
+    def traced() -> sqlite3.Connection:
+        conn = original()
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    store._readonly_connect = traced  # type: ignore[method-assign]
+    before = store.db_path.read_bytes()
+    with pytest.raises(CkmProjectionCaptureError) as class_refusal:
+        store.load_projection_batch(class_capture_limit=3)
+    assert class_refusal.value.code == "snapshot_too_large"
+    assert class_refusal.value.details["over_bound_classes"] == {"capability": 4}
+    with pytest.raises(CkmProjectionCaptureError) as aggregate_refusal:
+        store.load_projection_batch(
+            class_capture_limit=100,
+            aggregate_capture_limit=3,
+        )
+    assert aggregate_refusal.value.code == "snapshot_too_large"
+    assert aggregate_refusal.value.details["aggregate_count"] > 3
+    assert not any(statement.startswith("SELECT * FROM") for statement in statements)
+    assert store.db_path.read_bytes() == before
 
 
 def test_query_optimization_cannot_weaken_q1_bounds(tmp_path: Path) -> None:

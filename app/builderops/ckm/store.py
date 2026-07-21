@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -52,9 +53,22 @@ from app.builderops.ckm.schema import (
 
 JsonDict = dict[str, Any]
 
+CKM_PROJECTION_CLASS_CAPTURE_LIMIT = 500
+CKM_PROJECTION_AGGREGATE_CAPTURE_LIMIT = 3_000
+
+
+class CkmProjectionCaptureError(CkmValidationError):
+    """Typed all-or-nothing refusal from the projection snapshot reader."""
+
+    def __init__(self, code: str, message: str, details: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = dict(details)
+
 
 @dataclass(frozen=True)
 class CkmProjectionBatch:
+    state_identity: CkmStateIdentity
     capabilities: tuple[CkmCapability, ...]
     artifacts: tuple[CkmArtifact, ...]
     edges_by_capability: Mapping[str, tuple[CkmEvidenceEdge, ...]]
@@ -112,6 +126,29 @@ class CkmStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only = ON")
         return conn
+
+    def _db_file_identity(self) -> tuple[int, int, int, int]:
+        try:
+            value = self._db_path.lstat()
+        except FileNotFoundError as exc:
+            raise CkmProjectionCaptureError(
+                "missing_store",
+                f"CKM database does not exist: {self._db_path}",
+                {},
+            ) from exc
+        except OSError as exc:
+            raise CkmProjectionCaptureError(
+                "unsupported_store",
+                f"CKM database identity could not be verified: {self._db_path}",
+                {"reason": str(exc)},
+            ) from exc
+        if not stat.S_ISREG(value.st_mode):
+            raise CkmProjectionCaptureError(
+                "unsupported_store",
+                f"CKM database path is not a regular file: {self._db_path}",
+                {},
+            )
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
 
     @staticmethod
     def _preflight_read_schema(conn: sqlite3.Connection) -> None:
@@ -1317,16 +1354,101 @@ class CkmStore:
             rows = conn.execute("SELECT * FROM ckm_capability ORDER BY name").fetchall()
         return [CkmCapability.from_row(row) for row in rows]
 
-    def load_projection_batch(self) -> CkmProjectionBatch:
-        """Load all projection inputs read-only with a constant bounded plan."""
+    def load_projection_batch(
+        self,
+        *,
+        class_capture_limit: int = CKM_PROJECTION_CLASS_CAPTURE_LIMIT,
+        aggregate_capture_limit: int = CKM_PROJECTION_AGGREGATE_CAPTURE_LIMIT,
+    ) -> CkmProjectionBatch:
+        """Capture all bounded projection inputs in one read-only snapshot."""
+        if class_capture_limit < 1 or aggregate_capture_limit < 1:
+            raise ValueError("projection capture limits must be positive")
+        file_identity = self._db_file_identity()
         with self._readonly_connect() as conn:
+            conn.execute("BEGIN")
             self._preflight_read_schema(conn)
+            start_state_row = conn.execute(
+                "SELECT epoch, state_revision, schema_version "
+                "FROM ckm_state WHERE singleton = 1"
+            ).fetchone()
+            assert start_state_row is not None
+            state_identity = CkmStateIdentity(
+                str(start_state_row["epoch"]),
+                int(start_state_row["state_revision"]),
+                int(start_state_row["schema_version"]),
+            )
+            count_row = conn.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM ckm_capability) AS capability,
+                    (SELECT COUNT(*) FROM ckm_artifact) AS artifact,
+                    (SELECT COUNT(*) FROM ckm_evidence_edge) AS evidence_edge,
+                    (SELECT COUNT(*) FROM ckm_assessment) AS assessment,
+                    (SELECT COUNT(*) FROM ckm_finding) AS finding,
+                    (SELECT COUNT(*) FROM ckm_watermark) AS watermark
+                """
+            ).fetchone()
+            assert count_row is not None
+            object_counts = {
+                key: int(count_row[key])
+                for key in (
+                    "capability",
+                    "artifact",
+                    "evidence_edge",
+                    "assessment",
+                    "finding",
+                    "watermark",
+                )
+            }
+            over_bound = {
+                key: count
+                for key, count in object_counts.items()
+                if count > class_capture_limit
+            }
+            aggregate_count = sum(object_counts.values())
+            if over_bound or aggregate_count > aggregate_capture_limit:
+                raise CkmProjectionCaptureError(
+                    "snapshot_too_large",
+                    "complete CKM projection snapshot exceeds configured bounds",
+                    {
+                        "class_limit": class_capture_limit,
+                        "aggregate_limit": aggregate_capture_limit,
+                        "object_counts": object_counts,
+                        "over_bound_classes": over_bound,
+                        "aggregate_count": aggregate_count,
+                    },
+                )
             capability_rows = conn.execute("SELECT * FROM ckm_capability ORDER BY name, id").fetchall()
             artifact_rows = conn.execute("SELECT * FROM ckm_artifact ORDER BY source_ref, id").fetchall()
             edge_rows = conn.execute("SELECT * FROM ckm_evidence_edge ORDER BY capability_id, public_id").fetchall()
             assessment_rows = conn.execute("SELECT * FROM ckm_assessment ORDER BY capability_id, asserted_at, rowid").fetchall()
             finding_rows = conn.execute("SELECT * FROM ckm_finding ORDER BY capability_id, kind, dimension").fetchall()
             watermark_rows = conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source").fetchall()
+            end_state_row = conn.execute(
+                "SELECT epoch, state_revision, schema_version "
+                "FROM ckm_state WHERE singleton = 1"
+            ).fetchone()
+            if end_state_row is None or (
+                str(end_state_row["epoch"]),
+                int(end_state_row["state_revision"]),
+                int(end_state_row["schema_version"]),
+            ) != (
+                state_identity.epoch,
+                state_identity.state_revision,
+                state_identity.schema_version,
+            ):
+                raise CkmProjectionCaptureError(
+                    "mixed_epoch",
+                    "CKM state changed during projection snapshot capture",
+                    {},
+                )
+            if self._db_file_identity() != file_identity:
+                raise CkmProjectionCaptureError(
+                    "mixed_epoch",
+                    "CKM database identity changed during projection snapshot capture",
+                    {},
+                )
+            conn.commit()
         edges: dict[str, list[CkmEvidenceEdge]] = {}
         for row in edge_rows:
             edges.setdefault(str(row["capability_id"]), []).append(CkmEvidenceEdge.from_row(row))
@@ -1345,6 +1467,7 @@ class CkmStore:
                 CkmFinding.from_row(row, citations=_loads(row["citations"]))
             )
         return CkmProjectionBatch(
+            state_identity=state_identity,
             capabilities=tuple(CkmCapability.from_row(row) for row in capability_rows),
             artifacts=tuple(CkmArtifact.from_row(row) for row in artifact_rows),
             edges_by_capability={key: tuple(value) for key, value in edges.items()},
