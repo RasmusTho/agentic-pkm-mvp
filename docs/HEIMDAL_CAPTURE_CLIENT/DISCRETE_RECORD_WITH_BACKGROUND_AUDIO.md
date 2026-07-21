@@ -13,6 +13,11 @@ can_parallelize_with: [DEVICE_REGISTRATION_AND_CONSENT_SURFACE]
 
 Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
 
+State: **Implemented.** Delivered by
+[`RasmusTho/bifrost` PR #28](https://github.com/RasmusTho/bifrost/pull/28)
+(issue #15, 2026-07-21). Physical-device background and interruption confirmation remains part of
+HCAP-09 rather than this implementation receipt.
+
 ## Purpose
 
 Posture A's J0: the human presses record, talks (possibly for a long time, screen locked, phone
@@ -55,17 +60,17 @@ end-to-end no-loss.
 
 ## Acceptance Criteria
 
-- [ ] Recording continues across backgrounding (background audio mode active). `Verify:` bifrost
+- [x] Recording continues across backgrounding (background audio mode active). `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/CaptureRecorderTests.swift::testBackgroundTransitionKeepsSessionRecording`
   (new; state-machine + session-config level) plus the walkthrough step in HCAP-09 for the
   on-device truth.
-- [ ] Interruption pauses; resume resumes; abandonment finalizes a complete segment of captured
+- [x] Interruption pauses; resume resumes; abandonment finalizes a complete segment of captured
   audio. `Verify:` bifrost
   `CaptureRecorderTests.swift::{testInterruptionPausesAndResumes,testAbandonedSessionFinalizesSegment}`
   (new; injected recorder).
-- [ ] Finalized segments are `.m4a` with unique names in staging and appear in the staged list.
+- [x] Finalized segments are `.m4a` with unique names in staging and appear in the staged list.
   `Verify:` bifrost `CaptureRecorderTests.swift::testFinalizedSegmentStagedWithUniqueName` (new).
-- [ ] Stop → finalize never leaves a zero-byte or unclosed file; the file is fully written before
+- [x] Stop → finalize never leaves a zero-byte or unclosed file; the file is fully written before
   the state machine reports `staged` (enforcement AC on the production finalize path). `Verify:`
   bifrost `CaptureRecorderTests.swift::testStagedImpliesFullyWrittenFile` (new; asserts through
   the real finalize path with a temp staging dir).
@@ -85,9 +90,12 @@ end-to-end no-loss.
 ## Restart / Durability Posture
 
 A recording in progress when the app is force-killed survives as whatever the recorder had
-flushed: on next launch, staging is reconciled — any orphaned recorder file is finalized into a
-`staged` item (INV-B3-1's accountability), surfaced with a "recovered" marker. Staged items are
-durable on disk; the state list is rebuilt from the staging directory, never from memory.
+flushed. On next launch, every orphaned `.m4a` is opened and decoded through AVFoundation before it
+can become a recovered `staged` item. Only complete, decodable media enters the delivery-pending
+queue. Invalid, truncated, empty, or otherwise unverifiable bytes remain untouched on disk and are
+surfaced separately as an explicit filename-bearing recovery failure (INV-B3-1's accountable
+custody); they are never represented as complete audio. Both staged items and recovery failures are
+rebuilt from the staging directory, never from memory.
 
 ## Related Docs
 
@@ -97,7 +105,7 @@ durable on disk; the state list is rebuilt from the staging directory, never fro
 
 ## Related GitHub Issues
 
-One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:blocked` on the HCAP-01
-issue), linking hub #3026 and this spec file. TCD hint: Sonnet / high effort — AVFoundation
-lifecycle correctness under interruptions is the one genuinely fiddly seam in B3; escalate to Opus
-only if session/interruption semantics produce irreproducible test behavior.
+Implemented by [`RasmusTho/bifrost` issue #15](https://github.com/RasmusTho/bifrost/issues/15) and
+[PR #28](https://github.com/RasmusTho/bifrost/pull/28). The nonblocking automatic-resume retry
+affordance found during final review is tracked separately by
+[`RasmusTho/bifrost` issue #34](https://github.com/RasmusTho/bifrost/issues/34).

@@ -11,6 +11,8 @@ can_parallelize_with: [DEVICE_REGISTRATION_AND_CONSENT_SURFACE]
 
 # Deliver Recordings To Watched Folder
 
+State: Implemented. Delivered by Bifrost PR #36 (issue #16, 2026-07-21).
+
 Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
 
 ## Purpose
@@ -54,22 +56,24 @@ structurally impossible to hide.
 
 ## Acceptance Criteria
 
-- [ ] Delivery writes a temp-named file and atomically renames to the admissible final name; on
+- [x] Delivery writes a temp-named file and atomically renames to the admissible final name; on
   any failure before rename, no admissible-named file exists in the folder. `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/CaptureDeliveryTests.swift::testTempNameThenRenameNeverExposesPartial`
   (new; injected failing copy mid-write).
-- [ ] Staging copy is deleted only after confirmed placement; failure keeps it. `Verify:` bifrost
+- [x] Staging copy is deleted only after confirmed placement; failure keeps it. `Verify:` bifrost
   `CaptureDeliveryTests.swift::testLocalDeleteOnlyAfterConfirmedPlacement` (new).
-- [ ] Queue state is rebuilt from disk on relaunch (staged and failed items reappear). `Verify:`
+- [x] Queue state is rebuilt from disk on relaunch (staged and failed items reappear). `Verify:`
   bifrost `CaptureDeliveryTests.swift::testQueueRebuiltFromStagingDirectory` (new).
-- [ ] Delivery goes through coordinated file access on the production delivery path (enforcement
+- [x] Delivery goes through coordinated file access on the production delivery path (enforcement
   AC). `Verify:` bifrost `CaptureDeliveryTests.swift::testDeliveryUsesCoordinatedWrite` (new;
   asserts the coordinator seam is exercised from the queue's deliver method).
 
-## How to Verify (Pre-Merge)
+## Delivery Verification
 
-- bifrost CI green; `swiftlint --strict` clean. Real iCloud sync behavior is not
-  simulator-provable — HCAP-08 owns the real-runtime receipt.
+- Bifrost PR #36 merged exact head `68c32efd039295445a17cfdca4da4ac5756e484f` after hosted
+  iPhone/iPad CI, strict SwiftLint, the four named acceptance tests, additional full-byte corruption
+  and restart-custody coverage, and two clean independent reviews.
+- Real iCloud sync behavior is not simulator-provable — HCAP-08 owns the real-runtime receipt.
 
 ## Out of Scope
 
@@ -92,6 +96,4 @@ mid-delivery kill is an item back in `staged`/`failed`, never a lost or double-a
 
 ## Related GitHub Issues
 
-One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:blocked` on the HCAP-02
-issue), linking hub #3026 and this spec file. TCD hint: Sonnet / high effort — file-custody
-correctness with injected failures; the tests are the hard part, the code is small.
+Delivered by `RasmusTho/bifrost` issue #16 / PR #36, linked to hub #3026 and this spec file.
