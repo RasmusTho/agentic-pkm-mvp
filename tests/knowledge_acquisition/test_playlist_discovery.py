@@ -99,6 +99,31 @@ class FailingReadQueue:
         raise AssertionError(f"enqueue must not run after a failed read: {kwargs!r}")
 
 
+class FailingRegistry:
+    def __init__(self, delegate: SourceRegistry, fail_method: str) -> None:
+        self.delegate = delegate
+        self.fail_method = fail_method
+
+    def get(self, binding_id: str):
+        if self.fail_method == "get":
+            raise RuntimeError("PRIVATE_DIAGNOSTIC from registry read")
+        return self.delegate.get(binding_id)
+
+    def record_poll_success(self, binding_id: str, *, cursor: dict[str, Any]):
+        if self.fail_method == "record_poll_success":
+            raise RuntimeError("PRIVATE_DIAGNOSTIC from registry success write")
+        return self.delegate.record_poll_success(binding_id, cursor=cursor)
+
+    def record_poll_failure(
+        self, binding_id: str, *, reason_code: str, detail: Any = None
+    ):
+        if self.fail_method == "record_poll_failure":
+            raise RuntimeError("PRIVATE_DIAGNOSTIC from registry failure write")
+        return self.delegate.record_poll_failure(
+            binding_id, reason_code=reason_code, detail=detail
+        )
+
+
 def _item(playlist_item_id: str, video_id: str, position: int = 0) -> PlaylistItem:
     return PlaylistItem(
         playlist_item_id=playlist_item_id,
@@ -192,6 +217,8 @@ def test_v1_selects_exactly_one_enabled_inbox(outbox: FakeOutboxConn) -> None:
     same = service.select_inbox(
         playlist_ref=PLAYLIST_A, title="Synthetic V1 Inbox"
     )
+    with pytest.raises(V1InboxConfigurationError, match="Liked Videos is unavailable"):
+        service.select_inbox(playlist_ref="LL", title="Liked Videos")
     with pytest.raises(V1InboxConfigurationError, match="already has an enabled Inbox"):
         service.select_inbox(playlist_ref=PLAYLIST_B, title="Second Inbox")
 
@@ -238,7 +265,7 @@ def test_enqueue_failure_blocks_cursor_prefix(
     failing_queue: Any = (
         FailingReadQueue() if failure_stage == "read" else FailingQueue(requests)
     )
-    with pytest.raises(SourcePollPersistenceError, match="request persistence failed") as caught:
+    with pytest.raises(SourcePollPersistenceError, match="source sync persistence failed") as caught:
         poll_source(
             binding,
             api_client=StubApiClient(
@@ -256,6 +283,50 @@ def test_enqueue_failure_blocks_cursor_prefix(
     assert after.last_error["reason_code"] == "network_error"
     expected_items = [] if failure_stage == "read" else [VIDEO_A]
     assert [row.item_ref for row in requests.list_all()] == expected_items
+
+
+@pytest.mark.parametrize(
+    "fail_method", ["get", "record_poll_success", "record_poll_failure"]
+)
+def test_registry_persistence_failures_are_sanitized(
+    outbox: FakeOutboxConn, fail_method: str
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    binding = _register_inbox(registry, account)
+    api_result: PlaylistItemsPage | YouTubeApiError = _page(
+        _item("pli-a", VIDEO_A)
+    )
+    if fail_method == "record_poll_failure":
+        api_result = YouTubeApiError(
+            "api_unavailable", 503, "PRIVATE_DIAGNOSTIC from provider"
+        )
+
+    with pytest.raises(
+        SourcePollPersistenceError, match="source sync persistence failed"
+    ) as caught:
+        poll_source(
+            binding,
+            api_client=StubApiClient(api_result),
+            requests=requests,
+            registry=FailingRegistry(registry, fail_method),
+        )
+
+    stored = registry.get(binding.binding_id)
+    assert stored is not None
+    assert "PRIVATE_DIAGNOSTIC" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    if fail_method in {"get", "record_poll_success"}:
+        assert stored.cursor == {}
+        assert stored.last_success_at is None
+        assert stored.last_error["reason_code"] == "network_error"
+        assert "PRIVATE_DIAGNOSTIC" not in json.dumps(stored.last_error)
+    else:
+        assert stored.cursor == {}
+        assert stored.last_error is None
 
 
 @pytest.mark.parametrize(
@@ -322,6 +393,15 @@ def test_v1_status_reports_connection_last_success_and_sanitized_error(
     assert connected_status["status"] == "connected"
     assert connected_status["last_success_at"] is not None
     assert connected_status["latest_error"] is None
+
+    api.result = NotModified(etag='"etag-1"')
+    no_change = service.sync_now()
+    no_change_status = service.status()
+    assert no_change["status"] == "connected"
+    assert no_change["not_modified"] is True
+    assert no_change_status["status"] == "connected"
+    assert no_change_status["last_success_at"] is not None
+    assert no_change_status["latest_error"] is None
 
 
 def test_manual_inbox_sync_uses_production_poll_route(

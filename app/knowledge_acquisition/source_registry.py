@@ -1061,16 +1061,16 @@ class _PgSourceRegistryBackend:
                     last_error = NULL,
                     updated_at = %s::timestamptz
                 WHERE binding_id = %s
+                RETURNING {_COLUMNS_SQL}
                 """,
                 (json.dumps(cursor), now, now, now, binding_id),
             )
-            if cur.rowcount == 0:
+            row = cur.fetchone()
+            if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
+            return _row_to_binding(row)
         finally:
             conn.close()
-        result = self.get(binding_id)
-        assert result is not None  # just wrote it
-        return result
 
     def record_poll_failure(
         self,
@@ -1090,16 +1090,16 @@ class _PgSourceRegistryBackend:
                     last_error = %s::jsonb,
                     updated_at = %s::timestamptz
                 WHERE binding_id = %s
+                RETURNING {_COLUMNS_SQL}
                 """,
                 (now, json.dumps(last_error), now, binding_id),
             )
-            if cur.rowcount == 0:
+            row = cur.fetchone()
+            if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
+            return _row_to_binding(row)
         finally:
             conn.close()
-        result = self.get(binding_id)
-        assert result is not None  # just wrote it
-        return result
 
 
 # --- Service layer -------------------------------------------------------

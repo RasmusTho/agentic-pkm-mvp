@@ -90,10 +90,30 @@ class V1InboxConfigurationError(ValueError):
 def _raise_persistence_error() -> NoReturn:
     # Construct and raise outside the secret-bearing backend exception handler,
     # so neither message nor exception graph can escape INV-YSS-5.
-    error = SourcePollPersistenceError("request persistence failed before cursor advance")
+    error = SourcePollPersistenceError(
+        "source sync persistence failed before a confirmed outcome"
+    )
     error.__cause__ = None
     error.__context__ = None
     raise error from None
+
+
+def _best_effort_persistence_degradation(
+    binding_id: str,
+    registry: SourceRegistry,
+) -> None:
+    """Record a fixed failure without ever forwarding backend diagnostics."""
+
+    try:
+        registry.record_poll_failure(
+            binding_id,
+            reason_code="network_error",
+            detail="Durable source-sync storage was unavailable; retry the manual sync.",
+        )
+    except Exception:
+        # A failed status store cannot safely provide more detail. The detached
+        # public exception below remains the only caller-visible diagnostic.
+        pass
 
 
 def _quota_spent(api_client: Any) -> int:
@@ -125,10 +145,17 @@ def _successful_result(
     deduped: int,
     not_modified: bool,
 ) -> SourcePollResult:
-    registry.record_poll_success(
-        binding.binding_id,
-        cursor=cursor,
-    )
+    persistence_failed = False
+    try:
+        registry.record_poll_success(
+            binding.binding_id,
+            cursor=cursor,
+        )
+    except Exception:
+        persistence_failed = True
+    if persistence_failed:
+        _best_effort_persistence_degradation(binding.binding_id, registry)
+        _raise_persistence_error()
     duration_ms = _duration_ms(started)
     quota_units_spent = max(0, quota_after - quota_before)
     return SourcePollResult(
@@ -154,11 +181,17 @@ def _degraded_result(
 ) -> SourcePollResult:
     normalized_reason = reason_code if reason_code in SAFE_REASON_CODES else "api_unavailable"
     safe_detail = detail or _SAFE_REASON_DETAILS[normalized_reason]
-    registry.record_poll_failure(
-        binding.binding_id,
-        reason_code=normalized_reason,
-        detail=safe_detail,
-    )
+    persistence_failed = False
+    try:
+        registry.record_poll_failure(
+            binding.binding_id,
+            reason_code=normalized_reason,
+            detail=safe_detail,
+        )
+    except Exception:
+        persistence_failed = True
+    if persistence_failed:
+        _raise_persistence_error()
     return SourcePollResult(
         binding_id=binding.binding_id,
         run_id=run_id,
@@ -238,7 +271,15 @@ def poll_source(
     run_id = str(uuid.uuid4())
     started = time.monotonic()
 
-    current = registry.get(binding.binding_id)
+    current: SourceBinding | None = None
+    persistence_failed = False
+    try:
+        current = registry.get(binding.binding_id)
+    except Exception:
+        persistence_failed = True
+    if persistence_failed:
+        _best_effort_persistence_degradation(binding.binding_id, registry)
+        _raise_persistence_error()
     if current is None:
         raise KeyError(f"no such binding: {binding.binding_id}")
 
@@ -277,6 +318,8 @@ def poll_source(
     prior_cursor = deepcopy(binding.cursor)
     known = set(_known_item_ids(prior_cursor))
     quota_before = _quota_spent(api_client)
+    page: Any = None
+    failure_reason: str | None = None
     try:
         page = api_client.list_playlist_items(
             binding.collection_ref,
@@ -284,21 +327,17 @@ def poll_source(
             page_token=None,
         )
     except YouTubeApiError as exc:
-        return _degraded_result(
-            binding,
-            registry=registry,
-            run_id=run_id,
-            started=started,
-            reason_code=exc.reason_code,
-        )
+        failure_reason = exc.reason_code
     except Exception as exc:
         reason_code = getattr(exc, "reason_code", "network_error")
+        failure_reason = reason_code if isinstance(reason_code, str) else "network_error"
+    if failure_reason is not None:
         return _degraded_result(
             binding,
             registry=registry,
             run_id=run_id,
             started=started,
-            reason_code=reason_code if isinstance(reason_code, str) else "network_error",
+            reason_code=failure_reason,
         )
     quota_after = _quota_spent(api_client)
 
@@ -435,6 +474,11 @@ class YouTubeInboxSyncV1:
         title: str,
     ) -> SourceBinding:
         """Configure the sole V1 Inbox; a second product Inbox is refused."""
+
+        if playlist_ref == "LL":
+            raise V1InboxConfigurationError(
+                "V1 Inbox must be an ordinary owned playlist; Liked Videos is unavailable"
+            )
 
         rows = self._registry.list_for_account(self._account_binding_id)
         enabled = [

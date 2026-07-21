@@ -12,8 +12,8 @@ can_parallelize_with: []
 # Establish Source Registry and Settings
 
 State: Delivered repository-verifiable slice (#3916 / PR #3931, 2026-07-17): the registry and
-`youtubeSync.*` settings model are implemented and covered by local contract verification. Operator
-and live-capability acceptance remain pending on the parent #3915 and later YSS-02..YSS-11 slices.
+`youtubeSync.*` settings model are implemented and covered by local contract verification. The
+pragmatic Inbox V1 is completed by #3990 and #3920; broader later slices remain deferred.
 
 ## Purpose
 

@@ -170,15 +170,15 @@ Invariants that hold *across* tasks, with their partial-failure seams:
 
 ## Capability acceptance criteria
 
-- [ ] Exactly one Inbox is selected for the connected account.
+- [x] Exactly one Inbox is selected for the connected account.
       Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_v1_selects_exactly_one_enabled_inbox`.
-- [ ] A new Inbox item creates one durable request before cursor publication.
+- [x] A new Inbox item creates one durable request before cursor publication.
       Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_new_inbox_item_enqueues_once_at_production_call_site` and `tests/knowledge_acquisition/test_playlist_discovery.py::test_enqueue_failure_blocks_cursor_prefix`.
-- [ ] Failure and success status remain honest and sanitized.
+- [x] Failure and success status remain honest and sanitized.
       Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_failed_poll_never_reports_empty_success` and `tests/knowledge_acquisition/test_playlist_discovery.py::test_v1_status_reports_connection_last_success_and_sanitized_error`.
-- [ ] Manual sync uses the production poll route.
+- [x] Manual sync uses the production poll route.
       Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_manual_inbox_sync_uses_production_poll_route`.
-- [ ] The queue/drain outcome is review-required draft candidate material, never promoted knowledge.
+- [x] The queue/drain outcome is review-required draft candidate material, never promoted knowledge.
       Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_inbox_sync_produces_review_required_candidate_never_knowledge`.
 
 ## Verification path

@@ -1,4 +1,4 @@
-State: Normative shared contract for the YouTube Source Sync capability (target-state until child issues deliver it; each section names its consuming tasks).
+State: Partially implemented normative contract. `Shipped V1 product boundary` is current-state authority; broader sections remain target state until their deferred child issues are freshly re-contracted and delivered.
 Doc role: Capability contract
 Authority: Owns the source-registry shape, AcquisitionRequest contract, cursor discipline, sync event topics/payloads, settings keys and scopes, reason-code taxonomy, quota accounting, and the media-retention policy for this capability. Subordinate to `docs/EVENTS.md` (envelope/idempotency), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md` (settings scopes), and `docs/SECURITY.md` (secret baseline).
 
