@@ -77,8 +77,8 @@ streaming) stays "do not build" (R-EXTERNAL).
 
 ## Execution order
 
-1. `HEIMDAL_CLIENT_SCAFFOLD_AND_CAPTURE_FOLDER_BINDING` — **ready now.**
-2. `DISCRETE_RECORD_WITH_BACKGROUND_AUDIO` — after 1.
+1. `HEIMDAL_CLIENT_SCAFFOLD_AND_CAPTURE_FOLDER_BINDING` — **delivered** by bifrost#14 / PR #24.
+2. `DISCRETE_RECORD_WITH_BACKGROUND_AUDIO` — **delivered** by bifrost#15 / PR #28.
 3. `DELIVER_RECORDINGS_TO_WATCHED_FOLDER` — after 2.
 4. `DEVICE_REGISTRATION_AND_CONSENT_SURFACE` — after 1; **vault-write gated** (bifrost#4/#5 merged). May run parallel with 2–3.
 5. `DEVICE_HEALTH_PANEL_WITH_GAP_LOG` — after 2 and 4; gap-log writes share 4's gate.
