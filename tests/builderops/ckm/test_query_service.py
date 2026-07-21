@@ -97,6 +97,26 @@ def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
         _connection_factory=lambda _: (_ for _ in ()).throw(sqlite3.OperationalError("denied")),
     ).list_capabilities().to_dict()
     assert failed_open["error"]["code"] == "unsupported_store" and "resources" not in failed_open
+    malformed = CkmStore(tmp_path / "malformed.sqlite")
+    malformed.ensure_schema()
+    malformed_capability = malformed.upsert_capability(
+        identity_key="seed:malformed",
+        name="malformed",
+        definition="corrupt persisted public identity",
+        lifecycle="confirmed",
+        existence_provenance="test:malformed",
+    )
+    with sqlite3.connect(malformed.db_path) as conn:
+        conn.execute(
+            "UPDATE ckm_capability SET public_id = '' WHERE id = ?",
+            (malformed_capability.id,),
+        )
+        conn.commit()
+    malformed_before = _storage_fingerprint(malformed.db_path)
+    malformed_result = CkmQueryService(malformed.db_path).list_capabilities().to_dict()
+    assert malformed_result["error"]["code"] == "unsupported_store"
+    assert "resources" not in malformed_result
+    assert _storage_fingerprint(malformed.db_path) == malformed_before
 
 
 def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:

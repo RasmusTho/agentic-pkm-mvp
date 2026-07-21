@@ -81,7 +81,10 @@ class CkmQueryService:
                 result = self._read_capabilities(conn, public_id=public_id, query=query)
                 conn.commit()
                 return result
-            except sqlite3.Error as exc:
+            except CkmContractError:
+                conn.rollback()
+                raise
+            except (sqlite3.Error, ValueError) as exc:
                 conn.rollback()
                 raise CkmContractError("unsupported_store", "CKM store is unavailable or unsupported", {"reason": str(exc)}) from exc
             finally:
