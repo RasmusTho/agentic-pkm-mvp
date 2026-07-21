@@ -549,6 +549,8 @@ def test_wrapper_mutation_injects_required_delivery_route(tmp_path: Path) -> Non
 def test_wrapper_help_does_not_require_delivery_route() -> None:
     root = Path(__file__).resolve().parents[3]
     env = os.environ | {"BUILDEROPS_PYTHON": sys.executable, "BUILDEROPS_API_URL": "http://127.0.0.1:1"}
+    env.pop("BUILDEROPS_DELIVERY_MANIFEST_DIR", None)
+    env.pop("BUILDEROPS_TASK_CLASS", None)
     result = subprocess.run([str(root / "scripts/builderops_api_client.sh"), "--help"], cwd=root, env=env, text=True, capture_output=True, check=False)
     assert result.returncode == 0
     assert "BUILDEROPS_DELIVERY_MANIFEST_DIR" not in result.stderr
