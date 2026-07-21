@@ -22,7 +22,8 @@ from app.dispatcher.store import (
 )
 
 LEGACY_CONTRACT_VERSION = "verification_dispatch_request.v1"
-CONTRACT_VERSION = "verification_dispatch_request.v2"
+PREVIOUS_CONTRACT_VERSION = "verification_dispatch_request.v2"
+CONTRACT_VERSION = "verification_dispatch_request.v3"
 TERMINAL_STATES = frozenset({"completed", "failed", "needs_human", "superseded"})
 ACTIVE_STATES = frozenset({"claimed", "running"})
 REPAIR_BUDGET_POLICY_LEGACY = "v1"
@@ -52,10 +53,15 @@ _REQUEST_FIELDS_V1 = (
     "generated_at",
     "idempotency_key",
 )
-_REQUEST_FIELDS = (
+_REQUEST_FIELDS_V2 = (
     *_REQUEST_FIELDS_V1[:5],
     "closing_issues",
     *_REQUEST_FIELDS_V1[5:],
+)
+_REQUEST_FIELDS = (
+    *_REQUEST_FIELDS_V2[:6],
+    "final_review_rounds",
+    *_REQUEST_FIELDS_V2[6:],
 )
 _NESTED_REQUEST_FIELDS = {
     "source_workflow": ("name", "run_id", "run_attempt", "head_sha"),
@@ -137,6 +143,7 @@ class _LiveVerificationObservation:
     linked_issue: int | None
     closing_issues: tuple[int, ...]
     supporting_issues: tuple[int, ...]
+    final_review_rounds: int | None
 
 
 @dataclass(frozen=True)
@@ -187,6 +194,7 @@ def _live_observed_verification_request(
     observed_linked_issue: object,
     observed_closing_issues: object,
     observed_supporting_issues: object,
+    observed_final_review_rounds: object,
     canonical_chain_token: object,
 ) -> _LiveObservedVerificationRequest:
     """Pair an authenticated artifact with bounded, structurally valid live PR truth."""
@@ -195,6 +203,13 @@ def _live_observed_verification_request(
         raise ValueError("verification live PR observation requires authenticated artifact")
     projected = _canonical_request_projection(request)
     _validate_request(projected)
+    if projected.get("contract_version") == CONTRACT_VERSION and (
+        not isinstance(observed_final_review_rounds, int)
+        or isinstance(observed_final_review_rounds, bool)
+        or observed_final_review_rounds not in {1, 2}
+        or observed_final_review_rounds != projected.get("final_review_rounds")
+    ):
+        raise ValueError("verification live final-review authority mismatch")
     if (
         not isinstance(observed_repository, str)
         or not re.fullmatch(
@@ -285,6 +300,13 @@ def _live_observed_verification_request(
         ),
         closing_issues=tuple(sorted(closing_issues)),
         supporting_issues=tuple(sorted(supporting_issues)),
+        final_review_rounds=(
+            observed_final_review_rounds
+            if isinstance(observed_final_review_rounds, int)
+            and not isinstance(observed_final_review_rounds, bool)
+            and observed_final_review_rounds in {1, 2}
+            else None
+        ),
     )
     assert isinstance(canonical_chain_token, _CanonicalVerificationChainToken)
     return _LiveObservedVerificationRequest(
@@ -360,9 +382,12 @@ def _closed_projection(
 
 def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, object]:
     """Return the only request shape permitted to cross into durable state."""
+    version = request.get("contract_version")
     fields = (
         _REQUEST_FIELDS_V1
-        if request.get("contract_version") == LEGACY_CONTRACT_VERSION
+        if version == LEGACY_CONTRACT_VERSION
+        else _REQUEST_FIELDS_V2
+        if version == PREVIOUS_CONTRACT_VERSION
         else _REQUEST_FIELDS
     )
     projected = _closed_projection(request, fields=fields, location="request")
@@ -421,6 +446,7 @@ def _validate_request(
     strings = {field: _required_string(request, field) for field in required_strings}
     if request["contract_version"] not in {
         LEGACY_CONTRACT_VERSION,
+        PREVIOUS_CONTRACT_VERSION,
         CONTRACT_VERSION,
     } or request["stage"] != "verification":
         raise ValueError("unsupported verification dispatch request")
@@ -442,7 +468,7 @@ def _validate_request(
             "legacy verification request does not authenticate closing authority; "
             "fresh v2 artifact required"
         )
-    if request["contract_version"] == CONTRACT_VERSION:
+    if request["contract_version"] in {PREVIOUS_CONTRACT_VERSION, CONTRACT_VERSION}:
         closing_issues = request.get("closing_issues")
         if (
             not isinstance(closing_issues, list)
@@ -453,6 +479,14 @@ def _validate_request(
             or not set(closing_issues).issubset({linked_issue, *supporting_issues})
         ):
             raise ValueError("verification request closing issues are malformed")
+    if request["contract_version"] == CONTRACT_VERSION:
+        final_review_rounds = request.get("final_review_rounds")
+        if (
+            not isinstance(final_review_rounds, int)
+            or isinstance(final_review_rounds, bool)
+            or final_review_rounds not in {1, 2}
+        ):
+            raise ValueError("verification final review rounds are malformed")
     repository = strings["repository"]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(
         component in {".", ".."} for component in repository.split("/")
@@ -743,12 +777,24 @@ def _validated_supporting_authority(
 
 
 def _request_closing_authority(request: Mapping[str, object]) -> list[int]:
-    if request.get("contract_version") != CONTRACT_VERSION:
-        raise ValueError("verification closing authority requires a v2 artifact")
+    if request.get("contract_version") not in {
+        PREVIOUS_CONTRACT_VERSION,
+        CONTRACT_VERSION,
+    }:
+        raise ValueError("verification closing authority requires a v2+ artifact")
     closing = request.get("closing_issues")
     if not isinstance(closing, list):
         raise ValueError("verification closing authority is malformed")
     return list(closing)
+
+
+def _request_final_review_rounds(request: Mapping[str, object]) -> int:
+    if request.get("contract_version") == CONTRACT_VERSION:
+        rounds = request.get("final_review_rounds")
+        if isinstance(rounds, int) and not isinstance(rounds, bool) and rounds in {1, 2}:
+            return rounds
+        raise ValueError("verification final review rounds are malformed")
+    return 2
 
 
 def _validated_closing_authority(
@@ -862,6 +908,8 @@ def _live_takeover_authority_matches(
         and set(candidate_supporting).issubset(observation.supporting_issues)
         and set(incoming_closing) == set(candidate_closing)
         and set(incoming_closing) == set(observation.closing_issues)
+        and _request_final_review_rounds(request)
+        == _request_final_review_rounds(candidate_request)
     )
 
 
@@ -888,6 +936,8 @@ def _current_head_replay_authority_matches(
         and set(observation.supporting_issues) == set(candidate_supporting)
         and set(incoming_closing) == set(candidate_closing)
         and set(incoming_closing) == set(observation.closing_issues)
+        and _request_final_review_rounds(request)
+        == _request_final_review_rounds(candidate_request)
     )
 
 
@@ -1405,6 +1455,8 @@ class VerificationDispatchLedger:
                     not isinstance(incoming_supporting, list)
                     or set(incoming_supporting) != set(stored_supporting)
                     or set(incoming_closing) != set(stored_closing)
+                    or _request_final_review_rounds(request)
+                    != _request_final_review_rounds(existing_request)
                 ):
                     raise ValueError("verification idempotency authority conflict")
                 active_status = existing["status"] in {
@@ -1530,6 +1582,8 @@ class VerificationDispatchLedger:
                     not isinstance(incoming_supporting, list)
                     or set(incoming_supporting) != set(candidate_supporting)
                     or set(incoming_closing) != set(candidate_closing)
+                    or _request_final_review_rounds(request)
+                    != _request_final_review_rounds(candidate_request)
                 ):
                     raise ValueError(
                         "verification active replay authority does not match canonical run"
@@ -1853,7 +1907,7 @@ class VerificationDispatchLedger:
                 conn, run_id, owner["current_head_sha"]
             ):
                 raise ValueError(
-                    "completed requires two fresh clean reviews after the final repair"
+                    "completed requires the required fresh clean review rounds"
                 )
             result = conn.execute(
                 """
@@ -1905,7 +1959,8 @@ class VerificationDispatchLedger:
 
         ``verification_runs.head_sha`` remains the immutable request identity used by
         the idempotency/unique contract. Only ``current_head_sha`` advances, and any
-        prior verified-head marker is cleared until two clean reviews complete.
+        prior verified-head marker is cleared until the required clean review rounds
+        complete.
         """
         if not re.fullmatch(r"[0-9a-fA-F]{40}", new_head_sha):
             raise ValueError("malformed verification rebind head")
@@ -2099,11 +2154,28 @@ class VerificationDispatchLedger:
                     conn.commit()
                     return replay_ordinal
             if kind == "review":
-                reused = conn.execute(
-                    "SELECT 1 FROM verification_attempts WHERE run_id=? AND session_id=? LIMIT 1",
+                reused_rows = conn.execute(
+                    "SELECT * FROM verification_attempts WHERE run_id=? AND session_id=? "
+                    "ORDER BY created_at, attempt_id",
                     (run_id, session_id),
-                ).fetchone()
-                if reused is not None:
+                ).fetchall()
+                reused = [_attempt(row) for row in reused_rows]
+                same_blocking_round = bool(
+                    outcome == "blocking"
+                    and receipt is not None
+                    and reused
+                    and all(
+                        row["kind"] == "review"
+                        and row["outcome"] == "blocking"
+                        and isinstance(row["receipt"], Mapping)
+                        and row["receipt"].get("reviewed_attempt_id")
+                        == receipt.get("reviewed_attempt_id")
+                        and row["failure_domain"] == receipt.get("failure_domain")
+                        and row["mechanism_id"] == receipt.get("mechanism_id")
+                        for row in reused
+                    )
+                )
+                if reused and not same_blocking_round:
                     raise ValueError("independent re-review requires a fresh session")
             attempts = self._attempts(conn, run_id)
             ordinal, finding_id, failure_domain, mechanism_id = _attempt_plan(
@@ -2386,7 +2458,89 @@ class VerificationDispatchLedger:
             and row["receipt"].get("head_sha") == current_head_sha
             and row["outcome"] == "clean"
         ]
-        return len(reviews) >= 2 and len({row["session_id"] for row in reviews[-2:]}) == 2
+        request_row = conn.execute(
+            "SELECT request_json FROM verification_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if request_row is None:
+            return False
+        request = _validated_stored_request(request_row["request_json"])
+        required_reviews = _request_final_review_rounds(request)
+        policy_row = conn.execute(
+            "SELECT repair_budget_policy FROM verification_runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        if repairs and policy_row is not None and (
+            policy_row["repair_budget_policy"] == REPAIR_BUDGET_POLICY_MECHANISM
+        ):
+            blocking_rounds: dict[tuple[str, str, str, str], set[str]] = {}
+            for row in attempts:
+                session_id = row["session_id"]
+                reviewed_attempt_id = (
+                    row["receipt"].get("reviewed_attempt_id")
+                    if isinstance(row["receipt"], Mapping)
+                    else None
+                )
+                if (
+                    row["kind"] == "review"
+                    and row["outcome"] == "blocking"
+                    and isinstance(session_id, str)
+                    and isinstance(row["failure_domain"], str)
+                    and isinstance(row["mechanism_id"], str)
+                    and isinstance(row["finding_id"], str)
+                    and isinstance(reviewed_attempt_id, str)
+                ):
+                    round_key = (
+                        session_id,
+                        reviewed_attempt_id,
+                        row["failure_domain"],
+                        row["mechanism_id"],
+                    )
+                    blocking_rounds.setdefault(round_key, set()).add(row["finding_id"])
+            if any(len(findings) >= 2 for findings in blocking_rounds.values()):
+                required_reviews = 2
+            final_repair = repairs[-1]
+            final_key = (
+                final_repair["failure_domain"],
+                final_repair["mechanism_id"],
+            )
+            final_index = max(
+                index
+                for index, row in enumerate(attempts)
+                if row["attempt_id"] == final_repair["attempt_id"]
+            )
+            preceding_blocking = next(
+                (
+                    row
+                    for row in reversed(attempts[:final_index])
+                    if row["kind"] == "review" and row["outcome"] == "blocking"
+                ),
+                None,
+            )
+            has_prior_same_key_repair = any(
+                row["kind"] in {"standard_repair", "escalated_repair"}
+                and (row["failure_domain"], row["mechanism_id"]) == final_key
+                for row in attempts[:final_index]
+            )
+            # The circuit breaker needs both facts: the final repair repeats a
+            # stable key and the immediately preceding blocker is bound to that
+            # same key. A repair A -> blocker B -> repair A is not convergence
+            # evidence for A, and v1's unbound NULL keys cannot trigger it.
+            if (
+                all(isinstance(value, str) and value for value in final_key)
+                and has_prior_same_key_repair
+                and preceding_blocking is not None
+                and (
+                    preceding_blocking["failure_domain"],
+                    preceding_blocking["mechanism_id"],
+                )
+                == final_key
+            ):
+                required_reviews = 2
+        return (
+            len(reviews) >= required_reviews
+            and len({row["session_id"] for row in reviews[-required_reviews:]})
+            == required_reviews
+        )
 
     def closure_ready(self, run_id: str) -> bool:
         with self.store._connect() as conn:

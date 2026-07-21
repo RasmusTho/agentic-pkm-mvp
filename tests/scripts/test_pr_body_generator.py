@@ -62,6 +62,7 @@ def test_generates_valid_governance_lane_body() -> None:
     body = generate_pr_body_from_mapping(_fixture("governance_issue.json"))
 
     assert "- [x] Governance lane" in body
+    assert "Final-Review-Rounds: 1" in body
     assert "Closes #3275" in body
     assert "## SBS Impact" in body
     assert "- Primary subsystem: Builder System" in body

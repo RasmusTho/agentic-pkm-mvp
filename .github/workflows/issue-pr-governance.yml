@@ -135,6 +135,21 @@ jobs:
               pull_number: context.payload.pull_request.number,
             });
             const body = pullRequest.body || "";
+            const finalReviewRoundLines = body.match(
+              /^Final-Review-Rounds:[ \t]*.*$/gm
+            ) || [];
+            const validFinalReviewRoundLines = body.match(
+              /^Final-Review-Rounds:[ \t]*[12][ \t]*$/gm
+            ) || [];
+            if (
+              finalReviewRoundLines.length !== 1 ||
+              validFinalReviewRoundLines.length !== 1
+            ) {
+              core.setFailed(
+                "PR body must contain exactly one `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` declaration."
+              );
+              return;
+            }
             // BuilderOps routing is mandatory delivery traceability for Tier 2+ PRs.
             // It records the BuilderOps objects/projections/receipts created, or an explicit "none" reason.
             // Tier 1 (docs/development/GOVERNANCE_PROPORTIONALITY.md): PRs declaring the

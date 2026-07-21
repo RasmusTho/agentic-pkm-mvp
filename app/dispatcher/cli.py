@@ -730,7 +730,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("verification-ingest", help="Idempotently ingest a verification request")
-    p.add_argument("request", help="Path to verification_dispatch_request.v2 JSON")
+    p.add_argument("request", help="Path to verification_dispatch_request.v3 JSON")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("verification-status", help="Show durable verification-run status")

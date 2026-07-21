@@ -39,6 +39,27 @@ _CLOSING_ATTEMPT_TARGET = (
 # PR-controlled API fan-out.
 MAX_CLOSING_ISSUES = 10
 NEUTRALIZED_CLOSING_ISSUES_PREFIX = "Verified-Closing-Issues:"
+FINAL_REVIEW_ROUNDS_LINE_PATTERN = re.compile(
+    r"(?m)^Final-Review-Rounds:[ \t]*.*$"
+)
+FINAL_REVIEW_ROUNDS_PATTERN = re.compile(
+    r"(?m)^Final-Review-Rounds:[ \t]*([12])[ \t]*$"
+)
+
+
+def resolve_final_review_rounds(body: object) -> int | None:
+    """Return one strict declaration; missing, malformed, or duplicate fails closed."""
+    if not isinstance(body, str):
+        return None
+    if re.search(r"\r(?!\n)|[\u2028\u2029]", body):
+        return None
+    canonical_body = body.replace("\r\n", "\n")
+    lines = FINAL_REVIEW_ROUNDS_LINE_PATTERN.findall(canonical_body)
+    matches = FINAL_REVIEW_ROUNDS_PATTERN.findall(canonical_body)
+    if len(lines) != 1 or len(matches) != 1:
+        return None
+    return int(matches[0])
+
 
 GOVERNING_ISSUE_LINE_PATTERN = re.compile(
     rf"(?m)^[ \t]*{_GOVERNING_KEYWORD}[ \t]*:.*$"

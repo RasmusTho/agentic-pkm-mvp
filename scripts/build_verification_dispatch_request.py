@@ -11,17 +11,16 @@ from typing import Sequence, TypeGuard
 
 from app.dispatcher.verification_contract import (
     MAX_CLOSING_ISSUES,
+    resolve_final_review_rounds,
     resolve_issue_authority,
     resolve_issue_contract as resolve_issue_contract,
 )
 
 
-CONTRACT_VERSION = "verification_dispatch_request.v2"
+CONTRACT_VERSION = "verification_dispatch_request.v3"
 STAGE = "verification"
 SOURCE_WORKFLOW = "CI Smoke"
 EVIDENCE_WORKFLOW = "PR Evidence Pack"
-
-
 def _as_dict(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
@@ -166,7 +165,8 @@ def build_request(
         return None
 
     issue_authority = resolve_issue_authority(pr.get("body"))
-    if issue_authority is None:
+    final_review_rounds = resolve_final_review_rounds(pr.get("body"))
+    if issue_authority is None or final_review_rounds is None:
         return None
     live_closing_issues = _resolve_live_closing_issues(
         pr.get("live_closing_issues"), repository=repository
@@ -185,6 +185,7 @@ def build_request(
         "pr_number": pr_number,
         "linked_issue": linked_issue,
         "closing_issues": list(issue_authority.closing_issues),
+        "final_review_rounds": final_review_rounds,
         "supporting_issues": list(issue_authority.supporting_issues),
         "current_head_sha": current_head_sha,
         "source_workflow": {
@@ -233,6 +234,7 @@ def render_markdown(request: dict[str, object]) -> str:
         f"- PR: `#{request['pr_number']}`",
         f"- Head SHA: `{request['current_head_sha']}`",
         f"- Stage: `{request['stage']}`",
+        f"- Final review rounds: `{request['final_review_rounds']}`",
         f"- Source run: `{source.get('run_id', '')}`",
         f"- Evidence artifact: `{evidence.get('artifact_name', '')}`",
         f"- Idempotency key: `{request['idempotency_key']}`",

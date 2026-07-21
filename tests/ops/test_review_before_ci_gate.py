@@ -24,6 +24,7 @@ REVIEW_REPAIR_CONTRACT = (
 )
 DEV_WORKFLOW = REPO_ROOT / "docs/development/DEV_WORKFLOW.md"
 PROCESS_MAP = REPO_ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
+DISPATCHER_CONTRACT = REPO_ROOT / "docs/AGENT_ISSUE_DISPATCHER.md"
 AGENTS = REPO_ROOT / "AGENTS.md"
 
 
@@ -396,6 +397,26 @@ def test_mechanism_convergence_contract_is_wired_across_delivery_skills() -> Non
     assert "Low-convergence circuit breaker" in verification
     assert "credential-durability" in verification
     assert "state-machine surfaces" in verification
+
+
+def test_final_review_rounds_are_proportionate_to_runtime_or_low_convergence() -> None:
+    verification = VERIFICATION_SKILL.read_text(encoding="utf-8")
+    contract = REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8")
+    process_map = (REPO_ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md").read_text(
+        encoding="utf-8"
+    )
+    dispatcher = DISPATCHER_CONTRACT.read_text(encoding="utf-8")
+
+    assert "One clean,\n  independent final review is the default" in verification
+    assert "changes a runtime surface on a declared high-risk TCD category" in verification
+    assert "same mechanism/domain key" in verification
+    assert "One clean independent final review is the default" in contract
+    assert "does not require a second round merely because it carries a high-risk\n  label" in contract
+    assert "stop after one clean independent round by default" in process_map
+    assert "two clean rounds for high-risk surfaces" not in process_map
+    assert "one distinct clean review session" in dispatcher
+    assert "ledger-visible low-convergence condition" in dispatcher
+    assert "no-repair delivery still requires two distinct clean review sessions" not in dispatcher
 
 
 def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> None:

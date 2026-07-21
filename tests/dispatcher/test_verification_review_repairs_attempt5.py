@@ -48,6 +48,7 @@ def _observed_request(
         observed_linked_issue=payload["linked_issue"],
         observed_closing_issues=tuple(closing),
         observed_supporting_issues=tuple(supporting),
+        observed_final_review_rounds=payload["final_review_rounds"],
         canonical_chain_token=state.canonical_chain_token(authenticated),
     )
 
