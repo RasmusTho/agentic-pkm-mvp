@@ -69,6 +69,11 @@ def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
     before_unsupported = _storage_fingerprint(unsupported)
     assert CkmQueryService(unsupported).list_capabilities().to_dict()["error"]["code"] == "unsupported_store"
     assert _storage_fingerprint(unsupported) == before_unsupported
+    failed_open = CkmQueryService(
+        store.db_path,
+        _connection_factory=lambda _: (_ for _ in ()).throw(sqlite3.OperationalError("denied")),
+    ).list_capabilities().to_dict()
+    assert failed_open["error"]["code"] == "unsupported_store" and "resources" not in failed_open
 
 
 def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:
@@ -79,6 +84,85 @@ def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:
     for kwargs, code in (({"access_policy_version": "wrong"}, "unsupported_access_policy"), ({"ckm_schema_version": 999}, "unsupported_version"), ({"history_mode": "as_of"}, "unsupported_historical_semantics")):
         payload = CkmQueryService(store.db_path).list_capabilities(**kwargs).to_dict()
         assert payload["error"]["code"] == code and "resources" not in payload
+    original = sqlite3.connect
+
+    class IncompleteConnection:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_conn", conn)
+            object.__setattr__(self, "_count_seen", False)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def __setattr__(self, name, value) -> None:
+            if name == "row_factory":
+                self._conn.row_factory = value
+            else:
+                object.__setattr__(self, name, value)
+
+        def execute(self, statement, parameters=()):
+            cursor = self._conn.execute(statement, parameters)
+            if statement.startswith("SELECT COUNT(*) FROM ckm_capability"):
+                object.__setattr__(self, "_count_seen", True)
+            if self._count_seen and statement.startswith("SELECT * FROM ckm_capability"):
+                return _RowsCursor(cursor.fetchall()[:-1])
+            return cursor
+
+    incomplete = CkmQueryService(
+        store.db_path,
+        _connection_factory=lambda uri: IncompleteConnection(original(uri, uri=True)),
+    ).list_capabilities().to_dict()
+    assert incomplete["error"]["code"] == "incomplete_snapshot" and "resources" not in incomplete
+
+
+class _RowsCursor:
+    def __init__(self, rows) -> None:
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _StateCursor:
+    def __init__(self, row) -> None:
+        self._row = row
+
+    def fetchone(self):
+        return self._row
+
+
+def test_mixed_epoch_snapshot_refuses_without_semantic_result(tmp_path: Path) -> None:
+    store, _, _ = _store(tmp_path)
+    original = sqlite3.connect
+
+    class MixedEpochConnection:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_conn", conn)
+            object.__setattr__(self, "_state_reads", 0)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def __setattr__(self, name, value) -> None:
+            if name == "row_factory":
+                self._conn.row_factory = value
+            else:
+                object.__setattr__(self, name, value)
+
+        def execute(self, statement, parameters=()):
+            cursor = self._conn.execute(statement, parameters)
+            if statement.startswith("SELECT epoch, state_revision FROM ckm_state"):
+                object.__setattr__(self, "_state_reads", self._state_reads + 1)
+                if self._state_reads == 1:
+                    row = cursor.fetchone()
+                    return _StateCursor({"epoch": row["epoch"], "state_revision": int(row["state_revision"]) + 1})
+            return cursor
+
+    payload = CkmQueryService(
+        store.db_path,
+        _connection_factory=lambda uri: MixedEpochConnection(original(uri, uri=True)),
+    ).list_capabilities().to_dict()
+    assert payload["error"]["code"] == "mixed_epoch" and "resources" not in payload
 
 
 def test_missing_candidate_completeness_and_access_semantics(tmp_path: Path) -> None:

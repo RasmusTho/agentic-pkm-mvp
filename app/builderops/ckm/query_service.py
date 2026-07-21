@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from app.builderops.ckm.contracts import (
     CkmContractError,
@@ -35,11 +35,20 @@ DEFAULT_CAPTURE_LIMIT = 500
 class CkmQueryService:
     """The Q1b query seam.  It has no write-capable store dependency."""
 
-    def __init__(self, db_path: Path, *, capture_limit: int = DEFAULT_CAPTURE_LIMIT) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        capture_limit: int = DEFAULT_CAPTURE_LIMIT,
+        _connection_factory: Callable[[str], sqlite3.Connection] | None = None,
+    ) -> None:
         if capture_limit < 1:
             raise ValueError("capture_limit must be positive")
         self._db_path = Path(db_path)
         self._capture_limit = capture_limit
+        self._connection_factory = _connection_factory or (
+            lambda uri: sqlite3.connect(uri, uri=True)
+        )
 
     def list_capabilities(self, **request: Any) -> ResultEnvelope | ErrorEnvelope:
         return self._query(public_id=None, **request)
@@ -56,7 +65,14 @@ class CkmQueryService:
                 raise CkmContractError("missing_store", "CKM database does not exist", {"path": str(self._db_path)})
             # ``mode=ro`` is the important guard: SQLite cannot create the DB,
             # WAL, schema, or parent directory through this connection.
-            conn = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
+            try:
+                conn = self._connection_factory(f"file:{self._db_path}?mode=ro")
+            except sqlite3.Error as exc:
+                raise CkmContractError(
+                    "unsupported_store",
+                    "CKM store could not be opened read-only",
+                    {"reason": str(exc)},
+                ) from exc
             conn.row_factory = sqlite3.Row
             try:
                 conn.execute("PRAGMA query_only = ON")
@@ -95,6 +111,12 @@ class CkmQueryService:
             raise CkmContractError("snapshot_too_large", "complete capability snapshot exceeds configured bound", {"limit": self._capture_limit, "total": total})
         if public_id is None:
             rows = conn.execute("SELECT * FROM ckm_capability ORDER BY public_id").fetchall()
+            if len(rows) != total:
+                raise CkmContractError(
+                    "incomplete_snapshot",
+                    "complete capability snapshot could not be captured",
+                    {"declared_total": total, "captured_total": len(rows)},
+                )
         else:
             rows = conn.execute("SELECT * FROM ckm_capability WHERE public_id = ? ORDER BY public_id", (public_id,)).fetchall()
             if not rows:
