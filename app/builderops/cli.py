@@ -45,6 +45,7 @@ from app.builderops.ckm.semantic import (
 )
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
+from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.config import BuilderOpsPaths, load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
@@ -570,6 +571,17 @@ def ckm_show(ctx: click.Context, capability_slug: str) -> None:
     except (CkmValidationError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm show failed: {exc}") from exc
     click.echo(output, nl=False)
+
+
+@ckm.command("query", help="Read a bounded complete CKM snapshot as JSON without write-side effects.")
+@click.option("--public-id", default=None)
+@click.option("--limit", type=click.IntRange(1, 100000), default=500, show_default=True)
+@click.pass_context
+def ckm_query(ctx: click.Context, public_id: str | None, limit: int) -> None:
+    paths = _effective_paths(ctx)
+    service = CkmQueryService(paths.db_path, capture_limit=limit)
+    result = service.get_capability(public_id) if public_id else service.list_capabilities()
+    click.echo(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
 
 
 @ckm.command("project", help="Write one non-authoritative CKM Markdown projection.")
