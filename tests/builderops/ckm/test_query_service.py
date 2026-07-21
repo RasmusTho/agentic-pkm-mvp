@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -104,6 +105,46 @@ def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
         _connection_factory=lambda _: (_ for _ in ()).throw(sqlite3.OperationalError("denied")),
     ).list_capabilities().to_dict()
     assert failed_open["error"]["code"] == "unsupported_store" and "resources" not in failed_open
+    linked_path = tmp_path / "linked.sqlite"
+    linked_path.symlink_to(store.db_path)
+    linked_before = _directory_fingerprint(tmp_path)
+    linked_result = CkmQueryService(linked_path).list_capabilities().to_dict()
+    assert linked_result["error"]["code"] == "unsupported_store" and "resources" not in linked_result
+    assert _directory_fingerprint(tmp_path) == linked_before
+
+    touched = False
+    original_connect = sqlite3.connect
+
+    class TouchingSnapshotConnection:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            object.__setattr__(self, "_conn", conn)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def __setattr__(self, name, value) -> None:
+            if name == "row_factory":
+                self._conn.row_factory = value
+            else:
+                object.__setattr__(self, name, value)
+
+        def execute(self, statement, parameters=()):
+            nonlocal touched
+            cursor = self._conn.execute(statement, parameters)
+            if not touched and statement.startswith("SELECT name FROM sqlite_master"):
+                snapshot_stat = store.db_path.stat()
+                os.utime(store.db_path, ns=(snapshot_stat.st_atime_ns, snapshot_stat.st_mtime_ns + 1))
+                touched = True
+            return cursor
+
+    changing_before = _directory_fingerprint(tmp_path)
+    changing_result = CkmQueryService(
+        store.db_path,
+        _connection_factory=lambda uri: TouchingSnapshotConnection(original_connect(uri, uri=True)),
+    ).list_capabilities().to_dict()
+    assert touched is True
+    assert changing_result["error"]["code"] == "unsupported_store" and "resources" not in changing_result
+    assert _directory_fingerprint(tmp_path) == changing_before
     malformed = CkmStore(tmp_path / "malformed.sqlite")
     malformed.ensure_schema()
     malformed_capability = malformed.upsert_capability(
@@ -138,6 +179,56 @@ def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
         reserved_result = CkmQueryService(reserved.db_path).list_capabilities().to_dict()
         assert len(reserved_result["resources"]) == 1
         assert _directory_fingerprint(tmp_path) == reserved_before
+    checkpointed = CkmStore(tmp_path / "checkpointed-wal.sqlite")
+    checkpointed.ensure_schema()
+    checkpointed_capability = checkpointed.upsert_capability(
+        identity_key="seed:checkpointed-wal",
+        name="checkpointed WAL",
+        definition="checkpointed WAL snapshot",
+        lifecycle="confirmed",
+        existence_provenance="test:checkpointed-wal",
+    )
+    with sqlite3.connect(checkpointed.db_path) as conn:
+        assert conn.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+        assert conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (0, 0, 0)
+    for suffix in ("-wal", "-shm"):
+        Path(f"{checkpointed.db_path}{suffix}").unlink(missing_ok=True)
+    assert checkpointed.db_path.read_bytes()[18:20] == b"\x02\x02"
+    checkpointed_before = _directory_fingerprint(tmp_path)
+    checkpointed_result = CkmQueryService(checkpointed.db_path).get_capability(checkpointed_capability.public_id).to_dict()
+    assert checkpointed_result["resources"][0]["public_id"] == checkpointed_capability.public_id
+    assert _directory_fingerprint(tmp_path) == checkpointed_before
+
+    live_wal = CkmStore(tmp_path / "live-wal.sqlite")
+    live_wal.ensure_schema()
+    live_wal.upsert_capability(
+        identity_key="seed:before-wal",
+        name="before WAL",
+        definition="checkpointed row",
+        lifecycle="confirmed",
+        existence_provenance="test:before-wal",
+    )
+    writer = sqlite3.connect(live_wal.db_path)
+    try:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        recent = live_wal.upsert_capability(
+            identity_key="seed:in-wal",
+            name="in WAL",
+            definition="uncheckpointed row",
+            lifecycle="confirmed",
+            existence_provenance="test:in-wal",
+        )
+        assert Path(f"{live_wal.db_path}-wal").stat().st_size > 0
+        with sqlite3.connect(f"{live_wal.db_path.absolute().as_uri()}?mode=ro&immutable=1", uri=True) as conn:
+            assert conn.execute("SELECT 1 FROM ckm_capability WHERE public_id = ?", (recent.public_id,)).fetchone() is None
+        live_wal_before = _directory_fingerprint(tmp_path)
+        live_wal_result = CkmQueryService(live_wal.db_path).list_capabilities().to_dict()
+        assert live_wal_result["error"]["code"] == "unsupported_store"
+        assert "resources" not in live_wal_result
+        assert _directory_fingerprint(tmp_path) == live_wal_before
+    finally:
+        writer.close()
 
 
 def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:

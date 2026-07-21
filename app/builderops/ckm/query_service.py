@@ -9,6 +9,7 @@ repairing any BuilderOps surface.
 from __future__ import annotations
 
 import sqlite3
+import stat
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -30,6 +31,7 @@ from app.builderops.ckm.schema import CKM_REQUIRED_COLUMNS, CKM_SCHEMA_VERSION, 
 
 
 DEFAULT_CAPTURE_LIMIT = 500
+_SQLITE_RECOVERY_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 
 
 class CkmQueryService:
@@ -63,12 +65,16 @@ class CkmQueryService:
             validate_contract_request(resource_type="capability", **request)
             if not self._db_path.is_file():
                 raise CkmContractError("missing_store", "CKM database does not exist", {"path": str(self._db_path)})
+            snapshot_identity = self._snapshot_identity()
+            self._refuse_recovery_sidecars()
             # ``mode=ro`` is the important guard: SQLite cannot create the DB,
             # WAL, schema, or parent directory through this connection.  Build
             # the file URI through pathlib so reserved path characters cannot
-            # be parsed as URI query or fragment delimiters.
+            # be parsed as URI query or fragment delimiters. ``immutable=1``
+            # prevents SQLite from creating WAL support files for a safely
+            # checkpointed WAL-mode database.
             try:
-                conn = self._connection_factory(f"{self._db_path.absolute().as_uri()}?mode=ro")
+                conn = self._connection_factory(f"{self._db_path.absolute().as_uri()}?mode=ro&immutable=1")
             except sqlite3.Error as exc:
                 raise CkmContractError(
                     "unsupported_store",
@@ -81,6 +87,13 @@ class CkmQueryService:
                 conn.execute("BEGIN")  # exactly one explicit read transaction
                 self._validate_schema(conn)
                 result = self._read_capabilities(conn, public_id=public_id, query=query)
+                self._refuse_recovery_sidecars()
+                if self._snapshot_identity() != snapshot_identity:
+                    raise CkmContractError(
+                        "unsupported_store",
+                        "CKM database changed during immutable snapshot capture",
+                        {},
+                    )
                 conn.commit()
                 return result
             except CkmContractError:
@@ -93,6 +106,36 @@ class CkmQueryService:
                 conn.close()
         except CkmContractError as exc:
             return ErrorEnvelope(exc)
+
+    def _snapshot_identity(self) -> tuple[int, int, int, int]:
+        try:
+            snapshot_stat = self._db_path.lstat()
+        except OSError as exc:
+            raise CkmContractError(
+                "unsupported_store",
+                "CKM database identity could not be verified",
+                {"reason": str(exc)},
+            ) from exc
+        if not stat.S_ISREG(snapshot_stat.st_mode):
+            raise CkmContractError(
+                "unsupported_store",
+                "CKM database path is not a regular file",
+                {},
+            )
+        return (snapshot_stat.st_dev, snapshot_stat.st_ino, snapshot_stat.st_size, snapshot_stat.st_mtime_ns)
+
+    def _refuse_recovery_sidecars(self) -> None:
+        sidecars = [
+            path.name
+            for suffix in _SQLITE_RECOVERY_SIDECAR_SUFFIXES
+            if (path := Path(f"{self._db_path}{suffix}")).exists()
+        ]
+        if sidecars:
+            raise CkmContractError(
+                "unsupported_store",
+                "CKM store has SQLite recovery sidecars that cannot be consumed without write risk",
+                {"sidecars": sidecars},
+            )
 
     @staticmethod
     def _validate_schema(conn: sqlite3.Connection) -> None:
