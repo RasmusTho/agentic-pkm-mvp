@@ -202,16 +202,15 @@ def _honesty_markup(
 
 
 def _capability_markup(
-    store: CkmStore,
     capability: CkmCapability,
     *,
     depth: int,
+    edges: Sequence[CkmEvidenceEdge],
+    findings: Sequence[CkmFinding],
+    projection: CkmAssessmentProjection | None,
 ) -> str:
-    edges = store.list_evidence_edges_for_capability(capability.id)
-    findings = store.list_findings_for_capability(capability.id)
     confirmed, candidate = _edge_counts(edges)
-    assessment = store.latest_assessment_for_capability(capability.id)
-    projection = store.assessment_for_projection(capability.id) if assessment else None
+    assessment = projection.assessment if projection else None
     aggregate = float(assessment.aggregate) if assessment else None
     band = _band(aggregate)
     summary_flags: list[str] = []
@@ -308,18 +307,29 @@ def render_overview_html(
     """Render one self-contained CKM projection without mutating the store."""
 
     timestamp = generated_at or utc_now()
-    capabilities = store.list_capabilities()
+    batch = store.load_projection_batch()
+    capabilities = batch.capabilities
     capability_by_id = {item.id: item for item in capabilities}
-    all_findings = store.list_findings()
+    all_findings = tuple(
+        finding
+        for findings in batch.findings_by_capability.values()
+        for finding in findings
+    )
     assessments = {
         capability.id: (
-            assessment := store.latest_assessment_for_capability(capability.id),
-            store.assessment_for_projection(capability.id) if assessment else None,
+            projection.assessment if (projection := batch.assessments_by_capability.get(capability.id)) else None,
+            projection,
         )
         for capability in capabilities
     }
     cards = "".join(
-        _capability_markup(store, capability, depth=depth)
+        _capability_markup(
+            capability,
+            depth=depth,
+            edges=batch.edges_by_capability.get(capability.id, ()),
+            findings=batch.findings_by_capability.get(capability.id, ()),
+            projection=batch.assessments_by_capability.get(capability.id),
+        )
         for depth, capability in _forest(capabilities)
     ) or '<p class="empty">No capabilities in the CKM store.</p>'
     grouped: dict[str, list[CkmFinding]] = defaultdict(list)
@@ -332,7 +342,7 @@ def render_overview_html(
         for capability_id, findings in sorted(grouped.items())
         if capability_id in capability_by_id
     ) or "<li>No current findings.</li>"
-    watermark_text = _watermarks(store.current_watermark_set())
+    watermark_text = _watermarks(batch.current_watermark_set)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -388,6 +398,7 @@ def write_overview_html(
     *,
     generated_at: str | None = None,
 ) -> Path:
+    store.ensure_schema()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         render_overview_html(store, generated_at=generated_at),

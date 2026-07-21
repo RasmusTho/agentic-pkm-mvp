@@ -108,6 +108,11 @@ def _downgrade_identity_schema_to_v4(db_path: Path) -> None:
             "idx_ckm_evidence_edge_public_id",
             "idx_ckm_assessment_public_id",
             "idx_ckm_finding_public_id",
+            "idx_ckm_capability_parent_public",
+            "idx_ckm_evidence_edge_capability_public",
+            "idx_ckm_evidence_edge_artifact_public",
+            "idx_ckm_assessment_capability_asserted_public",
+            "idx_ckm_finding_capability_public",
         ):
             conn.execute(f"DROP INDEX {index_name}")
         conn.execute("DROP TABLE ckm_identity_successor")
