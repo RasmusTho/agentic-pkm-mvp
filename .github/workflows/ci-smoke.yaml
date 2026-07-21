@@ -294,6 +294,8 @@ jobs:
               environment:
                 WORKER_LOG_HEARTBEAT_SECONDS: "${WORKER_LOG_HEARTBEAT_SECONDS}"
           YAML
+          source scripts/lib/instance_ownership_host_state.sh
+          prepare_instance_ownership_host_state_dir
           compose_files="-f docker-compose.yaml -f /tmp/docker-compose.worker-ci.yaml"
           cleanup() {
             rc=$?
@@ -433,6 +435,8 @@ jobs:
           cache/
           EOF
 
+          source scripts/lib/instance_ownership_host_state.sh
+          prepare_instance_ownership_host_state_dir
           compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
           cleanup() {
             rc=$?
