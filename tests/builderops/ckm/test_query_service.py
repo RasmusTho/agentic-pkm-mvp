@@ -55,6 +55,28 @@ def test_exact_id_lookup_and_complete_bounded_capture(tmp_path: Path) -> None:
     assert complete["snapshot"]["effective_audience"] == EFFECTIVE_AUDIENCE
     assert complete["snapshot"]["access_policy_version"] == ACCESS_POLICY_VERSION
     assert complete["snapshot"]["redaction_profile"] == REDACTION_PROFILE
+    store.tombstone_capability(confirmed.public_id)
+    tombstone = service.get_capability(confirmed.public_id).to_dict()
+    assert tombstone["error"]["code"] == "tombstoned_resource"
+    assert tombstone["error"]["details"] == {"public_id": confirmed.public_id, "successors": []}
+    assert "resources" not in tombstone
+    split = store.upsert_capability(identity_key="seed:split", name="split", definition="x", lifecycle="confirmed", existence_provenance="test")
+    split_successor = store.upsert_capability(identity_key="seed:split-child", name="split-child", definition="x", lifecycle="confirmed", existence_provenance="test")
+    split_successor_two = store.upsert_capability(identity_key="seed:split-child-two", name="split-child-two", definition="x", lifecycle="confirmed", existence_provenance="test")
+    store.tombstone_capability(split.public_id, successor_public_ids=[split_successor_two.public_id, split_successor.public_id], relation="split_successor")
+    split_details = service.get_capability(split.public_id).to_dict()["error"]["details"]
+    assert split_details["successors"] == sorted(
+        [
+            {"successor_public_id": split_successor.public_id, "relation": "split_successor"},
+            {"successor_public_id": split_successor_two.public_id, "relation": "split_successor"},
+        ],
+        key=lambda item: item["successor_public_id"],
+    )
+    merge_left = store.upsert_capability(identity_key="seed:merge-left", name="merge-left", definition="x", lifecycle="confirmed", existence_provenance="test")
+    merge_result = store.upsert_capability(identity_key="seed:merge-result", name="merge-result", definition="x", lifecycle="confirmed", existence_provenance="test")
+    store.tombstone_capability(merge_left.public_id, successor_public_ids=[merge_result.public_id], relation="merge_successor")
+    assert service.get_capability(merge_left.public_id).to_dict()["error"]["details"]["successors"] == [{"successor_public_id": merge_result.public_id, "relation": "merge_successor"}]
+    assert service.get_capability("ckm_capability_unknown").to_dict()["error"]["code"] == "missing_resource"
 
 
 def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
