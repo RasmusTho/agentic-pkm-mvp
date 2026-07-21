@@ -11,6 +11,10 @@ can_parallelize_with: [DEVICE_HEALTH_PANEL_WITH_GAP_LOG, WATCH_ONE_TAP_RECORD_WI
 
 # Capture-Time Metadata Sidecar
 
+State: Producer half implemented. The Bifrost client writes the optional version-1 sidecar as
+delivered by Bifrost issue #20 / PR #37 (2026-07-21). The hub consumer half remains pending, so
+end-to-end sidecar ingestion is not yet claimed.
+
 Target repos: **`RasmusTho/bifrost`** (producer) and **`RasmusTho/agentic-pkm-mvp`** (consumer) —
 two issues, one contract, defined here once.
 
@@ -69,12 +73,11 @@ sidecar keeps the pipeline honest: no coupling, no flag-day.
 
 ## Acceptance Criteria
 
-- [ ] (bifrost) Sidecar is written after the audio's final rename, same completeness discipline,
+- [x] (bifrost) Sidecar is written after the audio's final rename, same completeness discipline,
   fields sourced from the real session. `Verify:` bifrost
-  `Yggdrasil/YggdrasilTests/CaptureSidecarTests.swift::testSidecarWrittenAfterAudioWithSessionFields`
-  (new).
-- [ ] (bifrost) Location absent unless explicitly enabled. `Verify:` bifrost
-  `CaptureSidecarTests.swift::testLocationOmittedByDefault` (new).
+  `Yggdrasil/YggdrasilTests/CaptureSidecarTests.swift::testRecorderPathPublishesSessionTruthBeforeLocalDeletion`.
+- [x] (bifrost) Location absent unless explicitly enabled. `Verify:` bifrost
+  `Yggdrasil/YggdrasilTests/CaptureSidecarTests.swift::testRecorderPathOmitsLocationByDefault`.
 - [ ] (hub) Adapter consumes a valid sidecar into raw-record metadata and deletes it with
   audio-custody discipline. `Verify:` hub
   `tests/heimdal/test_capture_adapter.py::test_sidecar_consumed_into_raw_metadata` (new).
@@ -106,7 +109,7 @@ sidecar keeps the pipeline honest: no coupling, no flag-day.
 
 ## Related GitHub Issues
 
-Two implementation issues: `RasmusTho/bifrost` (`type:task`, `agent:blocked` on HCAP-03) and
-`RasmusTho/agentic-pkm-mvp` (`type:task`, `agent:ready` — the hub half has no client dependency:
-it can land first and wait for real sidecars). Both link hub #3026 and this spec file. TCD hint:
-Sonnet / medium effort each — a small, crisply-contracted seam on both sides.
+The producer half is delivered by [`RasmusTho/bifrost` issue #20](https://github.com/RasmusTho/bifrost/issues/20)
+and [PR #37](https://github.com/RasmusTho/bifrost/pull/37). The
+`RasmusTho/agentic-pkm-mvp` consumer issue remains the pending half; it can land independently and
+consume the now-real sidecars. Both halves link hub #3026 and this spec file.

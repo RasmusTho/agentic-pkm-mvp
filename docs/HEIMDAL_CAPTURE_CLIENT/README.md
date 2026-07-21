@@ -79,11 +79,12 @@ streaming) stays "do not build" (R-EXTERNAL).
 
 1. `HEIMDAL_CLIENT_SCAFFOLD_AND_CAPTURE_FOLDER_BINDING` — **delivered** by bifrost#14 / PR #24.
 2. `DISCRETE_RECORD_WITH_BACKGROUND_AUDIO` — **delivered** by bifrost#15 / PR #28.
-3. `DELIVER_RECORDINGS_TO_WATCHED_FOLDER` — after 2.
+3. `DELIVER_RECORDINGS_TO_WATCHED_FOLDER` — **delivered** by bifrost#16 / PR #36.
 4. `DEVICE_REGISTRATION_AND_CONSENT_SURFACE` — after 1; **vault-write gated** (bifrost#4/#5 merged). May run parallel with 2–3.
 5. `DEVICE_HEALTH_PANEL_WITH_GAP_LOG` — after 2 and 4; gap-log writes share 4's gate.
 6. `WATCH_ONE_TAP_RECORD_WITH_HAPTIC_STATUS` — after 3. May run parallel with 4–5.
-7. `CAPTURE_TIME_METADATA_SIDECAR` — after 3 (bifrost half); hub half is its own issue, sequenced with the ERE lane.
+7. `CAPTURE_TIME_METADATA_SIDECAR` — Bifrost producer half **delivered** by bifrost#20 / PR #37;
+   hub consumer half remains its own issue, sequenced with the ERE lane.
 8. `PROVE_CAPTURE_ROUND_TRIP_ON_TEST_CHANNEL` — after 3 and 4 (registered device delivering real files).
 9. `PROVE_CAPTURE_UAT_JOURNEYS` — after 2–6 merge.
 10. `RECONCILE_AND_CLOSE_B3_TRACKING` — strictly last; blocked on 8's and 9's receipts.
