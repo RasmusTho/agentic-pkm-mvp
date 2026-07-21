@@ -64,9 +64,11 @@ class CkmQueryService:
             if not self._db_path.is_file():
                 raise CkmContractError("missing_store", "CKM database does not exist", {"path": str(self._db_path)})
             # ``mode=ro`` is the important guard: SQLite cannot create the DB,
-            # WAL, schema, or parent directory through this connection.
+            # WAL, schema, or parent directory through this connection.  Build
+            # the file URI through pathlib so reserved path characters cannot
+            # be parsed as URI query or fragment delimiters.
             try:
-                conn = self._connection_factory(f"file:{self._db_path}?mode=ro")
+                conn = self._connection_factory(f"{self._db_path.absolute().as_uri()}?mode=ro")
             except sqlite3.Error as exc:
                 raise CkmContractError(
                     "unsupported_store",

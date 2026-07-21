@@ -27,6 +27,13 @@ def _storage_fingerprint(path: Path) -> tuple[tuple[str, str], ...]:
     return tuple((item.name, hashlib.sha256(item.read_bytes()).hexdigest()) for item in related)
 
 
+def _directory_fingerprint(path: Path) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (str(item.relative_to(path)), hashlib.sha256(item.read_bytes()).hexdigest())
+        for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+    )
+
+
 def test_list_capabilities_uses_one_read_transaction(tmp_path: Path, monkeypatch) -> None:
     store, _, _ = _store(tmp_path)
     statements: list[str] = []
@@ -117,6 +124,20 @@ def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
     assert malformed_result["error"]["code"] == "unsupported_store"
     assert "resources" not in malformed_result
     assert _storage_fingerprint(malformed.db_path) == malformed_before
+    for filename in ("question?name.sqlite", "hash#name.sqlite", "percent%name.sqlite", "space name.sqlite"):
+        reserved = CkmStore(tmp_path / filename)
+        reserved.ensure_schema()
+        reserved.upsert_capability(
+            identity_key=f"seed:{filename}",
+            name=filename,
+            definition="URI-reserved database path",
+            lifecycle="confirmed",
+            existence_provenance="test:reserved-path",
+        )
+        reserved_before = _directory_fingerprint(tmp_path)
+        reserved_result = CkmQueryService(reserved.db_path).list_capabilities().to_dict()
+        assert len(reserved_result["resources"]) == 1
+        assert _directory_fingerprint(tmp_path) == reserved_before
 
 
 def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:
