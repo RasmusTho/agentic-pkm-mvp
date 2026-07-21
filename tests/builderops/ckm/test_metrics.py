@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
-from app.builderops.ckm.contracts import CkmContractError, ErrorEnvelope
+from app.builderops.ckm.contracts import CkmContractError, ErrorEnvelope, canonical_digest
 from app.builderops.ckm.metrics import METRIC_REGISTRY, MetricRetentionStore, build_observation, metric_definition
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.store import CkmStore
@@ -229,6 +229,118 @@ def test_correction_refuses_corrupt_persisted_metric_definition(tmp_path: Path) 
         )
     assert exc.value.code == "corrupt_retained_observation"
     assert retained.storage_usage()["count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "tampered_value"),
+    (
+        (("bindings", "watermark_digest"), "tampered"),
+        (("bindings", "taxonomy_digest"), "tampered"),
+        (("bindings", "provenance_digest"), "tampered"),
+        (("bindings", "schema"), {"ckm": 999}),
+        (("snapshot", "snapshot_digest"), "tampered"),
+        (("query", "digest"), "tampered"),
+        (("semantic_digest",), "tampered"),
+        (("observation_id",), "ckm_observation_tampered"),
+    ),
+)
+def test_correction_refuses_corrupt_semantic_identity_before_mutation(
+    tmp_path: Path, path: tuple[str, ...], tampered_value: object
+) -> None:
+    retained = MetricRetentionStore(
+        tmp_path / f"corrupt-semantic-{'-'.join(path)}.sqlite"
+    )
+    result = _result(tmp_path)
+    original = retained.retain(
+        result,
+        metric_id="provenance_coverage",
+        finding_evaluations={"finding": "bound"},
+        retained_at="2026-01-01T00:00:00Z",
+    )
+    with sqlite3.connect(retained.path) as conn:
+        payload = json.loads(
+            conn.execute(
+                "SELECT observation_json FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+                (original.sample_id,),
+            ).fetchone()[0]
+        )
+        target = payload
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = tampered_value
+        conn.execute(
+            "UPDATE ckm_metric_sample_v1 SET observation_json = ? WHERE sample_id = ?",
+            (json.dumps(payload), original.sample_id),
+        )
+    usage_before = retained.storage_usage()
+    with pytest.raises(CkmContractError) as exc:
+        retained.correct(
+            original.sample_id, result, retained_at="2026-01-02T00:00:00Z"
+        )
+    assert exc.value.code == "corrupt_retained_observation"
+    assert retained.storage_usage() == usage_before
+    with sqlite3.connect(retained.path) as conn:
+        assert conn.execute(
+            "SELECT lifecycle FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+            (original.sample_id,),
+        ).fetchone()[0] == "retained"
+
+
+@pytest.mark.parametrize(
+    ("update_sql", "value", "expected_code"),
+    (
+        (
+            "UPDATE ckm_metric_sample_v1 SET observation_id = ? WHERE sample_id = ?",
+            "ckm_observation_tampered",
+            "corrupt_retained_observation",
+        ),
+        (
+            "UPDATE ckm_metric_sample_v1 SET watermarks_json = ? WHERE sample_id = ?",
+            '{"repo":"tampered"}',
+            "corrupt_retained_observation",
+        ),
+        (
+            "UPDATE ckm_metric_sample_v1 SET finding_evaluations_json = ? WHERE sample_id = ?",
+            '{"finding":"tampered"}',
+            "corrupt_retained_observation",
+        ),
+        (
+            "UPDATE ckm_metric_sample_v1 SET policy_version = ? WHERE sample_id = ?",
+            "tampered-policy",
+            "corrupt_retained_observation",
+        ),
+        (
+            "UPDATE ckm_metric_sample_v1 SET source_digest = ? WHERE sample_id = ?",
+            "tampered-source-digest",
+            "tampered_retained_source",
+        ),
+    ),
+)
+def test_correction_refuses_corrupt_identity_columns_before_mutation(
+    tmp_path: Path, update_sql: str, value: str, expected_code: str
+) -> None:
+    retained = MetricRetentionStore(
+        tmp_path / f"corrupt-column-{expected_code}-{canonical_digest(update_sql)[:8]}.sqlite"
+    )
+    result = _result(tmp_path)
+    original = retained.retain(
+        result,
+        metric_id="provenance_coverage",
+        finding_evaluations={"finding": "bound"},
+        retained_at="2026-01-01T00:00:00Z",
+    )
+    with sqlite3.connect(retained.path) as conn:
+        conn.execute(update_sql, (value, original.sample_id))
+    with pytest.raises(CkmContractError) as exc:
+        retained.correct(
+            original.sample_id, result, retained_at="2026-01-02T00:00:00Z"
+        )
+    assert exc.value.code == expected_code
+    with sqlite3.connect(retained.path) as conn:
+        assert conn.execute(
+            "SELECT lifecycle FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+            (original.sample_id,),
+        ).fetchone()[0] == "retained"
 
 
 def test_correction_payloads_remain_accounted_and_policy_prunable(tmp_path: Path) -> None:

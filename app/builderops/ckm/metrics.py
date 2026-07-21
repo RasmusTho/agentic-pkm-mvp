@@ -234,13 +234,16 @@ class MetricRetentionStore:
     def correct(self, sample_id: str, result: ResultEnvelope, *, finding_evaluations: Mapping[str, Any] | None = None, retained_at: str | None = None, metric_id: str | None = None, semantic_version: str | None = None) -> RetainedSample:
         self.initialize()
         with sqlite3.connect(self.path) as conn:
-            row = conn.execute("SELECT observation_json, typeof(observation_json), source_payload, lifecycle FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
+            row = conn.execute("SELECT observation_json, typeof(observation_json), source_payload, lifecycle, observation_id, source_digest, watermarks_json, finding_evaluations_json, policy_version, retained_at, expires_at, supersedes_sample_id FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
         if row is None:
             raise CkmContractError("missing_retained_sample", "retained metric sample is unknown", {"sample_id": sample_id})
         if row[2] is None:
             raise CkmContractError("source_unavailable", "retained source payload is unavailable for correction", {"sample_id": sample_id, "lifecycle": row[3]})
+        if row[3] != "retained":
+            raise CkmContractError("correction_not_allowed", "only an active retained sample may be corrected", {"sample_id": sample_id, "lifecycle": row[3]})
         if row[1] != "text" or not isinstance(row[0], str):
             raise CkmContractError("corrupt_retained_observation", "retained metric definition binding is corrupt", {"sample_id": sample_id})
+        source = self.replay(sample_id)
         try:
             observation = json.loads(row[0])
             stored_definition = observation["metric_definition"]
@@ -250,16 +253,63 @@ class MetricRetentionStore:
             if not isinstance(stored_definition, Mapping) or not isinstance(bindings, Mapping):
                 raise TypeError("metric definition and bindings must be objects")
             expected_definition = dict(metric_definition(stored_id, stored_version))
-        except (json.JSONDecodeError, KeyError, TypeError, CkmContractError) as exc:
+            snapshot = source["snapshot"]
+            expected_query = {
+                "digest": source["query_digest"],
+                "resource_type": source["resource_type"],
+            }
+            expected_schema = {
+                "envelope": source["schema_version"],
+                "resource": snapshot["resource_schema_version"],
+                "ckm": snapshot["ckm_schema_version"],
+            }
+            stored_watermarks = json.loads(row[6])
+            stored_evaluations = json.loads(row[7])
+            if not isinstance(stored_evaluations, Mapping):
+                raise TypeError("finding evaluations must be an object")
+            retained_timestamp = datetime.fromisoformat(str(row[9]).replace("Z", "+00:00"))
+            expected_expiry = (retained_timestamp + timedelta(days=RETENTION_DAYS)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, CkmContractError) as exc:
             raise CkmContractError("corrupt_retained_observation", "retained metric definition binding is corrupt", {"sample_id": sample_id}) from exc
         expected_binding_digests = {
             "formula_digest": canonical_digest(expected_definition["formula"]),
             "detector_digest": canonical_digest(expected_definition["detector_bindings"]),
             "configuration_digest": canonical_digest(expected_definition["configuration_bindings"]),
+            "watermark_digest": canonical_digest(snapshot["watermarks"]),
+            "provenance_digest": canonical_digest(snapshot["provenance"]),
         }
-        if stored_definition != expected_definition or any(
-            bindings.get(key) != value for key, value in expected_binding_digests.items()
-        ):
+        semantic_content = {
+            key: value
+            for key, value in observation.items()
+            if key not in {"generated_at", "semantic_digest", "observation_id"}
+        }
+        expected_semantic_digest = canonical_digest(semantic_content)
+        expected_observation_id = f"ckm_observation_{expected_semantic_digest[:24]}"
+        expected_sample_id = f"ckm_sample_{canonical_digest({'observation': expected_observation_id, 'source': row[5], 'finding_evaluations': canonical_digest(stored_evaluations), 'retained_at': row[9], 'supersedes': row[11]})[:24]}"
+        bindings_valid = (
+            bindings.get("schema") == expected_schema
+            and bindings.get("taxonomy_digest") == snapshot["taxonomy_digest"]
+            and all(bindings.get(key) == value for key, value in expected_binding_digests.items())
+        )
+        identity_valid = (
+            observation.get("snapshot") == snapshot
+            and observation.get("query") == expected_query
+            and observation.get("citations") == snapshot["provenance"]
+            and observation.get("freshness") == {
+                "state_revision": snapshot["state_revision"],
+                "watermarks": snapshot["watermarks"],
+            }
+            and isinstance(observation.get("generated_at"), str)
+            and observation.get("semantic_digest") == expected_semantic_digest
+            and observation.get("observation_id") == expected_observation_id
+            and row[4] == expected_observation_id
+            and row[5] == canonical_digest(source)
+            and stored_watermarks == snapshot["watermarks"]
+            and row[8] == RETENTION_POLICY_VERSION
+            and row[10] == expected_expiry
+            and sample_id == expected_sample_id
+        )
+        if stored_definition != expected_definition or not bindings_valid or not identity_valid:
             raise CkmContractError("corrupt_retained_observation", "retained metric definition binding is corrupt", {"sample_id": sample_id})
         if (metric_id is not None and metric_id != stored_id) or (
             semantic_version is not None and semantic_version != stored_version
