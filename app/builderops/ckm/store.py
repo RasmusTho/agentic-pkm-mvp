@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
@@ -44,11 +45,22 @@ from app.builderops.ckm.schema import (
     CKM_DDL_STATEMENTS,
     CKM_LEGACY_ADDED_COLUMNS,
     CKM_REQUIRED_COLUMNS,
+    CKM_REQUIRED_QUERY_INDEXES,
     CKM_SCHEMA_VERSION,
     CKM_TABLE_NAMES,
 )
 
 JsonDict = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CkmProjectionBatch:
+    capabilities: tuple[CkmCapability, ...]
+    artifacts: tuple[CkmArtifact, ...]
+    edges_by_capability: Mapping[str, tuple[CkmEvidenceEdge, ...]]
+    assessments_by_capability: Mapping[str, CkmAssessmentProjection]
+    findings_by_capability: Mapping[str, tuple[CkmFinding, ...]]
+    current_watermark_set: Mapping[str, str]
 
 
 def _dumps(value: Any) -> str:
@@ -89,6 +101,51 @@ class CkmStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
+
+    def _readonly_connect(self) -> sqlite3.Connection:
+        """Open the existing CKM store without creating or mutating filesystem state."""
+        validate_db_path_outside_vault(self._db_path)
+        if not self._db_path.is_file():
+            raise CkmValidationError(f"CKM database does not exist: {self._db_path}")
+        uri = f"{self._db_path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
+        return conn
+
+    @staticmethod
+    def _preflight_read_schema(conn: sqlite3.Connection) -> None:
+        """Fail loudly on missing/outdated read schema with a constant query plan."""
+        objects = {
+            (str(row["type"]), str(row["name"]))
+            for row in conn.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE (type = 'table' AND name LIKE 'ckm_%') OR type = 'index'"
+            ).fetchall()
+        }
+        missing_tables = sorted(
+            table for table in CKM_TABLE_NAMES if ("table", table) not in objects
+        )
+        missing_indexes = sorted(
+            name for name in CKM_REQUIRED_QUERY_INDEXES if ("index", name) not in objects
+        )
+        if missing_tables or missing_indexes:
+            details = []
+            if missing_tables:
+                details.append(f"tables: {', '.join(missing_tables)}")
+            if missing_indexes:
+                details.append(f"indexes: {', '.join(missing_indexes)}")
+            raise CkmValidationError(
+                f"CKM read preflight failed; missing {'; '.join(details)}"
+            )
+        CkmStore._validate_required_columns(conn, legacy=False)
+        state_rows = conn.execute(
+            "SELECT schema_version FROM ckm_state WHERE singleton = 1"
+        ).fetchall()
+        if len(state_rows) != 1 or int(state_rows[0]["schema_version"]) != CKM_SCHEMA_VERSION:
+            raise CkmValidationError(
+                "CKM read preflight failed: missing or unsupported state row"
+            )
 
     # --- Schema lifecycle ----------------------------------------------------
 
@@ -1259,6 +1316,42 @@ class CkmStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM ckm_capability ORDER BY name").fetchall()
         return [CkmCapability.from_row(row) for row in rows]
+
+    def load_projection_batch(self) -> CkmProjectionBatch:
+        """Load all projection inputs read-only with a constant bounded plan."""
+        with self._readonly_connect() as conn:
+            self._preflight_read_schema(conn)
+            capability_rows = conn.execute("SELECT * FROM ckm_capability ORDER BY name, id").fetchall()
+            artifact_rows = conn.execute("SELECT * FROM ckm_artifact ORDER BY source_ref, id").fetchall()
+            edge_rows = conn.execute("SELECT * FROM ckm_evidence_edge ORDER BY capability_id, public_id").fetchall()
+            assessment_rows = conn.execute("SELECT * FROM ckm_assessment ORDER BY capability_id, asserted_at, rowid").fetchall()
+            finding_rows = conn.execute("SELECT * FROM ckm_finding ORDER BY capability_id, kind, dimension").fetchall()
+            watermark_rows = conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source").fetchall()
+        edges: dict[str, list[CkmEvidenceEdge]] = {}
+        for row in edge_rows:
+            edges.setdefault(str(row["capability_id"]), []).append(CkmEvidenceEdge.from_row(row))
+        current_watermarks = {str(row["source"]): str(row["value"]) for row in watermark_rows}
+        latest: dict[str, CkmAssessmentProjection] = {}
+        for row in assessment_rows:
+            assessment = self._assessment_from_row(row)
+            latest[assessment.capability_id] = CkmAssessmentProjection(
+                assessment=assessment,
+                current_watermark_set=current_watermarks,
+                stale_relative_to_evidence=dict(assessment.watermark_set) != current_watermarks,
+            )
+        findings: dict[str, list[CkmFinding]] = {}
+        for row in finding_rows:
+            findings.setdefault(str(row["capability_id"]), []).append(
+                CkmFinding.from_row(row, citations=_loads(row["citations"]))
+            )
+        return CkmProjectionBatch(
+            capabilities=tuple(CkmCapability.from_row(row) for row in capability_rows),
+            artifacts=tuple(CkmArtifact.from_row(row) for row in artifact_rows),
+            edges_by_capability={key: tuple(value) for key, value in edges.items()},
+            assessments_by_capability=latest,
+            findings_by_capability={key: tuple(value) for key, value in findings.items()},
+            current_watermark_set=current_watermarks,
+        )
 
     # --- Artifact --------------------------------------------------------------
 

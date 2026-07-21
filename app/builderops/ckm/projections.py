@@ -9,7 +9,6 @@ from typing import Iterable, Mapping, Sequence
 
 from app.builderops.ckm.models import (
     MATURITY_DIMENSIONS,
-    CkmAssessmentProjection,
     CkmArtifact,
     CkmCapability,
     CkmEvidenceEdge,
@@ -18,7 +17,7 @@ from app.builderops.ckm.models import (
     utc_now,
 )
 from app.builderops.ckm.seed import SeedManifestError, load_manifest
-from app.builderops.ckm.store import CkmStore
+from app.builderops.ckm.store import CkmProjectionBatch, CkmStore
 
 
 TRACEABILITY_COLUMNS = (
@@ -93,7 +92,7 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
 
 
-def _capability_by_slug(store: CkmStore, slug: str) -> CkmCapability:
+def _capability_by_slug(capabilities: Sequence[CkmCapability], slug: str) -> CkmCapability:
     normalized = _slug(slug)
     try:
         manifest = load_manifest()
@@ -102,7 +101,9 @@ def _capability_by_slug(store: CkmStore, slug: str) -> CkmCapability:
     manifest_by_slug = {_slug(entry.slug): entry for entry in manifest}
     manifest_entry = manifest_by_slug.get(normalized)
     if manifest_entry is not None:
-        capability = store.get_capability_by_name(manifest_entry.name)
+        capability = next(
+            (item for item in capabilities if item.name == manifest_entry.name), None
+        )
         if capability is None:
             raise CkmValidationError(
                 f"seeded capability is missing for manifest slug: {slug}"
@@ -115,7 +116,7 @@ def _capability_by_slug(store: CkmStore, slug: str) -> CkmCapability:
     seeded_names = {entry.name for entry in manifest}
     matches = [
         item
-        for item in store.list_capabilities()
+        for item in capabilities
         if item.name not in seeded_names and _slug(item.name) == normalized
     ]
     if not matches:
@@ -154,15 +155,13 @@ def _forest_order(capabilities: Sequence[CkmCapability]) -> list[tuple[int, CkmC
     return ordered
 
 
-def _render_capability_map(store: CkmStore) -> list[str]:
-    capabilities = store.list_capabilities()
-    all_edges = store.list_evidence_edges()
-    edges_by_capability: dict[str, list[CkmEvidenceEdge]] = {}
+def _render_capability_map(batch: CkmProjectionBatch) -> list[str]:
+    capabilities = batch.capabilities
+    edges_by_capability = batch.edges_by_capability
     linked_artifacts: set[str] = set()
-    for edge in all_edges:
-        edges_by_capability.setdefault(edge.capability_id, []).append(edge)
-        linked_artifacts.add(edge.artifact_id)
-    unlinked = sum(artifact.id not in linked_artifacts for artifact in store.list_artifacts())
+    for edges in edges_by_capability.values():
+        linked_artifacts.update(edge.artifact_id for edge in edges)
+    unlinked = sum(artifact.id not in linked_artifacts for artifact in batch.artifacts)
     lines = [
         "# CKM Capability Map",
         "",
@@ -181,18 +180,12 @@ def _render_capability_map(store: CkmStore) -> list[str]:
     return lines
 
 
-def _assessment_or_none(store: CkmStore, capability_id: str) -> CkmAssessmentProjection | None:
-    if store.latest_assessment_for_capability(capability_id) is None:
-        return None
-    return store.assessment_for_projection(capability_id)
-
-
-def _render_maturity(store: CkmStore) -> list[str]:
+def _render_maturity(batch: CkmProjectionBatch) -> list[str]:
     lines = ["# CKM Maturity", ""]
-    for capability in store.list_capabilities():
-        edges = store.list_evidence_edges_for_capability(capability.id)
+    for capability in batch.capabilities:
+        edges = batch.edges_by_capability.get(capability.id, ())
         confirmed, candidate = _edge_counts(edges)
-        projection = _assessment_or_none(store, capability.id)
+        projection = batch.assessments_by_capability.get(capability.id)
         lines.extend([f"## {_markdown(capability.name)}", ""])
         lines.append(
             f"Evidence: **{confirmed} confirmed / {candidate} candidate**. "
@@ -241,11 +234,12 @@ def _citation_text(citation: Mapping[str, object]) -> str:
     return " — ".join(parts)
 
 
-def _render_gaps(store: CkmStore) -> list[str]:
-    capabilities = {item.id: item for item in store.list_capabilities()}
+def _render_gaps(batch: CkmProjectionBatch) -> list[str]:
+    capabilities = {item.id: item for item in batch.capabilities}
     grouped: dict[str, list[CkmFinding]] = {"gap": [], "missing_evidence": []}
-    for finding in store.list_findings():
-        grouped.setdefault(finding.kind, []).append(finding)
+    for batch_findings in batch.findings_by_capability.values():
+        for finding in batch_findings:
+            grouped.setdefault(finding.kind, []).append(finding)
     lines = ["# CKM Gaps and Missing Evidence", ""]
     for kind in ("gap", "missing_evidence"):
         lines.extend([f"## {kind.replace('_', ' ').title()}", ""])
@@ -285,8 +279,8 @@ def _refs_for_kind(
     return ", ".join(sorted(set(values))) or "—"
 
 
-def _render_traceability_matrix(store: CkmStore) -> list[str]:
-    artifacts = {item.id: item for item in store.list_artifacts()}
+def _render_traceability_matrix(batch: CkmProjectionBatch) -> list[str]:
+    artifacts = {item.id: item for item in batch.artifacts}
     lines = [
         "# Generated CKM Traceability Matrix",
         "",
@@ -296,8 +290,8 @@ def _render_traceability_matrix(store: CkmStore) -> list[str]:
         "| " + " | ".join(TRACEABILITY_COLUMNS) + " |",
         "| " + " | ".join("---" for _ in TRACEABILITY_COLUMNS) + " |",
     ]
-    for index, capability in enumerate(store.list_capabilities(), start=1):
-        edges = store.list_evidence_edges_for_capability(capability.id)
+    for index, capability in enumerate(batch.capabilities, start=1):
+        edges = batch.edges_by_capability.get(capability.id, ())
         row = (
             str(index),
             f"{capability.name} ({capability.lifecycle})",
@@ -345,16 +339,20 @@ def render_projection(
     if normalized not in PROJECTION_FILENAMES:
         allowed = ", ".join(sorted(PROJECTION_FILENAMES))
         raise CkmValidationError(f"unsupported CKM projection type: {projection_type}; allowed: {allowed}")
-    store.ensure_schema()
     timestamp = generated_at or utc_now()
+    batch = store.load_projection_batch()
     body = {
         "ckm-capability-map": _render_capability_map,
         "ckm-maturity": _render_maturity,
         "ckm-gaps": _render_gaps,
         "ckm-traceability-matrix": _render_traceability_matrix,
-    }[normalized](store)
+    }[normalized](batch)
     return "\n".join(
-        _header(normalized, generated_at=timestamp, watermarks=store.current_watermark_set())
+        _header(
+            normalized,
+            generated_at=timestamp,
+            watermarks=batch.current_watermark_set,
+        )
         + body
         + [""]
     )
@@ -372,6 +370,7 @@ def write_projection(
     if filename is None:
         allowed = ", ".join(sorted(PROJECTION_FILENAMES))
         raise CkmValidationError(f"unsupported CKM projection type: {projection_type}; allowed: {allowed}")
+    store.ensure_schema()
     timestamp = generated_at or utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / filename
@@ -388,15 +387,15 @@ def render_capability_show(
     *,
     generated_at: str | None = None,
 ) -> str:
-    store.ensure_schema()
-    capability = _capability_by_slug(store, capability_slug)
+    batch = store.load_projection_batch()
+    capability = _capability_by_slug(batch.capabilities, capability_slug)
     timestamp = generated_at or utc_now()
-    edges = store.list_evidence_edges_for_capability(capability.id)
+    edges = batch.edges_by_capability.get(capability.id, ())
     confirmed, candidate = _edge_counts(edges)
     lines = _header(
         "ckm-show",
         generated_at=timestamp,
-        watermarks=store.current_watermark_set(),
+        watermarks=batch.current_watermark_set,
     )
     lines.extend([
         f"# {_markdown(capability.name)}",
@@ -405,7 +404,7 @@ def render_capability_show(
         f"Evidence: **{confirmed} confirmed / {candidate} candidate**.",
         "",
     ])
-    projection = _assessment_or_none(store, capability.id)
+    projection = batch.assessments_by_capability.get(capability.id)
     if projection is None:
         lines.extend(["Assessment: **missing**.", ""])
     else:

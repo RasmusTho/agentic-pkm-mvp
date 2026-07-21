@@ -112,6 +112,25 @@ Dependency graph:
 
 `accepted observation evidence → future O2 proposal`
 
+## Q2 delivered bounded-query semantics
+
+Q2 (#3778) extends the Q1 read service with a deliberately small allowlist:
+bounded capability public-ID and subtree filters, capability-scoped evidence,
+assessment, and finding filters, and unlinked-artifact selection. Filters are
+canonicalized, deterministically ordered, completeness-accounted, and subject
+to the same hard capture bound, access policy, one-transaction snapshot, and
+mixed-epoch refusal rules as Q1. Unknown, invalid, or over-bound requests return
+a typed refusal without a partial semantic result.
+
+Composite indexes support the live predicates and are installed by both new-
+store bootstrap and existing-store `ensure_schema()` migration. Projection and
+overview rendering use one read-only batch with a constant statement plan;
+rendering performs a bounded fail-loud schema preflight and cannot initialize or
+migrate a missing or outdated store. Write/CLI producers remain responsible for
+explicit schema setup before producing generated files. This delivery does not
+add pagination, arbitrary filters or sorting, ranking, HTTP/UI, metrics, or
+observation semantics.
+
 ## M1 delivered semantics
 
 M1 (#3779) supplies a small versioned registry of descriptive, snapshot-bound
@@ -158,7 +177,7 @@ implementation/test evidence only: it establishes neither trend nor cadence.
   Verify: Q1a and Q1b child delivery receipts plus `tests/builderops/ckm/test_query_service.py`
 - [ ] Query execution is read-only/side-effect free; incomplete/oversized capture and all unknown schema/version/policy/semantics states fail explicitly.
   Verify: `tests/builderops/ckm/test_query_service.py::test_query_path_is_read_only_and_side_effect_free`; `tests/builderops/ckm/test_query_service.py::test_incomplete_or_oversized_snapshot_refuses`
-- [ ] Q2 proves bounded indexed plans, constant query counts per complete capture, and no N+1 regression without weakening Q1 ordering/completeness guarantees.
+- [x] Q2 proves bounded indexed plans, constant query counts per complete capture, and no N+1 regression without weakening Q1 ordering/completeness guarantees.
   Verify: `tests/builderops/ckm/test_query_plans.py`
 - [ ] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings; any aggregate is `human_advisory_only`, accompanied by its evidence-rich components, and cannot drive machine authority.
   Verify: `tests/builderops/ckm/test_metrics.py`

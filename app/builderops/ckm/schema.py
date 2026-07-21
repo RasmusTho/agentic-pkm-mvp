@@ -28,6 +28,16 @@ CKM_TABLE_NAMES = (
     "ckm_watermark",
 )
 
+CKM_REQUIRED_QUERY_INDEXES = frozenset(
+    {
+        "idx_ckm_capability_parent_public",
+        "idx_ckm_evidence_edge_capability_public",
+        "idx_ckm_evidence_edge_artifact_public",
+        "idx_ckm_assessment_capability_asserted_public",
+        "idx_ckm_finding_capability_public",
+    }
+)
+
 CKM_REQUIRED_COLUMNS = {
     "ckm_state": frozenset(
         {"singleton", "epoch", "state_revision", "schema_version", "created_at", "updated_at"}
@@ -166,6 +176,10 @@ CKM_DDL_STATEMENTS = [
     ON ckm_capability(parent_id)
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_ckm_capability_parent_public
+    ON ckm_capability(parent_id, public_id)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ckm_artifact (
         id TEXT PRIMARY KEY,
         public_id TEXT NOT NULL,
@@ -218,6 +232,14 @@ CKM_DDL_STATEMENTS = [
     """
     CREATE INDEX IF NOT EXISTS idx_ckm_evidence_edge_artifact
     ON ckm_evidence_edge(artifact_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ckm_evidence_edge_capability_public
+    ON ckm_evidence_edge(capability_id, public_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ckm_evidence_edge_artifact_public
+    ON ckm_evidence_edge(artifact_id, public_id)
     """,
     """
     CREATE TABLE IF NOT EXISTS ckm_evidence_edge_history (
@@ -284,6 +306,10 @@ CKM_DDL_STATEMENTS = [
     ON ckm_assessment(capability_id, asserted_at)
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_ckm_assessment_capability_asserted_public
+    ON ckm_assessment(capability_id, asserted_at, public_id)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ckm_finding (
         id TEXT PRIMARY KEY,
         public_id TEXT NOT NULL,
@@ -304,6 +330,10 @@ CKM_DDL_STATEMENTS = [
     """
     CREATE INDEX IF NOT EXISTS idx_ckm_finding_capability
     ON ckm_finding(capability_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ckm_finding_capability_public
+    ON ckm_finding(capability_id, public_id)
     """,
     """
     CREATE TABLE IF NOT EXISTS ckm_watermark (
