@@ -129,6 +129,19 @@ count, M2 history, O2 automation, drift detection, federation, rankings, or
 machine decision authority. Those remain unresolved or out of scope until a
 new source-backed contract is accepted.
 
+## O1b delivered comparison semantics
+
+O1b (#3781) compares only two or more replayable retained M1 observations
+whose metric definition, formula/detector/configuration, schema, taxonomy,
+canonical query, tagged value-state, candidate/confirmed, identity, and
+access/redaction bindings all match. It returns deterministic component-wise
+deltas with input identity, provenance, freshness, citations, explicit tagged
+state transitions, and limitations; any mismatch, missing policy binding,
+expiry/pruning/deletion, or tamper refuses without a partial result. An
+aggregate is only `human_advisory_only`, co-present with components and
+limitations, and never sufficient for authority. The gathered observation is
+implementation/test evidence only: it establishes neither trend nor cadence.
+
 ## Observation-gated future work
 
 - **M2 is not filed or Ready.** The accepted question set is limited to compatible sampled changes in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition. Filing still requires a costed smallest implementation, source authority, precise semantics, and verifiable refusal behavior. General bitemporality is not the answer.

@@ -181,6 +181,7 @@ def build_observation(result: ResultEnvelope, *, metric_id: str = "capability_po
             "configuration_digest": canonical_digest(definition["configuration_bindings"]),
             "watermark_digest": canonical_digest(payload["snapshot"]["watermarks"]),
             "provenance_digest": canonical_digest(payload["snapshot"]["provenance"]),
+            "identity_policy_version": "ckm-public-id-v1",
         },
         "vector": vector,
         "distributions": {"confirmed": _tagged_distribution(confirmed), "candidate": _tagged_distribution(candidates)},

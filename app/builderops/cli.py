@@ -47,6 +47,7 @@ from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.metrics import MetricRetentionStore, build_observation
+from app.builderops.ckm.comparison import compare_retained_observations
 from app.builderops.ckm.contracts import CkmContractError, ResultEnvelope
 from app.builderops.config import BuilderOpsPaths, default_state_dir, load_paths
 from app.builderops.cutover_evidence import (
@@ -646,6 +647,19 @@ def ckm_measure(ctx: click.Context, metric_id: str, retain_sample: bool, limit: 
             sample = MetricRetentionStore(retention_path).retain(result, metric_id=metric_id)
             payload["retained_sample"] = {"sample_id": sample.sample_id, "observation_id": sample.observation_id}
             payload["storage"] = MetricRetentionStore(retention_path).storage_usage()
+    except CkmContractError as exc:
+        payload = {"error": exc.to_dict()}
+    click.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+@ckm.command("compare", help="Compare compatible retained CKM observations without inferring a trend.")
+@click.option("--sample-id", "sample_ids", multiple=True, required=True)
+@click.pass_context
+def ckm_compare(ctx: click.Context, sample_ids: tuple[str, ...]) -> None:
+    paths = _effective_paths(ctx)
+    retention_path = paths.db_path.with_name(f"{paths.db_path.stem}-metric-samples.sqlite")
+    try:
+        payload = compare_retained_observations(MetricRetentionStore(retention_path), sample_ids)
     except CkmContractError as exc:
         payload = {"error": exc.to_dict()}
     click.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))

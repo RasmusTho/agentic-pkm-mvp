@@ -47,7 +47,7 @@ def test_metric_definitions_are_versioned_and_warn_against_gating() -> None:
 def test_observation_binds_complete_semantic_bundle(tmp_path: Path) -> None:
     observation = build_observation(_result(tmp_path), generated_at="2026-07-21T00:00:00Z")
     assert observation["snapshot"]["snapshot_digest"] and observation["query"]["digest"]
-    assert observation["bindings"].keys() == {"schema", "taxonomy_digest", "formula_digest", "detector_digest", "configuration_digest", "watermark_digest", "provenance_digest"}
+    assert observation["bindings"].keys() == {"schema", "taxonomy_digest", "formula_digest", "detector_digest", "configuration_digest", "watermark_digest", "provenance_digest", "identity_policy_version"}
     assert observation["metric_definition"]["definition_digest"] and observation["generated_at"]
 
 
