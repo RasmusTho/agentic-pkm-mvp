@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from app.builderops import cli as cli_module
 from app.builderops.cli import builderops
 from app.builderops.ckm.contracts import ACCESS_POLICY_VERSION, EFFECTIVE_AUDIENCE, REDACTION_PROFILE, CkmContractError, ErrorEnvelope
+from app.builderops.ckm.models import MATURITY_DIMENSIONS
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.store import CkmStore
 
@@ -38,9 +39,11 @@ def _directory_fingerprint(path: Path) -> tuple[tuple[str, str], ...]:
 def test_list_capabilities_uses_one_read_transaction(tmp_path: Path, monkeypatch) -> None:
     store, _, _ = _store(tmp_path)
     statements: list[str] = []
+    connection_uris: list[str] = []
     original_connect = sqlite3.connect
 
     def traced_connect(*args, **kwargs):
+        connection_uris.append(str(args[0]))
         conn = original_connect(*args, **kwargs)
         conn.set_trace_callback(statements.append)
         return conn
@@ -48,6 +51,7 @@ def test_list_capabilities_uses_one_read_transaction(tmp_path: Path, monkeypatch
     monkeypatch.setattr("app.builderops.ckm.query_service.sqlite3.connect", traced_connect)
     result = CkmQueryService(store.db_path).list_capabilities().to_dict()
     assert result["snapshot"]["completeness"]["complete"] is True
+    assert connection_uris == [f"{store.db_path.absolute().as_uri()}?mode=ro"]
     assert [statement for statement in statements if statement.strip().upper() == "BEGIN"] == ["BEGIN"]
     assert not any(statement.strip().upper().split(" ", 1)[0] in {"INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP"} for statement in statements)
 
@@ -145,6 +149,7 @@ def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
     assert touched is True
     assert changing_result["error"]["code"] == "unsupported_store" and "resources" not in changing_result
     assert _directory_fingerprint(tmp_path) == changing_before
+
     malformed = CkmStore(tmp_path / "malformed.sqlite")
     malformed.ensure_schema()
     malformed_capability = malformed.upsert_capability(
@@ -196,7 +201,8 @@ def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
     assert checkpointed.db_path.read_bytes()[18:20] == b"\x02\x02"
     checkpointed_before = _directory_fingerprint(tmp_path)
     checkpointed_result = CkmQueryService(checkpointed.db_path).get_capability(checkpointed_capability.public_id).to_dict()
-    assert checkpointed_result["resources"][0]["public_id"] == checkpointed_capability.public_id
+    assert checkpointed_result["error"]["code"] == "unsupported_store"
+    assert "resources" not in checkpointed_result
     assert _directory_fingerprint(tmp_path) == checkpointed_before
 
     live_wal = CkmStore(tmp_path / "live-wal.sqlite")
@@ -259,7 +265,7 @@ def test_incomplete_or_oversized_snapshot_refuses(tmp_path: Path) -> None:
             cursor = self._conn.execute(statement, parameters)
             if statement.startswith("SELECT COUNT(*) FROM ckm_capability"):
                 object.__setattr__(self, "_count_seen", True)
-            if self._count_seen and statement.startswith("SELECT * FROM ckm_capability"):
+            if self._count_seen and statement.startswith("SELECT capability.*"):
                 return _RowsCursor(cursor.fetchall()[:-1])
             return cursor
 
@@ -333,6 +339,19 @@ def test_missing_candidate_completeness_and_access_semantics(tmp_path: Path) -> 
     assert resources[candidate.public_id]["candidate"] is True
     assert resources[confirmed.public_id]["candidate"] is False
     assert resources[confirmed.public_id]["values"]["assessment"]["state"] == "unassessed"
+    assert resources[candidate.public_id]["values"]["assessment"]["state"] == "unassessed"
+    store.append_assessment(
+        capability_id=confirmed.id,
+        scores={dimension: 0.5 for dimension in MATURITY_DIMENSIONS},
+        citations={dimension: [] for dimension in MATURITY_DIMENSIONS},
+        aggregate=0.5,
+        watermark_set={"test": "assessment"},
+    )
+    assessed_resources = {
+        item["public_id"]: item for item in CkmQueryService(store.db_path).list_capabilities().to_dict()["resources"]
+    }
+    assert assessed_resources[confirmed.public_id]["values"]["assessment"]["state"] == "unsupported"
+    assert assessed_resources[candidate.public_id]["values"]["assessment"]["state"] == "unassessed"
     assert resources[confirmed.public_id]["values"]["boundary_ref"]["state"] == "missing"
     assert payload["snapshot"]["completeness"]["object_classes"][0]["included"] == 2
     empty = CkmStore(tmp_path / "empty.sqlite")

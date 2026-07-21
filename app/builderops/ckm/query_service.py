@@ -32,6 +32,10 @@ from app.builderops.ckm.schema import CKM_REQUIRED_COLUMNS, CKM_SCHEMA_VERSION, 
 
 DEFAULT_CAPTURE_LIMIT = 500
 _SQLITE_RECOVERY_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+_SQLITE_WAL_SIDECAR_SUFFIXES = ("-wal", "-shm")
+_SQLITE_HEADER_MAGIC = b"SQLite format 3\x00"
+_SQLITE_ROLLBACK_HEADER_VERSIONS = b"\x01\x01"
+_SQLITE_WAL_HEADER_VERSIONS = b"\x02\x02"
 
 
 class CkmQueryService:
@@ -67,14 +71,14 @@ class CkmQueryService:
                 raise CkmContractError("missing_store", "CKM database does not exist", {"path": str(self._db_path)})
             snapshot_identity = self._snapshot_identity()
             self._refuse_recovery_sidecars()
+            self._validate_readable_header()
             # ``mode=ro`` is the important guard: SQLite cannot create the DB,
             # WAL, schema, or parent directory through this connection.  Build
             # the file URI through pathlib so reserved path characters cannot
-            # be parsed as URI query or fragment delimiters. ``immutable=1``
-            # prevents SQLite from creating WAL support files for a safely
-            # checkpointed WAL-mode database.
+            # be parsed as URI query or fragment delimiters. WAL-mode stores are
+            # refused from their header before SQLite opens the live path.
             try:
-                conn = self._connection_factory(f"{self._db_path.absolute().as_uri()}?mode=ro&immutable=1")
+                conn = self._connection_factory(f"{self._db_path.absolute().as_uri()}?mode=ro")
             except sqlite3.Error as exc:
                 raise CkmContractError(
                     "unsupported_store",
@@ -87,7 +91,7 @@ class CkmQueryService:
                 conn.execute("BEGIN")  # exactly one explicit read transaction
                 self._validate_schema(conn)
                 result = self._read_capabilities(conn, public_id=public_id, query=query)
-                self._refuse_recovery_sidecars()
+                self._refuse_recovery_sidecars(include_rollback_journal=False)
                 if self._snapshot_identity() != snapshot_identity:
                     raise CkmContractError(
                         "unsupported_store",
@@ -124,10 +128,37 @@ class CkmQueryService:
             )
         return (snapshot_stat.st_dev, snapshot_stat.st_ino, snapshot_stat.st_size, snapshot_stat.st_mtime_ns)
 
-    def _refuse_recovery_sidecars(self) -> None:
+    def _validate_readable_header(self) -> None:
+        try:
+            with self._db_path.open("rb") as stream:
+                header = stream.read(20)
+        except OSError as exc:
+            raise CkmContractError(
+                "unsupported_store",
+                "CKM database header could not be read",
+                {"reason": str(exc)},
+            ) from exc
+        if len(header) < 20 or header[:16] != _SQLITE_HEADER_MAGIC:
+            raise CkmContractError("unsupported_store", "CKM database header is unsupported", {})
+        versions = header[18:20]
+        if versions == _SQLITE_WAL_HEADER_VERSIONS:
+            raise CkmContractError(
+                "unsupported_store",
+                "CKM WAL-mode stores require a separately fenced snapshot",
+                {"journal_mode": "wal"},
+            )
+        if versions != _SQLITE_ROLLBACK_HEADER_VERSIONS:
+            raise CkmContractError(
+                "unsupported_store",
+                "CKM database journaling mode is unsupported",
+                {"header_versions": list(versions)},
+            )
+
+    def _refuse_recovery_sidecars(self, *, include_rollback_journal: bool = True) -> None:
+        suffixes = _SQLITE_RECOVERY_SIDECAR_SUFFIXES if include_rollback_journal else _SQLITE_WAL_SIDECAR_SUFFIXES
         sidecars = [
             path.name
-            for suffix in _SQLITE_RECOVERY_SIDECAR_SUFFIXES
+            for suffix in suffixes
             if (path := Path(f"{self._db_path}{suffix}")).exists()
         ]
         if sidecars:
@@ -158,7 +189,9 @@ class CkmQueryService:
         if public_id is None and total > self._capture_limit:
             raise CkmContractError("snapshot_too_large", "complete capability snapshot exceeds configured bound", {"limit": self._capture_limit, "total": total})
         if public_id is None:
-            rows = conn.execute("SELECT * FROM ckm_capability ORDER BY public_id").fetchall()
+            rows = conn.execute(
+                "SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment FROM ckm_capability AS capability ORDER BY capability.public_id"
+            ).fetchall()
             if len(rows) != total:
                 raise CkmContractError(
                     "incomplete_snapshot",
@@ -166,7 +199,10 @@ class CkmQueryService:
                     {"declared_total": total, "captured_total": len(rows)},
                 )
         else:
-            rows = conn.execute("SELECT * FROM ckm_capability WHERE public_id = ? ORDER BY public_id", (public_id,)).fetchall()
+            rows = conn.execute(
+                "SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment FROM ckm_capability AS capability WHERE capability.public_id = ? ORDER BY capability.public_id",
+                (public_id,),
+            ).fetchall()
             if not rows:
                 identity = conn.execute(
                     "SELECT status FROM ckm_public_identity WHERE public_id = ? AND resource_type = 'capability'",
@@ -189,7 +225,7 @@ class CkmQueryService:
         end_state = conn.execute("SELECT epoch, state_revision FROM ckm_state WHERE singleton = 1").fetchone()
         if end_state is None or (str(end_state["epoch"]), int(end_state["state_revision"])) != (state.epoch, state.state_revision):
             raise CkmContractError("mixed_epoch", "CKM state changed during snapshot capture", {})
-        resources = tuple(self._dto(row) for row in rows)
+        resources = tuple(self._dto(row, has_assessment=bool(row["has_assessment"])) for row in rows)
         read_set = {"capability": tuple(item.public_id for item in resources)}
         completeness = CompletenessManifest((ObjectClassCompleteness("capability", included=len(resources), filtered=(total - len(resources)) if public_id else 0),), complete=True)
         watermarks = {str(row["source"]): str(row["value"]) for row in conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source")}
@@ -216,10 +252,15 @@ class CkmQueryService:
         return ResultEnvelope(resource_type="capability", query_digest=canonical_query_digest(query), snapshot=snapshot, resources=resources)
 
     @staticmethod
-    def _dto(row: sqlite3.Row) -> ResourceDto:
+    def _dto(row: sqlite3.Row, *, has_assessment: bool) -> ResourceDto:
         lifecycle = str(row["lifecycle"])
+        assessment = (
+            TaggedValue.unsupported("Q1 query does not expose persisted assessment history")
+            if has_assessment
+            else TaggedValue.unassessed("capability has no persisted assessment")
+        )
         return ResourceDto(
             public_id=str(row["public_id"]), resource_type="capability", display_name=str(row["name"]), lifecycle=lifecycle,
             candidate=lifecycle == "candidate", provenance=({"source_ref": str(row["existence_provenance"])},),
-            values={"definition": TaggedValue.measured(str(row["definition"])), "boundary_ref": TaggedValue.measured(str(row["boundary_ref"])) if row["boundary_ref"] else TaggedValue.missing("capability has no boundary reference"), "assessment": TaggedValue.unassessed("Q1 query does not reconstruct assessment history")},
+            values={"definition": TaggedValue.measured(str(row["definition"])), "boundary_ref": TaggedValue.measured(str(row["boundary_ref"])) if row["boundary_ref"] else TaggedValue.missing("capability has no boundary reference"), "assessment": assessment},
         )
