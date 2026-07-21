@@ -52,7 +52,7 @@ memory backend must never be a lesser contract than Postgres):
   ``collection_kind``, ``collection_ref``, ``account_binding_id``), cursor,
   and policy are untouched.
 
-YSS-05 adds the narrow compare-and-set poll-outcome methods on this same row:
+YSS-05 adds narrow poll-outcome methods on this same row:
 successful discovery publishes cursor + success timestamps atomically, while
 degradation updates attempt/error fields without touching cursor state. Queue
 draining, scheduling, and leases remain explicitly out of scope here
@@ -68,7 +68,7 @@ import threading
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db.dsn import resolve_dsn
@@ -165,16 +165,6 @@ class SourceUnsupportedError(ValueError):
         super().__init__(message)
 
 
-class SourceRegistryStateConflictError(RuntimeError):
-    """A poll tried to publish an outcome over a newer registry row.
-
-    YSS-06 will exclude overlapping source runs with a durable lease.  YSS-05
-    still fails closed at its persistence boundary: auth changes, operator
-    edits, or an unexpected concurrent poll must not let a stale cursor or
-    stale error overwrite newer source state.
-    """
-
-
 def _normalize_account_binding_id(account_binding_id: str | None) -> str | None:
     """Validate and canonicalize the contract UUID before backend selection."""
     if account_binding_id is None:
@@ -222,26 +212,6 @@ class SourceBinding:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _next_update_iso(previous: str) -> str:
-    """Return a UTC row version strictly newer than ``previous``.
-
-    ``updated_at`` is the existing registry row's optimistic version. Python
-    and Postgres both store microseconds, so two same-tick poll outcomes must
-    not accidentally reuse one version and make a stale compare-and-set pass.
-    """
-    now = datetime.now(timezone.utc)
-    try:
-        prior = datetime.fromisoformat(previous.replace("Z", "+00:00"))
-        if prior.tzinfo is None:
-            prior = prior.replace(tzinfo=timezone.utc)
-        prior = prior.astimezone(timezone.utc)
-    except (TypeError, ValueError):
-        return now.isoformat()
-    if now <= prior:
-        now = prior + timedelta(microseconds=1)
-    return now.isoformat()
 
 
 # --- Validation helpers ---------------------------------------------------
@@ -617,18 +587,13 @@ class _MemorySourceRegistryBackend:
         self,
         binding_id: str,
         *,
-        expected_updated_at: str,
         cursor: dict[str, Any],
     ) -> SourceBinding:
         with self._lock:
             row = self._rows.get(binding_id)
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
-            if row.updated_at != expected_updated_at:
-                raise SourceRegistryStateConflictError(
-                    "source state changed while the poll was running"
-                )
-            now = _next_update_iso(expected_updated_at)
+            now = _now_iso()
             updated = replace(
                 row,
                 cursor=deepcopy(cursor),
@@ -644,18 +609,13 @@ class _MemorySourceRegistryBackend:
         self,
         binding_id: str,
         *,
-        expected_updated_at: str,
         last_error: dict[str, Any],
     ) -> SourceBinding:
         with self._lock:
             row = self._rows.get(binding_id)
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
-            if row.updated_at != expected_updated_at:
-                raise SourceRegistryStateConflictError(
-                    "source state changed while the poll was running"
-                )
-            now = _next_update_iso(expected_updated_at)
+            now = _now_iso()
             updated = replace(
                 row,
                 last_attempt_at=now,
@@ -1085,13 +1045,12 @@ class _PgSourceRegistryBackend:
         self,
         binding_id: str,
         *,
-        expected_updated_at: str,
         cursor: dict[str, Any],
     ) -> SourceBinding:
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
-            now = _next_update_iso(expected_updated_at)
+            now = _now_iso()
             cur = conn.cursor()
             cur.execute(
                 f"""
@@ -1102,17 +1061,11 @@ class _PgSourceRegistryBackend:
                     last_error = NULL,
                     updated_at = %s::timestamptz
                 WHERE binding_id = %s
-                  AND updated_at = %s::timestamptz
                 """,
-                (json.dumps(cursor), now, now, now, binding_id, expected_updated_at),
+                (json.dumps(cursor), now, now, now, binding_id),
             )
             if cur.rowcount == 0:
-                cur.execute(f"SELECT 1 FROM {_TABLE} WHERE binding_id = %s", (binding_id,))
-                if cur.fetchone() is None:
-                    raise KeyError(f"no such binding: {binding_id}")
-                raise SourceRegistryStateConflictError(
-                    "source state changed while the poll was running"
-                )
+                raise KeyError(f"no such binding: {binding_id}")
         finally:
             conn.close()
         result = self.get(binding_id)
@@ -1123,13 +1076,12 @@ class _PgSourceRegistryBackend:
         self,
         binding_id: str,
         *,
-        expected_updated_at: str,
         last_error: dict[str, Any],
     ) -> SourceBinding:
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
-            now = _next_update_iso(expected_updated_at)
+            now = _now_iso()
             cur = conn.cursor()
             cur.execute(
                 f"""
@@ -1138,17 +1090,11 @@ class _PgSourceRegistryBackend:
                     last_error = %s::jsonb,
                     updated_at = %s::timestamptz
                 WHERE binding_id = %s
-                  AND updated_at = %s::timestamptz
                 """,
-                (now, json.dumps(last_error), now, binding_id, expected_updated_at),
+                (now, json.dumps(last_error), now, binding_id),
             )
             if cur.rowcount == 0:
-                cur.execute(f"SELECT 1 FROM {_TABLE} WHERE binding_id = %s", (binding_id,))
-                if cur.fetchone() is None:
-                    raise KeyError(f"no such binding: {binding_id}")
-                raise SourceRegistryStateConflictError(
-                    "source state changed while the poll was running"
-                )
+                raise KeyError(f"no such binding: {binding_id}")
         finally:
             conn.close()
         result = self.get(binding_id)
@@ -1308,23 +1254,19 @@ class SourceRegistry:
         self,
         binding_id: str,
         *,
-        expected_updated_at: str,
         cursor: dict[str, Any],
     ) -> SourceBinding:
         """Atomically publish a successful poll outcome.
 
         ``cursor`` is accepted only after the caller has durably disposed every
-        newly covered item.  The optimistic row version prevents a stale poll
-        from overwriting a newer cursor/auth/operator mutation.
+        newly covered item. V1 exposes one synchronous manual poll path;
+        scheduling, leases, and concurrent-run reconciliation remain deferred.
         """
-        if not isinstance(expected_updated_at, str) or not expected_updated_at:
-            raise SourceRegistryValidationError("expected_updated_at must be a non-empty string")
         stored_cursor = _portable_json_copy(cursor, field="cursor")
         if not isinstance(stored_cursor, dict):
             raise SourceRegistryValidationError("cursor must be a JSON object")
         return self._backend.record_poll_success(
             binding_id,
-            expected_updated_at=expected_updated_at,
             cursor=stored_cursor,
         )
 
@@ -1332,16 +1274,12 @@ class SourceRegistry:
         self,
         binding_id: str,
         *,
-        expected_updated_at: str,
         reason_code: str,
         detail: Any = None,
     ) -> SourceBinding:
         """Record a degraded poll without touching its cursor/known set."""
-        if not isinstance(expected_updated_at, str) or not expected_updated_at:
-            raise SourceRegistryValidationError("expected_updated_at must be a non-empty string")
         return self._backend.record_poll_failure(
             binding_id,
-            expected_updated_at=expected_updated_at,
             last_error=_build_last_error(reason_code, detail),
         )
 
@@ -1382,7 +1320,6 @@ __all__ = [
     "SourceBinding",
     "SourceRegistry",
     "SourceRegistrySchemaMissingError",
-    "SourceRegistryStateConflictError",
     "SourceRegistryValidationError",
     "SourceUnsupportedError",
     "UNSUPPORTED_COLLECTION_REFS",

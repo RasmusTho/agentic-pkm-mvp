@@ -1,36 +1,36 @@
-"""YSS-05 (#3920): generic playlist discovery adapter contract.
-
-All source egress is stubbed at the delivered YSS-03 client boundary.  The
-tests deliberately exercise the production ``poll_source`` -> YSS-04
-``AcquisitionRequests.enqueue`` call site and the real YSS-01 memory registry,
-so request-before-cursor and cross-list identity are not proved against a
-parallel fake persistence model.
-"""
+"""Strict YouTube Source Sync V1 contract: one account and one Inbox."""
 
 from __future__ import annotations
 
+import json
 import uuid
-from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
+from app import objects as object_store_module
+from app.agent_memory import materialization
 from app.knowledge_acquisition import acquisition_requests as request_module
 from app.knowledge_acquisition import playlist_discovery as discovery_module
+from app.knowledge_acquisition import youtube_plugin as plugin
 from app.knowledge_acquisition.acquisition_requests import (
     YOUTUBE_SOURCE_DISCOVERED_TOPIC,
     AcquisitionRequests,
+    drain_one,
     reset_memory_acquisition_requests,
 )
+from app.knowledge_acquisition.extraction_registry import clear_registry
+from app.knowledge_acquisition.extractors import summary_extractor
 from app.knowledge_acquisition.playlist_discovery import (
-    YOUTUBE_SYNC_COMPLETED_TOPIC,
-    YOUTUBE_SYNC_DEGRADED_TOPIC,
     SourcePollPersistenceError,
+    V1InboxConfigurationError,
+    YouTubeInboxSyncV1,
     poll_source,
 )
 from app.knowledge_acquisition.source_registry import (
     SourceRegistry,
-    SourceUnsupportedError,
     reset_memory_source_registry,
 )
 from app.knowledge_acquisition.youtube_api_client import (
@@ -40,14 +40,16 @@ from app.knowledge_acquisition.youtube_api_client import (
     YouTubeApiError,
 )
 from app.services.outbox import write_outbox_event
+from app.vault.manager import VaultContext
+from app.write_guard import WriteGuard
 from tests.knowledge_acquisition._acquisition_requests_contract import FakeOutboxConn
 
 pytestmark = pytest.mark.not_pg
 
 VIDEO_A = "aaaaaaaaaaa"
 VIDEO_B = "bbbbbbbbbbb"
-PLAYLIST_A = "PL_test_playlist_a"
-PLAYLIST_B = "PL_test_playlist_b"
+PLAYLIST_A = "PL_v1_inbox_a"
+PLAYLIST_B = "PL_v1_inbox_b"
 
 
 class StubApiClient:
@@ -88,38 +90,50 @@ class FailingQueue:
         return self.delegate.enqueue(**kwargs)
 
 
+class FailingReadQueue:
+    def get(self, request_id: str):
+        del request_id
+        raise OSError("backend read failed with private diagnostic")
+
+    def enqueue(self, **kwargs: Any):
+        raise AssertionError(f"enqueue must not run after a failed read: {kwargs!r}")
+
+
 def _item(playlist_item_id: str, video_id: str, position: int = 0) -> PlaylistItem:
     return PlaylistItem(
         playlist_item_id=playlist_item_id,
         video_id=video_id,
         position=position,
         published_at="2026-07-20T00:00:00Z",
-        title=f"Synthetic item {position}",
+        title=f"Synthetic Inbox item {position}",
     )
 
 
-def _page(
-    *items: PlaylistItem,
-    etag: str = '"etag-1"',
-    truncated: bool = False,
-    next_page_token: str | None = None,
-) -> PlaylistItemsPage:
+def _page(*items: PlaylistItem, etag: str = '"etag-1"') -> PlaylistItemsPage:
     return PlaylistItemsPage(
         items=tuple(items),
-        next_page_token=next_page_token,
+        next_page_token=None,
         etag=etag,
-        pagination_truncated=truncated,
+        pagination_truncated=False,
     )
 
 
 @pytest.fixture(autouse=True)
 def _memory_backends(monkeypatch: pytest.MonkeyPatch):
+    from app.stores import reset_store_backends
+
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_store_backends()
     reset_memory_source_registry()
     reset_memory_acquisition_requests()
+    object_store_module._MEMORY_STORE.clear()
+    clear_registry()
     yield
+    clear_registry()
+    reset_store_backends()
     reset_memory_source_registry()
     reset_memory_acquisition_requests()
+    object_store_module._MEMORY_STORE.clear()
 
 
 @pytest.fixture
@@ -128,40 +142,71 @@ def outbox(monkeypatch: pytest.MonkeyPatch) -> FakeOutboxConn:
 
     def emit(event: Any, conn: Any = None, *, idempotency_key: str) -> str:
         del conn
-        return write_outbox_event(event, conn=conn_fixture, idempotency_key=idempotency_key)
+        return write_outbox_event(event, conn=outbox_conn, idempotency_key=idempotency_key)
 
-    conn_fixture = conn
+    outbox_conn = conn
     monkeypatch.setattr(request_module, "write_outbox_event", emit)
-    monkeypatch.setattr(discovery_module, "write_outbox_event", emit)
     return conn
 
 
-def _register(
-    registry: SourceRegistry,
-    *,
-    collection_kind: str = "owned_playlist",
-    collection_ref: str = PLAYLIST_A,
-    acquisition_policy: dict[str, Any] | None = None,
-):
-    account_binding_id = None
-    if collection_kind in {"inbox_playlist", "owned_playlist", "liked_videos"}:
-        account_binding_id = str(uuid.uuid4())
-    binding = registry.register(
-        collection_kind=collection_kind,
-        collection_ref=collection_ref,
-        title="Synthetic playlist",
+def _register_inbox(registry: SourceRegistry, account_binding_id: str):
+    row = registry.register(
+        collection_kind="inbox_playlist",
+        collection_ref=PLAYLIST_A,
+        title="Synthetic V1 Inbox",
         account_binding_id=account_binding_id,
-        acquisition_policy=acquisition_policy,
     )
-    if collection_kind == "inbox_playlist":
-        binding = registry.set_inbox(account_binding_id, binding.binding_id)
-    return binding
+    return registry.set_inbox(account_binding_id, row.binding_id)
 
 
-def test_new_item_creates_exactly_one_request_at_call_site(outbox: FakeOutboxConn) -> None:
+def _service(
+    account_binding_id: str,
+    registry: SourceRegistry,
+    requests: AcquisitionRequests,
+    api: StubApiClient,
+) -> YouTubeInboxSyncV1:
+    return YouTubeInboxSyncV1(
+        account_binding_id=account_binding_id,
+        registry=registry,
+        requests=requests,
+        api_client=api,
+        oauth_status=lambda _account: {
+            "status": "connected",
+            "reason_code": None,
+            "refresh_token": "must-not-escape",
+        },
+    )
+
+
+def test_v1_selects_exactly_one_enabled_inbox(outbox: FakeOutboxConn) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    service = _service(
+        account, registry, AcquisitionRequests.for_runtime(), StubApiClient(_page())
+    )
+
+    selected = service.select_inbox(
+        playlist_ref=PLAYLIST_A, title="Synthetic V1 Inbox"
+    )
+    same = service.select_inbox(
+        playlist_ref=PLAYLIST_A, title="Synthetic V1 Inbox"
+    )
+    with pytest.raises(V1InboxConfigurationError, match="already has an enabled Inbox"):
+        service.select_inbox(playlist_ref=PLAYLIST_B, title="Second Inbox")
+
+    rows = registry.list_for_account(account)
+    assert selected.binding_id == same.binding_id
+    assert [(row.collection_ref, row.enabled) for row in rows] == [(PLAYLIST_A, True)]
+
+
+def test_new_inbox_item_enqueues_once_at_production_call_site(
+    outbox: FakeOutboxConn,
+) -> None:
+    account = str(uuid.uuid4())
     registry = SourceRegistry.for_runtime()
     requests = AcquisitionRequests.for_runtime()
-    binding = _register(registry)
+    binding = _register_inbox(registry, account)
     api = StubApiClient(_page(_item("pli-a", VIDEO_A)))
 
     first = poll_source(binding, api_client=api, requests=requests, registry=registry)
@@ -174,165 +219,32 @@ def test_new_item_creates_exactly_one_request_at_call_site(outbox: FakeOutboxCon
     assert second.discovered == second.enqueued == 0
     assert len(rows) == 1
     assert rows[0].item_ref == VIDEO_A
-    assert len(rows[0].discovery_triggers) == 1
-    assert rows[0].discovery_triggers[0] == {
-        "binding_id": binding.binding_id,
-        "collection_kind": "owned_playlist",
-        "playlist_item_id": "pli-a",
-        "discovered_at": rows[0].discovery_triggers[0]["discovered_at"],
-        "trigger": "poll",
-    }
+    assert rows[0].discovery_triggers[0]["collection_kind"] == "inbox_playlist"
+    assert rows[0].discovery_triggers[0]["playlist_item_id"] == "pli-a"
     assert len(outbox.rows_for(YOUTUBE_SOURCE_DISCOVERED_TOPIC)) == 1
 
 
-def test_cross_list_dedup_preserves_both_triggers(outbox: FakeOutboxConn) -> None:
+@pytest.mark.parametrize("failure_stage", ["read", "write"])
+def test_enqueue_failure_blocks_cursor_prefix(
+    outbox: FakeOutboxConn, failure_stage: str
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
     registry = SourceRegistry.for_runtime()
     requests = AcquisitionRequests.for_runtime()
-    first_binding = _register(registry, collection_ref=PLAYLIST_A)
-    second_binding = _register(registry, collection_ref=PLAYLIST_B)
-
-    poll_source(
-        first_binding,
-        api_client=StubApiClient(_page(_item("pli-a", VIDEO_A))),
-        requests=requests,
-        registry=registry,
-    )
-    outcome = poll_source(
-        second_binding,
-        api_client=StubApiClient(_page(_item("pli-b", VIDEO_A))),
-        requests=requests,
-        registry=registry,
-    )
-
-    rows = requests.list_all()
-    assert len(rows) == 1
-    assert outcome.deduped == 1
-    assert {trigger["binding_id"] for trigger in rows[0].discovery_triggers} == {
-        first_binding.binding_id,
-        second_binding.binding_id,
-    }
-    assert {trigger["playlist_item_id"] for trigger in rows[0].discovery_triggers} == {
-        "pli-a",
-        "pli-b",
-    }
-
-
-def test_pagination_to_frontier_and_capped_overflow_marked(outbox: FakeOutboxConn) -> None:
-    registry = SourceRegistry.for_runtime()
-    requests = AcquisitionRequests.for_runtime()
-    binding = _register(registry)
-
-    poll_source(
-        binding,
-        api_client=StubApiClient(_page(_item("pli-known", VIDEO_A))),
-        requests=requests,
-        registry=registry,
-    )
-    # The YSS-03 client returns its bounded, flattened multi-page result.  A
-    # known item at the front must not stop the adapter from disposing the
-    # unknown item found behind it; its truncation marker must survive.
-    outcome = poll_source(
-        registry.get(binding.binding_id),
-        api_client=StubApiClient(
-            _page(
-                _item("pli-known", VIDEO_A),
-                _item("pli-behind-frontier", VIDEO_B, position=50),
-                etag='"etag-2"',
-                truncated=True,
-                next_page_token="bounded-overflow-token",
-            )
-        ),
-        requests=requests,
-        registry=registry,
-    )
-
-    stored = registry.get(binding.binding_id)
-    assert outcome.discovered == outcome.enqueued == 1
-    assert outcome.backfill_needed is True
-    assert stored is not None
-    assert stored.cursor["backfill_needed"] is True
-    assert stored.cursor["backfill_page_token"] == "bounded-overflow-token"
-    assert "pli-behind-frontier" in stored.cursor["known_playlist_item_ids"]
-    assert {row.item_ref for row in requests.list_all()} == {VIDEO_A, VIDEO_B}
-
-
-def test_not_modified_poll_success_without_mutation(outbox: FakeOutboxConn) -> None:
-    registry = SourceRegistry.for_runtime()
-    requests = AcquisitionRequests.for_runtime()
-    binding = _register(registry)
-    poll_source(
-        binding,
-        api_client=StubApiClient(_page(_item("pli-a", VIDEO_A), etag='"stable"')),
-        requests=requests,
-        registry=registry,
-    )
-    before = registry.get(binding.binding_id)
-    assert before is not None
-    api = StubApiClient(NotModified(etag='"stable"'))
-
-    outcome = poll_source(before, api_client=api, requests=requests, registry=registry)
-    after = registry.get(binding.binding_id)
-
-    assert outcome.not_modified is True
-    assert outcome.discovered == outcome.enqueued == 0
-    assert api.calls == [
-        {"playlist_id": PLAYLIST_A, "etag": '"stable"', "page_token": None}
-    ]
-    assert after is not None
-    assert after.cursor == before.cursor
-    assert after.last_success_at is not None
-    assert after.last_success_at != before.last_success_at
-    assert after.last_error is None
-    assert len(outbox.rows_for(YOUTUBE_SYNC_COMPLETED_TOPIC)) == 2
-
-
-def test_failed_poll_never_reports_empty_success(outbox: FakeOutboxConn) -> None:
-    registry = SourceRegistry.for_runtime()
-    requests = AcquisitionRequests.for_runtime()
-    failures = (
-        ("auth_revoked", 401),
-        ("api_unavailable", 503),
-        ("network_error", None),
-    )
-
-    for reason_code, status in failures:
-        binding = _register(registry, collection_ref=f"PL_test_{reason_code}")
-        before = registry.get(binding.binding_id)
-        result = poll_source(
-            binding,
-            api_client=StubApiClient(
-                YouTubeApiError(reason_code, status, "provider-safe classification")
-            ),
-            requests=requests,
-            registry=registry,
-        )
-        after = registry.get(binding.binding_id)
-        assert result.degraded is True
-        assert result.reason_code == reason_code
-        assert after is not None and before is not None
-        assert after.cursor == before.cursor == {}
-        assert after.last_error is not None
-        assert after.last_error["reason_code"] == reason_code
-        assert after.last_success_at is None
-
-    assert not requests.list_all()
-    assert len(outbox.rows_for(YOUTUBE_SYNC_DEGRADED_TOPIC)) == len(failures)
-    assert len(outbox.rows_for(YOUTUBE_SYNC_COMPLETED_TOPIC)) == 0
-
-
-def test_enqueue_failure_blocks_cursor_prefix(outbox: FakeOutboxConn) -> None:
-    registry = SourceRegistry.for_runtime()
-    requests = AcquisitionRequests.for_runtime()
-    binding = _register(registry)
+    binding = _register_inbox(registry, account)
     before = registry.get(binding.binding_id)
 
+    failing_queue: Any = (
+        FailingReadQueue() if failure_stage == "read" else FailingQueue(requests)
+    )
     with pytest.raises(SourcePollPersistenceError, match="request persistence failed") as caught:
         poll_source(
             binding,
             api_client=StubApiClient(
-                _page(_item("pli-first", VIDEO_A), _item("pli-fails", VIDEO_B, position=1))
+                _page(_item("pli-first", VIDEO_A), _item("pli-fails", VIDEO_B, 1))
             ),
-            requests=FailingQueue(requests),
+            requests=failing_queue,
             registry=registry,
         )
 
@@ -341,87 +253,188 @@ def test_enqueue_failure_blocks_cursor_prefix(outbox: FakeOutboxConn) -> None:
     assert before is not None and after is not None
     assert after.cursor == before.cursor == {}
     assert after.last_success_at is None
-    assert after.last_error is not None
     assert after.last_error["reason_code"] == "network_error"
-    # The first request is durable, but no cursor prefix is published past the
-    # second item's failed persistence. Retry will converge through idempotency.
-    assert [row.item_ref for row in requests.list_all()] == [VIDEO_A]
-    assert len(outbox.rows_for(YOUTUBE_SYNC_COMPLETED_TOPIC)) == 0
-    assert len(outbox.rows_for(YOUTUBE_SYNC_DEGRADED_TOPIC)) == 1
+    expected_items = [] if failure_stage == "read" else [VIDEO_A]
+    assert [row.item_ref for row in requests.list_all()] == expected_items
 
 
-def test_liked_videos_via_generic_adapter_requires_auth(outbox: FakeOutboxConn) -> None:
-    registry = SourceRegistry.for_runtime()
-    requests = AcquisitionRequests.for_runtime()
-    binding = _register(registry, collection_kind="liked_videos", collection_ref="LL")
-    api = StubApiClient(_page(_item("pli-liked", VIDEO_A)))
-
-    success = poll_source(binding, api_client=api, requests=requests, registry=registry)
-    assert success.enqueued == 1
-    assert api.calls[0]["playlist_id"] == "LL"
-
-    second = _register(registry, collection_kind="liked_videos", collection_ref="LL")
-    missing_auth = replace(second, account_binding_id=None)
-    before_calls = len(api.calls)
-    degraded = poll_source(
-        missing_auth, api_client=api, requests=requests, registry=registry
-    )
-    assert degraded.degraded is True
-    assert degraded.reason_code == "auth_missing"
-    assert len(api.calls) == before_calls
-
-
-def test_watch_later_and_history_refused_unsupported(outbox: FakeOutboxConn) -> None:
-    registry = SourceRegistry.for_runtime()
-    requests = AcquisitionRequests.for_runtime()
+@pytest.mark.parametrize(
+    ("reason_code", "status"),
+    [("auth_revoked", 401), ("api_unavailable", 503), ("network_error", None)],
+)
+def test_failed_poll_never_reports_empty_success(
+    outbox: FakeOutboxConn, reason_code: str, status: int | None
+) -> None:
     account = str(uuid.uuid4())
-
-    for unsupported in ("WL", "HL"):
-        with pytest.raises(SourceUnsupportedError, match="official YouTube Data API"):
-            registry.register(
-                collection_kind="owned_playlist",
-                collection_ref=unsupported,
-                title="Unsupported synthetic source",
-                account_binding_id=account,
-            )
-
-        valid = _register(registry, collection_ref=f"PL_valid_for_{unsupported}")
-        api = StubApiClient(_page())
-        result = poll_source(
-            replace(valid, collection_ref=unsupported),
-            api_client=api,
-            requests=requests,
-            registry=registry,
-        )
-        assert result.degraded is True
-        assert result.reason_code == "source_unsupported"
-        assert "official YouTube Data API" in (result.detail or "")
-        assert not api.calls
-
-
-def test_discover_only_traces_without_requests(outbox: FakeOutboxConn) -> None:
     registry = SourceRegistry.for_runtime()
     requests = AcquisitionRequests.for_runtime()
-    binding = _register(
-        registry,
-        acquisition_policy={"mode": "discover_only", "policy_version": 1},
-    )
-
-    result = poll_source(
+    binding = _register_inbox(registry, account)
+    poll_source(
         binding,
-        api_client=StubApiClient(_page(_item("pli-discover-only", VIDEO_A))),
+        api_client=StubApiClient(_page(_item("pli-known", VIDEO_A))),
         requests=requests,
         registry=registry,
     )
-    stored = registry.get(binding.binding_id)
+    before = registry.get(binding.binding_id)
+    result = poll_source(
+        before,
+        api_client=StubApiClient(
+            YouTubeApiError(reason_code, status, "provider secret must not escape")
+        ),
+        requests=requests,
+        registry=registry,
+    )
+    after = registry.get(binding.binding_id)
 
-    assert result.discovered == 1
-    assert result.enqueued == result.deduped == 0
-    assert not requests.list_all()
-    assert stored is not None
-    assert stored.cursor["dispositions"]["pli-discover-only"] == {
-        "item_ref": VIDEO_A,
-        "outcome": "discover_only",
+    assert result.degraded is True and result.reason_code == reason_code
+    assert "secret" not in (result.detail or "")
+    assert before is not None and after is not None
+    assert after.cursor == before.cursor
+    assert after.last_success_at == before.last_success_at
+    assert after.last_error["reason_code"] == reason_code
+    assert "secret" not in json.dumps(after.last_error)
+
+
+def test_v1_status_reports_connection_last_success_and_sanitized_error(
+    outbox: FakeOutboxConn,
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    api = StubApiClient(YouTubeApiError("api_unavailable", 503, "private body"))
+    service = _service(account, registry, requests, api)
+    service.select_inbox(playlist_ref=PLAYLIST_A, title="Synthetic V1 Inbox")
+
+    degraded = service.sync_now()
+    degraded_status = service.status()
+    assert degraded["status"] == "degraded"
+    assert degraded_status["status"] == "degraded"
+    assert degraded_status["last_success_at"] is None
+    assert degraded_status["latest_error"]["reason_code"] == "api_unavailable"
+    assert "private" not in json.dumps(degraded_status)
+    assert "refresh_token" not in degraded_status
+
+    api.result = _page(_item("pli-a", VIDEO_A))
+    connected = service.sync_now()
+    connected_status = service.status()
+    assert connected["status"] == "connected"
+    assert connected_status["status"] == "connected"
+    assert connected_status["last_success_at"] is not None
+    assert connected_status["latest_error"] is None
+
+
+def test_manual_inbox_sync_uses_production_poll_route(
+    outbox: FakeOutboxConn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    api = StubApiClient(_page(_item("pli-a", VIDEO_A)))
+    service = _service(account, registry, requests, api)
+    selected = service.select_inbox(
+        playlist_ref=PLAYLIST_A, title="Synthetic V1 Inbox"
+    )
+    production_poll = discovery_module.poll_source
+    seen: list[str] = []
+
+    def traced_poll(binding, **kwargs):
+        seen.append(binding.binding_id)
+        return production_poll(binding, **kwargs)
+
+    monkeypatch.setattr(discovery_module, "poll_source", traced_poll)
+    receipt = service.sync_now()
+
+    assert seen == [selected.binding_id]
+    assert receipt == {
+        "status": "connected",
+        "discovered": 1,
+        "enqueued": 1,
+        "deduped": 0,
+        "not_modified": False,
+        "reason_code": None,
     }
-    assert len(outbox.rows_for(YOUTUBE_SOURCE_DISCOVERED_TOPIC)) == 1
-    assert len(outbox.rows_for(YOUTUBE_SYNC_COMPLETED_TOPIC)) == 1
+    assert "token" not in json.dumps(receipt)
+
+
+def test_inbox_sync_produces_review_required_candidate_never_knowledge(
+    outbox: FakeOutboxConn,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    binding = _register_inbox(registry, account)
+    poll_source(
+        binding,
+        api_client=StubApiClient(_page(_item("pli-a", VIDEO_A))),
+        requests=requests,
+        registry=registry,
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/app_test")
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda _url: _video_info())
+    monkeypatch.setattr(plugin, "fetch_caption_body", lambda _url: _caption_body())
+    summary_extractor.register(
+        complete=lambda **_kwargs: json.dumps(
+            {"summary": "A deterministic Inbox summary.", "confidence": 0.8}
+        )
+    )
+
+    def forbidden_promotion(*_args: Any, **_kwargs: Any):
+        raise AssertionError("Inbox sync must never auto-promote knowledge")
+
+    monkeypatch.setattr(materialization, "materialize_promoted_memory", forbidden_promotion)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    vault = VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_name="Vault Test",
+        active_vault_path=str(vault_root),
+    )
+    claimed = requests.claim_batch(1, conn=outbox)
+    result = drain_one(
+        claimed[0],
+        vault_context=vault,
+        queue=requests,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        conn=outbox,
+    )
+
+    note = (vault_root / result.artifact_path).read_text(encoding="utf-8")
+    frontmatter = yaml.safe_load(note.split("---", 2)[1])
+    assert result.status == "completed"
+    assert frontmatter["artifact_class"] == "youtube_source_note"
+    assert frontmatter["authority"]["requires_review"] is True
+    assert frontmatter["review_state"] == "draft"
+    assert frontmatter["triage_state"] == "captured"
+    assert not list(vault_root.rglob("*evergreen*"))
+
+
+def _video_info() -> dict[str, Any]:
+    return {
+        "id": VIDEO_A,
+        "title": "Synthetic Inbox video",
+        "channel": "Synthetic Channel",
+        "channel_id": "UCsynthetic",
+        "upload_date": "20260720",
+        "duration": 120,
+        "description": "Synthetic fixture",
+        "chapters": [],
+        "tags": [],
+        "language": "en",
+        "thumbnail": "https://example.invalid/thumb.jpg",
+        "subtitles": {"en": [{"ext": "vtt", "url": "https://example.invalid/caption.vtt"}]},
+        "automatic_captions": {},
+    }
+
+
+def _caption_body() -> str:
+    return (
+        "WEBVTT\n\n"
+        "00:00:00.000 --> 00:00:02.000\n"
+        "Synthetic Inbox transcript for review.\n"
+    )

@@ -1,4 +1,4 @@
-State: Specification directory (feature-breakdown lane; target-state framing). Instantiates Knowledge Acquisition Platform Phase 4 (continuous discovery) for YouTube. **YSS-01 is delivered repository-verifiably** (#3916 / PR #3931, 2026-07-17: source registry + `youtubeSync.*` settings model); YSS-02..YSS-11 and the parent #3915 operator/live-capability acceptance remain pending. The issue set was filed 2026-07-17.
+State: Pragmatic YouTube Source Sync V1. Delivered foundations provide the registry, OAuth, Data API client, acquisition queue, and one manual Inbox sync route. The owner directive of 2026-07-21 limits the product outcome to one OAuth account, exactly one Inbox playlist, manual sync, minimal sanitized status, and review-required candidates. Scheduling, multi-source expansion, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain deferred.
 Doc role: Capability specification directory
 Authority: Owns the YouTube source-sync capability design — account binding, source registry, continuous discovery, durable acquisition requests, scheduling, and the setup/status surfaces. Subordinate to `docs/KNOWLEDGE_ACQUISITION/README.md` (platform boundary), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` (stages), `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` (triage), `docs/EVENTS.md` (event envelope/outbox), and `docs/SECURITY.md` (secret baseline). It revises `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md` §Discovery by owner directive (see §Decision record).
 Owner: Architecture / knowledge acquisition
@@ -10,10 +10,9 @@ Last reviewed: 2026-07-16
 
 ## Outcome
 
-The user connects their YouTube account once, picks one of their own playlists as a **quick
-inbox**, and from then on uses YouTube's ordinary *Save → &lt;playlist&gt;* on desktop, Android, and
-iPhone/iPad. New videos in the inbox playlist are discovered within ~3 minutes while the Mimer node
-is online and flow idempotently through the existing Knowledge Acquisition pipeline:
+The user connects one YouTube account, selects exactly one owned playlist as the **Inbox**, saves
+videos there using YouTube's ordinary UI, and explicitly runs the manual Inbox sync route. New
+items flow idempotently through the existing Knowledge Acquisition pipeline:
 
 ```
 YouTube playlist discovery
@@ -23,15 +22,14 @@ YouTube playlist discovery
   → review-required youtube_source_note candidate
 ```
 
-The same machinery syncs the user's other owned playlists, private playlists (when OAuth grants
-access), Liked Videos as an opt-in special source, explicitly added public/unlisted playlists, and
-YouTube subscriptions (Google Takeout bootstrap + per-channel RSS + rare backfill gap repair).
-
 **The playlist is only a user-friendly intent surface — never knowledge authority.** Discovery
 creates a durable request; KAP produces a review-required candidate; only Mimer's governed human
 review/promotion can raise anything to higher knowledge standing.
 
-## Decision record (owner directive 2026-07-16)
+No automatic cadence is claimed by V1. Owned/public/unlisted/Liked multi-playlist sync,
+subscriptions, RSS, Takeout, backfill, analytics, and full-media acquisition are not V1 outcomes.
+
+## Decision record (owner directives 2026-07-16 and 2026-07-21)
 
 `docs/KNOWLEDGE_ACQUISITION/RESEARCH_2026-07.md` §4 and `YOUTUBE_SOURCE_SPEC.md` §Discovery
 originally decided **"No Data API"** (Takeout + RSS + yt-dlp only, zero OAuth coupling). The owner
@@ -51,29 +49,27 @@ same change that lands this directory. SBS posture: this **extends** the EBF Acq
 class (`docs/INTEGRATION_FABRIC_CONTRACT.md` class 11) with an authenticated discovery surface —
 no reshape; plugin authority limits are unchanged.
 
+The 2026-07-21 directive supersedes the broad delivery plan with the pragmatic V1 boundary above.
+The wider data shapes remain future-facing compatibility vocabulary, not shipped product claims.
+
 ## Capability boundary
 
 In scope:
 
-- OAuth 2.0 account binding (device-authorization flow primary, loopback installed-app secondary),
-  secret-reference storage, reconnect/disconnect without data loss.
-- A durable, per-account **source registry** for inbox/owned/liked/public/unlisted playlist and
-  subscription-feed bindings, with per-source policy, cursor, and degradation state.
-- A source-agnostic durable **AcquisitionRequest** queue feeding the existing `acquire_youtube`
-  entrypoint, with idempotency, multi-trigger provenance, retries, and item-scoped dead letters.
-- Continuous scheduling (inbox 180 s default), single-run leases, pause/resume, offline/restart
-  reconciliation, bounded concurrency, quota accounting.
-- Subscriptions via Google Takeout bootstrap (adopting the existing
-  `app/knowledge_acquisition/youtube_onboarding.py` baseline) + per-channel RSS incremental
-  discovery + rare previewed backfill gap repair.
-- Versioned sync/acquisition events on the DB outbox; receipts sufficient to answer why any
-  candidate exists.
-- CLI and Companion UI setup/status surfaces.
+- One minimal-scope OAuth account with encrypted local token authority and fail-closed status.
+- Exactly one enabled Inbox playlist selected through `YouTubeInboxSyncV1.select_inbox`.
+- One explicit `sync_now` call through the production Inbox poll path.
+- Durable request-before-cursor discovery and minimal sanitized status.
+- Existing acquisition drain into review-required draft `youtube_source_note` candidates.
+- Existing versioned acquisition events on the canonical DB outbox.
 
 Out of scope (owned elsewhere or explicitly deferred):
 
 - Everything downstream of `candidate` (triage, promotion) — `INGESTION_AND_TRIAGE_POLICY.md`.
 - Fetch/refinement mechanics — already shipped (KA-01..07); this capability only *feeds* them.
+- Automatic scheduling/cadence, leases, pause/resume, and restart reconciliation.
+- Owned/public/unlisted/Liked multi-playlist product sync; subscriptions, RSS, Takeout, backfill,
+  analytics, broad CLI/UI families, and filter-policy expansion.
 - Full media (video/audio file) archival — policy fields ship OFF by default; the archival engine
   is a separate follow-up issue gated on an explicit owner rights/ToS review (see
   `SOURCE_SYNC_CONTRACT.md` §Media retention policy).
@@ -95,10 +91,10 @@ Out of scope (owned elsewhere or explicitly deferred):
 - **Events:** canonical DB outbox only (`app/services/outbox.py::write_outbox_event` +
   `derive_idempotency_key`), KERNEL-08 registered schemas. JSONL stays audit-only. The Heimdal
   observation log is never written.
-- **Reuse over new infrastructure:** the sync runner reuses the existing worker-loop/runtime
-  patterns and the shared outbox/idempotency helpers; cursors follow the established durable
-  per-consumer cursor discipline; WriteGuard remains the only vault-write gate. No parallel
-  scheduler, outbox, or receipt substrate is introduced.
+- **Reuse over new infrastructure:** V1 reuses the existing acquisition queue, shared
+  outbox/idempotency helpers, and durable cursor discipline; WriteGuard remains the only
+  vault-write gate. No runner, scheduler, lease, parallel outbox, or receipt substrate is
+  introduced.
 
 ## Normative shared contract
 
@@ -113,11 +109,11 @@ it. The operator path (GCP/OAuth setup, first sync, troubleshooting, live accept
 | Order | Task | ID | Prerequisites | Outcome |
 | --- | --- | --- | --- | --- |
 | 1 | [Establish source registry and settings](ESTABLISH_SOURCE_REGISTRY_AND_SETTINGS.md) | YSS-01 | — | **Delivered repository-verifiably** (#3916 / PR #3931): durable per-account source registry + settings model + validation; live capability acceptance remains pending |
-| 2a | [Bind YouTube account with OAuth](BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md) | YSS-02 | YSS-01 | device+loopback OAuth, secret-ref token store, connect/disconnect, degradation |
-| 2b | [Establish durable acquisition requests](ESTABLISH_DURABLE_ACQUISITION_REQUESTS.md) | YSS-04 | YSS-01 | source-agnostic request queue + dedup + retries + handover to `acquire_youtube` |
-| 3a | [Build YouTube Data API client](BUILD_YOUTUBE_DATA_API_CLIENT.md) | YSS-03 | YSS-02 (token provider interface only — stubbable) | bounded read-only API client: pagination, ETag, quota accounting, host allowlist |
+| 2a | [Bind YouTube account with OAuth](BIND_YOUTUBE_ACCOUNT_WITH_OAUTH.md) | YSS-02 | YSS-01 | **Delivered V1 foundation:** encrypted local token authority, connect/status/disconnect degradation |
+| 2b | [Establish durable acquisition requests](ESTABLISH_DURABLE_ACQUISITION_REQUESTS.md) | YSS-04 | YSS-01 | **Delivered V1 foundation:** source-agnostic request queue + review-required acquisition drain |
+| 3a | [Build YouTube Data API client](BUILD_YOUTUBE_DATA_API_CLIENT.md) | YSS-03 | YSS-02 (token provider interface only — stubbable) | **Delivered V1 foundation:** bounded read-only API client, ETag, quota accounting, host allowlist |
 | 3b | [Sync subscriptions from Takeout and RSS](SYNC_SUBSCRIPTIONS_FROM_TAKEOUT_AND_RSS.md) | YSS-07 | YSS-01, YSS-04 | Takeout adoption (operator WIP baseline), channel-RSS incremental discovery, policy modes |
-| 4 | [Discover playlist items continuously](DISCOVER_PLAYLIST_ITEMS_CONTINUOUSLY.md) | YSS-05 | YSS-01, YSS-03, YSS-04 | generic playlist adapter (inbox/owned/liked/public/private), dedup + provenance, cursor discipline, unsupported-list refusal |
+| 4 | [Sync one YouTube Inbox playlist](DISCOVER_PLAYLIST_ITEMS_CONTINUOUSLY.md) | YSS-05 | YSS-01, YSS-03, YSS-04 | **V1:** exactly one Inbox, manual production poll, sanitized status, review-required candidate |
 | 5 | [Schedule and operate continuous sync](SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) | YSS-06 | YSS-04, YSS-05 | per-source scheduling, single-run lease, pause, offline/restart reconciliation, backoff, safe shutdown |
 | 6a | [Repair gaps with previewed backfill](REPAIR_GAPS_WITH_PREVIEWED_BACKFILL.md) | YSS-08 | YSS-05, YSS-07 | weekly reconcile + historical backfill with preview receipt and explicit confirmation gate |
 | 6b | [Surface sync health, status, and receipts](SURFACE_SYNC_HEALTH_STATUS_AND_RECEIPTS.md) | YSS-09 | YSS-02, YSS-04, YSS-06 | doctor/health checks, degraded-reason taxonomy, receipt projection answering the audit questions |
@@ -159,9 +155,9 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   candidate notes, events, receipts, logs, or exception text. Settings and receipts may carry only
   non-secret references (binding ids, env-var *names*, file *paths*). Enforced by redaction-aware
   serializers plus tests on every emitting surface.
-- **INV-YSS-6 — single writer per source.** Overlapping runs are excluded by a durable single-run
-  lease (per sync scope) with TTL + heartbeat; a stale lease is taken over only after expiry.
-  Restart with a live-looking lease waits it out or takes over on expiry — it never double-polls.
+- **INV-YSS-6 — single writer per source (target state, deferred to YSS-06).** A future runner
+  excludes overlapping runs with a durable single-run lease. V1 has only an explicit synchronous
+  manual call and does not claim lease or concurrent-run reconciliation.
 - **INV-YSS-7 — channel isolation.** dev/test/prod never share OAuth state, registry rows, cursors,
   or queues: DB-per-channel isolates the tables; token stores are per-channel app-local paths.
   Environment selection never bypasses these boundaries (`docs/ENVIRONMENTS.md`).
@@ -174,47 +170,30 @@ Invariants that hold *across* tasks, with their partial-failure seams:
 
 ## Capability acceptance criteria
 
-- [ ] A video saved to the configured inbox playlist is discovered and has a durable
-      AcquisitionRequest within one inbox poll interval (default 180 s), and flows to a
-      review-required candidate without manual steps.
-      Verify: `tests/knowledge_acquisition/test_youtube_sync_scheduler.py::test_inbox_poll_discovers_and_enqueues_within_interval` (fixture-based), plus operator live-acceptance item 4 in `OPERATOR_RUNBOOK.md :: Live acceptance`.
-- [ ] The same video present in two synced sources produces exactly one candidate with both
-      discovery triggers in provenance.
-      Verify: `tests/knowledge_acquisition/test_acquisition_requests.py::test_same_video_two_sources_single_request_merged_provenance`.
-- [ ] Revoked OAuth degrades legibly (reason code, health surface, UI state) without cursor
-      corruption or silent empty-success.
-      Verify: `tests/knowledge_acquisition/test_youtube_oauth.py::test_revoked_auth_degrades_without_cursor_mutation`.
-- [ ] Offline/restart reconciliation: stopping the runtime, adding videos, and restarting converges
-      with no lost items and no duplicate candidates.
-      Verify: `tests/knowledge_acquisition/test_youtube_sync_scheduler.py::test_offline_then_online_reconciles_without_duplicates`.
-- [ ] No secret value appears in any log, event, receipt, note, or `--json` output across the
-      delivered surfaces.
-      Verify: `tests/knowledge_acquisition/test_youtube_oauth.py::test_no_secret_in_logs_events_receipts_or_json`.
-- [ ] Watch Later and Watch History are refused as unsupported with a legible explanation; no
-      cookie/scraping path exists.
-      Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_watch_later_and_history_refused_unsupported`.
-- [ ] Docs writeback: `YOUTUBE_SOURCE_SPEC.md` §Discovery reflects the decision record;
-      `KNOWLEDGE_ACQUISITION/README.md` Phase 4 row reflects delivered reality.
-      Verify: doc writeback at `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Discovery` and `docs/KNOWLEDGE_ACQUISITION/README.md :: Phasing`.
+- [ ] Exactly one Inbox is selected for the connected account.
+      Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_v1_selects_exactly_one_enabled_inbox`.
+- [ ] A new Inbox item creates one durable request before cursor publication.
+      Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_new_inbox_item_enqueues_once_at_production_call_site` and `tests/knowledge_acquisition/test_playlist_discovery.py::test_enqueue_failure_blocks_cursor_prefix`.
+- [ ] Failure and success status remain honest and sanitized.
+      Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_failed_poll_never_reports_empty_success` and `tests/knowledge_acquisition/test_playlist_discovery.py::test_v1_status_reports_connection_last_success_and_sanitized_error`.
+- [ ] Manual sync uses the production poll route.
+      Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_manual_inbox_sync_uses_production_poll_route`.
+- [ ] The queue/drain outcome is review-required draft candidate material, never promoted knowledge.
+      Verify: `tests/knowledge_acquisition/test_playlist_discovery.py::test_inbox_sync_produces_review_required_candidate_never_knowledge`.
 
 ## Verification path
 
-Every child task names its tests (all network egress fixture/stub-based; `not_pg` markers for the
-default suite, `pg` markers only where real-Postgres semantics are the subject). Slices touching
-shared/hot-path surfaces run the full `pytest -q -m "not pg"` suite before PR, not only the
-subsystem selection. `ruff check app tests` + `mypy app` per the validation baseline.
+The V1 acceptance tests stub all network egress at the existing client/plugin boundaries and run
+through the production registry, queue, poll, drain, and candidate call sites. `ruff check app
+tests`, `mypy app`, and the focused subsystem suite are the publication baseline.
 
 ## Validation / Acceptance path
 
-The parent feature issue is the live validation hub: each delivered child posts a receipt there.
-Capability acceptance additionally requires the operator live-acceptance run in
-`OPERATOR_RUNBOOK.md :: Live acceptance` (operator runtime host, test channel; OAuth consent, real playlist,
-revoke drill). Items not live-verifiable while the runtime host is offline are tracked as unchecked
-checklist entries on the parent issue — never claimed shipped in owner docs until checked.
+The parent feature issue is the V1 validation hub. Repository acceptance names the exact manual
+routes and tests; no scheduler, rich UI, or real-account operator drill is implied by this V1.
 
 ## Relationship to GitHub issues
 
-Filed via `feature-breakdown` 2026-07-17: parent feature issue #3915 (validation hub, `agent:blocked`)
-plus children #3916 (YSS-01, `agent:ready`) and #3917–#3926 (YSS-02..YSS-11, `agent:blocked` until
-their prerequisites merge). `PARENT_FEATURE_ISSUE.md` mirrors the filed parent. The spec directory
-is the source of truth; issues are execution artifacts.
+Parent #3915 is the pragmatic V1 validation hub. Issue #3990 supplies the final OAuth safety floor
+and #3920 supplies the one-Inbox manual sync route. Deferred children and follow-ups remain
+separate backlog contracts; this V1 does not claim or close them.

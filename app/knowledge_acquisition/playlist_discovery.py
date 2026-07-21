@@ -1,13 +1,12 @@
-"""YSS-05 (#3920): one generic adapter for playlist-shaped YouTube sources.
+"""YouTube Source Sync V1: one account, one enabled Inbox playlist.
 
 The adapter enumerates only through the delivered YSS-03 client, disposes
-each new playlist-item identity through the delivered YSS-04 request queue (or
-an explicit ``discover_only`` trace), and only then publishes the YSS-01
-cursor.  A failed API/auth/network poll never mutates cursor/known state and
-never emits an empty-success receipt (INV-YSS-1/2/4).
+each new Inbox playlist-item identity through the delivered YSS-04 request
+queue, and only then publishes the YSS-01 cursor. A failed API/auth/network
+poll never mutates cursor/known state and never emits an empty-success receipt.
 
-Scheduling, leases, historical backfill, and acquisition draining remain with
-YSS-06/YSS-08/YSS-04 respectively.
+Owned/public/Liked playlists, scheduling, leases, backfill, and automatic
+knowledge promotion are deliberately absent from this V1 surface.
 """
 
 from __future__ import annotations
@@ -16,59 +15,36 @@ import time
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
 
-from app.events.models import new_event
-from app.events.types import (
-    YOUTUBE_SOURCE_DISCOVERED,
-    YOUTUBE_SYNC_COMPLETED,
-    YOUTUBE_SYNC_DEGRADED,
-)
 from app.knowledge_acquisition.acquisition_requests import (
     DiscoveryTrigger,
-    discovered_event_key,
     request_identity,
 )
-from app.knowledge_acquisition.source_registry import (
-    UNSUPPORTED_COLLECTION_REFS,
-    SourceBinding,
-    SourceRegistry,
-)
+from app.knowledge_acquisition.source_registry import SourceBinding, SourceRegistry
 from app.knowledge_acquisition.youtube_api_client import (
     NotModified,
-    PlaylistItem,
     PlaylistItemsPage,
     YouTubeApiError,
 )
-from app.services.outbox import derive_idempotency_key, write_outbox_event
-
-YOUTUBE_SOURCE_DISCOVERED_TOPIC = YOUTUBE_SOURCE_DISCOVERED
-YOUTUBE_SYNC_COMPLETED_TOPIC = YOUTUBE_SYNC_COMPLETED
-YOUTUBE_SYNC_DEGRADED_TOPIC = YOUTUBE_SYNC_DEGRADED
-
-EVENT_SOURCE = "knowledge_acquisition.source_sync"
 CURSOR_VERSION = 1
 MAX_KNOWN_PLAYLIST_ITEMS = 5_000
-PLAYLIST_COLLECTION_KINDS = frozenset(
-    {"inbox_playlist", "owned_playlist", "liked_videos", "public_playlist"}
-)
-AUTH_REQUIRED_COLLECTION_KINDS = frozenset(
-    {"inbox_playlist", "owned_playlist", "liked_videos"}
-)
-REQUEST_MODES = frozenset({"candidate_metadata_only", "acquire_transcript"})
+V1_COLLECTION_KIND = "inbox_playlist"
+V1_REQUEST_MODE = "acquire_transcript"
 SAFE_REASON_CODES = frozenset(
     {
         "auth_missing",
         "auth_key_missing",
         "auth_expired",
         "auth_revoked",
+        "auth_disconnected",
         "quota_exhausted",
         "api_unavailable",
         "network_error",
         "source_gone",
-        "source_unsupported",
         "policy_unsupported",
         "paused_source",
+        "inbox_missing",
     }
 )
 
@@ -77,16 +53,14 @@ _SAFE_REASON_DETAILS: dict[str, str] = {
     "auth_key_missing": "The YouTube token store is unavailable.",
     "auth_expired": "YouTube authentication has expired; reconnect the account.",
     "auth_revoked": "YouTube authentication was revoked; reconnect the account.",
+    "auth_disconnected": "The YouTube account was disconnected.",
     "quota_exhausted": "The YouTube Data API quota is exhausted for this quota window.",
     "api_unavailable": "The YouTube Data API is temporarily unavailable.",
     "network_error": "The YouTube Data API could not be reached.",
     "source_gone": "The playlist is unavailable or the account cannot access it.",
-    "source_unsupported": (
-        "Watch Later and Watch History are unsupported because the official YouTube Data API "
-        "does not expose them; no cookie or browser-session fallback is used."
-    ),
     "policy_unsupported": "The configured acquisition policy cannot be enforced safely.",
     "paused_source": "The source is disabled and was not polled.",
+    "inbox_missing": "No YouTube Inbox playlist is configured for this account.",
 }
 
 
@@ -102,12 +76,15 @@ class SourcePollResult:
     enqueued: int = 0
     deduped: int = 0
     not_modified: bool = False
-    backfill_needed: bool = False
     degraded: bool = False
     reason_code: str | None = None
     detail: str | None = None
     duration_ms: int = 0
     quota_units_spent: int = 0
+
+
+class V1InboxConfigurationError(ValueError):
+    """The one-Inbox product boundary was violated."""
 
 
 def _raise_persistence_error() -> NoReturn:
@@ -134,47 +111,6 @@ def _duration_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
 
 
-def _emit(
-    topic: str,
-    payload: dict[str, Any],
-    *,
-    binding_id: str,
-    fingerprint: str,
-    trace_id: str,
-) -> None:
-    event = new_event(
-        event_type=topic,
-        payload=payload,
-        trace_id=trace_id,
-        source=EVENT_SOURCE,
-    )
-    write_outbox_event(
-        event,
-        idempotency_key=derive_idempotency_key(topic, binding_id, fingerprint),
-    )
-
-
-def _emit_discover_only(binding: SourceBinding, item: PlaylistItem, *, run_id: str) -> None:
-    payload = {
-        "binding_id": binding.binding_id,
-        "collection_kind": binding.collection_kind,
-        "collection_ref": binding.collection_ref,
-        "item_ref": item.video_id,
-        "playlist_item_id": item.playlist_item_id,
-        "trigger": "poll",
-    }
-    event = new_event(
-        event_type=YOUTUBE_SOURCE_DISCOVERED_TOPIC,
-        payload=payload,
-        trace_id=run_id,
-        source=EVENT_SOURCE,
-    )
-    write_outbox_event(
-        event,
-        idempotency_key=discovered_event_key(binding.binding_id, item.video_id),
-    )
-
-
 def _successful_result(
     binding: SourceBinding,
     *,
@@ -188,32 +124,13 @@ def _successful_result(
     enqueued: int,
     deduped: int,
     not_modified: bool,
-    backfill_needed: bool,
 ) -> SourcePollResult:
     registry.record_poll_success(
         binding.binding_id,
-        expected_updated_at=binding.updated_at,
         cursor=cursor,
     )
     duration_ms = _duration_ms(started)
     quota_units_spent = max(0, quota_after - quota_before)
-    payload = {
-        "binding_id": binding.binding_id,
-        "run_id": run_id,
-        "discovered": discovered,
-        "enqueued": enqueued,
-        "deduped": deduped,
-        "not_modified": not_modified,
-        "duration_ms": duration_ms,
-        "quota_units_spent": quota_units_spent,
-    }
-    _emit(
-        YOUTUBE_SYNC_COMPLETED_TOPIC,
-        payload,
-        binding_id=binding.binding_id,
-        fingerprint=run_id,
-        trace_id=run_id,
-    )
     return SourcePollResult(
         binding_id=binding.binding_id,
         run_id=run_id,
@@ -221,7 +138,6 @@ def _successful_result(
         enqueued=enqueued,
         deduped=deduped,
         not_modified=not_modified,
-        backfill_needed=backfill_needed,
         duration_ms=duration_ms,
         quota_units_spent=quota_units_spent,
     )
@@ -240,21 +156,8 @@ def _degraded_result(
     safe_detail = detail or _SAFE_REASON_DETAILS[normalized_reason]
     registry.record_poll_failure(
         binding.binding_id,
-        expected_updated_at=binding.updated_at,
         reason_code=normalized_reason,
         detail=safe_detail,
-    )
-    _emit(
-        YOUTUBE_SYNC_DEGRADED_TOPIC,
-        {
-            "binding_id": binding.binding_id,
-            "run_id": run_id,
-            "reason_code": normalized_reason,
-            "detail": safe_detail,
-        },
-        binding_id=binding.binding_id,
-        fingerprint=run_id,
-        trace_id=run_id,
     )
     return SourcePollResult(
         binding_id=binding.binding_id,
@@ -305,13 +208,6 @@ def _next_cursor(
     dispositions = _dispositions(prior)
     dispositions.update(outcomes)
     dispositions = {key: dispositions[key] for key in ordered if key in dispositions}
-    prior_backfill = bool(prior.get("backfill_needed"))
-    backfill_needed = page.pagination_truncated or prior_backfill
-    backfill_page_token = (
-        page.next_page_token
-        if page.pagination_truncated
-        else prior.get("backfill_page_token") if prior_backfill else None
-    )
     return {
         "version": CURSOR_VERSION,
         "etag": page.etag if page.etag is not None else prior.get("etag"),
@@ -320,8 +216,6 @@ def _next_cursor(
         else prior.get("frontier_playlist_item_id"),
         "known_playlist_item_ids": ordered,
         "dispositions": dispositions,
-        "backfill_needed": backfill_needed,
-        "backfill_page_token": backfill_page_token,
     }
 
 
@@ -332,12 +226,12 @@ def poll_source(
     requests: Any,
     registry: SourceRegistry,
 ) -> SourcePollResult:
-    """Poll one playlist-shaped source and publish only a disposed frontier.
+    """Poll the one enabled V1 Inbox and publish only a disposed frontier.
 
     ``binding`` is treated as an identity/input snapshot; the current durable
     row is re-read before egress so stale callers cannot overwrite current
-    policy/cursor state.  Watch Later/History and missing Liked Videos auth are
-    checked against the supplied snapshot first for defense in depth.
+    policy/cursor state. The production boundary refuses every other source
+    kind even though the underlying registry contains future-facing shapes.
     """
     if not isinstance(binding, SourceBinding):
         raise TypeError("binding must be a SourceBinding")
@@ -348,16 +242,9 @@ def poll_source(
     if current is None:
         raise KeyError(f"no such binding: {binding.binding_id}")
 
-    if binding.collection_ref in UNSUPPORTED_COLLECTION_REFS:
-        return _degraded_result(
-            current,
-            registry=registry,
-            run_id=run_id,
-            started=started,
-            reason_code="source_unsupported",
-            detail=_SAFE_REASON_DETAILS["source_unsupported"],
-        )
-    if binding.collection_kind in AUTH_REQUIRED_COLLECTION_KINDS and not binding.account_binding_id:
+    if binding.collection_kind != V1_COLLECTION_KIND:
+        raise V1InboxConfigurationError("V1 sync accepts only one inbox_playlist")
+    if not binding.account_binding_id:
         return _degraded_result(
             current,
             registry=registry,
@@ -367,15 +254,6 @@ def poll_source(
         )
 
     binding = current
-    if binding.collection_kind not in PLAYLIST_COLLECTION_KINDS:
-        return _degraded_result(
-            binding,
-            registry=registry,
-            run_id=run_id,
-            started=started,
-            reason_code="source_unsupported",
-            detail="This source is not a playlist-shaped YouTube collection.",
-        )
     if not binding.enabled:
         return _degraded_result(
             binding,
@@ -387,19 +265,7 @@ def poll_source(
 
     policy = deepcopy(binding.acquisition_policy)
     mode = policy.get("mode")
-    # YSS-01's delivered policy shape has no declared filter object and YSS-03
-    # exposes no language/duration metadata.  Advancing as if the filter did
-    # not match would silently discard intent, so this target-state mode stays
-    # fail-closed until its policy/metadata contract is explicitly delivered.
-    if mode == "acquire_if_filter_matches":
-        return _degraded_result(
-            binding,
-            registry=registry,
-            run_id=run_id,
-            started=started,
-            reason_code="policy_unsupported",
-        )
-    if mode not in REQUEST_MODES and mode != "discover_only":
+    if mode != V1_REQUEST_MODE:
         return _degraded_result(
             binding,
             registry=registry,
@@ -449,7 +315,6 @@ def poll_source(
             enqueued=0,
             deduped=0,
             not_modified=True,
-            backfill_needed=bool(prior_cursor.get("backfill_needed")),
         )
     if not isinstance(page, PlaylistItemsPage):
         return _degraded_result(
@@ -474,25 +339,15 @@ def poll_source(
         if item.playlist_item_id in known:
             continue
         discovered += 1
-        if mode == "discover_only":
-            try:
-                _emit_discover_only(binding, item, run_id=run_id)
-            except Exception:
-                persistence_failed = True
-                break
-            outcomes[item.playlist_item_id] = {
-                "item_ref": item.video_id,
-                "outcome": "discover_only",
-            }
-            continue
-
-        policy_version = policy.get("policy_version", 1)
-        existing = None
-        if isinstance(policy_version, int) and not isinstance(policy_version, bool):
-            getter = getattr(requests, "get", None)
-            if callable(getter):
-                existing = getter(request_identity("youtube_url", item.video_id, policy_version))
         try:
+            policy_version = policy.get("policy_version", 1)
+            existing = None
+            if isinstance(policy_version, int) and not isinstance(policy_version, bool):
+                getter = getattr(requests, "get", None)
+                if callable(getter):
+                    existing = getter(
+                        request_identity("youtube_url", item.video_id, policy_version)
+                    )
             requests.enqueue(
                 source_kind="youtube_url",
                 item_ref=item.video_id,
@@ -552,14 +407,156 @@ def poll_source(
         enqueued=enqueued,
         deduped=deduped,
         not_modified=False,
-        backfill_needed=bool(cursor["backfill_needed"]),
     )
+
+
+class YouTubeInboxSyncV1:
+    """Minimal operator route for selecting, syncing, and inspecting one Inbox."""
+
+    def __init__(
+        self,
+        *,
+        account_binding_id: str,
+        registry: SourceRegistry,
+        requests: Any,
+        api_client: Any,
+        oauth_status: Callable[[str], dict[str, Any]],
+    ) -> None:
+        self._account_binding_id = account_binding_id
+        self._registry = registry
+        self._requests = requests
+        self._api_client = api_client
+        self._oauth_status = oauth_status
+
+    def select_inbox(
+        self,
+        *,
+        playlist_ref: str,
+        title: str,
+    ) -> SourceBinding:
+        """Configure the sole V1 Inbox; a second product Inbox is refused."""
+
+        rows = self._registry.list_for_account(self._account_binding_id)
+        enabled = [
+            row
+            for row in rows
+            if row.collection_kind == V1_COLLECTION_KIND and row.enabled
+        ]
+        if len(enabled) > 1:
+            raise V1InboxConfigurationError("V1 requires exactly one enabled Inbox")
+        if enabled:
+            if enabled[0].collection_ref == playlist_ref:
+                return enabled[0]
+            raise V1InboxConfigurationError(
+                "V1 already has an enabled Inbox; generic multi-playlist configuration is unavailable"
+            )
+
+        existing = next(
+            (
+                row
+                for row in rows
+                if row.collection_kind == V1_COLLECTION_KIND
+                and row.collection_ref == playlist_ref
+            ),
+            None,
+        )
+        target = existing or self._registry.register(
+            collection_kind=V1_COLLECTION_KIND,
+            collection_ref=playlist_ref,
+            title=title,
+            account_binding_id=self._account_binding_id,
+        )
+        return self._registry.set_inbox(self._account_binding_id, target.binding_id)
+
+    def sync_now(self) -> dict[str, Any]:
+        """Run one synchronous production poll and return a secret-free receipt."""
+
+        binding = self._enabled_inbox()
+        result = poll_source(
+            binding,
+            api_client=self._api_client,
+            requests=self._requests,
+            registry=self._registry,
+        )
+        return {
+            "status": "degraded" if result.degraded else "connected",
+            "discovered": result.discovered,
+            "enqueued": result.enqueued,
+            "deduped": result.deduped,
+            "not_modified": result.not_modified,
+            "reason_code": result.reason_code,
+        }
+
+    def status(self) -> dict[str, Any]:
+        """Expose connected/degraded, last success, and one sanitized error."""
+
+        auth = self._oauth_status(self._account_binding_id)
+        auth_state = auth.get("status") if isinstance(auth, dict) else None
+        rows = self._registry.list_for_account(self._account_binding_id)
+        enabled = [
+            row
+            for row in rows
+            if row.collection_kind == V1_COLLECTION_KIND and row.enabled
+        ]
+        if len(enabled) != 1:
+            return {
+                "status": "degraded",
+                "last_success_at": None,
+                "latest_error": self._sanitized_error("inbox_missing"),
+            }
+        binding = enabled[0]
+        latest_error = self._sanitized_stored_error(binding.last_error)
+        if auth_state != "connected" and latest_error is None:
+            reason = auth.get("reason_code") if isinstance(auth, dict) else None
+            latest_error = self._sanitized_error(
+                reason if isinstance(reason, str) else "auth_missing"
+            )
+        return {
+            "status": "connected"
+            if auth_state == "connected" and latest_error is None
+            else "degraded",
+            "last_success_at": binding.last_success_at,
+            "latest_error": latest_error,
+        }
+
+    def _enabled_inbox(self) -> SourceBinding:
+        rows = self._registry.list_for_account(self._account_binding_id)
+        enabled = [
+            row
+            for row in rows
+            if row.collection_kind == V1_COLLECTION_KIND and row.enabled
+        ]
+        if len(enabled) != 1:
+            raise V1InboxConfigurationError("V1 requires exactly one enabled Inbox")
+        return enabled[0]
+
+    @staticmethod
+    def _sanitized_error(reason_code: str, *, at: str | None = None) -> dict[str, Any]:
+        safe_reason = reason_code if reason_code in SAFE_REASON_CODES else "api_unavailable"
+        result: dict[str, Any] = {
+            "reason_code": safe_reason,
+            "detail": _SAFE_REASON_DETAILS[safe_reason],
+        }
+        if at is not None:
+            result["at"] = at
+        return result
+
+    @classmethod
+    def _sanitized_stored_error(cls, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        reason = value.get("reason_code")
+        at = value.get("at")
+        return cls._sanitized_error(
+            reason if isinstance(reason, str) else "api_unavailable",
+            at=at if isinstance(at, str) else None,
+        )
 
 
 __all__ = [
     "SourcePollPersistenceError",
     "SourcePollResult",
-    "YOUTUBE_SYNC_COMPLETED_TOPIC",
-    "YOUTUBE_SYNC_DEGRADED_TOPIC",
+    "V1InboxConfigurationError",
+    "YouTubeInboxSyncV1",
     "poll_source",
 ]

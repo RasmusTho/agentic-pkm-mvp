@@ -22,7 +22,6 @@ import pytest
 from app.knowledge_acquisition.source_registry import (
     DuplicateBindingError,
     SourceRegistry,
-    SourceRegistryStateConflictError,
     SourceRegistryValidationError,
     SourceUnsupportedError,
 )
@@ -583,19 +582,19 @@ def assert_provenance_is_strict_portable_json(make_registry: RegistryFactory) ->
     assert zulu.provenance["at"] == "2026-07-18T08:00:00+00:00"
 
 
-def assert_poll_outcome_compare_and_set(make_registry: RegistryFactory) -> None:
-    """YSS-05: poll state is atomic, cursor-safe, and stale-writer guarded."""
+def assert_inbox_poll_outcomes(make_registry: RegistryFactory) -> None:
+    """V1 poll state publishes success or degradation without cursor ambiguity."""
     reg = make_registry()
     binding = reg.register(
-        collection_kind="owned_playlist",
+        collection_kind="inbox_playlist",
         collection_ref=f"PLfixturePOLL{uuid.uuid4().hex}",
         account_binding_id=_acct(),
         title="Poll state contract",
     )
+    binding = reg.set_inbox(binding.account_binding_id, binding.binding_id)
 
     failed = reg.record_poll_failure(
         binding.binding_id,
-        expected_updated_at=binding.updated_at,
         reason_code="network_error",
         detail="safe detail",
     )
@@ -605,16 +604,8 @@ def assert_poll_outcome_compare_and_set(make_registry: RegistryFactory) -> None:
     assert failed.last_error is not None
     assert failed.last_error["reason_code"] == "network_error"
 
-    with pytest.raises(SourceRegistryStateConflictError):
-        reg.record_poll_success(
-            binding.binding_id,
-            expected_updated_at=binding.updated_at,
-            cursor={"known_playlist_item_ids": ["stale"]},
-        )
-
     succeeded = reg.record_poll_success(
         binding.binding_id,
-        expected_updated_at=failed.updated_at,
         cursor={"known_playlist_item_ids": ["pli-safe"]},
     )
     assert succeeded.cursor == {"known_playlist_item_ids": ["pli-safe"]}
@@ -641,5 +632,5 @@ ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_invalid_interval_and_policy_fail_loud,
     assert_provenance_is_strict_portable_json,
     assert_memory_json_isolation,
-    assert_poll_outcome_compare_and_set,
+    assert_inbox_poll_outcomes,
 )
