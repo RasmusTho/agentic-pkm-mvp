@@ -38,11 +38,10 @@ ClientFactory = Callable[[ClientConfig], BuilderOpsControlPlaneClient]
 _FAIL_CLOSED_EXIT = 3
 _CONFIG_EXIT = 2
 
-# Subcommands whose envelope this CLI can resolve a delivery-manifest route
-# for: they carry --repository/--stack (the RepoRef/stack half of the routing
-# key) and a --task-class-scoped mutation. Read-only commands (status, receipt)
-# are not envelope-routed.
-_ROUTABLE_COMMANDS = frozenset(
+# Every authority-bearing CLI command carries an envelope and must resolve the
+# addressed repository's delivery-manifest route before it can dispatch.  Read
+# commands (status, receipt) intentionally stay outside this mutation gate.
+_MUTATING_COMMANDS = frozenset(
     {
         "record",
         "inquiry",
@@ -115,19 +114,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--delivery-manifest-dir",
         help=(
-            "Optional directory of per-repository delivery-manifest JSON "
-            "documents (see app.builderops.control_plane.routing). When given, "
-            "the addressed repository's manifest is loaded and routed by "
-            "(RepoRef, stack, task-class) before dispatch; a missing/ambiguous "
-            "manifest or route fails closed. Omit to skip routing entirely — "
-            "no manifest is required by default. This is advisory request "
-            "shaping only, never privileged authority."
+            "Directory of per-repository delivery-manifest JSON documents "
+            "(see app.builderops.control_plane.routing). Required for every "
+            "mutating command: the addressed repository's manifest is loaded "
+            "and routed by (RepoRef, stack, task-class) before dispatch; a "
+            "missing, ambiguous, stale cached/prior, or cross-repository route "
+            "fails closed. "
+            "Routing is advisory request shaping only, never privileged authority."
         ),
     )
     parser.add_argument(
         "--task-class",
         help="Task-class half of the (RepoRef, stack, task-class) routing key. "
-        "Required when --delivery-manifest-dir is given for a routable command.",
+        "Required for every mutating command.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -204,6 +203,13 @@ def build_parser() -> argparse.ArgumentParser:
     promotion.add_argument("--status", required=True)
     promotion.add_argument("--payload", help="JSON object payload.")
     promotion.add_argument("--idempotency-key", required=True)
+    promotion.add_argument(
+        "--lease",
+        help=(
+            "JSON fenced lease object. Required by the service when updating an "
+            "existing promotion; stale or missing evidence fails closed."
+        ),
+    )
 
     receipt = sub.add_parser("receipt", help="Read a committed authority-object receipt.")
     receipt.add_argument("--repository", required=True)
@@ -283,6 +289,7 @@ def _dispatch(
             status=args.status,
             payload=_json_payload(args.payload),
             idempotency_key=args.idempotency_key,
+            lease=_json_payload(args.lease) if args.lease else None,
         )
     if command == "receipt":
         return client.get_receipt(
@@ -297,23 +304,24 @@ def _dispatch(
 def _resolve_route(args: argparse.Namespace) -> RoutePolicy | None:
     """Resolve the addressed repo's (RepoRef, stack, task-class) route.
 
-    Returns ``None`` when routing was not engaged (no ``--delivery-manifest-dir``
-    given, or the command has no envelope to route). Engaging routing on a
-    routable command is a full commitment to fail-closed behavior: a missing,
-    ambiguous, or cross-repo-reused manifest raises ``RoutingError`` rather than
-    silently skipping. The resolved policy is advisory request-shaping only —
-    never privileged authority; BCP-05 independently re-resolves protected-base
-    policy before any privileged effect.
+    Read commands return ``None`` because they cannot mutate authority. Every
+    mutating command is a full commitment to fail-closed routing: a missing
+    manifest directory/task class, or a missing, ambiguous, stale cached/prior,
+    or cross-repo-reused manifest/route raises before a client is constructed
+    or a request is dispatched. The manifest is reloaded for every invocation;
+    no previous route can authorize a later mutation. The resolved policy is
+    advisory request-shaping only
+    — never privileged authority; BCP-05 independently re-resolves
+    protected-base policy before any privileged effect.
     """
     manifest_dir = getattr(args, "delivery_manifest_dir", None)
-    if manifest_dir is None:
+    if args.command not in _MUTATING_COMMANDS:
         return None
-    if args.command not in _ROUTABLE_COMMANDS:
-        return None
+    if not manifest_dir:
+        raise ValueError("--delivery-manifest-dir is required for mutating commands")
     if not getattr(args, "task_class", None):
         raise ValueError(
-            "--task-class is required when --delivery-manifest-dir is given "
-            "for a routable command"
+            "--task-class is required for mutating commands"
         )
     repo = RepoRef.parse(args.repository)
     registry = DeliveryManifestRegistry.from_directory(manifest_dir)
