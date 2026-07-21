@@ -165,6 +165,14 @@ implementation/test evidence only: it establishes neither trend nor cadence.
 
 ## Observation-gated future work
 
+- **O1a records bounded categories, not content or authority.** The delivered
+  BuilderOps-local adapter distinguishes supported results, typed refusals,
+  unsupported historical requests, and human-accepted questions. Accepted
+  questions use the closed categories `evidence_coverage_change`,
+  `source_freshness_change`, `citation_confidence_change`,
+  `candidate_finding_composition_change`, and `historical_change_question`.
+  These categories are structural evidence only: their presence, frequency,
+  or source-authority digest cannot activate a capability or create backlog.
 - **M2 is not filed or Ready.** The accepted question set is limited to compatible sampled changes in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition. Filing still requires a costed smallest implementation, source authority, precise semantics, and verifiable refusal behavior. General bitemporality is not the answer.
 - **O2 is not filed or pre-authorized.** Filters beyond Q2, comparison/timeline product surfaces, drift, prediction, automation, and federation require accepted observation evidence and their normal authority path.
 - Two compatible snapshots are only the mathematical minimum for a delta. They do not prove a cadence, trend, window duration, or minimum evidence count.
