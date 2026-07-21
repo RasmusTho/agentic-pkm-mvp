@@ -19,13 +19,13 @@ Observe what CKM consumers actually ask, including unsupported historical questi
 
 - Define a privacy-safe, versioned outer observation adapter for already-returned supported results, typed refusals, and explicitly accepted questions.
 - Record bounded structural facts such as resource/query family, filter classes, result/refusal kind, truncation, latency bucket, contract versions, and snapshot/query digests without raw free text or resource payloads.
-- Use the authoritative OEF event path where applicable, preserving BuilderOps scope and projection-only status.
+- Persist through the BuilderOps-local adjacent observation store; Product/runtime OEF outbox, topic, worker, retry, and dead-letter paths are inapplicable.
 - Produce evidence that can support a future PromotionIntent or bounded issue, never direct feature activation.
 - Apply the accepted 365-day retention/correction/deletion policy to every observation record, bind its policy version, expose retained count/bytes, and support previewed explicit operator pruning.
 
 ## Concretely
 
-After the query service returns an immutable result or typed refusal, the calling orchestration layer may pass a redacted observation input to a separate governed event recorder. The query service, DTO layer, SQLite connection, and read transaction never depend on or invoke the recorder. Event success or failure cannot change the already-returned query outcome. Unsupported historical requests are classified by typed refusal; any human-accepted question records source authority separately from the raw demand signal.
+After the query service returns an immutable result or typed refusal, the calling orchestration layer may pass a redacted observation input to the separate BuilderOps-local outer adapter. The query service, DTO layer, SQLite connection, and read transaction never depend on or invoke the adapter. Observation success or failure cannot change the already-returned query outcome. Unsupported historical requests are classified by typed refusal; any human-accepted question records source authority separately from the raw demand signal.
 
 ## Why This Matters
 
@@ -43,7 +43,7 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_runs_only_after_query_path_returns`
 - [ ] The outer observation adapter cannot mutate CKM state/revision, GitHub, repo, Product/Runtime authority, or trigger a feature, ranking, gate, alert, or promotion automatically.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_has_no_authority_or_ckm_side_effect`
-- [ ] Event emission failure is surfaced according to the authoritative OEF contract and cannot corrupt, replace, or semantically change the already-returned query result/refusal.
+- [ ] Observation validation or SQLite persistence failure returns a typed BuilderOps observation error, rolls back its adjacent-store transaction, and cannot corrupt, replace, or semantically change the already-returned query result/refusal.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_failure_preserves_returned_query_semantics`
 - [ ] An accepted historical question records its human/source authority and remains insufficient by itself to claim general history support.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_accepted_question_records_authority_without_enabling_history`
@@ -79,4 +79,4 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
 
 ## Related GitHub Issues
 
-Implementation issue #3780 under validation parent #3775, dependency-blocked on #3777 and reconciliation of its Issue contract to the accepted retention decision. Reconcile the live OEF event contract before labeling Ready. TCD hint: Terra/high; escalate for privacy, authority, retention, or event-failure ambiguity.
+Implementation issue #3780 is on PR #4060 under current-SHA verification beneath open, blocked validation parent #3775. Its reconciled contract explicitly excludes the Product/runtime OEF event path in favor of the BuilderOps-local adjacent observation store. TCD hint: Terra/high; escalate for privacy, authority, retention, or observation-failure ambiguity.

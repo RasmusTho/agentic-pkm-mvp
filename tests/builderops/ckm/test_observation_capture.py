@@ -255,7 +255,7 @@ def test_supported_refused_and_accepted_question_events_are_distinct(tmp_path: P
         event_kind="accepted_question",
         metadata=_metadata(
             query_family="accepted_question",
-            question_kind="historical_change_question",
+            question_kind="source_freshness_change",
             human_authority="owner_accepted",
             source_authority_kind="github_issue",
             source_authority_ref="issue:#3780",
@@ -400,7 +400,7 @@ def test_accepted_question_records_authority_without_enabling_history(tmp_path: 
         event_kind="accepted_question",
         metadata=_metadata(
             query_family="accepted_question",
-            question_kind="historical_change_question",
+            question_kind="evidence_coverage_change",
             human_authority="owner_accepted",
             source_authority_kind="owner_decision",
             source_authority_ref=raw_source,
@@ -418,6 +418,21 @@ def test_accepted_question_records_authority_without_enabling_history(tmp_path: 
     assert raw_source not in _rows(observations)[0]["observation_json"]
     assert payload["authority"]["m2_authorized"] is False
     assert payload["authority"]["o2_authorized"] is False
+    with pytest.raises(QueryObservationError) as generic_exc:
+        observations.capture(
+            None,
+            event_kind="accepted_question",
+            metadata=_metadata(
+                query_family="accepted_question",
+                question_kind="historical_change_question",
+                human_authority="owner_accepted",
+                source_authority_kind="owner_decision",
+                source_authority_ref="owner-record:generic-history",
+            ),
+            observed_at="2026-07-22T10:00:01Z",
+        )
+    assert generic_exc.value.code == "invalid_observation"
+    assert len(_rows(observations)) == 1
 
 
 def test_observation_retention_requires_accepted_policy(tmp_path: Path) -> None:

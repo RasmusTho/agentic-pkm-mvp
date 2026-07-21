@@ -74,7 +74,6 @@ QUESTION_KINDS = frozenset(
         "source_freshness_change",
         "citation_confidence_change",
         "candidate_finding_composition_change",
-        "historical_change_question",
     }
 )
 HUMAN_AUTHORITIES = frozenset({"owner_accepted", "governance_accepted"})
