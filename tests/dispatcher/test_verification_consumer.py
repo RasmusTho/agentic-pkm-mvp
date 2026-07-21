@@ -1305,7 +1305,7 @@ def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
 def test_merged_recovery_accepts_terminal_newline_canonical_body_without_budget_reset(
     tmp_path,
 ) -> None:
-    original_body = "Governing-Issue: #3603\n\nFixes #3603\n"
+    original_body = "Governing-Issue: #3603\n\nFixes #3603\n\nFinal-Review-Rounds: 1\n"
     plan = _merge_plan(HEAD, body=original_body)
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
