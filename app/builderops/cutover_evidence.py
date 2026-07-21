@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import NAMESPACE_OID, UUID, uuid5
 
+from app.builderops.config import validate_db_path_outside_vault
+
 
 RECEIPT_SCHEMA = "builderops.host-store-cutover.v2"
 _LEGACY_DB = "builderops.sqlite3"
@@ -188,6 +190,8 @@ def _reconciliation(
 
 def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, actor: str) -> dict[str, Any]:
     """Build a receipt only after a real, non-empty target has been reconciled."""
+    target_path = state_dir / _LEGACY_DB
+    validate_db_path_outside_vault(target_path)
     if not isinstance(actor, str) or not actor.strip():
         raise CutoverEvidenceError("cutover actor is required")
     cutoff = datetime.now(timezone.utc)
@@ -195,8 +199,8 @@ def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, ac
     inventory = discover_legacy_stores(participant_list)
     if any(item["mtime_ns"] > int(cutoff.timestamp() * 1_000_000_000) for item in inventory):
         raise CutoverEvidenceError("legacy store changed during reconciliation inventory")
-    report = _reconciliation(reconciliation, inventory, state_dir / _LEGACY_DB, verify_migrated_target=True)
-    target = inspect_target(state_dir / _LEGACY_DB)
+    report = _reconciliation(reconciliation, inventory, target_path, verify_migrated_target=True)
+    target = inspect_target(target_path)
     host, user = __import__("platform").node().strip(), str(os.getuid())
     derived_epoch = _derived_epoch(host, user, participant_list, inventory, report, target["identity"])
     payload: dict[str, Any] = {
@@ -213,12 +217,12 @@ def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, ac
     # drifted while source records were being inspected.  Re-run both source
     # discovery and reconciliation immediately before the sole write.
     final_inventory = discover_legacy_stores(participant_list)
-    final_report = _reconciliation(reconciliation, final_inventory, state_dir / _LEGACY_DB, verify_migrated_target=True)
+    final_report = _reconciliation(reconciliation, final_inventory, target_path, verify_migrated_target=True)
     if final_inventory != inventory or final_report != report:
         raise CutoverEvidenceError("legacy store inventory drifted during reconciliation")
     evidence_digest = hashlib.sha256(_canonical(_evidence_projection(payload))).hexdigest()
-    _stamp_target(state_dir / _LEGACY_DB, {"identity": target["identity"], "epoch": derived_epoch, "evidence_sha256": evidence_digest})
-    payload["target_store"] = inspect_target(state_dir / _LEGACY_DB)
+    _stamp_target(target_path, {"identity": target["identity"], "epoch": derived_epoch, "evidence_sha256": evidence_digest})
+    payload["target_store"] = inspect_target(target_path)
     payload["receipt_sha256"] = hashlib.sha256(_canonical(payload)).hexdigest()
     return payload
 

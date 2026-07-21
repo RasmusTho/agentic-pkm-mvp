@@ -111,6 +111,9 @@ recursively discovers every legacy store beneath those roots, binds its identity
 the actual host and numeric user, one reconciliation epoch, and an already-existing non-empty target.
 Because this producer governs the implicit host-stable store, the group-level CLI `--db-path`
 override is rejected before inspection or mutation.
+The producer also applies the shared vault-confinement guard to the implicit target path before
+legacy-store inventory, target inspection, marker stamping, or receipt creation. A target beneath
+`BUILDEROPS_VAULT_ROOT` therefore fails without mutating the database or receipt location.
 The validator recomputes those bindings before SQLite initialization; copied, stale, incomplete,
 post-epoch-mutated, or empty-target receipts fail closed.
 The payload schema is `builderops.host-store-cutover.v2`; the `host-store-cutover-v1.json`

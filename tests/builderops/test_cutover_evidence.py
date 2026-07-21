@@ -173,6 +173,82 @@ def test_cutover_producer_rejects_post_cutoff_inventory_without_stamping(tmp_pat
         assert conn.execute("SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'").fetchone() is None
 
 
+def test_cutover_producer_rejects_target_inside_vault_before_inspection_or_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root, state_dir, root = tmp_path / "vault", tmp_path / "vault" / "state", tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.delenv("BUILDEROPS_VAULT_ROOT", raising=False)
+    _target(state_dir)
+    db_path = state_dir / "builderops.sqlite3"
+    before = db_path.read_bytes()
+    inventory_calls: list[object] = []
+    monkeypatch.setenv("BUILDEROPS_VAULT_ROOT", str(vault_root))
+    monkeypatch.setattr(
+        evidence,
+        "discover_legacy_stores",
+        lambda participants: inventory_calls.append(participants),
+    )
+
+    with pytest.raises(ValueError, match="must be outside BUILDEROPS_VAULT_ROOT"):
+        build_receipt(
+            state_dir=state_dir,
+            participants=[{"repository": "owner/repo", "root": str(root)}],
+            reconciliation=[],
+            actor="operator",
+        )
+
+    assert not inventory_calls
+    assert db_path.read_bytes() == before
+    assert not config.host_cutover_ack_path(state_dir).exists()
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        marker = conn.execute(
+            "SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'"
+        ).fetchone()
+        assert marker is None
+
+
+def test_cutover_evidence_cli_rejects_target_inside_vault_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root, state_dir, root = tmp_path / "vault", tmp_path / "vault" / "state", tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.delenv("BUILDEROPS_VAULT_ROOT", raising=False)
+    _target(state_dir)
+    db_path = state_dir / "builderops.sqlite3"
+    before = db_path.read_bytes()
+    participants = tmp_path / "participants.json"
+    reconciliation = tmp_path / "reconciliation.json"
+    participants.write_text(json.dumps([{"repository": "owner/repo", "root": str(root)}]), encoding="utf-8")
+    reconciliation.write_text(json.dumps([]), encoding="utf-8")
+    monkeypatch.setenv("BUILDEROPS_VAULT_ROOT", str(vault_root))
+    monkeypatch.setattr("app.builderops.cli.default_state_dir", lambda: state_dir)
+
+    result = CliRunner().invoke(
+        builderops,
+        [
+            "cutover-evidence",
+            "generate",
+            "--participants-file",
+            str(participants),
+            "--reconciliation-file",
+            str(reconciliation),
+            "--actor",
+            "operator",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "must be outside BUILDEROPS_VAULT_ROOT" in result.output
+    assert db_path.read_bytes() == before
+    assert not config.host_cutover_ack_path(state_dir).exists()
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        marker = conn.execute(
+            "SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'"
+        ).fetchone()
+        assert marker is None
+
+
 def test_cutover_evidence_cli_rejects_db_override_before_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
