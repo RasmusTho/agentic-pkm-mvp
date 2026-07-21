@@ -143,8 +143,11 @@ create no local SQLite/JSONL/JSON authority and no fabricated GitHub lease.
 Every mutating CLI command requires `--delivery-manifest-dir` and
 `--task-class` and resolves delivery-manifest `(RepoRef, stack, task-class)`
 routing (`app.builderops.control_plane.routing`) before dispatch. Missing,
-ambiguous, stale, or cross-repository manifests/routes fail closed before a
-client is constructed. The resolved policy remains advisory request shaping
+ambiguous, stale cached/prior-route, or cross-repository manifests/routes fail
+closed before a client is constructed; every invocation reloads the addressed
+repository's manifest rather than reusing a prior route. Temporal
+base-SHA/manifest-hash freshness remains BCP-05 protected-base authority. The
+resolved policy remains advisory request shaping
 (for example, a `ttl_seconds` default), never privileged authority; BCP-05
 still independently re-resolves protected-base policy and credential binding.
 Promotion updates pass the caller-supplied fenced `--lease` object through the
