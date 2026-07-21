@@ -126,6 +126,31 @@ class FailingRegistry:
         )
 
 
+class FailingListRegistry:
+    def list_for_account(self, account_binding_id: str):
+        del account_binding_id
+        raise RuntimeError("PRIVATE_DIAGNOSTIC from registry list")
+
+
+class CommittedThenRaisedRegistry:
+    def __init__(self, delegate: SourceRegistry) -> None:
+        self.delegate = delegate
+
+    def get(self, binding_id: str):
+        return self.delegate.get(binding_id)
+
+    def record_poll_success(self, binding_id: str, *, cursor: dict[str, Any]):
+        self.delegate.record_poll_success(binding_id, cursor=cursor)
+        raise OSError("PRIVATE_DIAGNOSTIC after committed success")
+
+    def record_poll_failure(
+        self, binding_id: str, *, reason_code: str, detail: Any = None
+    ):
+        return self.delegate.record_poll_failure(
+            binding_id, reason_code=reason_code, detail=detail
+        )
+
+
 def _item(playlist_item_id: str, video_id: str, position: int = 0) -> PlaylistItem:
     return PlaylistItem(
         playlist_item_id=playlist_item_id,
@@ -350,6 +375,113 @@ def test_registry_persistence_failures_are_sanitized(
     else:
         assert stored.cursor == {}
         assert stored.last_error is None
+
+
+def test_manual_service_registry_failure_is_sanitized(outbox: FakeOutboxConn) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    service = YouTubeInboxSyncV1(
+        account_binding_id=account,
+        registry=FailingListRegistry(),
+        requests=AcquisitionRequests.for_runtime(),
+        api_client=StubApiClient(_page()),
+        oauth_status=lambda _account: {"status": "connected", "reason_code": None},
+    )
+
+    for operation in (
+        lambda: service.select_inbox(playlist_ref=PLAYLIST_A, title="Inbox"),
+        service.sync_now,
+    ):
+        with pytest.raises(
+            SourcePollPersistenceError, match="source sync persistence failed"
+        ) as caught:
+            operation()
+        assert "PRIVATE_DIAGNOSTIC" not in str(caught.value)
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
+    status = service.status()
+    assert status == {
+        "status": "degraded",
+        "last_success_at": None,
+        "latest_error": {
+            "reason_code": "network_error",
+            "detail": "The YouTube Data API could not be reached.",
+        },
+    }
+    assert "PRIVATE_DIAGNOSTIC" not in json.dumps(status)
+
+    healthy_registry = SourceRegistry.for_runtime()
+    oauth_failure_service = YouTubeInboxSyncV1(
+        account_binding_id=str(uuid.uuid4()),
+        registry=healthy_registry,
+        requests=AcquisitionRequests.for_runtime(),
+        api_client=StubApiClient(_page()),
+        oauth_status=lambda _account: (_ for _ in ()).throw(
+            RuntimeError("PRIVATE_DIAGNOSTIC from OAuth status")
+        ),
+    )
+    oauth_failure_status = oauth_failure_service.status()
+    assert oauth_failure_status["status"] == "degraded"
+    assert oauth_failure_status["latest_error"]["reason_code"] == "api_unavailable"
+    assert "PRIVATE_DIAGNOSTIC" not in json.dumps(oauth_failure_status)
+
+
+def test_committed_success_with_lost_returning_is_reconciled(
+    outbox: FakeOutboxConn,
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    binding = _register_inbox(registry, account)
+
+    result = poll_source(
+        binding,
+        api_client=StubApiClient(_page(_item("pli-a", VIDEO_A))),
+        requests=requests,
+        registry=CommittedThenRaisedRegistry(registry),
+    )
+
+    stored = registry.get(binding.binding_id)
+    assert result.degraded is False
+    assert result.enqueued == 1
+    assert stored is not None
+    assert stored.cursor["known_playlist_item_ids"] == ["pli-a"]
+    assert stored.last_success_at is not None
+    assert stored.last_error is None
+
+
+def test_no_change_prewrite_failure_is_not_reconciled_as_success(
+    outbox: FakeOutboxConn,
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    binding = _register_inbox(registry, account)
+    poll_source(
+        binding,
+        api_client=StubApiClient(_page(_item("pli-a", VIDEO_A))),
+        requests=requests,
+        registry=registry,
+    )
+    before = registry.get(binding.binding_id)
+    assert before is not None
+
+    with pytest.raises(SourcePollPersistenceError):
+        poll_source(
+            before,
+            api_client=StubApiClient(NotModified(etag='"etag-1"')),
+            requests=requests,
+            registry=FailingRegistry(registry, "record_poll_success"),
+        )
+
+    after = registry.get(binding.binding_id)
+    assert after is not None
+    assert after.cursor == before.cursor
+    assert after.last_success_at == before.last_success_at
+    assert after.last_error["reason_code"] == "network_error"
 
 
 @pytest.mark.parametrize(

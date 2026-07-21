@@ -154,8 +154,27 @@ def _successful_result(
     except Exception:
         persistence_failed = True
     if persistence_failed:
-        _best_effort_persistence_degradation(binding.binding_id, registry)
-        _raise_persistence_error()
+        recovered: SourceBinding | None = None
+        try:
+            recovered = registry.get(binding.binding_id)
+        except Exception:
+            pass
+        # An autocommit write can succeed server-side while the client loses
+        # its RETURNING response. Reconcile only the exact intended cursor and
+        # clean success state; every other outcome remains a detached failure.
+        if not (
+            recovered is not None
+            and recovered.cursor == cursor
+            and recovered.last_success_at is not None
+            and recovered.last_error is None
+            and (
+                recovered.cursor != binding.cursor
+                or recovered.last_success_at != binding.last_success_at
+                or recovered.last_attempt_at != binding.last_attempt_at
+            )
+        ):
+            _best_effort_persistence_degradation(binding.binding_id, registry)
+            _raise_persistence_error()
     duration_ms = _duration_ms(started)
     quota_units_spent = max(0, quota_after - quota_before)
     return SourcePollResult(
@@ -480,7 +499,9 @@ class YouTubeInboxSyncV1:
                 "V1 Inbox must be an ordinary owned playlist; Liked Videos is unavailable"
             )
 
-        rows = self._registry.list_for_account(self._account_binding_id)
+        rows = self._registry_call(
+            lambda: self._registry.list_for_account(self._account_binding_id)
+        )
         enabled = [
             row
             for row in rows
@@ -504,13 +525,19 @@ class YouTubeInboxSyncV1:
             ),
             None,
         )
-        target = existing or self._registry.register(
-            collection_kind=V1_COLLECTION_KIND,
-            collection_ref=playlist_ref,
-            title=title,
-            account_binding_id=self._account_binding_id,
+        target = existing or self._registry_call(
+            lambda: self._registry.register(
+                collection_kind=V1_COLLECTION_KIND,
+                collection_ref=playlist_ref,
+                title=title,
+                account_binding_id=self._account_binding_id,
+            )
         )
-        return self._registry.set_inbox(self._account_binding_id, target.binding_id)
+        return self._registry_call(
+            lambda: self._registry.set_inbox(
+                self._account_binding_id, target.binding_id
+            )
+        )
 
     def sync_now(self) -> dict[str, Any]:
         """Run one synchronous production poll and return a secret-free receipt."""
@@ -534,9 +561,25 @@ class YouTubeInboxSyncV1:
     def status(self) -> dict[str, Any]:
         """Expose connected/degraded, last success, and one sanitized error."""
 
-        auth = self._oauth_status(self._account_binding_id)
+        try:
+            auth = self._oauth_status(self._account_binding_id)
+        except Exception:
+            return {
+                "status": "degraded",
+                "last_success_at": None,
+                "latest_error": self._sanitized_error("api_unavailable"),
+            }
         auth_state = auth.get("status") if isinstance(auth, dict) else None
-        rows = self._registry.list_for_account(self._account_binding_id)
+        try:
+            rows = self._registry_call(
+                lambda: self._registry.list_for_account(self._account_binding_id)
+            )
+        except SourcePollPersistenceError:
+            return {
+                "status": "degraded",
+                "last_success_at": None,
+                "latest_error": self._sanitized_error("network_error"),
+            }
         enabled = [
             row
             for row in rows
@@ -564,7 +607,9 @@ class YouTubeInboxSyncV1:
         }
 
     def _enabled_inbox(self) -> SourceBinding:
-        rows = self._registry.list_for_account(self._account_binding_id)
+        rows = self._registry_call(
+            lambda: self._registry.list_for_account(self._account_binding_id)
+        )
         enabled = [
             row
             for row in rows
@@ -573,6 +618,20 @@ class YouTubeInboxSyncV1:
         if len(enabled) != 1:
             raise V1InboxConfigurationError("V1 requires exactly one enabled Inbox")
         return enabled[0]
+
+    @staticmethod
+    def _registry_call(operation: Callable[[], Any]) -> Any:
+        """Run one registry operation behind the detached public error seam."""
+
+        failed = False
+        result: Any = None
+        try:
+            result = operation()
+        except Exception:
+            failed = True
+        if failed:
+            _raise_persistence_error()
+        return result
 
     @staticmethod
     def _sanitized_error(reason_code: str, *, at: str | None = None) -> dict[str, Any]:
