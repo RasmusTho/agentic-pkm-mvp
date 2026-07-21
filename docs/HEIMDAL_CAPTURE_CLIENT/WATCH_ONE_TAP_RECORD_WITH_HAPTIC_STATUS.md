@@ -13,6 +13,13 @@ can_parallelize_with: [DEVICE_REGISTRATION_AND_CONSENT_SURFACE, DEVICE_HEALTH_PA
 
 Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
 
+State: **Implemented.** Delivered by
+[`RasmusTho/bifrost` PR #38](https://github.com/RasmusTho/bifrost/pull/38)
+(issue #19, 2026-07-21). The implementation includes the shared admissible-media gate, durable
+Watch/phone relay custody across callback and relaunch seams, truthful session metadata for the
+HCAP-07 sidecar, and recorder-confirmed transition haptics. Physical-device WatchConnectivity
+timing and haptic feel remain HCAP-09 walkthrough scope.
+
 ## Purpose
 
 The Watch is a Heimdal surface only: "start a memo, feel a haptic when capture pauses/resumes,
@@ -54,16 +61,16 @@ trust gap.
 
 ## Acceptance Criteria
 
-- [ ] Watch target builds in CI (watchOS simulator destination). `Verify:` `.github/workflows/ci.yml`
+- [x] Watch target builds in CI (watchOS simulator destination). `Verify:` `.github/workflows/ci.yml`
   diff + green run on the PR head including the watch build step.
-- [ ] Relay custody: watch-side file is deleted only on confirmed WC delivery; failure keeps it
+- [x] Relay custody: watch-side file is deleted only on confirmed WC delivery; failure keeps it
   queued and visible. `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/WatchRelayCustodyTests.swift::{testDeleteOnlyOnConfirmedTransfer,testFailedTransferStaysQueued}`
   (new; WC session faked — the custody logic must be extracted testably).
-- [ ] Relayed files enter the same staging queue and delivery path as phone recordings (one
+- [x] Relayed files enter the same staging queue and delivery path as phone recordings (one
   custody pipeline, enforcement AC on the phone-side receive handler). `Verify:` bifrost
   `CaptureDeliveryTests.swift::testWatchRelayedFileEntersStagingQueue` (new).
-- [ ] Haptic events fire on start/pause/resume/stop transitions of the watch session model.
+- [x] Haptic events fire on start/pause/resume/stop transitions of the watch session model.
   `Verify:` bifrost `Yggdrasil/YggdrasilTests/WatchHapticsTests.swift::testHapticPerTransition`
   (new; haptic player injected).
 
@@ -92,6 +99,5 @@ nothing is silently dropped.
 
 ## Related GitHub Issues
 
-One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:blocked` on the HCAP-03
-issue), linking hub #3026 and this spec file. TCD hint: Sonnet / high effort — new target +
-WatchConnectivity custody logic; escalate to Opus only if WC test seams prove hostile to faking.
+Delivered by [`RasmusTho/bifrost` issue #19](https://github.com/RasmusTho/bifrost/issues/19) and
+[PR #38](https://github.com/RasmusTho/bifrost/pull/38), linking hub #3026 and this spec file.
