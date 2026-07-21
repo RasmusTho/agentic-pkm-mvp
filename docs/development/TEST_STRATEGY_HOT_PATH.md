@@ -21,6 +21,7 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`.
 - PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.
+- Runtime-start harness tests that exercise `scripts/start_full_system.sh` and its process-cleanup behavior are owned by the `ops_deploy` selector, even when the touched files live under `tests/helpers/` or `tests/runtime/`.
 - Store and vault-ingest changes are owned by the `store_ingest` selection and run its focused
   `tests/stores`, `tests/ingest`, and architecture contracts in the ordinary `not pg` job. That job
   intentionally excludes live-Postgres tests; a PR that changes a Postgres store or vault ingest

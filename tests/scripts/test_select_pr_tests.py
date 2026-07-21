@@ -891,6 +891,24 @@ def test_builder_system_change_selects_its_own_regression_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
+def test_runtime_start_harness_change_selects_ops_deploy_regressions() -> None:
+    selection = select_tests(
+        [
+            "tests/helpers/runtime_start_harness.py",
+            "tests/runtime/test_start_full_system_version_marker.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("ops_deploy",)
+    assert selection.unowned_paths == ()
+    assert "tests/ops" in selection.targets
+    assert "tests/scripts" in selection.targets
+    assert "tests/deploy" in selection.targets
+    assert "tests/helpers/runtime_start_harness.py" in selection.targets
+    assert "tests/runtime/test_start_full_system_version_marker.py" in selection.targets
+
+
 def test_governance_test_change_is_owned_by_builder_system() -> None:
     selection = select_tests(["tests/governance/test_project_pickup_deprecation.py"])
 
