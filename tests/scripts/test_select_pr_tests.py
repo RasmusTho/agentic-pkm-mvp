@@ -72,6 +72,17 @@ def test_unknown_runtime_surface_fails_closed_until_it_has_an_owner() -> None:
     assert selection.unowned_paths == ("app/new_surface/example.py",)
 
 
+def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
+    path = "tests/architecture/test_builderops_store_boundary.py"
+
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("builder_system",)
+    assert selection.unowned_paths == ()
+    assert path in selection.targets
+
+
 def test_deploy_pin_file_selects_ops_deploy() -> None:
     selection = select_tests(["config/deploy/dev.env"])
 
