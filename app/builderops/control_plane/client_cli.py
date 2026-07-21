@@ -118,7 +118,8 @@ def build_parser() -> argparse.ArgumentParser:
             "(see app.builderops.control_plane.routing). Required for every "
             "mutating command: the addressed repository's manifest is loaded "
             "and routed by (RepoRef, stack, task-class) before dispatch; a "
-            "missing, ambiguous, stale, or cross-repository route fails closed. "
+            "missing, ambiguous, stale cached/prior, or cross-repository route "
+            "fails closed. "
             "Routing is advisory request shaping only, never privileged authority."
         ),
     )
@@ -305,9 +306,11 @@ def _resolve_route(args: argparse.Namespace) -> RoutePolicy | None:
 
     Read commands return ``None`` because they cannot mutate authority. Every
     mutating command is a full commitment to fail-closed routing: a missing
-    manifest directory/task class, or a missing, ambiguous, stale, or
-    cross-repo-reused manifest/route raises before a client is constructed or a
-    request is dispatched. The resolved policy is advisory request-shaping only
+    manifest directory/task class, or a missing, ambiguous, stale cached/prior,
+    or cross-repo-reused manifest/route raises before a client is constructed
+    or a request is dispatched. The manifest is reloaded for every invocation;
+    no previous route can authorize a later mutation. The resolved policy is
+    advisory request-shaping only
     — never privileged authority; BCP-05 independently re-resolves
     protected-base policy before any privileged effect.
     """

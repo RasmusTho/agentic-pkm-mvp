@@ -55,10 +55,11 @@ whatever service/store backend is configured and ships non-authoritative; the
 legacy direct-SQLite `app.dispatcher`/`app.builderops` CLIs remain in place, and
 BCP-06 owns activating production authority and freezing those legacy writers.
 Issue #3968 closes the BCP-04 review residuals: all mutation paths now require
-delivery-manifest routing before dispatch, and promotion updates can carry the
-store-required fenced lease through the client CLI. This remains client-side
-request formation only; it does not alter BCP-05 verification or BCP-06
-cutover authority.
+delivery-manifest routing before dispatch, reject stale cached/prior-route
+reuse by reloading the addressed manifest per invocation, and promotion updates
+can carry the store-required fenced lease through the client CLI. This remains
+client-side request formation only; temporal protected-base manifest freshness
+stays with BCP-05, and BCP-06 cutover authority is unchanged.
 
 ## Target boundary
 

@@ -159,6 +159,31 @@ def test_delivery_manifest_routing_is_engaged_through_real_cli_dispatch(
     assert "rasmustho/agentic-pkm-mvp" in stderr
 
 
+def test_mutating_cli_reloads_manifest_and_rejects_stale_prior_route(
+    tmp_path: Path, factory
+) -> None:
+    """A prior invocation's route cannot authorize a later mutation.
+
+    This drives ``main()`` twice rather than only exercising the registry: after
+    the first dispatch, removing the addressed repository manifest makes the
+    second invocation fail before it constructs another client.
+    """
+    manifest_dir = _manifest_dir(tmp_path)
+    args = [
+        "--delivery-manifest-dir", str(manifest_dir), "--task-class", "implementation",
+        "task-claim", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:3968",
+        "--stack", "builderops-control-plane", "--source-ref", "github:issue:3968",
+        "--task-id", "issue-3968", "--idempotency-key", "claim-1",
+    ]
+    assert main(args, client_factory=factory) == 0
+    assert len(factory.created) == 1
+
+    (manifest_dir / "agentic-pkm-mvp.json").unlink()
+
+    assert main(args, client_factory=factory) == 3
+    assert len(factory.created) == 1
+
+
 def test_explicit_ttl_flag_wins_over_manifest_policy(tmp_path: Path, factory) -> None:
     manifest_dir = _manifest_dir(tmp_path, ttl_seconds=1800)
     exit_code = main(
