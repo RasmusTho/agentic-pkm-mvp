@@ -167,29 +167,60 @@ class MetricRetentionStore:
     def storage_usage(self) -> dict[str, int]:
         self.initialize()
         with sqlite3.connect(self.path) as conn:
-            count, bytes_ = conn.execute("SELECT COUNT(*), COALESCE(SUM(COALESCE(length(source_payload), 0) + length(observation_json)), 0) FROM ckm_metric_sample_v1 WHERE lifecycle = 'retained'").fetchone()
+            count, bytes_ = conn.execute("SELECT COUNT(*), COALESCE(SUM(length(source_payload) + length(observation_json)), 0) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL").fetchone()
         return {"count": int(count), "bytes": int(bytes_)}
 
-    def preview_prune(self, *, now: str, earlier_than_365_days: bool = False) -> list[dict[str, Any]]:
+    def preview_prune(self, *, now: str, earlier_than_365_days: bool = False, max_count: int | None = None, max_bytes: int | None = None) -> list[dict[str, Any]]:
         self.initialize()
+        if max_count is not None and max_count < 0:
+            raise ValueError("max_count must be non-negative")
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must be non-negative")
         with sqlite3.connect(self.path) as conn:
-            rows = conn.execute("SELECT sample_id, expires_at FROM ckm_metric_sample_v1 WHERE lifecycle = 'retained' ORDER BY sample_id").fetchall()
+            rows = conn.execute("SELECT sample_id, retained_at, expires_at, length(source_payload) + length(observation_json) FROM ckm_metric_sample_v1 WHERE source_payload IS NOT NULL ORDER BY retained_at, sample_id").fetchall()
         if earlier_than_365_days:
             return [{"sample_id": row[0], "reason": "explicit_operator_prune_preview"} for row in rows]
-        return [{"sample_id": row[0], "reason": "retention_expired"} for row in rows if row[1] <= now]
+        selected: dict[str, str] = {
+            str(row[0]): "retention_expired" for row in rows if row[2] <= now
+        }
+        remaining = [row for row in rows if str(row[0]) not in selected]
+        remaining_count = len(remaining)
+        remaining_bytes = sum(int(row[3]) for row in remaining)
+        for row in remaining:
+            over_count = max_count is not None and remaining_count > max_count
+            over_bytes = max_bytes is not None and remaining_bytes > max_bytes
+            if not over_count and not over_bytes:
+                break
+            selected[str(row[0])] = (
+                "storage_count_and_byte_cap"
+                if over_count and over_bytes
+                else "storage_count_cap"
+                if over_count
+                else "storage_byte_cap"
+            )
+            remaining_count -= 1
+            remaining_bytes -= int(row[3])
+        return [
+            {"sample_id": str(row[0]), "reason": selected[str(row[0])]}
+            for row in rows
+            if str(row[0]) in selected
+        ]
 
     def prune(self, sample_ids: list[str], *, reason: str, at: str, previewed_sample_ids: list[str] | None = None) -> None:
         self.initialize()
         previewed = set(previewed_sample_ids or [])
         with sqlite3.connect(self.path) as conn:
             for sample_id in sample_ids:
-                row = conn.execute("SELECT expires_at FROM ckm_metric_sample_v1 WHERE sample_id = ? AND lifecycle = 'retained'", (sample_id,)).fetchone()
+                row = conn.execute("SELECT expires_at, lifecycle, lifecycle_marker_json, source_payload, observation_id FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)).fetchone()
                 if row is None:
                     raise CkmContractError("missing_retained_sample", "retained metric sample is unavailable for pruning", {"sample_id": sample_id})
+                if row[3] is None:
+                    raise CkmContractError("source_unavailable", "retained source payload is already unavailable", {"sample_id": sample_id, "lifecycle": row[1]})
                 if row[0] > at and sample_id not in previewed:
                     raise CkmContractError("prune_preview_required", "early payload pruning requires an explicit operator preview", {"sample_id": sample_id})
-                marker = {"event": reason, "payload_removed": True, "at": at}
-                conn.execute("UPDATE ckm_metric_sample_v1 SET source_payload = NULL, lifecycle = ?, lifecycle_marker_json = ?, deleted_at = ? WHERE sample_id = ? AND lifecycle = 'retained'", (reason, canonical_json(marker), at, sample_id))
+                marker = {"event": reason, "payload_removed": True, "at": at, "prior_marker": json.loads(row[2])}
+                observation_marker = {"observation_id": row[4], "payload_removed": True}
+                conn.execute("UPDATE ckm_metric_sample_v1 SET source_payload = NULL, observation_json = ?, lifecycle = ?, lifecycle_marker_json = ?, deleted_at = ? WHERE sample_id = ? AND source_payload IS NOT NULL", (canonical_json(observation_marker), reason, canonical_json(marker), at, sample_id))
 
     def correct(self, sample_id: str, result: ResultEnvelope, *, finding_evaluations: Mapping[str, Any] | None = None, retained_at: str | None = None) -> RetainedSample:
         self.initialize()

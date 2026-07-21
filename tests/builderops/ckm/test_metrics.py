@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -122,6 +123,55 @@ def test_retained_sample_correction_and_deletion_preserve_lifecycle_truth(tmp_pa
     with pytest.raises(CkmContractError, match="unavailable") as exc:
         retained.replay(corrected.sample_id)
     assert exc.value.code == "source_unavailable"
+
+
+def test_correction_payloads_remain_accounted_and_policy_prunable(tmp_path: Path) -> None:
+    retained = MetricRetentionStore(tmp_path / "correction-accounting.sqlite")
+    result = _result(tmp_path)
+    original = retained.retain(result, retained_at="2025-01-01T00:00:00Z")
+    corrected = retained.correct(
+        original.sample_id, result, retained_at="2025-01-02T00:00:00Z"
+    )
+    usage = retained.storage_usage()
+    assert usage["count"] == 2 and usage["bytes"] > 0
+
+    cap_preview = retained.preview_prune(
+        now="2025-01-03T00:00:00Z",
+        max_count=1,
+        max_bytes=usage["bytes"] - 1,
+    )
+    assert cap_preview == [
+        {"sample_id": original.sample_id, "reason": "storage_count_and_byte_cap"}
+    ]
+
+    age_preview = retained.preview_prune(now="2026-01-02T00:00:00Z")
+    assert age_preview == [
+        {"sample_id": original.sample_id, "reason": "retention_expired"},
+        {"sample_id": corrected.sample_id, "reason": "retention_expired"},
+    ]
+    retained.prune(
+        [item["sample_id"] for item in age_preview],
+        reason="retention_expired",
+        at="2026-01-02T00:00:00Z",
+    )
+    assert retained.storage_usage() == {"count": 0, "bytes": 0}
+    assert retained.preview_prune(now="2027-01-01T00:00:00Z") == []
+    for sample_id in (original.sample_id, corrected.sample_id):
+        with pytest.raises(CkmContractError) as exc:
+            retained.replay(sample_id)
+        assert exc.value.code == "source_unavailable"
+    with sqlite3.connect(retained.path) as conn:
+        lifecycle_json, observation_json = conn.execute(
+            "SELECT lifecycle_marker_json, observation_json FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+            (original.sample_id,),
+        ).fetchone()
+    marker = json.loads(lifecycle_json)
+    assert marker["prior_marker"]["event"] == "superseded"
+    assert marker["prior_marker"]["successor"] == corrected.sample_id
+    assert json.loads(observation_json) == {
+        "observation_id": original.observation_id,
+        "payload_removed": True,
+    }
 
 
 def test_observation_is_deterministic_for_same_snapshot_and_definition(tmp_path: Path) -> None:
