@@ -152,11 +152,21 @@ def _stamp_target(db_path: Path, marker: Mapping[str, str]) -> None:
         connection.commit()
 
 
-def _reconciliation(raw: Any, inventory: list[dict[str, Any]], target_path: Path) -> list[dict[str, Any]]:
+def _reconciliation(
+    raw: Any,
+    inventory: list[dict[str, Any]],
+    target_path: Path,
+    *,
+    verify_migrated_target: bool,
+) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         raise CutoverEvidenceError("reconciliation report must contain a store list")
     reported: dict[str, dict[str, Any]] = {}
-    target_records = {(item["id"], item["payload_sha256"]) for item in _records(target_path)}
+    target_records = (
+        {(item["id"], item["payload_sha256"]) for item in _records(target_path)}
+        if verify_migrated_target
+        else set()
+    )
     for item in raw:
         if not isinstance(item, Mapping) or not isinstance(item.get("path"), str) or not isinstance(item.get("disposition"), str):
             raise CutoverEvidenceError("reconciliation report entry is invalid")
@@ -167,7 +177,7 @@ def _reconciliation(raw: Any, inventory: list[dict[str, Any]], target_path: Path
         source_digest = hashlib.sha256(_canonical(source)).hexdigest()
         if item.get("source_records_sha256") not in {None, source_digest}:
             raise CutoverEvidenceError("reconciliation source evidence does not match legacy store")
-        if disposition == "migrated" and not {(row["id"], row["payload_sha256"]) for row in source}.issubset(target_records):
+        if disposition == "migrated" and verify_migrated_target and not {(row["id"], row["payload_sha256"]) for row in source}.issubset(target_records):
             raise CutoverEvidenceError("migrated legacy records are not accounted for in target")
         reported[path] = {"path": path, "disposition": disposition, "source_records_sha256": source_digest, "source_record_count": len(source)}
     expected = {item["path"] for item in inventory}
@@ -185,7 +195,7 @@ def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, ac
     inventory = discover_legacy_stores(participant_list)
     if any(item["mtime_ns"] > int(cutoff.timestamp() * 1_000_000_000) for item in inventory):
         raise CutoverEvidenceError("legacy store changed during reconciliation inventory")
-    report = _reconciliation(reconciliation, inventory, state_dir / _LEGACY_DB)
+    report = _reconciliation(reconciliation, inventory, state_dir / _LEGACY_DB, verify_migrated_target=True)
     target = inspect_target(state_dir / _LEGACY_DB)
     host, user = __import__("platform").node().strip(), str(os.getuid())
     derived_epoch = _derived_epoch(host, user, participant_list, inventory, report, target["identity"])
@@ -203,7 +213,7 @@ def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, ac
     # drifted while source records were being inspected.  Re-run both source
     # discovery and reconciliation immediately before the sole write.
     final_inventory = discover_legacy_stores(participant_list)
-    final_report = _reconciliation(reconciliation, final_inventory, state_dir / _LEGACY_DB)
+    final_report = _reconciliation(reconciliation, final_inventory, state_dir / _LEGACY_DB, verify_migrated_target=True)
     if final_inventory != inventory or final_report != report:
         raise CutoverEvidenceError("legacy store inventory drifted during reconciliation")
     evidence_digest = hashlib.sha256(_canonical(_evidence_projection(payload))).hexdigest()
@@ -249,7 +259,7 @@ def validate_receipt(state_dir: Path, payload: Any, *, host_id: str, user_id: st
         inventory = discover_legacy_stores(participants)
         if inventory != receipt.get("legacy_store_inventory") or hashlib.sha256(_canonical(inventory)).hexdigest() != receipt.get("inventory_sha256"):
             raise CutoverEvidenceError("cutover receipt inventory is incomplete or stale")
-        report = _reconciliation(receipt.get("reconciliation"), inventory, state_dir / _LEGACY_DB)
+        report = _reconciliation(receipt.get("reconciliation"), inventory, state_dir / _LEGACY_DB, verify_migrated_target=False)
         if report != receipt.get("reconciliation") or hashlib.sha256(_canonical(report)).hexdigest() != receipt.get("reconciliation_sha256"):
             raise CutoverEvidenceError("cutover receipt reconciliation binding is invalid")
         target = inspect_target(state_dir / _LEGACY_DB)

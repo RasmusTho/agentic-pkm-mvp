@@ -64,6 +64,14 @@ def test_generated_receipt_binds_host_user_inventory_and_reconciliation_epoch(tm
     monkeypatch.setattr(config, "default_state_dir", lambda: state_dir)
     monkeypatch.chdir(nested)
     assert config.load_paths({}).db_path == state_dir / "builderops.sqlite3"
+    target = SqliteBuilderOpsStore(state_dir / "builderops.sqlite3")
+    lease = target.acquire_lease("awl_migrated", actor={"actor_type": "agent", "id": "transition"})
+    target.transition_record_state(
+        "awl_migrated", actor={"actor_type": "agent", "id": "transition"}, lease_id=lease["lease_id"],
+        idempotency_key="transition:awl_migrated:accepted", source_refs=[{"ref_type": "github_issue", "ref": "#3686"}],
+        summary="authorized target transition", action="archive", receipt_body="normal post-cutover transition", lifecycle_state="archived",
+    )
+    assert config.load_paths({}).db_path == state_dir / "builderops.sqlite3"
     assert receipt["participants"] == [{"repository": "owner/repo", "root": str(root.resolve())}]
     assert receipt["host_id"] == config.current_host_id() and receipt["user_id"] == config.current_user_id()
     assert receipt["legacy_store_inventory"][0]["path"] == str(legacy.resolve())
