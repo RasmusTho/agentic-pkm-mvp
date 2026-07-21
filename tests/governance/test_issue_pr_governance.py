@@ -362,6 +362,97 @@ def test_neutralized_pr_contract_canonicalizes_only_one_terminal_lf() -> None:
         )
 
 
+def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_terminal_lf() -> None:
+    pull_request, comment, receipt = _neutralized_authority_fixture()
+    body = str(pull_request["body"])
+    legacy = copy.deepcopy(receipt)
+    legacy["neutralized_body_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+    legacy_comment = copy.deepcopy(comment)
+    legacy_comment["body"] = (
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(legacy, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+    legacy_comment["created_at"] = "2026-07-21T16:16:34Z"
+    legacy_comment["updated_at"] = "2026-07-21T16:16:34Z"
+    lf_less = {**pull_request, "body": body[:-1]}
+
+    assert _js_neutralized_merge_authority(
+        [legacy_comment], lf_less, str(legacy["repository"])
+    ) == legacy
+    for changed in (body, body[:-1] + " ", body[:-1] + "drift"):
+        assert _js_neutralized_merge_authority(
+            [legacy_comment], {**pull_request, "body": changed}, str(legacy["repository"])
+        ) is None
+    assert _js_neutralized_merge_authority(
+        [legacy_comment], {**pull_request, "body": body + "\n"}, str(legacy["repository"])
+    ) == legacy
+
+    for crlf_body in (body[:-1] + "\r", body[:-1].replace("Refs", "Refs\r", 1)):
+        crlf_receipt = copy.deepcopy(legacy)
+        crlf_receipt["neutralized_body_sha256"] = hashlib.sha256(
+            (crlf_body + "\n").encode()
+        ).hexdigest()
+        crlf_comment = {
+            **legacy_comment,
+            "body": "verified issue-set merge authority:\n```json\n"
+            + json.dumps(crlf_receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```",
+        }
+        assert _js_neutralized_merge_authority(
+            [crlf_comment], {**pull_request, "body": crlf_body}, str(legacy["repository"])
+        ) is None
+    post_cutoff = {
+        **legacy_comment,
+        "created_at": "2026-07-21T16:32:11Z",
+        "updated_at": "2026-07-21T16:32:11Z",
+    }
+    assert _js_neutralized_merge_authority(
+        [post_cutoff], lf_less, str(legacy["repository"])
+    ) is None
+    for noncanonical_timestamp in (
+        "2026-07-21T16:16:34",
+        "2026-07-21T18:16:34+02:00",
+        "2026-07-21 16:16:34Z",
+        "2026-07-21T16:16:34.000Z",
+        "2026-02-30T16:16:34Z",
+        "2025-02-29T16:16:34Z",
+        "2026-13-01T16:16:34Z",
+        "2026-07-00T16:16:34Z",
+        "2026-07-21T24:16:34Z",
+    ):
+        malformed_provenance = {
+            **legacy_comment,
+            "updated_at": noncanonical_timestamp,
+        }
+        assert _js_neutralized_merge_authority(
+            [malformed_provenance], lf_less, str(legacy["repository"])
+        ) is None
+    valid_leap_day = {
+        **legacy_comment,
+        "created_at": "2024-02-29T16:16:34Z",
+        "updated_at": "2024-02-29T16:16:34Z",
+    }
+    assert _js_neutralized_merge_authority(
+        [valid_leap_day], lf_less, str(legacy["repository"])
+    ) == legacy
+
+    double_lf = body + "\n"
+    canonical_double_lf = copy.deepcopy(receipt)
+    canonical_double_lf["neutralized_body_sha256"] = _verified_merge_body_digest(
+        double_lf
+    )
+    canonical_comment = copy.deepcopy(comment)
+    canonical_comment["body"] = (
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(canonical_double_lf, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+    assert _js_neutralized_merge_authority(
+        [canonical_comment], {**pull_request, "body": double_lf}, str(receipt["repository"])
+    ) == canonical_double_lf
+
+
 def test_neutralized_pr_contract_rejects_forged_stale_missing_and_conflicting_authority() -> None:
     pull_request, comment, receipt = _neutralized_authority_fixture()
     repository = str(receipt["repository"])
@@ -400,8 +491,8 @@ def test_production_pr_contract_authenticates_neutralized_merge_authority() -> N
         "resolveNeutralizedMergeAuthority",
         "TRUSTED_ASSOCIATIONS",
         "receipt.head_sha === pullRequest.head?.sha",
-        "receipt.neutralized_body_sha256 === liveDigest",
-        "new Set(valid.map(canonicalJson)).size !== 1",
+        "liveBody, receipt.neutralized_body_sha256, {allowLegacy}",
+        "valid.map(entry => canonicalJson(entry.receipt))",
         "one trusted, non-conflicting exact-head verified-merge authority receipt",
     ):
         assert fragment in workflow

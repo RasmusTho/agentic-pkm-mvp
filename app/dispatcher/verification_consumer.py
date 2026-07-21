@@ -57,7 +57,8 @@ from app.dispatcher.verification_contract import (
     resolve_neutralized_issue_authority,
 )
 from app.dispatcher.verified_merge import (
-    _body_digest,
+    _comments_authenticate_legacy_authority,
+    _matches_stored_body_digest,
     plan_post_merge_reconciliation,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
@@ -3358,10 +3359,20 @@ class VerificationConsumer:
             raise ValueError(
                 "verification run is no longer resumable: merged_body_missing"
             )
-        live_body_digest = _body_digest(live_body)
-        if live_body_digest == authority.get("body_sha256"):
+        allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
+            comments, authority
+        )
+        if _matches_stored_body_digest(
+            live_body,
+            authority.get("body_sha256"),
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        ):
             body_state = "restored"
-        elif live_body_digest == authority.get("neutralized_body_sha256"):
+        elif _matches_stored_body_digest(
+            live_body,
+            authority.get("neutralized_body_sha256"),
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        ):
             body_state = "neutralized"
         else:
             body_state = "raced"

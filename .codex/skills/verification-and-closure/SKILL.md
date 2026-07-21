@@ -291,7 +291,12 @@ Verified-merge authority and phase body digests canonicalize GitHub PR-body stor
 most one terminal LF before digest derivation or comparison. That LF is equivalent to its absence;
 every other body byte and whitespace character remains exact, and substantive body drift fails
 closed. This digest equivalence does not relax any head, title, closing-set, authority-receipt, or
-phase-continuity gate below.
+phase-continuity gate below. For a pre-#4010 trusted authority receipt only, the stored raw digest
+of the otherwise identical body with exactly one terminal LF may authenticate when GitHub returns
+the LF-less form when the authenticated comment `created_at` and `updated_at` both precede #4010's
+`2026-07-21T16:32:11Z` merge cutoff. Check normal canonical equality first so unchanged two-LF bodies
+remain valid; the legacy fallback rejects any CR/CRLF, spaces, interior drift, post-cutoff receipt,
+or other receipt/live-state mismatch. Preserve receipt identity, phase continuity, and repair budget.
 
 1. freeze the authenticated v2 context (`run_id`, repository, PR, exact head, governing issue,
    `closing_issues`, durable `supporting_issues`, attempts, and 2+2 repair-budget projection); re-read
@@ -314,7 +319,9 @@ phase-continuity gate below.
    result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
    `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
-   exact neutralized PR snapshot. Require a single continuous prepared/merged/reconciled/restored
+   exact neutralized PR snapshot. For the pre-#4010 legacy exception, also pass the complete trusted
+   authority comment through `--authority-comment-json`; the receipt payload alone does not prove
+   cutoff provenance. Require a single continuous prepared/merged/reconciled/restored
    phase ledger; duplicate identical receipts are idempotent, while missing, stale, forged, or
    conflicting receipts fail closed
 5. merge through the exact-head REST endpoint using the verified SHA and only the plan's fixed

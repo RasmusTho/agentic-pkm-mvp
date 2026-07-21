@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Final, cast
 
 from app.dispatcher.verification_contract import (
@@ -32,10 +33,16 @@ VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
 _CONTEXT_CONTRACT = "verification_closer_dispatch_context.v2"
 _SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 _DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
+_CANONICAL_UTC_TIMESTAMP_PATTERN = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+)
 _TRUSTED_AUTHOR_ASSOCIATIONS: Final = frozenset(
     {"OWNER", "MEMBER", "COLLABORATOR"}
 )
 _PHASES: Final = ("prepared", "merged", "reconciled", "restored")
+_LEGACY_TERMINAL_LF_CUTOFF: Final = datetime(
+    2026, 7, 21, 16, 32, 11, tzinfo=timezone.utc
+)
 _AUTHORITY_RECEIPT_FIELDS: Final = frozenset(
     {
         "authenticated_supporting_issues",
@@ -125,19 +132,79 @@ def _body_digest(body: str) -> str:
     return hashlib.sha256(canonical_body.encode("utf-8")).hexdigest()
 
 
+def _raw_terminal_lf_digest(body: str) -> str:
+    return hashlib.sha256((body + "\n").encode("utf-8")).hexdigest()
+
+
+def _matches_stored_body_digest(
+    body: str,
+    stored_digest: object,
+    *,
+    allow_legacy_terminal_lf: bool = False,
+) -> bool:
+    """Accept a canonical digest or the one pre-#4010 stored LF form.
+
+    New receipts use :func:`_body_digest`.  A historical receipt may instead
+    have stored the raw digest of a body ending in exactly one LF, while GitHub
+    now returns that same body without the LF.  Do not turn this into trimming:
+    a second LF, whitespace, CRLF, and interior changes remain distinct.
+    """
+
+    if (
+        not isinstance(stored_digest, str)
+        or _DIGEST_PATTERN.fullmatch(stored_digest) is None
+    ):
+        return False
+    # Always preserve the normal #4010 canonical path first. In particular,
+    # an unchanged body ending in two LFs canonicalizes to one terminal LF.
+    if _body_digest(body) == stored_digest:
+        return True
+    if (
+        not allow_legacy_terminal_lf
+        or body.endswith("\n")
+        or "\r" in body
+    ):
+        return False
+    return _raw_terminal_lf_digest(body) == stored_digest
+
+
+def _legacy_terminal_lf_provenance(comment: Mapping[str, object]) -> bool:
+    """Authenticate an unedited authority comment predating #4010's merge."""
+
+    timestamps: list[datetime] = []
+    for field in ("created_at", "updated_at"):
+        value = comment.get(field)
+        if (
+            not isinstance(value, str)
+            or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(value) is None
+        ):
+            return False
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            return False
+        timestamps.append(parsed)
+    return bool(
+        timestamps[0] <= timestamps[1]
+        and all(timestamp < _LEGACY_TERMINAL_LF_CUTOFF for timestamp in timestamps)
+    )
+
+
 def _canonical_digest(value: Mapping[str, object]) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _comment_receipts(
+def _comment_receipt_entries(
     comments: Sequence[Mapping[str, object]], marker: str
-) -> list[Mapping[str, object]]:
+) -> list[tuple[Mapping[str, object], Mapping[str, object]]]:
     pattern = re.compile(
         re.escape(marker) + r"\s*```json\s*([\s\S]*?)\s*```",
         re.MULTILINE,
     )
-    receipts: list[Mapping[str, object]] = []
+    receipts: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
     for comment in comments:
         if comment.get("author_association") not in _TRUSTED_AUTHOR_ASSOCIATIONS:
             continue
@@ -152,8 +219,40 @@ def _comment_receipts(
         except json.JSONDecodeError:
             continue
         if isinstance(value, Mapping):
-            receipts.append(value)
+            receipts.append((value, comment))
     return receipts
+
+
+def _comment_receipts(
+    comments: Sequence[Mapping[str, object]], marker: str
+) -> list[Mapping[str, object]]:
+    return [receipt for receipt, _ in _comment_receipt_entries(comments, marker)]
+
+
+def _comment_authenticates_legacy_authority(
+    comment: Mapping[str, object], authority_receipt: Mapping[str, object]
+) -> bool:
+    return bool(
+        comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and _legacy_terminal_lf_provenance(comment)
+        and any(
+            receipt == authority_receipt
+            for receipt, candidate in _comment_receipt_entries(
+                [comment], VERIFIED_MERGE_AUTHORITY_MARKER
+            )
+            if candidate is comment
+        )
+    )
+
+
+def _comments_authenticate_legacy_authority(
+    comments: Sequence[Mapping[str, object]],
+    authority_receipt: Mapping[str, object],
+) -> bool:
+    return any(
+        _comment_authenticates_legacy_authority(comment, authority_receipt)
+        for comment in comments
+    )
 
 
 def _body_authority(body: object) -> IssueAuthority | None:
@@ -180,6 +279,7 @@ def _valid_authority_receipt(
     pr: Mapping[str, object],
     repository: str,
     expected_run_id: str | None,
+    allow_legacy_terminal_lf: bool = False,
     require_live_body: bool = True,
 ) -> bool:
     body = pr.get("body")
@@ -205,11 +305,17 @@ def _valid_authority_receipt(
         authority is None
         or receipt.get("governing_issue") != authority.governing_issue
         or not isinstance(body, str)
-        or _body_digest(body)
-        not in {
-            receipt.get("body_sha256"),
-            receipt.get("neutralized_body_sha256"),
-        }
+        or not any(
+            _matches_stored_body_digest(
+                body,
+                digest,
+                allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            )
+            for digest in (
+                receipt.get("body_sha256"),
+                receipt.get("neutralized_body_sha256"),
+            )
+        )
     ):
         return False
     try:
@@ -274,29 +380,46 @@ def resolve_verified_merge_authority_receipt(
 ) -> dict[str, object] | None:
     """Resolve one trusted exact-head merge receipt without accepting conflicts."""
 
-    receipts = _comment_receipts(comments, VERIFIED_MERGE_AUTHORITY_MARKER)
-    valid = [
-        dict(receipt)
-        for receipt in receipts
+    entries = _comment_receipt_entries(comments, VERIFIED_MERGE_AUTHORITY_MARKER)
+    valid_entries = [
+        (dict(receipt), comment)
+        for receipt, comment in entries
         if _valid_authority_receipt(
             receipt,
             pr=pr,
             repository=repository,
             expected_run_id=expected_run_id,
+            allow_legacy_terminal_lf=_legacy_terminal_lf_provenance(comment),
         )
     ]
     if _complete_merged_identity(pr):
         body = pr.get("body")
         if isinstance(body, str):
-            live_digest = _body_digest(body)
-            valid.extend(
-                dict(receipt)
-                for receipt in receipts
-                if live_digest
-                not in {
-                    receipt.get("body_sha256"),
-                    receipt.get("neutralized_body_sha256"),
-                }
+            valid_entries.extend(
+                (dict(receipt), comment)
+                for receipt, comment in entries
+                if not any(
+                    _matches_stored_body_digest(
+                        body,
+                        digest,
+                        allow_legacy_terminal_lf=_legacy_terminal_lf_provenance(
+                            comment
+                        ),
+                    )
+                    for digest in (
+                        receipt.get("body_sha256"),
+                        receipt.get("neutralized_body_sha256"),
+                    )
+                )
+                and not any(
+                    not body.endswith("\n")
+                    and "\r" not in body
+                    and _raw_terminal_lf_digest(body) == digest
+                    for digest in (
+                        receipt.get("body_sha256"),
+                        receipt.get("neutralized_body_sha256"),
+                    )
+                )
                 and _valid_authority_receipt(
                     receipt,
                     pr=pr,
@@ -305,22 +428,30 @@ def resolve_verified_merge_authority_receipt(
                     require_live_body=False,
                 )
             )
-    if not valid:
+    if not valid_entries:
         return None
-    identities = {_canonical_digest(receipt) for receipt in valid}
+    identities = {_canonical_digest(receipt) for receipt, _ in valid_entries}
     if len(identities) != 1:
         return None
-    authority_receipt = valid[-1]
+    authority_receipt, authority_comment = valid_entries[-1]
+    allow_legacy_terminal_lf = _legacy_terminal_lf_provenance(authority_comment)
     if (
         expected_repair_budget is not None
         and authority_receipt.get("repair_budget") != expected_repair_budget
     ):
         return None
     body = pr.get("body")
-    if isinstance(body, str) and _body_digest(body) not in {
-        authority_receipt.get("body_sha256"),
-        authority_receipt.get("neutralized_body_sha256"),
-    }:
+    if isinstance(body, str) and not any(
+        _matches_stored_body_digest(
+            body,
+            digest,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+        for digest in (
+            authority_receipt.get("body_sha256"),
+            authority_receipt.get("neutralized_body_sha256"),
+        )
+    ):
         if resolve_verified_merge_phase(
             comments,
             authority_receipt=authority_receipt,
@@ -404,6 +535,7 @@ def build_verified_merge_phase(
     authority_receipt: Mapping[str, object],
     phase: str,
     pr: Mapping[str, object],
+    authority_comment: Mapping[str, object] | None = None,
     closed_issues: Sequence[int] = (),
     reopened_unauthorized_issues: Sequence[int] = (),
 ) -> dict[str, object]:
@@ -435,12 +567,22 @@ def build_verified_merge_phase(
         if phase == "restored"
         else authority_receipt.get("neutralized_body_sha256")
     )
+    allow_legacy_terminal_lf = bool(
+        authority_comment is not None
+        and _comment_authenticates_legacy_authority(
+            authority_comment, authority_receipt
+        )
+    )
     if (
         not isinstance(body, str)
         or not isinstance(head, Mapping)
         or pr.get("number") != authority_receipt.get("pr_number")
         or head.get("sha") != authority_receipt.get("head_sha")
-        or _body_digest(body) != expected_body_digest
+        or not _matches_stored_body_digest(
+            body,
+            expected_body_digest,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
         or (
             merged_phase
             and (
@@ -466,7 +608,7 @@ def build_verified_merge_phase(
         raise ValueError("verified merge phase live state is malformed")
     receipt = {
         "authority_sha256": _canonical_digest(authority_receipt),
-        "body_sha256": _body_digest(body),
+        "body_sha256": expected_body_digest,
         "closed_issues": list(closed),
         "contract": VERIFIED_MERGE_PHASE_CONTRACT,
         "head_sha": authority_receipt["head_sha"],
@@ -572,11 +714,23 @@ def resolve_verified_merge_phase(
     if highest is None:
         return None
     current_body = pr.get("body")
-    current_digest = _body_digest(current_body) if isinstance(current_body, str) else None
-    if current_digest not in {
-        authority_receipt.get("body_sha256"),
-        authority_receipt.get("neutralized_body_sha256"),
-    } and not (allow_merged_body_drift and _complete_merged_identity(pr)):
+    allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
+        comments, authority_receipt
+    )
+    if (
+        not isinstance(current_body, str)
+        or not any(
+            _matches_stored_body_digest(
+                current_body,
+                digest,
+                allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            )
+            for digest in (
+                authority_receipt.get("body_sha256"),
+                authority_receipt.get("neutralized_body_sha256"),
+            )
+        )
+    ) and not (allow_merged_body_drift and _complete_merged_identity(pr)):
         return None
     return highest
 
