@@ -14,7 +14,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.builderops.ckm.contracts import CkmContractError, ENVELOPE_SCHEMA_VERSION, ResultEnvelope, canonical_digest, canonical_json
+from app.builderops.ckm.contracts import (
+    ACCESS_POLICY_VERSION,
+    ENVELOPE_SCHEMA_VERSION,
+    RESOURCE_SCHEMA_VERSION,
+    CkmContractError,
+    ResultEnvelope,
+    canonical_digest,
+    canonical_json,
+)
 from app.builderops.ckm.schema import CKM_SCHEMA_VERSION
 
 METRIC_REGISTRY_VERSION = 1
@@ -83,14 +91,72 @@ def _tagged_distribution(resources: list[Mapping[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _validate_metric_schema_bundle(payload: Mapping[str, Any]) -> None:
+    snapshot = payload["snapshot"]
+    expected_versions = {
+        "result.schema_version": (payload["schema_version"], ENVELOPE_SCHEMA_VERSION),
+        "snapshot.envelope_schema_version": (
+            snapshot["envelope_schema_version"],
+            ENVELOPE_SCHEMA_VERSION,
+        ),
+        "snapshot.resource_schema_version": (
+            snapshot["resource_schema_version"],
+            RESOURCE_SCHEMA_VERSION,
+        ),
+        "snapshot.ckm_schema_version": (
+            snapshot["ckm_schema_version"],
+            CKM_SCHEMA_VERSION,
+        ),
+        "snapshot.access_policy_version": (
+            snapshot["access_policy_version"],
+            ACCESS_POLICY_VERSION,
+        ),
+    }
+    expected_versions.update(
+        {
+            f"resources[{index}].schema_version": (
+                resource["schema_version"],
+                RESOURCE_SCHEMA_VERSION,
+            )
+            for index, resource in enumerate(payload["resources"])
+        }
+    )
+    mismatches = {
+        key: {"requested": requested, "supported": supported}
+        for key, (requested, supported) in expected_versions.items()
+        if requested != supported
+    }
+    inconsistencies: dict[str, dict[str, Any]] = {}
+    if payload["schema_version"] != snapshot["envelope_schema_version"]:
+        inconsistencies["result.snapshot.envelope_schema_version"] = {
+            "result": payload["schema_version"],
+            "snapshot": snapshot["envelope_schema_version"],
+        }
+    resource_version_mismatches = {
+        str(index): resource["schema_version"]
+        for index, resource in enumerate(payload["resources"])
+        if resource["schema_version"] != snapshot["resource_schema_version"]
+    }
+    if resource_version_mismatches:
+        inconsistencies["snapshot.resources.schema_version"] = {
+            "snapshot": snapshot["resource_schema_version"],
+            "resources": resource_version_mismatches,
+        }
+    if mismatches or inconsistencies:
+        raise CkmContractError(
+            "unsupported_metric_schema",
+            "metric cannot coerce an unknown or inconsistent query schema bundle",
+            {"mismatches": mismatches, "inconsistencies": inconsistencies},
+        )
+
+
 def build_observation(result: ResultEnvelope, *, metric_id: str = "capability_population", generated_at: str | None = None) -> dict[str, Any]:
     """Build deterministic semantic observation content from one Q1 result."""
     if not isinstance(result, ResultEnvelope):
         raise CkmContractError("unsupported_metric_semantics", "metric requires a supported complete query result", {})
-    definition = dict(metric_definition(metric_id))
     payload = result.to_dict()
-    if payload["schema_version"] != ENVELOPE_SCHEMA_VERSION or payload["snapshot"]["ckm_schema_version"] != CKM_SCHEMA_VERSION:
-        raise CkmContractError("unsupported_metric_schema", "metric cannot coerce an unknown query schema bundle", {})
+    _validate_metric_schema_bundle(payload)
+    definition = dict(metric_definition(metric_id))
     if payload["resource_type"] != "capability" or not payload["snapshot"]["completeness"]["complete"]:
         raise CkmContractError("unsupported_metric_semantics", "metric requires a complete capability snapshot", {})
     resources = payload["resources"]
@@ -158,8 +224,8 @@ class MetricRetentionStore:
 
     def retain(self, result: ResultEnvelope, *, metric_id: str = "capability_population", finding_evaluations: Mapping[str, Any] | None = None, retained_at: str | None = None, supersedes_sample_id: str | None = None) -> RetainedSample:
         """Persist only an already-returned result; this method never invokes Q1."""
-        self.initialize()
         observation = build_observation(result, metric_id=metric_id, generated_at=retained_at)
+        self.initialize()
         source = result.to_dict()
         source_bytes = canonical_json(source).encode("utf-8")
         source_digest = canonical_digest(source)

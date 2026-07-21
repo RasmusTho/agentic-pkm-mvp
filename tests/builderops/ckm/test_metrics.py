@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
-from app.builderops.ckm.contracts import CkmContractError, ErrorEnvelope, canonical_digest
+from app.builderops.ckm.contracts import (
+    ACCESS_POLICY_VERSION,
+    ENVELOPE_SCHEMA_VERSION,
+    RESOURCE_SCHEMA_VERSION,
+    CkmContractError,
+    ErrorEnvelope,
+    canonical_digest,
+)
 from app.builderops.ckm.metrics import METRIC_REGISTRY, MetricRetentionStore, build_observation, metric_definition
 from app.builderops.ckm.query_service import CkmQueryService
+from app.builderops.ckm.schema import CKM_SCHEMA_VERSION
 from app.builderops.ckm.store import CkmStore
 
 
@@ -462,6 +471,102 @@ def test_metric_version_and_semantics_mismatch_refuse(tmp_path: Path) -> None:
     with pytest.raises(CkmContractError) as semantics:
         build_observation(result)  # type: ignore[arg-type]
     assert semantics.value.code == "unsupported_metric_semantics"
+
+
+@pytest.mark.parametrize(
+    ("snapshot_field", "detail_key", "requested", "supported"),
+    (
+        (
+            "envelope_schema_version",
+            "snapshot.envelope_schema_version",
+            999,
+            ENVELOPE_SCHEMA_VERSION,
+        ),
+        (
+            "resource_schema_version",
+            "snapshot.resource_schema_version",
+            999,
+            RESOURCE_SCHEMA_VERSION,
+        ),
+        (
+            "ckm_schema_version",
+            "snapshot.ckm_schema_version",
+            999,
+            CKM_SCHEMA_VERSION,
+        ),
+        (
+            "access_policy_version",
+            "snapshot.access_policy_version",
+            "unknown-policy",
+            ACCESS_POLICY_VERSION,
+        ),
+    ),
+)
+def test_metric_snapshot_schema_bundle_refuses_unknown_versions(
+    tmp_path: Path,
+    snapshot_field: str,
+    detail_key: str,
+    requested: object,
+    supported: object,
+) -> None:
+    result = _result(tmp_path)
+    unsupported = replace(
+        result,
+        snapshot=replace(result.snapshot, **{snapshot_field: requested}),
+    )
+
+    with pytest.raises(CkmContractError) as refusal:
+        build_observation(unsupported)
+
+    assert refusal.value.code == "unsupported_metric_schema"
+    assert refusal.value.details["mismatches"][detail_key] == {
+        "requested": requested,
+        "supported": supported,
+    }
+
+
+def test_metric_schema_bundle_refuses_resource_dto_version_atomically(
+    tmp_path: Path,
+) -> None:
+    result = _result(tmp_path)
+    unsupported_resource = replace(result.resources[0], schema_version=999)
+    unsupported = replace(
+        result,
+        resources=(unsupported_resource, *result.resources[1:]),
+    )
+    retained = MetricRetentionStore(tmp_path / "unsupported-schema.sqlite")
+
+    with pytest.raises(CkmContractError) as refusal:
+        retained.retain(unsupported, retained_at="2026-07-21T00:00:00Z")
+
+    assert refusal.value.code == "unsupported_metric_schema"
+    assert refusal.value.details["mismatches"]["resources[0].schema_version"] == {
+        "requested": 999,
+        "supported": RESOURCE_SCHEMA_VERSION,
+    }
+    assert not retained.path.exists()
+
+
+def test_metric_schema_bundle_refuses_result_snapshot_envelope_inconsistency(
+    tmp_path: Path,
+) -> None:
+    result = _result(tmp_path)
+    inconsistent = replace(
+        result,
+        schema_version=998,
+        snapshot=replace(result.snapshot, envelope_schema_version=999),
+    )
+
+    with pytest.raises(CkmContractError) as refusal:
+        build_observation(inconsistent)
+
+    assert refusal.value.code == "unsupported_metric_schema"
+    assert refusal.value.details["inconsistencies"] == {
+        "result.snapshot.envelope_schema_version": {
+            "result": 998,
+            "snapshot": 999,
+        }
+    }
 
 
 def test_cli_measure_retains_only_after_public_query_result(tmp_path: Path) -> None:
