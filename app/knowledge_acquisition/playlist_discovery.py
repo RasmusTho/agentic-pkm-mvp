@@ -304,6 +304,10 @@ def poll_source(
 
     if current.collection_kind != V1_COLLECTION_KIND:
         raise V1InboxConfigurationError("V1 sync accepts only one inbox_playlist")
+    if current.collection_ref == "LL":
+        raise V1InboxConfigurationError(
+            "V1 Inbox must be an ordinary owned playlist; Liked Videos is unavailable"
+        )
     if not current.account_binding_id:
         return _degraded_result(
             current,

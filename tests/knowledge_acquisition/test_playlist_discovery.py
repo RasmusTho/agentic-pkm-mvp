@@ -274,6 +274,29 @@ def test_v1_selects_exactly_one_enabled_inbox(outbox: FakeOutboxConn) -> None:
     assert stored_liked.cursor == {}
     assert stored_liked.last_success_at is None
 
+    misbound_account = str(uuid.uuid4())
+    misbound = registry.register(
+        collection_kind="inbox_playlist",
+        collection_ref="LL",
+        account_binding_id=misbound_account,
+        title="Misbound Liked Videos",
+    )
+    misbound = registry.set_inbox(misbound_account, misbound.binding_id)
+    misbound_api = StubApiClient(_page(_item("pli-misbound", VIDEO_A)))
+    misbound_service = _service(
+        misbound_account,
+        registry,
+        AcquisitionRequests.for_runtime(),
+        misbound_api,
+    )
+    with pytest.raises(V1InboxConfigurationError, match="Liked Videos is unavailable"):
+        misbound_service.sync_now()
+    assert misbound_api.calls == []
+    stored_misbound = registry.get(misbound.binding_id)
+    assert stored_misbound is not None
+    assert stored_misbound.cursor == {}
+    assert stored_misbound.last_success_at is None
+
 
 def test_new_inbox_item_enqueues_once_at_production_call_site(
     outbox: FakeOutboxConn,
