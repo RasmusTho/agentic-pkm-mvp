@@ -1,4 +1,4 @@
-State: Target-state specification directory for the post-MVP CKM Measurement & Access capability. Backlog is filed as parent #3775 with children #3776-#3781. Q1a #3776, Q1b #3777, Q2 #3778, M1 #3779, O1a #3780, and O1b #3781 are terminal delivered. This docs-only promotion completes the O1a/child owner-doc promotion. Parent #3775 remains open and blocked pending its separate final acceptance/closure audit; child delivery does not itself claim parent acceptance. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138.
+State: Current-state delivered specification for the post-MVP CKM Measurement & Access capability. All six children under parent #3775 are terminally delivered, and the supported BuilderOps-only Q1, Q2, M1, and O1 capabilities have passed their acceptance ledger. Parent #3775 records the independent final verification/closure audit; this owner-doc promotion neither performs nor claims that lifecycle mutation. M2 and O2 remain unfiled and unauthorized, and #3972 remains a separate owner-value gate rather than a dependency. CKM remains non-authoritative projection/evidence and creates no Product/Runtime truth or decision authority. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the accepted post-MVP access, measurement, observation, dependency, and acceptance contract. Subordinate to ADR-0057 and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
@@ -9,13 +9,13 @@ Last reviewed: 2026-07-22
 
 # CKM Measurement & Access
 
-This specification defines how a successor capability will make the delivered Capability Knowledge Model safely consumable by machines and measurable without turning CKM projections into authority. It follows the accepted CKM MVP (#3138), the architecture audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md`, and BuilderOps inquiries `inq_20260715T062832Z_e73546a2` and `inq_20260715T090347Z_61c6d5e4` (both `consensus`). The later inquiry governs where the two inquiry handoffs differ, and the owner decisions recorded below now resolve its five policy gates.
+This specification defines the delivered successor capability that makes the Capability Knowledge Model safely consumable by machines and measurable without turning CKM projections into authority. It follows the accepted CKM MVP (#3138), the architecture audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md`, and BuilderOps inquiries `inq_20260715T062832Z_e73546a2` and `inq_20260715T090347Z_61c6d5e4` (both `consensus`). The later inquiry governs where the two inquiry handoffs differ, and the owner decisions recorded below resolve its five policy gates.
 
 Work classification: **Builder System / CES boundary**. CKM remains projection-only BuilderOps analysis. OEF may consume descriptive observations but gains no policy or control authority. Product/Runtime artifacts and GitHub remain read-only sources. Federation remains SFC/CES-owned, and Correctness Kernel drift remains a separate declared-state contract.
 
 ## Capability boundary
 
-Once parent acceptance is complete, the specified successor capability will provide:
+The accepted successor capability provides:
 
 - a transport-neutral, versioned CKM result/error envelope and resource DTOs;
 - rebuild-stable, non-reused public resource identity plus explicit rename/delete/split/merge alias or tombstone semantics;
@@ -197,18 +197,18 @@ implementation/test evidence only: it establishes neither trend nor cadence.
   Verify: `tests/builderops/ckm/test_observation_capture.py`; validation receipt on the successor parent
 - [x] O1b compares only compatible immutable observations and refuses every semantics-bearing mismatch; cadence and minimum-snapshot hypotheses remain explicitly unresolved.
   Verify: `tests/builderops/ckm/test_metric_comparison.py`; validation receipt on the successor parent
-- [ ] Every child has a delivery receipt, owner-doc resolution, transition-debt result, and local review/CI evidence; D11/D12 and unresolved learning candidates are terminally resolved.
+- [x] Every child has a delivery receipt, owner-doc resolution, transition-debt result, and local review/CI evidence; D11/D12 and unresolved learning candidates are terminally resolved.
   Verify: successor-parent closure ledger and child issue receipts
-- [ ] Owner-doc promotion states supported access/measurement truth only after all repo-verifiable acceptance criteria pass.
+- [x] Owner-doc promotion states supported access/measurement truth only after all repo-verifiable acceptance criteria pass.
   Verify: doc writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: State` plus post-merge owner-doc receipt
 
 ## Verification and acceptance path
 
-Each task ships its named focused tests, runs `ruff check app tests`, and passes current-SHA CI plus the local review gate. Every closure posts a receipt to the successor parent. The parent stays blocked/non-pickup until the full verification ledger, owner-doc resolutions, transition debt, D11/D12, and learning outcomes are resolved.
+Each task shipped its named focused tests, ran `ruff check app tests`, and passed current-SHA CI plus the local review gate. Every child closure posted a receipt to the successor parent. The parent remained blocked/non-pickup through resolution of the full verification ledger, owner-doc outcomes, transition debt, D11/D12, and learning outcomes; its explicit lifecycle closure is reserved for independent verification after this promotion.
 
 Live validation hub: [#3775](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3775). Children: Q1a #3776, Q1b #3777, Q2 #3778, M1 #3779, O1a #3780, O1b #3781. GitHub owns execution state; this directory owns the implementation contract.
 
-Future parent acceptance will not require a fixed observation duration or snapshot count. It will require the observation mechanism to be delivered and the evidence captured by that point to be reported truthfully. Any later feature proposal gets its own source-backed contract.
+Parent acceptance did not require a fixed observation duration or snapshot count. It required the observation mechanism to be delivered and the evidence captured by that point to be reported truthfully. Any later feature proposal gets its own source-backed contract.
 
 ## Source docs
 
