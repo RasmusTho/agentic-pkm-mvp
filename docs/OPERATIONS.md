@@ -252,6 +252,23 @@ Companion docs:
   Markdown read-back, mixed-language segments may route to different voices, and production
   deployment still depends on the Mac mini/local model health path.
 
+### Karakeep managed source service (KMA-02)
+- `docker-compose.karakeep.yml` is the repo-owned deployment for the self-hosted Karakeep
+  read-later source on the mac mini (Heimdal's external source dependency; ADR-0049 §1). It pins the
+  `karakeep`/`meilisearch` images, declares the durable `karakeep-data` / `karakeep-meilisearch-data`
+  volumes, health-checks both services, and binds to loopback only — there is no public ingress.
+- Secrets and the private endpoint ride the operator-owned, gitignored `config/karakeep.env`
+  (template: `config/karakeep.env.example`); the committed manifest and template carry no credential
+  or endpoint value.
+- Backup / update / rollback steps (and their verification checks) live in
+  `docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md :: Restart / Durability Posture`.
+- `app.heimdal.karakeep_service.assert_fetch_ready` is the fail-loud gate: Heimdal acquisition is
+  refused when a required config reference is absent or service health is red, while Mimer replay of
+  already-published evidence is unaffected.
+- Scope note: this ships the deployment manifest/runbook and the fetch-readiness gate only. The live
+  acquisition pipeline (Heimdal fetch → published evidence → Mimer candidates) is not accepted as
+  shipped until the parent Karakeep acquisition feature (#3367) completes its acceptance slice.
+
 Detailed startup, local topology, and recovery procedures live in `docs/INFRASTRUCTURE.md`.
 Task-specific operator walkthroughs live in `docs/runbooks/`.
 

@@ -45,6 +45,37 @@ Service restart preserves database/assets volumes. A failed migration/update lea
 version recoverable under the runbook. Worker cursor state is separate and is not stored in the
 container lifecycle.
 
+The repo-owned manifest is [`docker-compose.karakeep.yml`](../../docker-compose.karakeep.yml): a
+pinned image (`ghcr.io/karakeep-app/karakeep:<version>`), the durable named volumes `karakeep-data`
+(bookmarks/assets) and `karakeep-meilisearch-data` (search index), a web-root healthcheck, and
+`restart: unless-stopped`. Every secret and the private endpoint ride the operator-owned, gitignored
+`config/karakeep.env` (template: [`config/karakeep.env.example`](../../config/karakeep.env.example));
+the committed manifest and template carry no credential or endpoint value. The service binds to
+loopback only — there is no public ingress. The fail-loud gate
+`app.heimdal.karakeep_service.assert_fetch_ready` refuses Heimdal acquisition when a required config
+reference is absent or health is red, while Mimer replay of already-published evidence is unaffected.
+
+### Backup / update / rollback runbook
+
+All commands run from the repo root on the mac mini with
+`docker compose -f docker-compose.karakeep.yml` (abbreviated `compose` below).
+
+- **Backup (durable data):** the durable data is the named volumes `karakeep-data` and
+  `karakeep-meilisearch-data`. Snapshot them while the service is stopped or quiescent:
+  `compose stop` then, for each volume,
+  `docker run --rm -v karakeep-data:/data -v "$PWD/backup":/backup alpine tar czf /backup/karakeep-data.tgz -C /data .`
+  (repeat for `karakeep-meilisearch-data`). **Verification check:** confirm each archive is non-empty
+  and lists entries — `tar tzf backup/karakeep-data.tgz | head` — before treating the backup as good.
+- **Update:** bump the pinned image tag in `docker-compose.karakeep.yml`, take a fresh backup (above),
+  then `compose pull && compose up -d`. **Verification check:** `compose ps` shows the service
+  `healthy` and `docker inspect --format '{{.Config.Image}}' <container>` reports the new pinned tag.
+  A half-upgraded or unhealthy service is caught here (and by `assert_fetch_ready`) before any fetch.
+- **Rollback:** restore the previous pinned tag in the manifest and `compose up -d`; if data must be
+  reverted, `compose down` (never `-v`, which would delete the durable volumes), restore the volume
+  archives with the inverse `tar x` into each named volume, then `compose up -d`. **Verification
+  check:** `compose ps` reports `healthy` and a spot read in the Karakeep UI shows the expected
+  bookmarks. The durable volumes survive `compose down`/restart; only `down -v` destroys them.
+
 ## Acceptance Criteria
 
 - [ ] Deployment pins an explicit image/version and declares durable volumes, healthcheck, and

@@ -9,6 +9,9 @@ __pycache__/
 *.pyc
 .env
 .env.*.local
+# Operator-owned Karakeep managed-service config (KMA-02); the .example template
+# stays tracked. Never commit the filled-in secrets/endpoint file.
+config/karakeep.env
 env/
 .venv*
 .idea/
