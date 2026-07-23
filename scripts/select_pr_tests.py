@@ -113,7 +113,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "docs/builderops/",
             "importlinter.ini",
         ),
-        ("tests/builderops", "tests/dispatcher", "tests/governance"),
+        (
+            "tests/builderops",
+            "tests/dispatcher",
+            "tests/governance",
+            "tests/architecture/test_builderops_store_boundary.py",
+        ),
     ),
     (
         "settings",
