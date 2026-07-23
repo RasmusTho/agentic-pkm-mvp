@@ -91,6 +91,35 @@ def test_exact_id_lookup_and_complete_bounded_capture(tmp_path: Path) -> None:
     assert service.get_capability("ckm_capability_unknown").to_dict()["error"]["code"] == "missing_resource"
 
 
+def test_capability_lookup_requires_active_public_identity(tmp_path: Path) -> None:
+    store, confirmed, candidate = _store(tmp_path)
+    service = CkmQueryService(store.db_path)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "UPDATE ckm_public_identity SET status = 'tombstone', tombstoned_at = '2026-07-23T00:00:00Z' WHERE public_id = ?",
+            (confirmed.public_id,),
+        )
+    tombstoned = service.get_capability(confirmed.public_id).to_dict()
+    assert tombstoned["error"]["code"] == "tombstoned_resource"
+    selected = service.list_resources(
+        "capability",
+        filters={"public_ids": [candidate.public_id, confirmed.public_id]},
+    ).to_dict()
+    assert selected["error"]["code"] == "tombstoned_resource"
+    assert "resources" not in selected
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("DELETE FROM ckm_public_identity WHERE public_id = ?", (candidate.public_id,))
+    missing = service.get_capability(candidate.public_id).to_dict()
+    assert missing["error"]["code"] == "missing_resource"
+    selected_missing = service.list_resources(
+        "capability",
+        filters={"public_ids": [candidate.public_id]},
+    ).to_dict()
+    assert selected_missing["error"]["code"] == "missing_resource"
+    assert "resources" not in selected_missing
+
+
 def test_query_path_is_read_only_and_side_effect_free(tmp_path: Path) -> None:
     store, _, _ = _store(tmp_path)
     before = _storage_fingerprint(store.db_path)

@@ -13,6 +13,10 @@ can_parallelize_with: []
 
 Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
 
+State: **Implemented.** Delivered by
+[`RasmusTho/bifrost` PR #24](https://github.com/RasmusTho/bifrost/pull/24)
+(issue #14, 2026-07-21).
+
 ## Purpose
 
 Topology C hosts two bounded clients in one shell; only Mimer exists so far. This task creates the
@@ -53,19 +57,19 @@ keeps the future app-split a repackaging.
 
 ## Acceptance Criteria
 
-- [ ] Heimdal client area exists in its own directory importing only shell modules +
+- [x] Heimdal client area exists in its own directory importing only shell modules +
   `YggdrasilCore` (no Mimer lens imports). `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/HeimdalBoundaryTests.swift::testHeimdalSourcesImportNoMimerInternals`
   (new; scans `Heimdal/` sources' import/type references for `Mimer` symbols).
-- [ ] Capture-folder pick persists a security-scoped bookmark distinct from vault bookmarks and
+- [x] Capture-folder pick persists a security-scoped bookmark distinct from vault bookmarks and
   survives relaunch, with stale-bookmark refresh. `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/CaptureFolderBindingTests.swift::{testBookmarkPersistsAndResolves,testStaleBookmarkRefreshes}`
   (new).
-- [ ] The session state machine enforces its transition table and rejects illegal transitions.
+- [x] The session state machine enforces its transition table and rejects illegal transitions.
   `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/CaptureSessionModelTests.swift::testTransitionTableAndIllegalMoves`
   (new).
-- [ ] Shell navigation reaches the Heimdal area on iPhone without regressing existing journeys.
+- [x] Shell navigation reaches the Heimdal area on iPhone without regressing existing journeys.
   `Verify:` bifrost `Yggdrasil/YggdrasilUITests/HeimdalShellUITests.swift::testHeimdalAreaReachable`
   (new) + existing UI tests green.
 
@@ -89,6 +93,4 @@ keeps the future app-split a repackaging.
 
 ## Related GitHub Issues
 
-One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:ready`), linking hub #3026
-and this spec file. TCD hint: Sonnet / medium effort — pattern reuse plus a clean state machine;
-no novel decisions.
+Delivered by `RasmusTho/bifrost` issue #14 / PR #24, linking hub #3026 and this spec file.

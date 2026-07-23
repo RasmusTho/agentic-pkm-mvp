@@ -270,9 +270,21 @@ class CkmQueryService:
                 values = filters["public_ids"]
                 placeholders = ",".join("?" for _ in values)
                 rows = conn.execute(
-                    f"SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment FROM ckm_capability AS capability WHERE capability.public_id IN ({placeholders}) ORDER BY capability.public_id",
+                    f"""SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment
+                    FROM ckm_capability AS capability
+                    JOIN ckm_public_identity AS identity
+                      ON identity.public_id = capability.public_id
+                     AND identity.resource_type = 'capability'
+                     AND identity.status = 'active'
+                    WHERE capability.public_id IN ({placeholders})
+                    ORDER BY capability.public_id
+                    """,
                     tuple(values),
                 ).fetchall()
+                returned = {str(row["public_id"]) for row in rows}
+                for requested in values:
+                    if requested not in returned:
+                        self._raise_missing_capability_identity(conn, requested)
             elif "subtree_root_public_id" in filters:
                 rows = conn.execute(
                     """
@@ -282,18 +294,39 @@ class CkmQueryService:
                         SELECT child.id FROM ckm_capability AS child JOIN subtree ON child.parent_id = subtree.id
                     )
                     SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment
-                    FROM ckm_capability AS capability JOIN subtree ON subtree.id = capability.id
+                    FROM ckm_capability AS capability
+                    JOIN subtree ON subtree.id = capability.id
+                    JOIN ckm_public_identity AS identity
+                      ON identity.public_id = capability.public_id
+                     AND identity.resource_type = 'capability'
+                     AND identity.status = 'active'
                     ORDER BY capability.public_id
                     """,
                     (filters["subtree_root_public_id"],),
                 ).fetchall()
+                if not rows:
+                    self._raise_missing_capability_identity(conn, str(filters["subtree_root_public_id"]))
             else:
                 rows = conn.execute(
-                    "SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment FROM ckm_capability AS capability ORDER BY capability.public_id"
+                    """SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment
+                    FROM ckm_capability AS capability
+                    JOIN ckm_public_identity AS identity
+                      ON identity.public_id = capability.public_id
+                     AND identity.resource_type = 'capability'
+                     AND identity.status = 'active'
+                    ORDER BY capability.public_id
+                    """
                 ).fetchall()
             if len(rows) > self._capture_limit:
                 raise CkmContractError("snapshot_too_large", "filtered capability snapshot exceeds configured bound", {"limit": self._capture_limit, "total": len(rows)})
             if not filters and len(rows) != total:
+                active_total = self._active_capability_identity_count(conn)
+                if active_total != total:
+                    raise CkmContractError(
+                        "unsupported_store",
+                        "CKM capability public identities do not match capability rows",
+                        {"declared_total": total, "active_identity_total": active_total},
+                    )
                 raise CkmContractError(
                     "incomplete_snapshot",
                     "complete capability snapshot could not be captured",
@@ -301,25 +334,19 @@ class CkmQueryService:
                 )
         else:
             rows = conn.execute(
-                "SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment FROM ckm_capability AS capability WHERE capability.public_id = ? ORDER BY capability.public_id",
+                """SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment
+                FROM ckm_capability AS capability
+                JOIN ckm_public_identity AS identity
+                  ON identity.public_id = capability.public_id
+                 AND identity.resource_type = 'capability'
+                 AND identity.status = 'active'
+                WHERE capability.public_id = ?
+                ORDER BY capability.public_id
+                """,
                 (public_id,),
             ).fetchall()
             if not rows:
-                identity = conn.execute(
-                    "SELECT status FROM ckm_public_identity WHERE public_id = ? AND resource_type = 'capability'",
-                    (public_id,),
-                ).fetchone()
-                if identity is not None and identity["status"] == "tombstone":
-                    successors = conn.execute(
-                        "SELECT successor_public_id, relation FROM ckm_identity_successor WHERE source_public_id = ? ORDER BY successor_public_id",
-                        (public_id,),
-                    ).fetchall()
-                    raise CkmContractError(
-                        "tombstoned_resource",
-                        "CKM capability public ID is tombstoned",
-                        {"public_id": public_id, "successors": [dict(row) for row in successors]},
-                    )
-                raise CkmContractError("missing_resource", "CKM capability public ID was not found", {"public_id": public_id})
+                self._raise_missing_capability_identity(conn, public_id)
         # A state revision must be stable over the complete read set.  The
         # transaction gives the snapshot guarantee; the second read makes an
         # accidental mixed-epoch fixture fail closed rather than look valid.
@@ -352,6 +379,39 @@ class CkmQueryService:
         snapshot = SnapshotManifest.build(state=state, taxonomy_digest=canonical_digest(taxonomy), watermarks=watermarks, provenance=provenance, completeness=completeness, read_set=read_set)
         return ResultEnvelope(resource_type="capability", query_digest=canonical_query_digest(query), snapshot=snapshot, resources=resources)
 
+    @staticmethod
+    def _active_capability_identity_count(conn: sqlite3.Connection) -> int:
+        return int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM ckm_capability AS capability
+                JOIN ckm_public_identity AS identity
+                  ON identity.public_id = capability.public_id
+                 AND identity.resource_type = 'capability'
+                 AND identity.status = 'active'
+                """
+            ).fetchone()[0]
+        )
+
+    @staticmethod
+    def _raise_missing_capability_identity(conn: sqlite3.Connection, public_id: str) -> None:
+        identity = conn.execute(
+            "SELECT status FROM ckm_public_identity WHERE public_id = ? AND resource_type = 'capability'",
+            (public_id,),
+        ).fetchone()
+        if identity is not None and identity["status"] == "tombstone":
+            successors = conn.execute(
+                "SELECT successor_public_id, relation FROM ckm_identity_successor WHERE source_public_id = ? ORDER BY successor_public_id",
+                (public_id,),
+            ).fetchall()
+            raise CkmContractError(
+                "tombstoned_resource",
+                "CKM capability public ID is tombstoned",
+                {"public_id": public_id, "successors": [dict(row) for row in successors]},
+            )
+        raise CkmContractError("missing_resource", "CKM capability public ID was not found", {"public_id": public_id})
+
     def _read_related_resources(self, conn: sqlite3.Connection, *, resource_type: str, filters: Mapping[str, Any], query: Mapping[str, Any]) -> ResultEnvelope:
         table = {
             "artifact": "ckm_artifact",
@@ -373,9 +433,11 @@ class CkmQueryService:
             parameters = (filters["capability_public_id"],)
         else:
             sql = f"SELECT resource.* FROM {table} AS resource ORDER BY resource.public_id"
+        count_sql = f"SELECT COUNT(*) FROM ({sql.rsplit(' ORDER BY ', 1)[0]}) AS bounded_scope"
+        selected_total = int(conn.execute(count_sql, parameters).fetchone()[0])
+        if selected_total > self._capture_limit:
+            raise CkmContractError("snapshot_too_large", "complete filtered snapshot exceeds configured bound", {"limit": self._capture_limit, "total": selected_total, "resource_type": resource_type})
         rows = conn.execute(sql, parameters).fetchall()
-        if len(rows) > self._capture_limit:
-            raise CkmContractError("snapshot_too_large", "complete filtered snapshot exceeds configured bound", {"limit": self._capture_limit, "total": len(rows), "resource_type": resource_type})
         end_state = conn.execute("SELECT epoch, state_revision FROM ckm_state WHERE singleton = 1").fetchone()
         if end_state is None or (str(end_state["epoch"]), int(end_state["state_revision"])) != (state.epoch, state.state_revision):
             raise CkmContractError("mixed_epoch", "CKM state changed during snapshot capture", {})
