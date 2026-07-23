@@ -9,8 +9,14 @@ pytestmark = pytest.mark.not_pg
 
 
 _FORBIDDEN_LITERALS = [
+    # The bare word "Inbox" (without the vault folder's emoji prefix) is not
+    # included here: it collides with unrelated domain vocabulary (e.g. a
+    # source platform's own "Inbox playlist" concept in
+    # app/knowledge_acquisition/playlist_discovery.py) and, per the repo's
+    # actual default vault layout (app/settings/default-vault-layout.yaml),
+    # the real vault literal is always emoji-prefixed -- the bare form adds
+    # no additional protection.
     "📥 Inbox",
-    "Inbox",
     "⚙️ System",
     "System-changes.md",
 ]
