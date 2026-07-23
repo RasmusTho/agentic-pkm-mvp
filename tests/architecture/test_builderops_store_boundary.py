@@ -67,6 +67,9 @@ VAULT_STORE_ALLOWLIST: frozenset[str] = frozenset(
         "app/builderops/cutover_evidence.py",  # #3686 audited one-time receipt producer/validator
         "app/builderops/ckm/store.py",  # CKM receipt store built on the Vault store
         "app/builderops/ckm/query_service.py",  # CKM projection-only read path: I-MA11 requires direct SQLite mode=ro
+        "app/builderops/ckm/metrics.py",  # outer adapter over query_service; own small versioned SQLite receipt store, non-authoritative
+        "app/builderops/ckm/comparison.py",  # fail-closed, descriptive-only comparison of retained metrics observations
+        "app/builderops/ckm/observation_capture.py",  # privacy-safe observations over already-returned CKM outcomes; own adjacent SQLite store, no policy/promotion authority
     }
 )
 
