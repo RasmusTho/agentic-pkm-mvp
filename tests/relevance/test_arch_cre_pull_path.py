@@ -60,10 +60,9 @@ def test_moment_materialization_is_governed() -> None:
 
 def test_glance_now_surface_is_read_only_pull() -> None:
     """Arrow 2 is pull-only: ``/api/companion/now`` exposes GET, never a write verb."""
+    from tests._route_introspection import openapi_paths
 
-    methods: set[str] = set()
-    for route in fastapi_app.routes:
-        if getattr(route, "path", None) == "/api/companion/now":
-            methods |= set(getattr(route, "methods", set()) or set())
+    operations = openapi_paths(fastapi_app).get("/api/companion/now", {})
+    methods = {method.upper() for method in operations}
     assert methods, "the glance /now route must be registered"
     assert methods <= {"GET", "HEAD", "OPTIONS"}, f"glance must be read-only, got {methods}"
