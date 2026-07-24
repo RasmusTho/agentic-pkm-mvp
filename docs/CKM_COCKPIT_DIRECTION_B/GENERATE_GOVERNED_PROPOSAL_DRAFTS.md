@@ -102,7 +102,9 @@ Issue contract through the normal repo process.
 
 ## Related GitHub Issues
 
-Create one child under the Direction B parent, dependency-blocked on CKM-DB-04. Cheapest acceptable
-TCD route: **Terra/high** because the implementation is deterministic presentation work but has a
-high persuasion/authority-boundary risk; escalate to Sol/high if any action, PromotionIntent, or
-GitHub integration is proposed.
+Live child [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085) under parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` on CKM-DB-04
+[#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084). Cheapest acceptable TCD route:
+**Terra/high** because the implementation is deterministic presentation work but has a high
+persuasion/authority-boundary risk; escalate to Sol/high if any action, PromotionIntent, or GitHub
+integration is proposed.

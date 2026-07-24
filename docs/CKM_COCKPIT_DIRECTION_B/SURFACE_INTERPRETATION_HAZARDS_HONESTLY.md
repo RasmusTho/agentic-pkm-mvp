@@ -95,7 +95,9 @@ renderer causal or backlog authority.
 
 ## Related GitHub Issues
 
-Create one child under the Direction B parent, dependency-blocked on CKM-DB-01. Cheapest acceptable
-TCD route: **Terra/high** because generated interpretation can create persuasive false authority and
-requires multi-fixture rhetoric scoping; escalate to Sol/high if source-vs-generated-copy boundaries
-cannot be isolated deterministically.
+Live child [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082) under parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` on CKM-DB-01
+[#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081). Cheapest acceptable TCD route:
+**Terra/high** because generated interpretation can create persuasive false authority and requires
+multi-fixture rhetoric scoping; escalate to Sol/high if source-vs-generated-copy boundaries cannot
+be isolated deterministically.

@@ -1,4 +1,4 @@
-State: Target-state specification directory for CKM Cockpit Direction B. Owner Gate A authorized bounded design and feature breakdown on 2026-07-24; this docs-only specification enacts no renderer, CLI, retention, comparison, proposal, or GitHub behavior. Filing follows merge. Implementation is dependency-blocked on delivery of `docs/CKM_EVIDENCE_PROFILE/README.md` Phase 1 so this capability cannot preserve or recreate the scalar/maturity-band surface already ratified for retirement.
+State: Filed target-state specification directory for CKM Cockpit Direction B. Owner Gate A authorized bounded design and feature breakdown on 2026-07-24; parent validation hub [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) and children #4081–#4086 are open with `agent:blocked`. This docs-only specification and its Issues enact no renderer, CLI, retention, comparison, or proposal behavior. Implementation remains dependency-blocked on delivery of `docs/CKM_EVIDENCE_PROFILE/README.md` Phase 1 so this capability cannot preserve or recreate the scalar/maturity-band surface already ratified for retirement.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the target-state Direction B cockpit boundary, task decomposition, interaction-safety invariants, and acceptance path. Subordinate to ADR-0057, the delivered CKM MVP and Measurement & Access contracts, the ratified CKM Evidence Profile Phase 1 contract, and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
@@ -60,7 +60,7 @@ It authorizes bounded Direction B design and feature breakdown only.
 
 The Claude Design Direction B export supplied to the coordinator on 2026-07-24 is supporting design
 input. The prototype HTML and generated `support.js` are not production dependencies and must not
-be copied. This merged specification, current owner contracts, and the future Issue/PR chain are
+be copied. This merged specification, current owner contracts, and the live Issue/PR chain are
 authoritative when design prose and repo truth differ.
 
 ## Live reconciliation ledger
@@ -186,21 +186,22 @@ through `app/builderops/ckm/overview_html.py` and
 - [ ] CKM Evidence Profile Phase 1 is delivered before Direction B implementation begins.
   Verify: closed Evidence Profile parent/children plus a terminal real-store receipt at `docs/CKM_EVIDENCE_PROFILE/README.md :: Verification and acceptance path`
 - [ ] All six child contracts pass their named tests, current-SHA CI, and local review gate.
-  Verify: child PR delivery receipts linked from the future parent issue
+  Verify: child PR delivery receipts linked from parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080)
 - [ ] The finished cockpit answers the four fixed questions without ranking, causality, authority, or mutation.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_answers_fixed_owner_questions_without_authority`
 - [ ] O1b comparison and all refusal states are exercised through the production CLI/render call site.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_cli_renders_comparison_and_refusal_states`
 - [ ] JS-off and print receipts prove full-content preservation.
-  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_progressive_enhancement_keeps_full_source_content`; manual PDF receipt on the future parent issue
+  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_progressive_enhancement_keeps_full_source_content`; manual PDF receipt on parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080)
 - [ ] No owner doc claims Direction B is supported before all child and parent acceptance checks pass.
   Verify: post-merge owner-doc receipts on every child and final promotion diff at `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
 
 ## Verification, validation, and owner-doc promotion
 
 Each child runs its exact `Verify:` targets, the full focused CKM suite, `ruff check app tests`,
-`mypy app`, current-head CI, and the independent local review gate. The future parent issue is the
-live validation hub. Each child posts a short receipt containing exact PR, merge SHA, tests,
+`mypy app`, current-head CI, and the independent local review gate. Parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is the live validation hub. Each
+child posts a short receipt containing exact PR, merge SHA, tests,
 comparison/refusal or visual evidence, owner-doc outcome, and transition-debt outcome.
 
 The final child records a deterministic HTML digest and a manual PDF receipt proving that trust,
@@ -211,10 +212,25 @@ target-state linkage to supported Direction B truth.
 
 ## Relationship to GitHub issues
 
-**Not yet filed.** This directory ships first as a docs-only specification. After the specification
-PR merges, the coordinator creates one blocked validation-parent issue and six dependency-ordered
-children from the stable `origin/main` anchors, then reconciles this README and
-`PARENT_FEATURE_ISSUE.md` with the live identities in a separate docs-authoring PR.
+The live execution chain is serialized and currently blocked:
+
+1. Parent validation hub [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) —
+   `agent:blocked`; never a pickup Issue.
+2. CKM-DB-01 [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081) —
+   `agent:blocked` on CKM Evidence Profile Phase 1.
+3. CKM-DB-02 [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082) —
+   `agent:blocked` on #4081.
+4. CKM-DB-03 [#4083](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4083) —
+   `agent:blocked` on #4082.
+5. CKM-DB-04 [#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084) —
+   `agent:blocked` on #4083.
+6. CKM-DB-05 [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085) —
+   `agent:blocked` on #4084.
+7. CKM-DB-06 [#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086) —
+   `agent:blocked` on #4085.
+
+GitHub is the live backlog and validation surface. These docs own stable target-state intent,
+invariants, and task shape; Issue labels and receipts own current pickup/delivery truth.
 
 ## Source docs
 

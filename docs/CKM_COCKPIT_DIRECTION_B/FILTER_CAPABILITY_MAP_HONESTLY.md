@@ -108,7 +108,9 @@ lose authority-bearing work.
 
 ## Related GitHub Issues
 
-Create one child under the Direction B parent, dependency-blocked on CKM-DB-03. Cheapest acceptable
-TCD route: **Terra/high** because the JavaScript is small but the security/progressive-enhancement
-contract and production-call-site enforcement need careful review; escalate to Sol/high for any
-request to add persistence, network, clipboard, URL state, or a second script.
+Live child [#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084) under parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` on CKM-DB-03
+[#4083](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4083). Cheapest acceptable TCD route:
+**Terra/high** because the JavaScript is small but the security/progressive-enhancement contract and
+production-call-site enforcement need careful review; escalate to Sol/high for any request to add
+persistence, network, clipboard, URL state, or a second script.
