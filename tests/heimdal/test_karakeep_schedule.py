@@ -170,6 +170,17 @@ def test_constituent_leases_are_independent() -> None:
     assert consumer.lease_conflict is False and consumer.ran is True
 
 
+def test_same_holder_reentry_is_rejected_without_run_token() -> None:
+    store = LeaseStore()
+    first = store.acquire(PRODUCER_LEASE, "stable-holder", ttl_seconds=90, now=100.0)
+    second = store.acquire(PRODUCER_LEASE, "stable-holder", ttl_seconds=90, now=101.0)
+
+    assert first is not None
+    assert second is None
+    store.release(PRODUCER_LEASE, "stable-holder")
+    assert store.acquire(PRODUCER_LEASE, "stable-holder", ttl_seconds=90, now=102.0) is not None
+
+
 # ---------------------------------------------------------------------------
 # AC3
 # ---------------------------------------------------------------------------

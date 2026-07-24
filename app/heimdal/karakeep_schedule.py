@@ -87,7 +87,10 @@ class LeaseStore:
     def acquire(self, key: str, holder: str, *, ttl_seconds: float, now: float) -> Optional[Lease]:
         with self._lock:
             existing = self._leases.get(key)
-            if existing is not None and existing.expires_at > now and existing.holder != holder:
+            # A holder identifies a scheduler side, not an individual run.  A
+            # same-holder re-entry is still overlap until a run-token renewal
+            # protocol exists, so it must not replace the live lease.
+            if existing is not None and existing.expires_at > now:
                 return None
             lease = Lease(key=key, holder=holder, expires_at=now + ttl_seconds)
             self._leases[key] = lease

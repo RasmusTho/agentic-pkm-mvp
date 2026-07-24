@@ -54,6 +54,7 @@ class _FakeKarakeep:
 
     def __init__(self, pages: list[list[dict[str, Any]]]) -> None:
         self._pages = pages
+        self.highlights: list[dict[str, Any]] = []
         self.fail_pages: dict[int, int] = {}  # page index -> HTTP status
         self.requests: list[httpx.Request] = []
 
@@ -63,6 +64,10 @@ class _FakeKarakeep:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        if request.url.path == "/":
+            return httpx.Response(200, request=request, text="ok")
+        if request.url.path.endswith("/api/v1/highlights"):
+            return httpx.Response(200, request=request, json={"highlights": self.highlights, "nextCursor": None})
         idx = self._index(request)
         if idx in self.fail_pages:
             # A provider error body that embeds secret-looking material; the
@@ -133,6 +138,73 @@ def _by_episode(payloads: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]
     for p in payloads:
         out.setdefault(p["episode_id"], []).append(p)
     return out
+
+
+def test_fetches_bookmark_highlights_from_highlights_api() -> None:
+    fake = _FakeKarakeep([[_link("item-highlighted", "https://example.com/a", note="saved note")]])
+    fake.highlights = [{"bookmarkId": "item-highlighted", "content": "important passage"}]
+
+    result = _adapter(fake).acquire()
+
+    assert len(result.published) == 1
+    payload = _by_episode(_payloads())["karakeep:item-highlighted"][0]
+    assert payload["content"] == "saved note\n\nimportant passage"
+    assert payload["content_structure"]["karakeep"]["highlights"] == ["important passage"]
+    assert any(request.url.path.endswith("/api/v1/highlights") for request in fake.requests)
+
+
+def test_disappeared_bookmark_publishes_tombstone_revision() -> None:
+    cursor = KarakeepProducerCursor()
+    first = _adapter(_FakeKarakeep([[_link("item-gone", "https://example.com/a")]]), cursor=cursor).acquire()
+    second = _adapter(_FakeKarakeep([[]]), cursor=cursor).acquire()
+
+    assert len(first.published) == 1
+    assert len(second.published) == 1
+    payloads = _by_episode(_payloads())["karakeep:item-gone"]
+    assert payloads[-1]["content"] is None
+    assert payloads[-1]["content_structure"]["karakeep"]["tombstone"] is True
+    assert payloads[-1]["supersedes"] == first.published[0]
+
+
+def test_resumed_partial_scan_never_tombstones_unseen_prior_pages() -> None:
+    cursor = KarakeepProducerCursor()
+    initial = _FakeKarakeep(
+        [
+            [_link("item-a", "https://example.com/a")],
+            [_link("item-b", "https://example.com/b")],
+        ]
+    )
+    initial.fail_pages = {1: 503}
+    _adapter(initial, cursor=cursor).acquire()
+
+    resumed = _adapter(
+        _FakeKarakeep([[_link("item-a", "https://example.com/a")], [_link("item-b", "https://example.com/b")]]),
+        cursor=cursor,
+    ).acquire()
+
+    assert all(
+        payload["content_structure"]["karakeep"]["tombstone"] is False
+        for payload in _payloads()
+    )
+    assert len(resumed.published) == 1
+
+
+def test_adapter_calls_fetch_readiness_gate_before_source_egress() -> None:
+    fake = _FakeKarakeep([[_link("item-1", "https://example.com/a")]])
+    calls: list[str] = []
+
+    def ready() -> None:
+        calls.append("ready")
+        assert fake.requests == []
+
+    adapter = KarakeepAdapter(
+        config=KarakeepConfig(base_url=_BASE_URL, source_id="karakeep-test"),
+        token_provider=StaticKarakeepToken(_SECRET_TOKEN),
+        http=fake.client(),
+        fetch_ready=ready,
+    )
+    adapter.acquire()
+    assert calls == ["ready"]
 
 
 # ---------------------------------------------------------------------------

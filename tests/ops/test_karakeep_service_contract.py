@@ -189,3 +189,9 @@ def test_service_manifest_is_health_checked_and_secret_free() -> None:
         assert "KARAKEEP_API_TOKEN" in str(exc)
     else:  # pragma: no cover - the token is absent, so the gate must raise
         raise AssertionError("expected a config error for the absent token reference")
+
+
+def test_env_template_includes_required_server_url_placeholder() -> None:
+    example_text = _ENV_EXAMPLE.read_text(encoding="utf-8")
+    assert "NEXTAUTH_URL=http://127.0.0.1:3000" in example_text
+    assert "REPLACE_ME" not in example_text.split("NEXTAUTH_URL=", 1)[1].splitlines()[0]
