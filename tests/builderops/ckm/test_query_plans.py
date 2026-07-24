@@ -248,3 +248,24 @@ def test_query_optimization_cannot_weaken_q1_bounds(tmp_path: Path) -> None:
     assert complete["snapshot"]["access_policy_version"] == ACCESS_POLICY_VERSION
     mixed = _mixed_epoch_payload(store.db_path)
     assert mixed["error"]["code"] == "mixed_epoch" and "resources" not in mixed
+
+
+def test_related_resource_bounds_refuse_before_materializing_rows(tmp_path: Path) -> None:
+    store, capabilities, _, _ = _populated(tmp_path, count=3)
+    statements: list[str] = []
+    original = sqlite3.connect
+
+    def connect(uri: str) -> sqlite3.Connection:
+        conn = original(uri, uri=True)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    service = CkmQueryService(store.db_path, capture_limit=1, _connection_factory=connect)
+    result = service.list_resources("evidence_edge", filters={"capability_public_id": capabilities[0].public_id}).to_dict()
+    assert result["resources"]
+
+    oversized = service.list_resources("artifact").to_dict()
+    assert oversized["error"]["code"] == "snapshot_too_large"
+    assert "resources" not in oversized
+    after_error = statements[statements.index(next(item for item in statements if "COUNT(*) FROM (SELECT resource.* FROM ckm_artifact" in item)) :]
+    assert not any("SELECT resource.* FROM ckm_artifact" in item for item in after_error[1:])

@@ -62,8 +62,10 @@ end-to-end no-loss.
 
 - [x] Recording continues across backgrounding (background audio mode active). `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/CaptureRecorderTests.swift::testBackgroundTransitionKeepsSessionRecording`
-  (new; state-machine + session-config level) plus the walkthrough step in HCAP-09 for the
-  on-device truth.
+  (new; state-machine + session-config level).
+- [ ] Physical-device background/lock-screen and interruption behavior is confirmed by the
+  operator walkthrough. `Verify:` HCAP-09 walkthrough receipt; this is device truth, not part of
+  the HCAP-02 implementation receipt.
 - [x] Interruption pauses; resume resumes; abandonment finalizes a complete segment of captured
   audio. `Verify:` bifrost
   `CaptureRecorderTests.swift::{testInterruptionPausesAndResumes,testAbandonedSessionFinalizesSegment}`
