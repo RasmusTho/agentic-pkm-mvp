@@ -58,11 +58,10 @@ The owner Gate A receipt is
 [#3972 comment 5066973510](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3972#issuecomment-5066973510).
 It authorizes bounded Direction B design and feature breakdown only.
 
-Claude Design Direction B artifacts under
-`/Users/rasmus/Desktop/ckm-direction-b-continuation/claude-design-response/design-output-b/`
-are supporting design input. The prototype HTML and generated `support.js` are not production
-dependencies and must not be copied. This merged specification, current owner contracts, and the
-future Issue/PR chain are authoritative when design prose and repo truth differ.
+The Claude Design Direction B export supplied to the coordinator on 2026-07-24 is supporting design
+input. The prototype HTML and generated `support.js` are not production dependencies and must not
+be copied. This merged specification, current owner contracts, and the future Issue/PR chain are
+authoritative when design prose and repo truth differ.
 
 ## Live reconciliation ledger
 
