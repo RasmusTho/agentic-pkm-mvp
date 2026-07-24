@@ -1,4 +1,4 @@
-State: Pre-filing parent feature issue contract. GitHub creation is forbidden until this specification is merged and stable on `origin/main`. After filing, GitHub becomes the live backlog/validation surface and this file must be reconciled immediately.
+State: Filed parent feature issue contract. [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is the authoritative live validation hub, open with `agent:blocked`; children #4081–#4086 are also open and blocked in dependency order. This parent is never a pickup Issue.
 
 # CKM Cockpit Direction B — Parent Validation Hub
 
@@ -6,8 +6,9 @@ State: Pre-filing parent feature issue contract. GitHub creation is forbidden un
 
 CKM Direction A was delivered by #3689 / PR #3692, CKM Measurement & Access by parent #3775,
 and owner Gate A by #3972. The owner authorized a small Direction B cockpit design and feature
-breakdown, not automation or a control plane. This parent is the validation hub for the target-state
-contract at `docs/CKM_COCKPIT_DIRECTION_B/README.md`; it is never a pickup issue.
+breakdown, not automation or a control plane. Live parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is the validation hub for the
+target-state contract at `docs/CKM_COCKPIT_DIRECTION_B/README.md`; it is never a pickup issue.
 
 Implementation is dependency-blocked until CKM Evidence Profile Phase 1 is delivered. That merged
 spec retires the current scalar/maturity-band render and must precede Direction B so the cockpit
@@ -80,12 +81,19 @@ evidence, cross-task acceptance, owner-doc promotion, and closure truth.
 
 ## Implementation Tasks
 
-1. `docs/CKM_COCKPIT_DIRECTION_B/ESTABLISH_TRUST_AND_PORTFOLIO_FRAMING.md`
-2. `docs/CKM_COCKPIT_DIRECTION_B/SURFACE_INTERPRETATION_HAZARDS_HONESTLY.md`
-3. `docs/CKM_COCKPIT_DIRECTION_B/RENDER_COMPATIBLE_OBSERVATION_COMPARISONS.md`
-4. `docs/CKM_COCKPIT_DIRECTION_B/FILTER_CAPABILITY_MAP_HONESTLY.md`
-5. `docs/CKM_COCKPIT_DIRECTION_B/GENERATE_GOVERNED_PROPOSAL_DRAFTS.md`
-6. `docs/CKM_COCKPIT_DIRECTION_B/SUPPORT_DETERMINISTIC_PRINT_OUTPUT.md`
+1. CKM-DB-01 [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081) —
+   `docs/CKM_COCKPIT_DIRECTION_B/ESTABLISH_TRUST_AND_PORTFOLIO_FRAMING.md`; blocked on Evidence
+   Profile Phase 1.
+2. CKM-DB-02 [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082) —
+   `docs/CKM_COCKPIT_DIRECTION_B/SURFACE_INTERPRETATION_HAZARDS_HONESTLY.md`; blocked on #4081.
+3. CKM-DB-03 [#4083](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4083) —
+   `docs/CKM_COCKPIT_DIRECTION_B/RENDER_COMPATIBLE_OBSERVATION_COMPARISONS.md`; blocked on #4082.
+4. CKM-DB-04 [#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084) —
+   `docs/CKM_COCKPIT_DIRECTION_B/FILTER_CAPABILITY_MAP_HONESTLY.md`; blocked on #4083.
+5. CKM-DB-05 [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085) —
+   `docs/CKM_COCKPIT_DIRECTION_B/GENERATE_GOVERNED_PROPOSAL_DRAFTS.md`; blocked on #4084.
+6. CKM-DB-06 [#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086) —
+   `docs/CKM_COCKPIT_DIRECTION_B/SUPPORT_DETERMINISTIC_PRINT_OUTPUT.md`; blocked on #4085.
 
 ## Verification Path
 
@@ -114,8 +122,8 @@ Profile delivery, and owner-doc posture before closing the capability.
   `origin/main`.
 - Verify the parent receipt ledger, deterministic HTML digest, manual PDF receipt, transition-debt
   outcomes, and PR-specific post-merge owner-doc receipts.
-- Re-run `python3 scripts/validate_source_anchors.py --body-file <parent-body-file>` against the live
-  parent body before terminal closure.
+- Re-run `python3 scripts/validate_source_anchors.py < parent-body-file.md` against the live parent
+  body before terminal closure.
 
 ## Source Docs
 
