@@ -61,6 +61,25 @@ inner command deadline, and a 600-second host adapter deadline. Credentials, sub
 and host-specific executable paths remain outside Git. It never substitutes Codex, Claude,
 Anthropic, OpenAI, mock, or the deterministic dry-run planner for a missing Fable role.
 
+## Host role-entrypoint lifecycle
+
+The repository owns the two stable command names consumed by that profile:
+`fable-subscription-cli` and `codex-subscription-cli`. Run
+`scripts/install_model_inquiry_host.py install` to create owner-only executable wrappers in an
+explicit host bin directory. Each wrapper binds exactly one role to the versioned
+`scripts/model_inquiry_subscription_adapter.py`; an exact reinstall is a no-op, while a symlink,
+unsafe directory, or unrelated existing command fails closed without overwriting it.
+
+The companion `check` operation is read-only. It reports only whether both installed entrypoints
+match the adapter digest committed into the installer in its own operator-authoritative checkout
+and Python interpreter, whether the launch `PATH` resolves both names to those exact files, and
+whether the underlying `claude`, `codex`, and host launcher commands are discoverable. Host-time
+validation does not invoke Git; an adapter change and its installer digest update are one repo
+change. The recognized
+subscription profile runs the same lineage check during desktop preflight; arbitrary same-name
+executables cannot make it healthy. The check does not run either provider, inspect subscription
+state, reveal paths, or create inquiry artifacts.
+
 ## Concretely
 
 ```bash
