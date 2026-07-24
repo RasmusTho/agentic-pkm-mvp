@@ -386,17 +386,25 @@ def test_host_role_entrypoints_gate_desktop_preflight(tmp_path: Path) -> None:
     for command in ("fable-subscription-cli", "codex-subscription-cli"):
         (bin_dir / command).unlink()
 
-    installed = _run_host_installer(tmp_path, bin_dir)
+    selected_python = tmp_path / "selected-python"
+    selected_python.symlink_to(Path(sys.executable))
+    env["BUILDEROPS_PYTHON"] = str(selected_python)
+    installed = _run_host_installer(tmp_path, bin_dir, python=selected_python)
     assert installed.returncode == 0, installed.stderr
     result = preflight_dependencies(env, command_cwd=REPO_ROOT)
 
     assert set(result["adapters"]) == {"fable", "gpt_codex"}
     assert not (tmp_path / "vault" / "model-inquiries").exists()
+    mismatched_env = {key: value for key, value in env.items() if key != "BUILDEROPS_PYTHON"}
+    with pytest.raises(AdapterUnavailableError, match="installed-lineage preflight"):
+        preflight_dependencies(mismatched_env, command_cwd=REPO_ROOT)
 
 
 def _run_host_installer(
     tmp_path: Path,
     bin_dir: Path,
+    *,
+    python: Path = Path(sys.executable),
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -408,7 +416,7 @@ def _run_host_installer(
             "--bin-dir",
             str(bin_dir),
             "--python",
-            sys.executable,
+            str(python),
         ],
         cwd=REPO_ROOT,
         env={**os.environ, "BUILDEROPS_DB_PATH": str(tmp_path / "unused.sqlite3")},

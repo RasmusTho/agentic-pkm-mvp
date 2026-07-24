@@ -78,10 +78,11 @@ def preflight_dependencies(
                 "subscription role entrypoints do not share one validated host bin directory"
             )
         try:
+            selected_python = Path(env.get("BUILDEROPS_PYTHON", sys.executable))
             host_status = check_host_entrypoints(
                 repo_root=command_cwd,
                 bin_dir=Path(bin_dirs.pop()),
-                python=Path(sys.executable),
+                python=selected_python,
                 path=path,
             )
         except HostInstallError as exc:

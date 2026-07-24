@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -412,7 +413,13 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
 def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     selected_python = tmp_path / "selected-python"
-    selected_python.symlink_to(Path(sys.executable))
+    interpreter_target = tmp_path / "interpreter-target"
+    interpreter_target.write_text(
+        f"#!/bin/sh\\n[ \"$0\" = {shlex.quote(str(selected_python))} ]\\n",
+        encoding="utf-8",
+    )
+    interpreter_target.chmod(0o700)
+    selected_python.symlink_to(interpreter_target)
 
     result = _run_installer(
         "install",
@@ -428,7 +435,8 @@ def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) 
     for entrypoint in ("fable-subscription-cli", "codex-subscription-cli"):
         content = (bin_dir / entrypoint).read_text(encoding="utf-8")
         assert str(selected_python) in content
-        assert str(Path(sys.executable).resolve()) not in content
+        executed = subprocess.run([str(bin_dir / entrypoint)], check=False)
+        assert executed.returncode == 0
 
 
 def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
