@@ -55,7 +55,7 @@ retry or infer completion.
 
 The SSH host must expose both durable role entrypoints before its launcher is considered ready.
 They are installed and checked with the repository-owned
-`scripts/install_model_inquiry_host.py` routine documented in the Mac mini agent playbook. This
+`scripts/install_model_inquiry_host.py` routine documented in the host agent playbook. This
 stabilizes the versioned command boundary across shell and reboot changes without moving provider
 credentials or subscription configuration into Git. The routine deliberately does not create a
 GUI-session proxy or alter authentication; those remain explicit host-operator setup when needed.
