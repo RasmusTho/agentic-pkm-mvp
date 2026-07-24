@@ -97,7 +97,9 @@ rendering.
 
 ## Related GitHub Issues
 
-Create one terminal child under the Direction B parent, dependency-blocked on CKM-DB-05. Cheapest
-acceptable TCD route: **Terra/high** because CSS/test mechanics are bounded but final acceptance
-depends on manual visual evidence and complete cross-slice coverage; use Sol/high for the independent
-parent-acceptance review if residual omission risk remains.
+Live terminal child [#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086) under parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` on CKM-DB-05
+[#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085). Cheapest acceptable TCD route:
+**Terra/high** because CSS/test mechanics are bounded but final acceptance depends on manual visual
+evidence and complete cross-slice coverage; use Sol/high for the independent parent-acceptance
+review if residual omission risk remains.

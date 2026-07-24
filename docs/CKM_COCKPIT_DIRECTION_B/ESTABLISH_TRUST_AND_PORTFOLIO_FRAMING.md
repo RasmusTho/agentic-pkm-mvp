@@ -104,8 +104,9 @@ state.
 
 ## Related GitHub Issues
 
-Create one child under the Direction B parent after the spec is merged. Keep it `agent:blocked`
-until the CKM Evidence Profile Phase 1 parent and children are terminally delivered. Cheapest
-acceptable TCD route: **Terra/high** because this is a multi-file public CLI/render boundary with
-determinism and prerequisite-integration risk; escalate to Sol/high only if the Evidence Profile
-delivery changes the agreed renderer seam.
+Live child [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081) under parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` until the CKM
+Evidence Profile Phase 1 parent and children are terminally delivered. Cheapest acceptable TCD
+route: **Terra/high** because this is a multi-file public CLI/render boundary with determinism and
+prerequisite-integration risk; escalate to Sol/high only if the Evidence Profile delivery changes
+the agreed renderer seam.
