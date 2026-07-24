@@ -91,9 +91,21 @@ def _dimension_markup(
     score: float,
     citations: Sequence[Mapping[str, object]],
     candidate_share: float,
+    status: str | None,
 ) -> str:
-    percent = max(0.0, min(100.0, score * 100.0))
     _, label = DIMENSION_LABELS[dimension]
+    if status in {"unassessed", "unsupported"}:
+        state_label = (
+            "unassessed — no selected evidence"
+            if status == "unassessed"
+            else "unsupported by this assessment formula"
+        )
+        return f"""
+      <section class="dimension dimension-unassessed" data-dimension="{_e(dimension)}" data-cell-state="unassessed">
+        <div class="dimension-label"><span>{_e(label)}</span><strong>—</strong></div>
+        <small>{_e(state_label)}</small>
+      </section>"""
+    percent = max(0.0, min(100.0, score * 100.0))
     starved = score == 0 and not citations
     citation_items = "".join(
         f"<li>{_e(_citation_source(citation))}</li>" for citation in citations
@@ -125,8 +137,16 @@ def _mini_dimensions_markup(assessment: CkmAssessment | None) -> str:
             continue
         score = float(assessment.scores[dimension])
         citations = assessment.citations[dimension]
+        status = assessment.dimension_status.get(dimension)
+        if status in {"unassessed", "unsupported"}:
+            aria_parts.append(f"{label} {status}")
+            cells.append(
+                f'<span class="mini-dimension mini-unassessed" data-cell-state="unassessed" '
+                f'data-abbr="{abbreviation}" title="{_e(label)}: {_e(status)}">—</span>'
+            )
+            continue
         percent = max(0.0, min(100.0, score * 100.0))
-        starved = score == 0 and not citations
+        starved = status == "missing" or (status is None and score == 0 and not citations)
         state = "starved" if starved else "scored"
         state_label = "evidence-starved" if starved else "scored"
         aria_parts.append(f"{label} {score:.2f}, {len(citations)} citations")
@@ -225,6 +245,7 @@ def _capability_markup(
                 float(assessment.scores[dimension]),
                 assessment.citations[dimension],
                 float(assessment.candidate_shares[dimension]),
+                assessment.dimension_status.get(dimension),
             )
             for dimension in MATURITY_DIMENSIONS
         )

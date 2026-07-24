@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 from uuid import uuid4
 
+from app.builderops.ckm.contracts import SUPPORTED_VALUE_STATES
+
 JsonDict = dict[str, Any]
 
 # --- Capability -------------------------------------------------------------
@@ -337,6 +339,7 @@ class CkmAssessment:
     scores: Mapping[str, float]
     citations: Mapping[str, list[JsonDict]]
     candidate_shares: Mapping[str, float]
+    dimension_status: Mapping[str, str]
     formula_ids: Mapping[str, str]
     aggregate: float
     aggregate_formula_id: str
@@ -353,6 +356,27 @@ class CkmAssessment:
         missing_dims = set(MATURITY_DIMENSIONS) - set(self.scores)
         if missing_dims:
             raise CkmValidationError(f"assessment missing dimension score(s): {sorted(missing_dims)}")
+        unknown_status_dims = set(self.dimension_status) - set(MATURITY_DIMENSIONS)
+        if unknown_status_dims:
+            raise CkmValidationError(
+                f"assessment has unknown dimension status key(s): {sorted(unknown_status_dims)}"
+            )
+        if self.dimension_status:
+            missing_status_dims = set(MATURITY_DIMENSIONS) - set(self.dimension_status)
+            if missing_status_dims:
+                raise CkmValidationError(
+                    "assessment missing dimension status(es): "
+                    f"{sorted(missing_status_dims)}"
+                )
+        unsupported_statuses = {
+            status
+            for status in self.dimension_status.values()
+            if status not in SUPPORTED_VALUE_STATES
+        }
+        if unsupported_statuses:
+            raise CkmValidationError(
+                f"assessment has unsupported dimension status(es): {sorted(unsupported_statuses)}"
+            )
         for dimension in MATURITY_DIMENSIONS:
             score = self.scores[dimension]
             if not isinstance(score, (int, float)) or not (0.0 <= float(score) <= 1.0):
@@ -383,6 +407,7 @@ class CkmAssessment:
         scores: Mapping[str, float],
         citations: Mapping[str, list[JsonDict]],
         candidate_shares: Mapping[str, float],
+        dimension_status: Mapping[str, str],
         formula_ids: Mapping[str, str],
         watermark_set: Mapping[str, str],
     ) -> "CkmAssessment":
@@ -393,6 +418,7 @@ class CkmAssessment:
             scores=scores,
             citations=citations,
             candidate_shares=candidate_shares,
+            dimension_status=dimension_status,
             formula_ids=formula_ids,
             aggregate=row["aggregate"],
             aggregate_formula_id=row["aggregate_formula_id"],
@@ -401,7 +427,7 @@ class CkmAssessment:
             watermark_set=watermark_set,
             valid_from=row["valid_from"],
             asserted_at=row["asserted_at"],
-        )
+        ).validate()
 
     def to_dict(self) -> JsonDict:
         return {
@@ -411,6 +437,7 @@ class CkmAssessment:
             "scores": dict(self.scores),
             "citations": {k: list(v) for k, v in self.citations.items()},
             "candidate_shares": dict(self.candidate_shares),
+            "dimension_status": dict(self.dimension_status),
             "formula_ids": dict(self.formula_ids),
             "aggregate": self.aggregate,
             "aggregate_formula_id": self.aggregate_formula_id,

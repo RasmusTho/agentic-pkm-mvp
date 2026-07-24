@@ -84,12 +84,18 @@ def overview_store(tmp_path: Path) -> CkmStore:
     }
     scores = {dimension: 0.8 for dimension in MATURITY_DIMENSIONS}
     citations = {dimension: [citation] for dimension in MATURITY_DIMENSIONS}
+    dimension_status = {dimension: "measured" for dimension in MATURITY_DIMENSIONS}
     scores["operational_readiness"] = 0.0
     citations["operational_readiness"] = []
+    dimension_status["operational_readiness"] = "missing"
+    scores["documentation_quality"] = 0.0
+    citations["documentation_quality"] = []
+    dimension_status["documentation_quality"] = "unassessed"
     store.append_assessment(
         capability_id=parent.id,
         scores=scores,
         citations=citations,
+        dimension_status=dimension_status,
         candidate_shares={dimension: 0.75 for dimension in MATURITY_DIMENSIONS},
         formula_ids={dimension: "fixture-formula" for dimension in MATURITY_DIMENSIONS},
         aggregate=0.8,
@@ -137,7 +143,7 @@ def test_pure_render_over_fixture_graph(overview_store: CkmStore) -> None:
     assert "band-critical" not in first
     assert "band-watch" not in first
     assert "band-healthy" not in first
-    assert first.count('class="dimension-bar"') == len(MATURITY_DIMENSIONS)
+    assert first.count('class="dimension-bar"') == len(MATURITY_DIMENSIONS) - 1
     summary = first.split("</summary>", maxsplit=1)[0]
     assert summary.count('class="mini-dimension ') == len(MATURITY_DIMENSIONS)
     assert '<details class="drilldown"><summary>Evidence and basis</summary>' in first
@@ -151,7 +157,7 @@ def test_honesty_markers_render(overview_store: CkmStore) -> None:
     assert "LOW CONFIDENCE" in rendered
     assert "candidate share 75.0%" in rendered
     assert "candidate share unavailable" in rendered
-    assert rendered.count('mini-dimension mini-unassessed') == len(MATURITY_DIMENSIONS)
+    assert rendered.count('mini-dimension mini-unassessed') == len(MATURITY_DIMENSIONS) + 1
     assert "2 confirmed / 1 candidate" not in rendered
     assert "1 confirmed / 1 candidate" in rendered
     assert '<span class="badge evidence-status">candidate</span>' in rendered
@@ -173,10 +179,22 @@ def test_dimension_cells_render_three_states_and_proportional_fill(
     assert 'class="mini-dimension mini-scored"' in rendered
     assert 'style="--score:80.0%"' in rendered
     assert 'class="mini-dimension mini-starved"' in rendered
+    assert (
+        '<section class="dimension dimension-unassessed" '
+        'data-dimension="documentation_quality" data-cell-state="unassessed">'
+        in rendered
+    )
+    unassessed_section = rendered.split(
+        'data-dimension="documentation_quality" data-cell-state="unassessed">',
+        maxsplit=1,
+    )[1].split("</section>", maxsplit=1)[0]
+    assert "<strong>—</strong>" in unassessed_section
+    assert "dimension-track" not in unassessed_section
+    assert "dimension-bar" not in unassessed_section
     unknown_cells = re.findall(
         r'<span class="mini-dimension mini-unassessed"[^>]*>—</span>', rendered
     )
-    assert len(unknown_cells) == len(MATURITY_DIMENSIONS)
+    assert len(unknown_cells) == len(MATURITY_DIMENSIONS) + 1
     assert all("--score" not in cell for cell in unknown_cells)
 
 

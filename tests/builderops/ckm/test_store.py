@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from app.builderops.ckm.contracts import SUPPORTED_VALUE_STATES
 from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmValidationError
-from app.builderops.ckm.schema import CKM_TABLE_NAMES
+from app.builderops.ckm.schema import CKM_SCHEMA_VERSION, CKM_TABLE_NAMES
 from app.builderops.ckm.store import CkmStore
 from app.builderops.store import SqliteBuilderOpsStore
 
@@ -284,6 +285,73 @@ def test_assessment_append_only_bitemporal(store: CkmStore) -> None:
 
     latest = store.latest_assessment_for_capability(capability.id)
     assert latest.id == second.id
+
+
+def test_dimension_status_round_trips_supported_vocabulary(store: CkmStore) -> None:
+    capability = _upsert_capability(store)
+    scores, citations = _assessment_scores_and_citations()
+    statuses = {dimension: "measured" for dimension in MATURITY_DIMENSIONS}
+    statuses["documentation_quality"] = "unassessed"
+
+    assessment = store.append_assessment(
+        capability_id=capability.id,
+        scores=scores,
+        citations=citations,
+        dimension_status=statuses,
+        aggregate=0.5,
+        watermark_set={"repo_artifact_ingestion": "commit:abc123"},
+    )
+
+    assert dict(assessment.dimension_status) == statuses
+    assert set(assessment.dimension_status.values()) <= SUPPORTED_VALUE_STATES
+    assert store.get_assessment(assessment.id) == assessment
+
+    invalid = dict(statuses)
+    invalid["documentation_quality"] = "unknown"
+    with pytest.raises(CkmValidationError, match="unsupported dimension status"):
+        store.append_assessment(
+            capability_id=capability.id,
+            scores=scores,
+            citations=citations,
+            dimension_status=invalid,
+            aggregate=0.5,
+            watermark_set={"repo_artifact_ingestion": "commit:abc123"},
+        )
+
+
+def test_current_v5_store_idempotently_backfills_dimension_status(tmp_path: Path) -> None:
+    store = CkmStore(tmp_path / "current-v5.sqlite3")
+    store.ensure_schema()
+    capability = _upsert_capability(store)
+    scores, citations = _assessment_scores_and_citations()
+    assessment = store.append_assessment(
+        capability_id=capability.id,
+        scores=scores,
+        citations=citations,
+        dimension_status={dimension: "measured" for dimension in MATURITY_DIMENSIONS},
+        aggregate=0.5,
+        watermark_set={"repo_artifact_ingestion": "commit:abc123"},
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("ALTER TABLE ckm_assessment DROP COLUMN dimension_status")
+        before = conn.execute(
+            "SELECT epoch, schema_version FROM ckm_state WHERE singleton = 1"
+        ).fetchone()
+
+    store.ensure_schema()
+    store.ensure_schema()
+
+    with sqlite3.connect(store.db_path) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(ckm_assessment)")
+        }
+        after = conn.execute(
+            "SELECT epoch, schema_version FROM ckm_state WHERE singleton = 1"
+        ).fetchone()
+    assert "dimension_status" in columns
+    assert before == after
+    assert after[1] == CKM_SCHEMA_VERSION == 5
+    assert dict(store.get_assessment(assessment.id).dimension_status) == {}
 
 
 def test_append_assessment_requires_all_dimension_citations(store: CkmStore) -> None:

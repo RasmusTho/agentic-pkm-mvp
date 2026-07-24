@@ -120,6 +120,7 @@ def test_every_dimension_cites_evidence(store: CkmStore) -> None:
     assert assessment is not None
     assert set(assessment.scores) == set(MATURITY_DIMENSIONS)
     assert set(assessment.citations) == set(MATURITY_DIMENSIONS)
+    assert set(assessment.dimension_status) == set(MATURITY_DIMENSIONS)
     assert set(assessment.formula_ids) == set(MATURITY_DIMENSIONS)
     assert all(formula_id in FORMULAS for formula_id in assessment.formula_ids.values())
     edge_ids = {edge.id for edge in store.list_evidence_edges()}
@@ -129,6 +130,48 @@ def test_every_dimension_cites_evidence(store: CkmStore) -> None:
         for citation in assessment.citations[dimension]:
             assert CkmEvidenceEdge.from_row(citation["edge"]).validate().id == citation["edge_id"]
             assert CkmArtifact.from_row(citation["artifact"]).validate().id == citation["artifact_id"]
+
+
+def test_documentation_empty_set_is_unassessed_with_formula_v2(store: CkmStore) -> None:
+    capability = _capability(store)
+
+    assert assess_capabilities(store).assessed == 1
+    assessment = store.latest_assessment_for_capability(capability.id)
+
+    assert assessment is not None
+    assert assessment.scores["documentation_quality"] == 0.0
+    assert assessment.citations["documentation_quality"] == []
+    assert assessment.dimension_status["documentation_quality"] == "unassessed"
+    assert assessment.formula_ids["documentation_quality"] == "current-doc-evidence-v2"
+
+
+def test_documentation_formula_v1_assessment_is_reminted(
+    store: CkmStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capability = _capability(store)
+    monkeypatch.setitem(
+        assess_module._DIMENSION_FORMULA_IDS,
+        "documentation_quality",
+        "current-doc-evidence-v1",
+    )
+    assert assess_capabilities(store).assessed == 1
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+    assert first.formula_ids["documentation_quality"] == "current-doc-evidence-v1"
+
+    monkeypatch.setitem(
+        assess_module._DIMENSION_FORMULA_IDS,
+        "documentation_quality",
+        "current-doc-evidence-v2",
+    )
+    assert assess_capabilities(store).assessed == 1
+    history = store.list_assessments_for_capability(capability.id)
+
+    assert len(history) == 2
+    assert history[0].id == first.id
+    assert history[1].id != first.id
+    assert history[1].formula_ids["documentation_quality"] == "current-doc-evidence-v2"
+    assert history[0].edge_fingerprint != history[1].edge_fingerprint
 
 
 def test_assessment_public_id_survives_real_rebuild_producer(
@@ -704,6 +747,7 @@ def test_schema_v2_assessment_migrates_with_legacy_formula_provenance(tmp_path: 
     assert all(migrated.citations[dimension] == [] for dimension in MATURITY_DIMENSIONS)
     assert migrated.aggregate == 0.25
     assert set(migrated.formula_ids.values()) == {"legacy-pre-ckm07"}
+    assert dict(migrated.dimension_status) == {}
     assert migrated.aggregate_formula_id == "legacy-pre-ckm07"
     assert set(migrated.candidate_shares.values()) == {0.0}
     assert migrated.low_confidence is False
