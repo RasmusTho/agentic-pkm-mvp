@@ -51,15 +51,16 @@ class Checkout:
 
 
 def _resolve_file(path: Path, *, label: str, executable: bool = False) -> Path:
+    candidate = Path(os.path.abspath(path.expanduser()))
     try:
-        resolved = path.expanduser().resolve(strict=True)
+        details = os.stat(candidate)
     except OSError as exc:
         raise HostInstallError(f"{label} is unavailable") from exc
-    if not resolved.is_file():
+    if not stat.S_ISREG(details.st_mode):
         raise HostInstallError(f"{label} must be a regular file")
-    if executable and not os.access(resolved, os.X_OK):
+    if executable and not os.access(candidate, os.X_OK):
         raise HostInstallError(f"{label} must be executable")
-    return resolved
+    return candidate
 
 
 def _absolute_parts(path: Path, *, label: str) -> tuple[str, ...]:

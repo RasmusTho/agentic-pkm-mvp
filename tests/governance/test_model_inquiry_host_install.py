@@ -397,7 +397,7 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
     adapter = str((REPO_ROOT / "scripts" / "model_inquiry_subscription_adapter.py").resolve())
     adapter_sha256 = hashlib.sha256(Path(adapter).read_bytes()).hexdigest()
     assert host_installer.VERSIONED_ADAPTER_SHA256 == adapter_sha256
-    python = str(Path(sys.executable).resolve())
+    python = str(Path(sys.executable))
     for name, role in expected.items():
         content = (bin_dir / name).read_text(encoding="utf-8")
         assert f"INQUIRY_ROLE={role}" in content
@@ -407,6 +407,28 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
         assert "BUILDEROPS_INQUIRY_ADAPTERS_JSON" not in content
         assert "TOKEN" not in content
         assert "KEY" not in content
+
+
+def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    selected_python = tmp_path / "selected-python"
+    selected_python.symlink_to(Path(sys.executable))
+
+    result = _run_installer(
+        "install",
+        "--repo-root",
+        str(REPO_ROOT),
+        "--bin-dir",
+        str(bin_dir),
+        "--python",
+        str(selected_python),
+    )
+
+    assert result.returncode == 0, result.stderr
+    for entrypoint in ("fable-subscription-cli", "codex-subscription-cli"):
+        content = (bin_dir / entrypoint).read_text(encoding="utf-8")
+        assert str(selected_python) in content
+        assert str(Path(sys.executable).resolve()) not in content
 
 
 def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
