@@ -496,7 +496,7 @@ def test_cli_overview_accepts_explicit_capture_bounds(
 
     def traced(self: CkmStore, **kwargs: int):
         observed.update(kwargs)
-        if kwargs.get("class_capture_limit") == 500:
+        if not kwargs:
             raise CkmProjectionCaptureError(
                 "snapshot_too_large",
                 "complete CKM projection snapshot exceeds configured bounds",
@@ -532,7 +532,10 @@ def test_cli_overview_preserves_default_and_insufficient_bound_refusal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    observed: dict[str, int] = {}
+
     def refuse(self: CkmStore, **kwargs: int):
+        observed.update(kwargs)
         raise CkmProjectionCaptureError(
             "snapshot_too_large",
             "complete CKM projection snapshot exceeds configured bounds",
@@ -553,11 +556,16 @@ def test_cli_overview_preserves_default_and_insufficient_bound_refusal(
             "overview",
             "--out",
             str(output),
+            "--class-capture-limit",
+            "1",
+            "--aggregate-capture-limit",
+            "1",
         ],
     )
 
     assert result.exit_code != 0
     assert "snapshot" in result.output
+    assert observed == {"class_capture_limit": 1, "aggregate_capture_limit": 1}
     assert not output.exists()
 
 
