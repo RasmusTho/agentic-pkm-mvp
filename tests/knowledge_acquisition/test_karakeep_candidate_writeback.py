@@ -78,10 +78,11 @@ def _karakeep_payload(
     sequence: int = 0,
     supersedes: str | None = None,
     revision_of: str | None = None,
+    profile_seed: str = "c",
 ) -> tuple[str, dict]:
     episode_id = f"karakeep:{item_id}"
     content_hex = _content_hex(content_seed)
-    profile_hex = _content_hex("c")
+    profile_hex = _content_hex(profile_seed)
     observation_id = f"{episode_id}:{content_hex}:{profile_hex}"
     karakeep_block: dict = {
         "item_kind": item_kind,
@@ -120,6 +121,22 @@ def _publish(observation_id: str, payload: dict) -> None:
         source="heimdal_karakeep_adapter",
         stage_versions={"karakeep_adapter": "contract-v1"},
     )
+
+
+def test_profile_revision_gets_distinct_candidate_path(tmp_path: Path) -> None:
+    original_id, original = _karakeep_payload("profile-item", "a")
+    reprocessed_id, reprocessed = _karakeep_payload(
+        "profile-item", "a", sequence=1, revision_of=original_id, profile_seed="d"
+    )
+    _publish(original_id, original)
+    _publish(reprocessed_id, reprocessed)
+
+    vault = _vault(tmp_path / "vault")
+    results = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert [result.status for result in results] == ["written", "written"]
+    assert results[0].artifact_path != results[1].artifact_path
+    assert reprocessed_id in (Path(vault.active_vault_path) / results[1].artifact_path).read_text(encoding="utf-8")
 
 
 def _frontmatter(vault: VaultContext, artifact_path: str) -> tuple[dict, str]:

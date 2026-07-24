@@ -74,6 +74,7 @@ from app.events.topic_schema_registry import TopicSchemaViolation
 from app.events.types import HEIMDAL_OBSERVATION_PUBLISHED
 from app.heimdal.observation_log import read_observations_from
 from app.heimdal.publish import publish_full_observation
+from app.heimdal.karakeep_service import assert_fetch_ready
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ _PUBLISH_SOURCE = "heimdal_karakeep_adapter"
 # operator-owned and injected (never hardcoded); only the API path shape is
 # fixed here.
 _BOOKMARKS_PATH = "api/v1/bookmarks"
+_HIGHLIGHTS_PATH = "api/v1/highlights"
 
 _DEFAULT_PAGE_SIZE = 50
 _DEFAULT_MAX_PAGES = 100
@@ -217,6 +219,7 @@ class SourceSnapshot:
     updated_at: Optional[str]
     archived: bool
     deleted: bool
+    highlights: tuple[str, ...] = ()
 
     def canonical(self) -> dict[str, Any]:
         return {
@@ -230,6 +233,7 @@ class SourceSnapshot:
             "updated_at": self.updated_at,
             "archived": self.archived,
             "deleted": self.deleted,
+            "highlights": list(self.highlights),
         }
 
     def content_identity(self) -> str:
@@ -319,6 +323,10 @@ class KarakeepProducerCursor:
     def item_lineage(self, source_id: str, item_id: str) -> Optional[ItemLineage]:
         with self._lock:
             return self._checkpoint(source_id).items.get(item_id)
+
+    def item_ids(self, source_id: str) -> set[str]:
+        with self._lock:
+            return set(self._checkpoint(source_id).items)
 
     def record_revision(self, source_id: str, item_id: str, mark: ItemRevisionMark) -> None:
         """Record a newly durable revision. Monotone: never regresses the latest
@@ -446,6 +454,7 @@ class KarakeepAdapter:
         cursor: KarakeepProducerCursor | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         publish: Callable[..., Any] = publish_full_observation,
+        fetch_ready: Callable[[], None] | None = None,
     ) -> None:
         self._config = config
         self._tokens = token_provider
@@ -453,6 +462,7 @@ class KarakeepAdapter:
         self._cursor = cursor or default_producer_cursor()
         self._timeout = timeout_seconds
         self._publish = publish
+        self._fetch_ready = fetch_ready or self._default_fetch_ready
 
     # -- public API ---------------------------------------------------------
 
@@ -466,6 +476,8 @@ class KarakeepAdapter:
         it and dedups against the log rather than skipping evidence
         (KMA-INV-2/INV-3). One malformed item dead-letters only itself.
         """
+        # Required production gate before any Karakeep API request.
+        self._fetch_ready()
         source_id = self._config.source_id
         self._cursor.rebuild_from_log(source_id)
 
@@ -476,7 +488,10 @@ class KarakeepAdapter:
         noops = 0
         stopped_early = False
 
+        highlights = self._fetch_all_highlights()
         cursor_token = self._cursor.upstream_cursor(source_id)
+        seen_item_ids: set[str] = set()
+        completed_scan = False
         for _ in range(self._config.max_pages):
             try:
                 page = self._fetch_page(cursor_token)
@@ -494,7 +509,15 @@ class KarakeepAdapter:
                 break
 
             pages_read += 1
-            page_published, page_noops, page_errors = self._process_items(page.items)
+            page_items = [
+                {
+                    **raw,
+                    "highlights": highlights.get(raw_id, ()) if isinstance(raw_id := raw.get("id"), str) else (),
+                }
+                for raw in page.items
+            ]
+            seen_item_ids.update(raw["id"] for raw in page.items if isinstance(raw.get("id"), str))
+            page_published, page_noops, page_errors = self._process_items(page_items)
             fetched += len(page.items)
             published.extend(page_published)
             noops += page_noops
@@ -505,7 +528,18 @@ class KarakeepAdapter:
             cursor_token = page.next_cursor
             self._cursor.advance_upstream(source_id, cursor_token)
             if page.next_cursor is None:
+                completed_scan = True
                 break
+
+        # Karakeep deletes bookmarks outright. Only a complete snapshot can
+        # safely turn an absent previously-published item into a tombstone.
+        if completed_scan:
+            for item_id in self._cursor.item_ids(source_id) - seen_item_ids:
+                outcome = self._publish_snapshot(_disappeared_snapshot(item_id))
+                if outcome is None:
+                    noops += 1
+                else:
+                    published.append(outcome)
 
         return AcquisitionResult(
             fetched=fetched,
@@ -646,11 +680,54 @@ class KarakeepAdapter:
 
     # -- HTTP ---------------------------------------------------------------
 
+    def _default_fetch_ready(self) -> None:
+        assert_fetch_ready(
+            env={
+                "KARAKEEP_BASE_URL": self._config.base_url,
+                "KARAKEEP_API_TOKEN": self._tokens.get_api_token(),
+            },
+            http=self._http,
+        )
+
+    def _fetch_all_highlights(self) -> dict[str, tuple[str, ...]]:
+        """Fetch paginated highlights and group their text by bookmark id."""
+        grouped: dict[str, list[str]] = {}
+        cursor_token: Optional[str] = None
+        for _ in range(self._config.max_pages):
+            params: dict[str, str] = {"limit": str(self._config.page_size)}
+            if cursor_token:
+                params["cursor"] = cursor_token
+            body = self._request_json(_HIGHLIGHTS_PATH, params)
+            entries = body.get("highlights")
+            if not isinstance(entries, list) or not all(isinstance(entry, Mapping) for entry in entries):
+                _raise_detached(KarakeepApiError("api_unavailable", None, "Karakeep highlights had an invalid items shape"))
+            for entry in entries:
+                bookmark_id = entry.get("bookmarkId") or entry.get("bookmark_id")
+                text = entry.get("content") or entry.get("text") or entry.get("highlight")
+                if isinstance(bookmark_id, str) and isinstance(text, str) and text:
+                    grouped.setdefault(bookmark_id, []).append(text)
+            cursor_token = body.get("nextCursor")
+            if cursor_token is None:
+                return {key: tuple(values) for key, values in grouped.items()}
+            if not isinstance(cursor_token, str) or not cursor_token:
+                _raise_detached(KarakeepApiError("api_unavailable", None, "Karakeep highlights cursor was invalid"))
+        _raise_detached(KarakeepApiError("api_unavailable", None, "Karakeep highlights exceeded page limit"))
+
     def _fetch_page(self, cursor_token: Optional[str]) -> "_Page":
         params: dict[str, str] = {"limit": str(self._config.page_size)}
         if cursor_token:
             params["cursor"] = cursor_token
-        url = self._config.base_url.rstrip("/") + "/" + _BOOKMARKS_PATH
+        body = self._request_json(_BOOKMARKS_PATH, params)
+        items = body.get("bookmarks")
+        if not isinstance(items, list) or not all(isinstance(item, Mapping) for item in items):
+            _raise_detached(KarakeepApiError("api_unavailable", None, "Karakeep page had an invalid items shape"))
+        next_cursor = body.get("nextCursor")
+        if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor):
+            _raise_detached(KarakeepApiError("api_unavailable", None, "Karakeep page cursor was invalid"))
+        return _Page(items=list(items), next_cursor=next_cursor)
+
+    def _request_json(self, path: str, params: Mapping[str, str]) -> Mapping[str, Any]:
+        url = self._config.base_url.rstrip("/") + "/" + path
         token = self._tokens.get_api_token()
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
@@ -677,17 +754,7 @@ class KarakeepAdapter:
             _raise_detached(
                 KarakeepApiError("api_unavailable", status, "Karakeep returned an invalid page shape")
             )
-        items = body.get("bookmarks")
-        if not isinstance(items, list) or not all(isinstance(item, Mapping) for item in items):
-            _raise_detached(
-                KarakeepApiError("api_unavailable", status, "Karakeep page had an invalid items shape")
-            )
-        next_cursor = body.get("nextCursor")
-        if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor):
-            _raise_detached(
-                KarakeepApiError("api_unavailable", status, "Karakeep page cursor was invalid")
-            )
-        return _Page(items=list(items), next_cursor=next_cursor)
+        return body
 
 
 @dataclass(frozen=True)
@@ -736,6 +803,7 @@ def _canonicalize_item(raw: Mapping[str, Any]) -> SourceSnapshot:
     deleted = bool(raw.get("deleted", False))
     archived = bool(raw.get("archived", False))
     tags = _canonical_tags(raw.get("tags"))
+    highlights = _canonical_highlights(raw.get("highlights"))
 
     content = raw.get("content")
     content_type = content.get("type") if isinstance(content, Mapping) else None
@@ -754,7 +822,7 @@ def _canonicalize_item(raw: Mapping[str, Any]) -> SourceSnapshot:
         if isinstance(content, Mapping):
             source_url = _optional_str(content.get("url"))
             title = title or _optional_str(content.get("title"))
-        text = note
+        text = _combine_evidence(note, highlights)
     elif content_type in ("text", "note"):
         kind = _KIND_NOTE
         text = _optional_str(content.get("text")) if isinstance(content, Mapping) else None
@@ -785,6 +853,7 @@ def _canonicalize_item(raw: Mapping[str, Any]) -> SourceSnapshot:
         updated_at=updated_at,
         archived=archived,
         deleted=deleted,
+        highlights=highlights,
     )
 
 
@@ -808,6 +877,33 @@ def _canonical_tags(value: Any) -> tuple[str, ...]:
             if isinstance(name, str) and name:
                 names.add(name)
     return tuple(sorted(names))
+
+
+def _canonical_highlights(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(text for text in value if isinstance(text, str) and text)
+
+
+def _combine_evidence(note: Optional[str], highlights: tuple[str, ...]) -> Optional[str]:
+    parts = ([note] if note else []) + list(highlights)
+    return "\n\n".join(parts) if parts else None
+
+
+def _disappeared_snapshot(item_id: str) -> SourceSnapshot:
+    """Stable tombstone for a bookmark absent from a complete source scan."""
+    return SourceSnapshot(
+        item_id=item_id,
+        item_kind=_KIND_LINK,
+        source_url=None,
+        title=None,
+        text=None,
+        tags=(),
+        created_at=None,
+        updated_at="1970-01-01T00:00:00+00:00",
+        archived=False,
+        deleted=True,
+    )
 
 
 def _assemble_payload(
@@ -882,6 +978,8 @@ def _assemble_payload(
         content_structure["karakeep"]["source_url"] = snapshot.source_url
     if snapshot.tags:
         content_structure["karakeep"]["tags"] = list(snapshot.tags)
+    if snapshot.highlights:
+        content_structure["karakeep"]["highlights"] = list(snapshot.highlights)
 
     raw_ref = f"raw:karakeep:{snapshot.item_id}:{_hex(content_identity)[:8]}"
     provenance = {

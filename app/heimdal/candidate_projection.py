@@ -478,11 +478,13 @@ class ReadingSourceCandidate:
         """The revision discriminator, derived from the immutable observation_id.
 
         ``observation_id`` is ``karakeep:<item-id>:<content-hex>:<profile-hex>``;
-        the content-hex uniquely identifies this revision of the item.
+        both hashes identify this immutable revision, including profile-only
+        reprocesses of unchanged source content.
         """
         parts = self.observation_id.rsplit(":", 2)
         content_hex = parts[1] if len(parts) == 3 else self.content_identity.split(":", 1)[-1]
-        return content_hex[:16] or "rev"
+        profile_hex = parts[2] if len(parts) == 3 else ""
+        return f"{content_hex[:16] or 'rev'}-{profile_hex[:16] or 'profile'}"
 
     @property
     def prior_revision(self) -> Optional[str]:
