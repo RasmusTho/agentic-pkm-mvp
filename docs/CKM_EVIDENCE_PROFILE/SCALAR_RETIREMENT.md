@@ -122,8 +122,9 @@ state is introduced; a process restart changes nothing about what the next rende
 
 ## Related GitHub Issues
 
-Not yet filed. The coordinator creates this slice from the merged spec. May be delivered as a single
-issue/PR jointly with CKM-EP-02 (shared overview render surface and the same real-store gate). Point
-`Context` at the parent feature issue and reference "Implements CKM_EVIDENCE_PROFILE/SCALAR_RETIREMENT".
-TCD hint: Sonnet / medium — bounded render-surface deletion mirroring an existing pattern, low blast
-radius, but the Direction A contract writeback and the real-store gate must not be dropped at handoff.
+Filed as [#4090](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4090), the first serial child
+of parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). It is
+delivered independently before CKM-EP-02; its exact PR/SHA, validation, owner-doc result, and parent
+handoff belong on #4089. TCD hint: Sonnet / medium — bounded render-surface deletion mirroring an
+existing pattern, low blast radius, but the Direction A contract writeback and the real-store gate
+must not be dropped at handoff.

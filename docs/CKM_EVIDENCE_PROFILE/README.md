@@ -97,10 +97,12 @@ CKM-EP-01 (retire scalar render) ── CKM-EP-02 (tri-state + doc fix) ── C
   and reuses `_forest` unmodified) but shares the file `overview_html.py`; deliver it serially after
   CKM-EP-02 to avoid same-file merge conflict, not because of a data dependency.
 
-Issue mapping (for the coordinator): CKM-EP-01 and CKM-EP-02 may be delivered as a single bounded
-issue/PR (they share the overview render surface and the same acceptance gate); CKM-EP-03 is its own
-issue/PR. One task spec can still map to one or many issues — the spec is the source of truth, the
-issues are execution artifacts.
+Issue mapping: the serial parent contract maps CKM-EP-01, CKM-EP-02, and CKM-EP-03 to distinct
+child issues [#4090](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4090),
+[#4091](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4091), and
+[#4092](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4092), respectively. Deliver them in
+the stated order; the specification remains the source of task shape and the issues are the live
+execution artifacts.
 
 ## Cross-Task Invariants / Interaction Safety
 
