@@ -115,6 +115,19 @@ def overview_store(tmp_path: Path) -> CkmStore:
     return store
 
 
+def _make_snapshot_exceed_default(store: CkmStore) -> None:
+    """Add enough real fixture artifacts to exceed the default class bound."""
+    existing = len(store.list_artifacts())
+    for index in range(existing, 501):
+        store.upsert_artifact(
+            source_ref=f"fixture/oversized-{index}.md",
+            artifact_kind="document",
+            source="fixture",
+            watermark="one",
+            provenance=f'{{"source_ref":"fixture/oversized-{index}.md"}}',
+        )
+
+
 @pytest.fixture()
 def fanout_overview_store(tmp_path: Path) -> CkmStore:
     store = CkmStore(tmp_path / "fanout-overview.sqlite3")
@@ -484,6 +497,98 @@ def test_cli_writes_overview(overview_store: CkmStore, tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert output.is_file()
     assert "Development Overview" in output.read_text(encoding="utf-8")
+
+
+def test_cli_overview_accepts_explicit_capture_bounds(
+    overview_store: CkmStore,
+    tmp_path: Path,
+) -> None:
+    _make_snapshot_exceed_default(overview_store)
+    default_output = tmp_path / "default-refused" / "ckm-overview.html"
+    default_result = CliRunner().invoke(
+        builderops,
+        ["--db-path", str(overview_store.db_path), "ckm", "overview", "--out", str(default_output)],
+    )
+    assert default_result.exit_code != 0
+    assert "snapshot" in default_result.output
+    assert not default_output.exists()
+
+    output = tmp_path / "bounded" / "ckm-overview.html"
+    result = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--out",
+            str(output),
+            "--class-capture-limit",
+            "501",
+            "--aggregate-capture-limit",
+            "3001",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output.is_file()
+
+
+def test_cli_overview_preserves_default_and_insufficient_bound_refusal(
+    overview_store: CkmStore,
+    tmp_path: Path,
+) -> None:
+    _make_snapshot_exceed_default(overview_store)
+    output = tmp_path / "refused" / "ckm-overview.html"
+    result = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--out",
+            str(output),
+            "--class-capture-limit",
+            "1",
+            "--aggregate-capture-limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "snapshot" in result.output
+    assert not output.exists()
+
+    insufficient = tmp_path / "insufficient" / "ckm-overview.html"
+    insufficient_result = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path", str(overview_store.db_path), "ckm", "overview", "--out", str(insufficient),
+            "--class-capture-limit", "1", "--aggregate-capture-limit", "1",
+        ],
+    )
+    assert insufficient_result.exit_code != 0
+    assert "snapshot" in insufficient_result.output
+    assert not insufficient.exists()
+
+
+def test_cli_overview_rejects_non_positive_capture_bounds(
+    overview_store: CkmStore,
+    tmp_path: Path,
+) -> None:
+    for value in ("0", "-1"):
+        output = tmp_path / f"invalid-{value.replace('-', 'negative-')}" / "ckm-overview.html"
+        result = CliRunner().invoke(
+            builderops,
+            [
+                "--db-path", str(overview_store.db_path), "ckm", "overview", "--out", str(output),
+                "--class-capture-limit", value,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Invalid value" in result.output
+        assert not output.exists()
 
 
 def test_cli_rejects_missing_database_without_creating_it(tmp_path: Path) -> None:

@@ -24,6 +24,10 @@ Give the owner the one-glance surface: a static HTML Development Overview render
   - gaps panel listing current findings;
   - footer: generated-projection self-identification + watermark set (INV-CKM-2).
 - CLI: `python -m app.builderops ckm overview --out /path/overview.html`.
+- For real stores whose finite projection exceeds the conservative defaults, operators may pass
+  explicit positive finite bounds: `--class-capture-limit N` and
+  `--aggregate-capture-limit N`. Defaults and typed refusal remain unchanged; there is no
+  unbounded or auto-sizing mode.
 - **Parent-closure handoff:** this final child updates `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md` acceptance checklist to reflect delivered state, posts the capability-level validation receipt (live-run outputs + overview screenshot/file) to the parent feature issue, and either closes the parent (if all capability ACs verify) or files the explicit parent-closure issue naming what remains.
 
 ## Concretely

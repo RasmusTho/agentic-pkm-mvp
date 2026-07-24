@@ -694,13 +694,35 @@ def ckm_project(ctx: click.Context, projection_type: str, output_dir: Path) -> N
     type=click.Path(dir_okay=False, path_type=Path),
     required=True,
 )
+@click.option(
+    "--class-capture-limit",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Finite per-class projection capture bound (defaults to the store policy).",
+)
+@click.option(
+    "--aggregate-capture-limit",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Finite aggregate projection capture bound (defaults to the store policy).",
+)
 @click.pass_context
-def ckm_overview(ctx: click.Context, output_path: Path) -> None:
+def ckm_overview(
+    ctx: click.Context,
+    output_path: Path,
+    class_capture_limit: int | None,
+    aggregate_capture_limit: int | None,
+) -> None:
     try:
         store = _ckm_store(ctx)
         if not store.db_path.is_file():
             raise CkmValidationError(f"CKM database does not exist: {store.db_path}")
-        result = write_overview_html(store, output_path)
+        result = write_overview_html(
+            store,
+            output_path,
+            class_capture_limit=class_capture_limit,
+            aggregate_capture_limit=aggregate_capture_limit,
+        )
     except (CkmValidationError, OSError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm overview failed: {exc}") from exc
     click.echo(result)
