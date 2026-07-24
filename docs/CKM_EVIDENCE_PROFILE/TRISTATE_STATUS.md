@@ -131,9 +131,10 @@ trust consequence exists.
 
 ## Related GitHub Issues
 
-Not yet filed. The coordinator creates this slice from the merged spec. May be delivered jointly with
-CKM-EP-01 in one issue/PR (shared overview render surface and real-store gate). Point `Context` at the
-parent feature issue and reference "Implements CKM_EVIDENCE_PROFILE/TRISTATE_STATUS". TCD hint:
-Sonnet / high — additive schema migration plus the formula-id/fingerprint coupling is the correctness-
-sensitive part (a missed bump silently no-ops the fix); escalate if the migration or fingerprint
-interaction proves subtler than the existing `_migrate_assessment_explainability` precedent.
+Filed as [#4091](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4091), the second serial child
+of parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). It remains
+blocked until CKM-EP-01 is delivered; its exact PR/SHA, validation, owner-doc result, and parent
+handoff belong on #4089. TCD hint: Sonnet / high — additive schema migration plus the formula-id/
+fingerprint coupling is the correctness-sensitive part (a missed bump silently no-ops the fix);
+escalate if the migration or fingerprint interaction proves subtler than the existing
+`_migrate_assessment_explainability` precedent.
