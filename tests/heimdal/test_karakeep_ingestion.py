@@ -166,6 +166,29 @@ def test_disappeared_bookmark_publishes_tombstone_revision() -> None:
     assert payloads[-1]["supersedes"] == first.published[0]
 
 
+def test_resumed_partial_scan_never_tombstones_unseen_prior_pages() -> None:
+    cursor = KarakeepProducerCursor()
+    initial = _FakeKarakeep(
+        [
+            [_link("item-a", "https://example.com/a")],
+            [_link("item-b", "https://example.com/b")],
+        ]
+    )
+    initial.fail_pages = {1: 503}
+    _adapter(initial, cursor=cursor).acquire()
+
+    resumed = _adapter(
+        _FakeKarakeep([[_link("item-a", "https://example.com/a")], [_link("item-b", "https://example.com/b")]]),
+        cursor=cursor,
+    ).acquire()
+
+    assert all(
+        payload["content_structure"]["karakeep"]["tombstone"] is False
+        for payload in _payloads()
+    )
+    assert len(resumed.published) == 1
+
+
 def test_adapter_calls_fetch_readiness_gate_before_source_egress() -> None:
     fake = _FakeKarakeep([[_link("item-1", "https://example.com/a")]])
     calls: list[str] = []

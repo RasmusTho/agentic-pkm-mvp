@@ -490,6 +490,7 @@ class KarakeepAdapter:
 
         highlights = self._fetch_all_highlights()
         cursor_token = self._cursor.upstream_cursor(source_id)
+        scan_started_at_first_page = cursor_token is None
         seen_item_ids: set[str] = set()
         completed_scan = False
         for _ in range(self._config.max_pages):
@@ -533,7 +534,7 @@ class KarakeepAdapter:
 
         # Karakeep deletes bookmarks outright. Only a complete snapshot can
         # safely turn an absent previously-published item into a tombstone.
-        if completed_scan:
+        if completed_scan and scan_started_at_first_page:
             for item_id in self._cursor.item_ids(source_id) - seen_item_ids:
                 outcome = self._publish_snapshot(_disappeared_snapshot(item_id))
                 if outcome is None:
