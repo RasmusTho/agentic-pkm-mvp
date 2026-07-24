@@ -26,6 +26,10 @@ from app.builderops.model_inquiry_adapters import (
     sanitized_adapter_identity,
 )
 from app.builderops.models import BuilderOpsValidationError
+from scripts.install_model_inquiry_host import (
+    HostInstallError,
+    check as check_host_entrypoints,
+)
 
 WORKFLOW = "fable-gpt-architecture"
 SOURCE_REF = "desktop_skill:start-model-inquiry"
@@ -43,6 +47,52 @@ def preflight_dependencies(
     """Validate the durable store and explicit adapters without mutation."""
     ModelInquiryService.from_env(env)
     adapters = load_adapters(env)
+    subscription_entrypoints = {
+        "fable": "fable-subscription-cli",
+        "gpt_codex": "codex-subscription-cli",
+    }
+    if all(
+        isinstance(adapters.get(role), LocalCommandAdapter)
+        and adapters[role].adapter_id == entrypoint
+        and adapters[role].argv == (entrypoint,)
+        for role, entrypoint in subscription_entrypoints.items()
+    ):
+        path = env.get("PATH", os.defpath)
+        discovered = {
+            role: shutil.which(entrypoint, path=path)
+            for role, entrypoint in subscription_entrypoints.items()
+        }
+        if not all(discovered.values()):
+            missing_role = next(role for role, value in discovered.items() if value is None)
+            adapter = adapters[missing_role]
+            raise AdapterUnavailableError(
+                f"{missing_role}: local command unavailable: {adapter.adapter_id}"
+            )
+        bin_dirs = {
+            str(Path(value).absolute().parent)
+            for value in discovered.values()
+            if value is not None
+        }
+        if len(bin_dirs) != 1:
+            raise AdapterUnavailableError(
+                "subscription role entrypoints do not share one validated host bin directory"
+            )
+        try:
+            selected_python = Path(env.get("BUILDEROPS_PYTHON", sys.executable))
+            host_status = check_host_entrypoints(
+                repo_root=command_cwd,
+                bin_dir=Path(bin_dirs.pop()),
+                python=selected_python,
+                path=path,
+            )
+        except HostInstallError as exc:
+            raise AdapterUnavailableError(
+                "subscription role entrypoints failed installed-lineage preflight"
+            ) from exc
+        if not host_status["ok"]:
+            raise AdapterUnavailableError(
+                "subscription role entrypoints failed installed-lineage preflight"
+            )
     for role, adapter in adapters.items():
         if not isinstance(adapter, LocalCommandAdapter):
             continue

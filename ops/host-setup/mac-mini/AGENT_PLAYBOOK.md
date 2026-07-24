@@ -46,6 +46,62 @@ Work top to bottom; stop and report if a step fails.
 7. **Report** to the operator: gateway `/healthz`, the env you set, and the
    routed-vs-local check result.
 
+## BuilderOps Model Inquiry host entrypoints
+
+The Model Inquiry launcher expects two stable host commands:
+`fable-subscription-cli` and `codex-subscription-cli`. Install them as durable,
+owner-only wrappers bound to the current repository checkout:
+
+```bash
+repo_root="$(git rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/install_model_inquiry_host.py" install \
+  --repo-root "$repo_root" \
+  --bin-dir "$HOME/.local/bin" \
+  --python "$repo_root/.venv/bin/python3"
+```
+
+The operation is idempotent. An exact rerun reports both entrypoints as
+`unchanged`; an unrelated existing file, symlinked bin directory, or unsafe
+permissions fail closed and must be inspected rather than overwritten.
+If an I/O failure interrupts the two-role install, an exact first wrapper may
+remain while the second is absent. Do not delete it as rollback: rerun the same
+command, which validates the retained wrapper and converges the missing role.
+Any reported temporary-file cleanup failure remains an install failure and
+requires inspection of owner-only `.<entrypoint>.*.tmp` files in the bin
+directory.
+
+Before advertising the launcher as healthy, run the sanitized, read-only check:
+
+```bash
+python3 "$repo_root/scripts/install_model_inquiry_host.py" check \
+  --repo-root "$repo_root" \
+  --bin-dir "$HOME/.local/bin" \
+  --python "$repo_root/.venv/bin/python3"
+```
+
+The check succeeds only when both wrappers match the selected checkout and
+interpreter, the current `PATH` resolves both role names to those exact wrapper
+files, and the underlying `claude`, `codex`, and `yggdrasil-model-inquiry`
+commands are discoverable. It does not invoke either provider or inspect
+authentication. If the host needs a GUI-session proxy for subscription access,
+configure that separately outside Git and rerun the check afterward.
+
+After a reboot or checkout promotion, run the same `check` command through the
+actual non-interactive transport:
+
+```bash
+ssh -T Tailscale_macmini \
+  'PATH="$HOME/.local/bin:$PATH"; python3 /path/to/repo/scripts/install_model_inquiry_host.py check --repo-root /path/to/repo --bin-dir "$HOME/.local/bin" --python /path/to/repo/.venv/bin/python3'
+```
+
+If `check` reports a stale wrapper after an intentional checkout or interpreter
+move, inspect both wrapper files first. Only when they are confirmed as products
+of this installer, move them to an owner-only backup directory and rerun
+`install`. The installer intentionally does not overwrite or delete a stale,
+symlinked, or unrelated command. Uninstall uses the same rule: verify lineage,
+back up or remove exactly those two wrapper files, then rerun `check` to confirm
+they are unavailable.
+
 ## Notes
 - Embeddings must never route to the gaming PC (identity drift would force a full
   index rebuild — see `docs/LLM_ROUTING.md`). The gateway enforces this; don't

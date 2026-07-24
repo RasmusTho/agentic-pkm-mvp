@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_inquiry_adapters import AdapterUnavailableError
+from scripts.start_model_inquiry import preflight_dependencies
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "start_model_inquiry.sh"
@@ -333,6 +335,127 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
     )
     assert missing_executable.returncode == 2
     assert "local command unavailable" in missing_executable.stderr
+    assert not (vault / "model-inquiries").exists()
+
+
+def test_host_role_entrypoints_gate_desktop_preflight(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    adapter_config = {
+        "fable": {
+            "kind": "command",
+            "role_identity": "fable",
+            "adapter_id": "fable-subscription-cli",
+            "provider": "anthropic-subscription",
+            "model": "configured-fable",
+            "argv": ["fable-subscription-cli"],
+            "environment_allowlist": ["PATH"],
+        },
+        "gpt_codex": {
+            "kind": "command",
+            "role_identity": "gpt_codex",
+            "adapter_id": "codex-subscription-cli",
+            "provider": "openai-subscription",
+            "model": "configured-codex",
+            "argv": ["codex-subscription-cli"],
+            "environment_allowlist": ["PATH"],
+        },
+    }
+    env = {
+        **os.environ,
+        "PATH": str(bin_dir),
+        "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
+        "BUILDEROPS_VAULT_ROOT": str(tmp_path / "vault"),
+        "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(adapter_config),
+    }
+    (tmp_path / "vault").mkdir()
+    for command in ("claude", "codex", "yggdrasil-model-inquiry"):
+        executable = bin_dir / command
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+
+    with pytest.raises(AdapterUnavailableError, match="fable-subscription-cli"):
+        preflight_dependencies(env, command_cwd=REPO_ROOT)
+
+    for command in ("fable-subscription-cli", "codex-subscription-cli"):
+        executable = bin_dir / command
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+    with pytest.raises(AdapterUnavailableError, match="installed-lineage preflight"):
+        preflight_dependencies(env, command_cwd=REPO_ROOT)
+    for command in ("fable-subscription-cli", "codex-subscription-cli"):
+        (bin_dir / command).unlink()
+
+    selected_python = tmp_path / "selected-python"
+    selected_python.symlink_to(Path(sys.executable))
+    env["BUILDEROPS_PYTHON"] = str(selected_python)
+    installed = _run_host_installer(tmp_path, bin_dir, python=selected_python)
+    assert installed.returncode == 0, installed.stderr
+    result = preflight_dependencies(env, command_cwd=REPO_ROOT)
+
+    assert set(result["adapters"]) == {"fable", "gpt_codex"}
+    assert not (tmp_path / "vault" / "model-inquiries").exists()
+    mismatched_env = {key: value for key, value in env.items() if key != "BUILDEROPS_PYTHON"}
+    with pytest.raises(AdapterUnavailableError, match="installed-lineage preflight"):
+        preflight_dependencies(mismatched_env, command_cwd=REPO_ROOT)
+
+
+def _run_host_installer(
+    tmp_path: Path,
+    bin_dir: Path,
+    *,
+    python: Path = Path(sys.executable),
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "install_model_inquiry_host.py"),
+            "install",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--bin-dir",
+            str(bin_dir),
+            "--python",
+            str(python),
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "BUILDEROPS_DB_PATH": str(tmp_path / "unused.sqlite3")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_generic_command_adapters_do_not_require_host_entrypoint_lineage(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    config: dict[str, dict[str, object]] = {}
+    for role in ("fable", "gpt_codex"):
+        command = bin_dir / f"generic-{role}"
+        command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        command.chmod(0o700)
+        config[role] = {
+            "kind": "command",
+            "role_identity": role,
+            "adapter_id": f"generic-{role}",
+            "provider": f"provider-{role}",
+            "model": f"model-{role}",
+            "argv": [str(command)],
+        }
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    env = {
+        **os.environ,
+        "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
+        "BUILDEROPS_VAULT_ROOT": str(vault),
+        "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(config),
+    }
+
+    result = preflight_dependencies(env, command_cwd=REPO_ROOT)
+
+    assert set(result["adapters"]) == {"fable", "gpt_codex"}
     assert not (vault / "model-inquiries").exists()
 
 

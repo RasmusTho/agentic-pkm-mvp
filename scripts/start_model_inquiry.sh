@@ -16,4 +16,5 @@ if [ -z "$PYTHON" ]; then
 fi
 
 cd "$APP_ROOT"
+export BUILDEROPS_PYTHON="$PYTHON"
 exec "$PYTHON" "$SCRIPT_DIR/start_model_inquiry.py" "$@"

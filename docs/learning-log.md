@@ -201,3 +201,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** Chat reservations and process polling did not prevent another worktree from starting a host-global non-PG full suite, wasting one exact-SHA proof and forcing quiet-period recovery.
 **Upstream artifact:** `AGENTS.md :: Parallel-agent execution`, `docs/development/DEV_WORKFLOW.md`, and `scripts/run_with_host_lease.py` — replace advisory chat coordination with an atomic repo-common kernel lease held for the complete host-global child process.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement is absent.
+
+## 2026-07-24 — #3958 (descriptor-bound Git authority)
+**Source:** Sol/xhigh mechanism convergence review
+**Diverged:** The plan treated before/after pathname identity checks around `git -C` as checkout-lineage proof, but an ABA replacement can source HEAD/index from a foreign checkout while restoring the trusted path before every check.
+**Upstream artifact:** `docs/BUILDEROPS_MODEL_INQUIRY/MODEL_TURN_ADAPTERS.md :: Host role-entrypoint lifecycle` — require immutable in-process digest/object authority rather than treating Git evidence obtained through a mutable pathname as lineage proof.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
