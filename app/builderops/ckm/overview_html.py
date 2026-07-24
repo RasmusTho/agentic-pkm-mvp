@@ -73,6 +73,110 @@ def _edge_counts(edges: Sequence[CkmEvidenceEdge]) -> tuple[int, int]:
     )
 
 
+def _shared_evidence_pairs(
+    edges_by_capability: Mapping[str, Sequence[CkmEvidenceEdge]],
+) -> frozenset[tuple[str, str]]:
+    capability_ids_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for edges in edges_by_capability.values():
+        for edge in edges:
+            capability_ids_by_pair[(edge.artifact_id, edge.basis)].add(
+                edge.capability_id
+            )
+    return frozenset(
+        pair
+        for pair, capability_ids in capability_ids_by_pair.items()
+        if len(capability_ids) >= 2
+    )
+
+
+def _evidence_count_values(
+    edges: Sequence[CkmEvidenceEdge],
+    shared_pairs: frozenset[tuple[str, str]],
+) -> tuple[int, int, int, str]:
+    distinct_artifacts = len({edge.artifact_id for edge in edges})
+    edge_count = len(edges)
+    shared_edge_count = sum(
+        (edge.artifact_id, edge.basis) in shared_pairs for edge in edges
+    )
+    shared_percentage = (
+        f"{shared_edge_count / edge_count:.1%}" if edge_count else "0.0%"
+    )
+    return distinct_artifacts, edge_count, shared_edge_count, shared_percentage
+
+
+def _subsystem_counts_markup(
+    forest: Sequence[tuple[int, CkmCapability]],
+    edges_by_capability: Mapping[str, Sequence[CkmEvidenceEdge]],
+) -> str:
+    shared_pairs = _shared_evidence_pairs(edges_by_capability)
+    all_edges = tuple(
+        edge
+        for _, capability in forest
+        for edge in edges_by_capability.get(capability.id, ())
+    )
+    (
+        global_artifacts,
+        global_edges,
+        global_shared_edges,
+        global_shared_percentage,
+    ) = _evidence_count_values(all_edges, shared_pairs)
+
+    groups: list[list[tuple[int, CkmCapability]]] = []
+    current: list[tuple[int, CkmCapability]] = []
+    for depth, capability in forest:
+        if depth == 0:
+            if current:
+                groups.append(current)
+            current = [(depth, capability)]
+        else:
+            current.append((depth, capability))
+    if current:
+        groups.append(current)
+
+    cards: list[str] = []
+    for group in groups:
+        root = group[0][1]
+        group_edges = tuple(
+            edge
+            for _, capability in group
+            for edge in edges_by_capability.get(capability.id, ())
+        )
+        distinct_artifacts, edge_count, shared_edge_count, shared_percentage = (
+            _evidence_count_values(group_edges, shared_pairs)
+        )
+        capability_rows: list[str] = []
+        for depth, capability in group:
+            capability_edges = edges_by_capability.get(capability.id, ())
+            (
+                capability_artifacts,
+                capability_edge_count,
+                capability_shared_edges,
+                capability_shared_percentage,
+            ) = _evidence_count_values(capability_edges, shared_pairs)
+            capability_rows.append(
+                f"""<li class="capability-count" data-capability-name="{_e(capability.name)}" data-distinct-artifacts="{capability_artifacts}" data-shared-edge-count="{capability_shared_edges}" data-edge-count="{capability_edge_count}" data-shared-evidence="{capability_shared_percentage}" style="--count-depth:{depth}">
+              <span class="count-name">{_e(capability.name)}</span>
+              <span>distinct artifacts: <strong>{capability_artifacts}</strong></span>
+              <span class="secondary">edges: {capability_edge_count}</span>
+              <span>shared evidence: <strong>{capability_shared_percentage}</strong> ({capability_shared_edges} of {capability_edge_count} edges)</span>
+            </li>"""
+            )
+        cards.append(
+            f"""<section class="subsystem-counts-card" data-subsystem-name="{_e(root.name)}" data-capability-count="{len(group)}" data-distinct-artifacts="{distinct_artifacts}" data-shared-edge-count="{shared_edge_count}" data-edge-count="{edge_count}" data-shared-evidence="{shared_percentage}">
+          <h3>{_e(root.name)} subsystem</h3>
+          <p>capabilities: <strong>{len(group)}</strong> · distinct artifacts: <strong>{distinct_artifacts}</strong> · shared evidence: <strong>{shared_percentage}</strong> ({shared_edge_count} of {edge_count} edges)</p>
+          <ul>{"".join(capability_rows)}</ul>
+        </section>"""
+        )
+
+    cards_markup = "".join(cards) or '<p class="empty">No subsystems in the CKM store.</p>'
+    return f"""<section class="subsystem-counts" aria-labelledby="subsystem-counts-heading">
+      <h2 id="subsystem-counts-heading">Evidence counts by subsystem</h2>
+      <p class="linkage-masthead" data-denominator="global" data-distinct-artifacts="{global_artifacts}" data-capability-count="{len(forest)}" data-shared-edge-count="{global_shared_edges}" data-edge-count="{global_edges}" data-shared-evidence="{global_shared_percentage}"><strong>Linkage masthead:</strong> {global_artifacts} distinct artifacts across {len(forest)} capabilities · shared evidence: <strong>{global_shared_percentage}</strong> of all {global_edges} edges (global).</p>
+      <div class="subsystem-counts-grid">{cards_markup}</div>
+    </section>"""
+
+
 def _citation_source(citation: Mapping[str, object]) -> str:
     source_ref = citation.get("source_ref")
     artifact = citation.get("artifact")
@@ -328,6 +432,7 @@ def render_overview_html(
         )
         for capability in capabilities
     }
+    forest = _forest(capabilities)
     cards = "".join(
         _capability_markup(
             capability,
@@ -336,7 +441,7 @@ def render_overview_html(
             findings=batch.findings_by_capability.get(capability.id, ()),
             projection=batch.assessments_by_capability.get(capability.id),
         )
-        for depth, capability in _forest(capabilities)
+        for depth, capability in forest
     ) or '<p class="empty">No capabilities in the CKM store.</p>'
     grouped: dict[str, list[CkmFinding]] = defaultdict(list)
     for finding in all_findings:
@@ -361,6 +466,7 @@ def render_overview_html(
     main,footer {{ width:min(74rem,calc(100% - 2rem)); margin:0 auto; }} a {{ color:inherit; }} summary:focus-visible,a:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
     .projection-banner {{ border-left:0.25rem solid var(--amber); background:var(--bg-raised); padding:0.75rem 1rem; color:var(--fg-2); }} header {{ padding:1.75rem 0 0.75rem; }} h1 {{ font:400 1.75rem/1.2 ui-serif,Georgia,serif; }} h2 {{ margin-top:1.5rem; }} .subtitle,.empty,small,.meta {{ color:var(--fg-2); }}
     .trust-strip {{ display:grid; grid-template-columns:repeat(5,1fr); border:1px solid var(--border-strong); background:var(--bg-surface); }} .trust-strip a {{ padding:0.625rem; text-decoration:none; border-right:1px solid var(--border); }}
+    .linkage-masthead {{ padding:0.75rem; border-left:0.25rem solid var(--agent); background:var(--bg-raised); }} .subsystem-counts-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(22rem,1fr)); gap:0.75rem; }} .subsystem-counts-card {{ border:1px solid var(--border); background:var(--bg-surface); padding:0.75rem; }} .subsystem-counts-card h3 {{ margin:0; }} .subsystem-counts-card ul {{ list-style:none; margin:0.75rem 0 0; padding:0; }} .capability-count {{ display:grid; grid-template-columns:minmax(10rem,1fr) repeat(3,auto); gap:0.5rem 1rem; margin-left:calc(var(--count-depth) * 0.75rem); padding:0.45rem 0; border-top:1px solid var(--border); }} .count-name {{ font-weight:600; }} .secondary {{ color:var(--fg-2); }}
     .legend {{ display:grid; grid-template-columns:2fr 1fr; gap:1rem; margin:1rem 0; padding:0.75rem; border:1px solid var(--border); background:var(--bg-surface); }} .legend ul {{ display:flex; gap:0.5rem 1rem; flex-wrap:wrap; list-style:none; padding:0; margin:0.35rem 0 0; }} .legend-cell {{ display:inline-block; width:1.5rem; height:0.5rem; margin-right:0.3rem; background:var(--agent); }} .legend-cell.starved {{ border:1px dotted var(--amber); background:transparent; }} .legend-cell.unassessed {{ height:auto; background:none; color:var(--fg-3); }}
     .dimension-rail {{ position:sticky; top:0; z-index:2; display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin-left:auto; width:13rem; padding:0.25rem; background:var(--bg-base); color:var(--fg-2); font:0.7rem ui-monospace,monospace; text-align:center; }}
     .capability {{ margin:0.5rem 0 0.5rem calc(var(--depth) * 1.375rem); border:1px solid var(--border); border-left:0.25rem solid var(--unknown); border-radius:0.25rem; background:var(--bg-surface); }}
@@ -370,7 +476,7 @@ def render_overview_html(
     .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
     .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
     footer {{ margin-top:1.75rem; padding:1rem 0 2.25rem; border-top:1px solid var(--border); color:var(--fg-2); overflow-wrap:anywhere; }}
-    @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
+    @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .subsystem-counts-grid {{ grid-template-columns:1fr; }} .capability-count {{ grid-template-columns:1fr; gap:0.15rem; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
   </style>
 </head>
 <body>
@@ -378,6 +484,7 @@ def render_overview_html(
   <main>
     <header><h1>Development Overview</h1><p class="subtitle">Capability Knowledge Model maturity, trust, and cited drill-down.</p></header>
     {_trust_strip(capabilities, assessments, len(all_findings))}
+    {_subsystem_counts_markup(forest, batch.edges_by_capability)}
     <section aria-labelledby="map-heading">
       <h2 id="map-heading">Capability map</h2>
       {_legend()}
