@@ -19,7 +19,7 @@ Make the model consumable — for the owner, for builder agents, and for reports
 
 - Extends `app/builderops/ckm/projections.py` with four projection types, following the `app/builderops/projections.py` metadata contract (every output opens with the generated-projection header):
   - `ckm-capability-map` — the capability forest with lifecycle, boundary refs, evidence counts (confirmed vs candidate), unlinked-artifact count.
-  - `ckm-maturity` — per capability: the seven-dimension vector with per-dimension citations count, candidate share, aggregate (labeled convenience), low-confidence and **staleness** flags (INV-CKM-5: assessment older than evidence watermark ⇒ `STALE` marker).
+  - `ckm-maturity` — per capability: the seven-dimension vector with per-dimension citations count, candidate share, low-confidence and **staleness** flags (INV-CKM-5: assessment older than evidence watermark ⇒ `STALE` marker). The stored aggregate remains a compatibility field but is not rendered in Markdown projections.
   - `ckm-gaps` — current findings grouped by kind, each with its statement + citations.
   - `ckm-traceability-matrix` — a generated matrix in the same column shape as `docs/architecture/traceability-matrix.md`, emitted for **side-by-side comparison** with the hand-authored one; divergence is a signal, never an auto-edit (ADR-0057 §Consequences).
 - CLI query surface: `python -m app.builderops ckm show <capability-slug>` (assessment + evidence listing with basis strings) and `python -m app.builderops ckm project --type <type> --out <dir>`.
