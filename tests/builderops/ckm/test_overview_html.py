@@ -133,7 +133,10 @@ def test_pure_render_over_fixture_graph(overview_store: CkmStore) -> None:
     assert '<div class="capability-tree">' in first
     assert "Retrieval" in first and "Context Assembly" in first
     assert 'style="--depth:1"' in first
-    assert 'data-aggregate-band="healthy"' in first
+    assert "data-aggregate-band" not in first
+    assert "band-critical" not in first
+    assert "band-watch" not in first
+    assert "band-healthy" not in first
     assert first.count('class="dimension-bar"') == len(MATURITY_DIMENSIONS)
     summary = first.split("</summary>", maxsplit=1)[0]
     assert summary.count('class="mini-dimension ') == len(MATURITY_DIMENSIONS)
@@ -198,8 +201,11 @@ def test_gap_capability_crosslinks(overview_store: CkmStore) -> None:
 def test_aggregate_demoted_label(overview_store: CkmStore) -> None:
     rendered = render_overview_html(overview_store)
 
-    assert '<span class="aggregate" title="Minimum of seven maturity dimensions">min 0.80</span>' in rendered
-    assert '<span class="aggregate" title="Minimum of seven maturity dimensions">min —</span>' in rendered
+    assert 'class="aggregate"' not in rendered
+    assert "Minimum of seven maturity dimensions" not in rendered
+    assert "data-aggregate-band" not in rendered
+    assert 'class="band-label"' not in rendered
+    assert 'class="band-dot"' not in rendered
 
 
 def test_legend_dimension_mapping(overview_store: CkmStore) -> None:
@@ -243,7 +249,7 @@ def test_accessibility_and_responsive_contract(overview_store: CkmStore) -> None
     assert 'font-size:1rem' in rendered
     assert 'role="img"' in rendered
     assert "Citations — operational readiness (0)" in rendered
-    assert '<span class="band-dot" aria-hidden="true"></span>' in rendered
+    assert 'class="band-dot"' not in rendered
 
 
 def test_node_lifecycle_and_evidence_confirmation_are_distinct(

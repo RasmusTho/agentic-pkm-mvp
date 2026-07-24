@@ -19,7 +19,7 @@ Refine `app/builderops/ckm/overview_html.py` so a reader can judge trust and mat
 - a complete seven-dimension legend and aligned column rail;
 - collapsed-row stale, low-confidence, candidate-share, and gap markers;
 - scored, evidence-starved, and unassessed dimension-cell states;
-- a subordinate aggregate labeled `min`, plus text-and-shape maturity-band encoding;
+- no cross-dimension aggregate or maturity-band presentation; the per-dimension vector is the collapsed-row display;
 - explicit `node: confirmed` lifecycle wording;
 - explicit explanatory prose in expanded details that names assessment availability, stale-relative-to-evidence state, and candidate-evidence share without presenting absence as zero;
 - capability↔gap fragment links and grouped gap presentation;
@@ -29,9 +29,9 @@ The renderer signature remains `render_overview_html(store) -> str`. Store reads
 
 ## CKM11-STATIC-CONTRACT
 
-The output remains one self-contained HTML file with inline CSS, native semantic HTML, and no JavaScript, remote fonts, images, stylesheets, or other network references. Verify: CKM11 acceptance criterion 8. Missing-database behavior is unchanged and rendering is deterministic. Verify: CKM11 acceptance criterion 11. Missing assessment is rendered as unavailable (`—` / `min —`), never as `0.00` or `0.0%`. Candidate and confirmed evidence remain visibly distinct. Verify: CKM11 acceptance criteria 2, 3, and 12.
+The output remains one self-contained HTML file with inline CSS, native semantic HTML, and no JavaScript, remote fonts, images, stylesheets, or other network references. Verify: CKM11 acceptance criterion 8. Missing-database behavior is unchanged and rendering is deterministic. Verify: CKM11 acceptance criterion 11. Missing assessment is rendered as unavailable (`—`), never as `0.00` or `0.0%`. Candidate and confirmed evidence remain visibly distinct. Verify: CKM11 acceptance criteria 2, 3, and 12.
 
-Every color signal has a text or shape twin: maturity band uses dot plus word; trust states use named chips; candidate share uses a named percentage; unassessed uses a dash plus accessible text; evidence-starved uses a dotted treatment plus citation count. Verify: CKM11 acceptance criteria 1, 2, 3, 5, and 10.
+Every color signal has a text or shape twin: trust states use named chips; candidate share uses a named percentage; unassessed uses a dash plus accessible text; evidence-starved uses a dotted treatment plus citation count. Verify: CKM11 acceptance criteria 1, 2, 3, and 10.
 
 ## CKM11-DIMENSIONS
 
@@ -55,7 +55,7 @@ The legend spells out every mapping. Verify: CKM11 acceptance criterion 7. Each 
 2. Every collapsed capability renders exactly seven dimension cells: scored cells expose proportional fill values, evidence-starved zeroes use the dotted state, and unavailable cells render `—` without a score/fill value. Verify: `tests/builderops/ckm/test_overview_html.py::test_dimension_cells_render_three_states_and_proportional_fill`
 3. Candidate-share summary markup is absent at zero and present with a percentage above zero. Verify: `tests/builderops/ckm/test_overview_html.py::test_candidate_chip_conditional`
 4. Findings for known capabilities link to their capability fragments, and capabilities with findings link back to grouped gap fragments. Verify: `tests/builderops/ckm/test_overview_html.py::test_gap_capability_crosslinks`
-5. The aggregate is labeled `min {value}` or `min —` and is never an anonymous summary numeral. Verify: `tests/builderops/ckm/test_overview_html.py::test_aggregate_demoted_label`
+5. The collapsed capability summary renders no cross-dimension aggregate or maturity band: no `min` aggregate chip, `band-*` class, `data-aggregate-band` attribute, or band label. Verify: `tests/builderops/ckm/test_overview_html.py::test_aggregate_demoted_label`
 6. The generated-projection provenance banner precedes the capability map and the projection footer contract remains present. Verify: `tests/builderops/ckm/test_overview_html.py::test_provenance_banner_precedes_map_and_footer_remains`
 7. The legend contains all seven full dimension names and explains scored, evidence-starved, and unassessed cells. Verify: `tests/builderops/ckm/test_overview_html.py::test_legend_dimension_mapping`
 8. Output remains self-contained with no script elements, executable inline handlers, or external/network references. Verify: `tests/builderops/ckm/test_overview_html.py::test_no_scripts_or_external_references`
@@ -71,7 +71,7 @@ The legend spells out every mapping. Verify: CKM11 acceptance criterion 7. Each 
 - Preserve visible `:focus-visible` outlines on summaries and links. Verify: CKM11 acceptance criterion 10.
 - Provide a visible plus/minus disclosure affordance without motion. Verify: CKM11 acceptance criterion 10.
 - Use system font stacks and relative units; avoid horizontal scrolling at 390 px and at 200% zoom-equivalent widths. Verify: CKM11 acceptance criterion 10 plus parent #3138 visual-review receipt.
-- Give every collapsed trust signal a non-color label and every maturity band a dot plus text. Verify: CKM11 acceptance criteria 1, 5, and 10.
+- Give every collapsed trust signal a non-color label. Verify: CKM11 acceptance criteria 1 and 10.
 - Use unique expanded disclosure labels such as `Citations — test completeness (0)`. Verify: CKM11 acceptance criterion 10.
 
 ## CKM11-OUT-OF-SCOPE

@@ -169,6 +169,16 @@ def test_candidate_confirmed_distinction_rendered(populated_store: CkmStore) -> 
     assert "basis: semantic:retrieval-doc" in shown
 
 
+def test_assessment_projections_do_not_render_aggregate_convenience_scores(
+    populated_store: CkmStore,
+) -> None:
+    maturity = render_projection(populated_store, "ckm-maturity")
+    shown = render_capability_show(populated_store, "retrieval")
+
+    assert "aggregate convenience score" not in maturity
+    assert "aggregate convenience score" not in shown
+
+
 def test_generated_matrix_shape_and_never_overwrites_canonical(
     populated_store: CkmStore,
     tmp_path: Path,
