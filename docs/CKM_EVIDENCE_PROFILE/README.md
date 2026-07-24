@@ -1,4 +1,4 @@
-State: Ratified-scope specification directory for CKM Evidence Profile **Phase 1 only**. Grounds the ratified Phase 1 of the CKM evidence-profile redesign (retire the render-time cross-dimension scalar, add per-dimension tri-state, add a per-subsystem counts view) from the advisory plan `research/CKM_EVIDENCE_PROFILE_IMPLEMENTATION_PLAN_2026-07-18.md` (BuilderOps Vault). Not yet filed: no parent feature issue or child slice issues exist; the coordinator files them from this merged spec. Phase 2 as originally scoped was superseded 2026-07-18 by the validation-panel verdict (BuilderOps Vault: `research/CKM_PHASE2_VALIDATION_PANEL_2026-07-18.md`) in favor of a linker-precision workstream; Phase 3 is cut from ratification. Docs-only; enacts no schema, scoring, or render change on its own.
+State: Filed Phase 1 specification directory for CKM Evidence Profile. Parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089) is open with `agent:blocked`; children #4090–#4092 are open, with #4091–#4092 carrying `agent:blocked`. Grounds the ratified Phase 1 of the CKM evidence-profile redesign (retire the render-time cross-dimension scalar, add per-dimension tri-state, add a per-subsystem counts view) from the advisory plan `research/CKM_EVIDENCE_PROFILE_IMPLEMENTATION_PLAN_2026-07-18.md` (BuilderOps Vault). Phase 2 as originally scoped was superseded 2026-07-18 by the validation-panel verdict (BuilderOps Vault: `research/CKM_PHASE2_VALIDATION_PANEL_2026-07-18.md`) in favor of a linker-precision workstream; Phase 3 is cut from ratification. This docs-only specification and its Issues enact no schema, scoring, or render change on their own.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the Phase 1 task decomposition, execution order, cross-task invariants, and acceptance path for the CKM Evidence Profile redesign. Subordinate to ADR-0057 (CKM existence and projection-only posture), the accepted CKM MVP contract `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`, and the Direction A presentation contract `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md`. Governs nothing that those owners govern; it specifies bounded implementation work only.
 Owner: BuilderOps governance / Capability Knowledge Model
@@ -214,10 +214,24 @@ These invariants hold *across* the three tasks. Each task names the ones it must
 
 ## Relationship to GitHub issues
 
-**Not yet filed.** This directory ships as a docs-only specification. The coordinator creates the
-parent feature issue and the bounded child slice issues (CKM-EP-01, CKM-EP-02, CKM-EP-03) from this
-merged spec — this authoring PR does not file issues. When the parent feature issue is filed, add its
-number here and reconcile the `State:` line so this directory no longer reads as a pre-filing draft.
+The authoritative backlog and live acceptance surface is parent validation hub
+[#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089), which is open with
+`agent:blocked` and is never a pickup issue. Its local pointer and validation-hub map is
+[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
+
+The three serial child slices are filed from this specification:
+
+1. CKM-EP-01 — [#4090](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4090) —
+   [SCALAR_RETIREMENT.md](SCALAR_RETIREMENT.md); open; first serial slice.
+2. CKM-EP-02 — [#4091](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4091) —
+   [TRISTATE_STATUS.md](TRISTATE_STATUS.md); open and `agent:blocked` pending CKM-EP-01.
+3. CKM-EP-03 — [#4092](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4092) —
+   [SUBSYSTEM_COUNTS_VIEW.md](SUBSYSTEM_COUNTS_VIEW.md); open and `agent:blocked` pending the
+   serial execution path.
+
+Each delivered child posts its exact PR/SHA, validation, owner-doc result, and parent handoff to
+#4089. The parent remains open until the terminal INV-EP-6 real-store validation receipt resolves
+the capability-level acceptance path.
 
 ## Verification and acceptance path
 
