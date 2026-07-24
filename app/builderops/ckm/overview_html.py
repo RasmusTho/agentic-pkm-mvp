@@ -66,16 +66,6 @@ def _forest(capabilities: Sequence[CkmCapability]) -> list[tuple[int, CkmCapabil
     return result
 
 
-def _band(aggregate: float | None) -> str:
-    if aggregate is None:
-        return "unknown"
-    if aggregate < 0.4:
-        return "critical"
-    if aggregate < 0.7:
-        return "watch"
-    return "healthy"
-
-
 def _edge_counts(edges: Sequence[CkmEvidenceEdge]) -> tuple[int, int]:
     return (
         sum(edge.lifecycle == "confirmed" for edge in edges),
@@ -211,8 +201,6 @@ def _capability_markup(
 ) -> str:
     confirmed, candidate = _edge_counts(edges)
     assessment = projection.assessment if projection else None
-    aggregate = float(assessment.aggregate) if assessment else None
-    band = _band(aggregate)
     summary_flags: list[str] = []
     if projection and projection.stale_relative_to_evidence:
         summary_flags.append(
@@ -243,16 +231,13 @@ def _capability_markup(
         if assessment
         else '<p class="empty">Assessment missing.</p>'
     )
-    aggregate_text = f"{aggregate:.2f}" if aggregate is not None else "—"
     return f"""
-    <article id="cap-{_e(capability.id)}" class="capability band-{band}" data-capability-id="{_e(capability.id)}" data-aggregate-band="{band}" style="--depth:{depth}" aria-label="{_e(capability.name)}, depth {depth}">
+    <article id="cap-{_e(capability.id)}" class="capability" data-capability-id="{_e(capability.id)}" style="--depth:{depth}" aria-label="{_e(capability.name)}, depth {depth}">
       <details class="capability-details">
         <summary class="capability-summary">
           <span class="tree-name">{_e(capability.name)}</span>
           <span class="summary-flags">{"".join(summary_flags)}</span>
           {_mini_dimensions_markup(assessment)}
-          <span class="aggregate" title="Minimum of seven maturity dimensions">min {_e(aggregate_text)}</span>
-          <span class="band-label"><span class="band-dot" aria-hidden="true"></span>{band}</span>
           <span class="lifecycle">node: {_e(capability.lifecycle)}</span>
         </summary>
         <div class="capability-body">
@@ -357,11 +342,10 @@ def render_overview_html(
     .trust-strip {{ display:grid; grid-template-columns:repeat(5,1fr); border:1px solid var(--border-strong); background:var(--bg-surface); }} .trust-strip a {{ padding:0.625rem; text-decoration:none; border-right:1px solid var(--border); }}
     .legend {{ display:grid; grid-template-columns:2fr 1fr; gap:1rem; margin:1rem 0; padding:0.75rem; border:1px solid var(--border); background:var(--bg-surface); }} .legend ul {{ display:flex; gap:0.5rem 1rem; flex-wrap:wrap; list-style:none; padding:0; margin:0.35rem 0 0; }} .legend-cell {{ display:inline-block; width:1.5rem; height:0.5rem; margin-right:0.3rem; background:var(--agent); }} .legend-cell.starved {{ border:1px dotted var(--amber); background:transparent; }} .legend-cell.unassessed {{ height:auto; background:none; color:var(--fg-3); }}
     .dimension-rail {{ position:sticky; top:0; z-index:2; display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin-left:auto; width:13rem; padding:0.25rem; background:var(--bg-base); color:var(--fg-2); font:0.7rem ui-monospace,monospace; text-align:center; }}
-    .capability {{ margin:0.5rem 0 0.5rem calc(var(--depth) * 1.375rem); border:1px solid var(--border); border-left:0.25rem solid var(--unknown); border-radius:0.25rem; background:var(--bg-surface); }} .band-critical {{ border-left-color:var(--destructive); }} .band-watch {{ border-left-color:var(--amber); }} .band-healthy {{ border-left-color:var(--healthy); }}
+    .capability {{ margin:0.5rem 0 0.5rem calc(var(--depth) * 1.375rem); border:1px solid var(--border); border-left:0.25rem solid var(--unknown); border-radius:0.25rem; background:var(--bg-surface); }}
     summary {{ cursor:pointer; }} summary::before {{ content:"+"; color:var(--fg-2); font-family:ui-monospace,monospace; }} details[open] > summary::before {{ content:"−"; }} .capability-summary {{ min-height:2.75rem; display:flex; gap:0.5rem; align-items:center; padding:0.625rem 0.75rem; }} .capability-summary:hover {{ background:var(--bg-overlay); }} .tree-name {{ flex:1; font-weight:600; }}
-    .summary-flags {{ display:flex; gap:0.25rem; }} .flag,.badge,.lifecycle,.aggregate,.band-label {{ border:1px solid var(--border-strong); border-radius:0.1875rem; padding:0.125rem 0.375rem; font:0.7rem ui-monospace,monospace; white-space:nowrap; }} .flag-stale {{ background:var(--amber); color:var(--bg-base); }} .flag-low {{ border-color:var(--amber); color:var(--amber); }} .flag-candidate {{ border-color:var(--agent); color:var(--agent); }} .gap-link {{ color:var(--accent); text-decoration:none; }}
+    .summary-flags {{ display:flex; gap:0.25rem; }} .flag,.badge,.lifecycle {{ border:1px solid var(--border-strong); border-radius:0.1875rem; padding:0.125rem 0.375rem; font:0.7rem ui-monospace,monospace; white-space:nowrap; }} .flag-stale {{ background:var(--amber); color:var(--bg-base); }} .flag-low {{ border-color:var(--amber); color:var(--amber); }} .flag-candidate {{ border-color:var(--agent); color:var(--agent); }} .gap-link {{ color:var(--accent); text-decoration:none; }}
     .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-3); text-align:center; line-height:0.55rem; }}
-    .aggregate {{ color:var(--fg-2); }} .band-dot {{ display:inline-block; width:0.45rem; height:0.45rem; border-radius:50%; margin-right:0.3rem; background:var(--unknown); }} .band-critical .band-dot {{ background:var(--destructive); }} .band-watch .band-dot {{ background:var(--amber); }} .band-healthy .band-dot {{ background:var(--healthy); }}
     .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
     .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
     footer {{ margin-top:1.75rem; padding:1rem 0 2.25rem; border-top:1px solid var(--border); color:var(--fg-2); overflow-wrap:anywhere; }}

@@ -198,9 +198,7 @@ def _render_maturity(batch: CkmProjectionBatch) -> list[str]:
         freshness = "STALE relative to evidence" if projection.stale_relative_to_evidence else "current"
         confidence = "LOW CONFIDENCE" if assessment.low_confidence else "normal confidence"
         lines.extend([
-            f"Assessment: **{freshness}**; **{confidence}**; "
-            f"aggregate convenience score **{assessment.aggregate:.3f}** "
-            f"(`{assessment.aggregate_formula_id}`).",
+            f"Assessment: **{freshness}**; **{confidence}**.",
             "",
             "| Dimension | Score | Citations | Candidate share | Formula |",
             "| --- | ---: | ---: | ---: | --- |",
@@ -411,7 +409,7 @@ def render_capability_show(
         assessment = projection.assessment
         freshness = "STALE relative to evidence" if projection.stale_relative_to_evidence else "current"
         lines.extend([
-            f"Assessment: **{freshness}**; aggregate convenience score **{assessment.aggregate:.3f}**.",
+            f"Assessment: **{freshness}**.",
             "",
             "| Dimension | Score | Citations | Candidate share |",
             "| --- | ---: | ---: | ---: |",
