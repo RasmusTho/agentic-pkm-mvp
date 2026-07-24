@@ -21,7 +21,9 @@ silently changing the pair, reconstructing history, or manufacturing trend seman
 - Add a read-only active-sample selector over the existing adjacent
   `<builderops-stem>-metric-samples.sqlite` retention store.
 - Select exactly two active rows ordered by `retained_at DESC, sample_id DESC`.
-- Invoke `compare_retained_observations` once with those two IDs.
+- Reverse that selected pair into chronological `(older, newer)` order, then invoke
+  `compare_retained_observations` once with those exact two IDs so a signed delta is newer minus
+  older.
 - Render O1b component states/deltas, input sample and observation IDs/digests, freshness,
   provenance, compatibility bindings, limitations, and the exact fixed disclaimer.
 - Convert absent/incomplete retention storage, insufficient active rows, expiry/unavailable/tamper,
@@ -40,9 +42,10 @@ ORDER BY retained_at DESC, sample_id DESC
 LIMIT 2
 ```
 
-Zero or one row returns `insufficient_retained_samples` with the observed count. Two rows are passed
-unchanged to O1b. If O1b refuses, the cockpit renders that refusal; it does not ask SQLite for a
-third row.
+Zero or one row returns `insufficient_retained_samples` with the observed count. The selected two
+rows are reversed into chronological `(older, newer)` order before O1b, whose component delta is
+therefore newer minus older. If O1b refuses, the cockpit renders that refusal; it does not ask
+SQLite for a third row.
 
 Existing real recovery commands are shown only in relevant help text:
 
@@ -61,8 +64,8 @@ retention honesty, and the distinction between a two-point delta and a trend.
 
 ## Acceptance Criteria
 
-- [ ] The production cockpit CLI call selects exactly the newest two active rows by `retained_at DESC, sample_id DESC` using read-only storage and passes those exact IDs to O1b.
-  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_cli_compares_exact_newest_active_retained_pair`
+- [ ] The production cockpit CLI call selects exactly the newest two active rows by `retained_at DESC, sample_id DESC` using read-only storage, passes those exact IDs to O1b in chronological `(older, newer)` order, and renders signed numeric deltas as newer minus older.
+  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_cli_compares_exact_newest_pair_oldest_first`
 - [ ] If the newest two are incompatible while an older compatible row exists, the cockpit renders `incompatible_observations` and proves the older row was not read or compared.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_does_not_search_older_compatible_pair`
 - [ ] Missing/incomplete storage and zero/one active row render typed `source_unavailable` or `insufficient_retained_samples` states without creating or mutating the retention path.

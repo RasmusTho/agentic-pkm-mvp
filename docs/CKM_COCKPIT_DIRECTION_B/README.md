@@ -69,7 +69,7 @@ authoritative when design prose and repo truth differ.
 | --- | --- | --- | --- |
 | Enhanced local generated HTML | `app/builderops/ckm/overview_html.py :: render_overview_html`; `app/builderops/cli.py :: ckm_overview` | Keep, refine | Add opt-in `ckm overview --cockpit`; extend `render_overview_html(..., cockpit=...)` and `write_overview_html(..., cockpit=...)`. Do not add a sibling cockpit renderer. The default call remains Direction A compatible. |
 | Preserve Direction A visual language and scalar | `docs/CKM_EVIDENCE_PROFILE/README.md :: INV-EP-2`; `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` | Refine | Preserve the layout language, but sequence behind Evidence Profile Phase 1 and never restore or contractually depend on `min`, maturity bands, or aggregate colour. |
-| Newest compatible retained pair | `app/builderops/ckm/metrics.py :: MetricRetentionStore`; `app/builderops/ckm/comparison.py :: compare_retained_observations` | Refine | Select exactly the newest two active records by `(retained_at DESC, sample_id DESC)`. Compare those IDs once. Fewer than two, unavailable input, expiry/tamper, or incompatibility produces a typed visible refusal. Never search older rows. |
+| Newest compatible retained pair | `app/builderops/ckm/metrics.py :: MetricRetentionStore`; `app/builderops/ckm/comparison.py :: compare_retained_observations` | Refine | Select exactly the newest two active records by `(retained_at DESC, sample_id DESC)`, then reverse that selected pair to chronological `(older, newer)` order for O1b so a signed delta is newer minus older. Compare those IDs once. Fewer than two, unavailable input, expiry/tamper, or incompatibility produces a typed visible refusal. Never search older rows. |
 | Pairwise delta copy | `docs/CKM_MEASUREMENT_AND_ACCESS/COMPARE_COMPATIBLE_OBSERVATIONS.md` | Keep | Render only O1b component-wise deltas and the exact non-trend disclaimer; preserve input IDs/digests, provenance, freshness, limitations, and tagged state transitions. |
 | Broad banned-language scan | Existing Direction A prose, exact disclaimer, and cited source text | Refine | Test only new renderer-authored interpretation/proposal regions. Exempt the exact required disclaimer. Never scan citations, capability definitions, finding statements, or legacy Direction A copy as if they were generated claims. |
 | “Scorer blind spot” dead-dimension diagnosis | ADR-0057 projection posture; Evidence Profile known substrate defects | Reject as diagnosis | Render only: “Snapshot-wide zero: this dimension is 0.00 for every assessed capability in this snapshot. CKM cannot determine whether that reflects missing evidence, current metric coverage, or portfolio state.” |
@@ -125,9 +125,10 @@ stable sort keys; SQLite row order and mapping insertion order are never accepte
 - **INV-DB-3 — Evidence Profile precedence.** Direction B begins only after CKM Evidence Profile
   Phase 1 is delivered. It consumes the per-dimension vector/tri-state/count view and never reads the
   cross-dimension aggregate into a render surface.
-- **INV-DB-4 — exact pair, no fallback.** Comparison selects exactly the newest two active retained
-  records, then invokes O1b once. Any refusal is rendered honestly; no older compatible pair is
-  searched.
+- **INV-DB-4 — exact pair, chronological comparison, no fallback.** Comparison selects exactly the
+  newest two active retained records, orders that selected pair as `(older, newer)` for O1b, then
+  invokes O1b once so a signed delta is newer minus older. Any refusal is rendered honestly; no
+  older compatible pair is searched.
 - **INV-DB-5 — no interpretive laundering.** New renderer-authored interpretation is descriptive and
   caveated. Source text is labeled/cited, not rewritten into a stronger claim.
 - **INV-DB-6 — one bounded script.** Cockpit HTML contains exactly one inline script, used only to

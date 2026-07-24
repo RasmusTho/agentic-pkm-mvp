@@ -57,8 +57,9 @@ evidence, cross-task acceptance, owner-doc promotion, and closure truth.
 - Extend the existing overview renderer/CLI; do not create a parallel dashboard or service.
 - No automatic ranking, gating, prioritization, agent scoring, prediction, causal claims, or mutation.
 - No clipboard, GitHub prefill, fetch, network, storage, cookies, or hosted/multi-user behavior.
-- Comparison uses exactly the newest two active retained records and never searches older rows after
-  a refusal.
+- Comparison uses exactly the newest two active retained records, presents that selected pair to O1b
+  as `(older, newer)` so signed deltas are newer minus older, and never searches older rows after a
+  refusal.
 - Default Direction A output stays script-free; cockpit output may have exactly one filtering-only
   script.
 
