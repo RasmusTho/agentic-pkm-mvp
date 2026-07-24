@@ -415,7 +415,7 @@ def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) 
     selected_python = tmp_path / "selected-python"
     interpreter_target = tmp_path / "interpreter-target"
     interpreter_target.write_text(
-        f"#!/bin/sh\\n[ \"$0\" = {shlex.quote(str(selected_python))} ]\\n",
+        f"#!/bin/sh\n[ \"$0\" = {shlex.quote(str(selected_python))} ]\n",
         encoding="utf-8",
     )
     interpreter_target.chmod(0o700)
