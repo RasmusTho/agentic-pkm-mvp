@@ -431,6 +431,42 @@ def test_projector_replay_is_idempotent_after_partial_write(tmp_path: Path, monk
     assert get_cursor(CANDIDATE_CONSUMER_ID) == 2
 
 
+def test_interleaved_fold_straddling_a_blocked_unit_does_not_skip(tmp_path: Path, monkeypatch) -> None:
+    """A folded episode whose rows straddle a blocked unit must not be
+    half-acknowledged, and its earliest revision must never be silently skipped
+    by a watermark advance (KMA-04 durable-prefix regression)."""
+    # ep-A spans seq 0 and seq 3 (a revision); ep-B seq 1; ep-C seq 2 is blocked.
+    _publish("obs-a0", episode_id="ep-A", content="a original")
+    _publish("obs-b1", episode_id="ep-B", content="b only")
+    _publish("obs-c2", episode_id="ep-C", content="c blocked")
+    _publish("obs-a3", episode_id="ep-A", content="a corrected", revision_of="obs-a0")
+    vault = _vault(tmp_path / "vault")
+
+    original = candidate_projection.write_candidate_note
+
+    def block_ep_c(candidate, **kwargs):
+        if candidate.episode_id == "ep-C":
+            return CandidateWriteResult(
+                status="blocked", artifact_path=None, observation_id=candidate.observation_id, reason="test block"
+            )
+        return original(candidate, **kwargs)
+
+    monkeypatch.setattr(candidate_projection, "write_candidate_note", block_ep_c)
+    project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+    # ep-A straddles the blocked ep-C (seq 0 < 2 <= 3), so the boundary drops to
+    # ep-A's earliest row: nothing is acknowledged, no revision is dropped.
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+    monkeypatch.setattr(candidate_projection, "write_candidate_note", original)
+    replay = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 4
+    ep_a = next(r for r in replay if r.observation_id == "obs-a3")
+    front, _, _ = (Path(vault.active_vault_path) / ep_a.artifact_path).read_text(encoding="utf-8").removeprefix("---\n").partition("\n---\n")
+    frontmatter = yaml.safe_load(front)
+    # The earlier revision survives in the fold lineage -- never dropped.
+    assert frontmatter["superseded_observation_ids"] == ["obs-a0"]
+
+
 def test_projector_restart_resumes_unpersisted_observation(tmp_path: Path) -> None:
     _publish("obs-retry-a", episode_id="ep-retry-a")
     _publish("obs-retry-b", episode_id="ep-retry-b")

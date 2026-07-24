@@ -1,0 +1,68 @@
+# Managed Karakeep reading source (KMA-02, #3373).
+#
+# Karakeep is Heimdal's external read-later source dependency on the deployment host
+# (docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md,
+# ADR-0049 §1). This manifest is repo-owned deployment truth: a pinned image,
+# durable volumes, a healthcheck, and restart supervision. It contains NO
+# credential or private-endpoint value -- every secret/endpoint rides the
+# operator-owned env_file (config/karakeep.env, gitignored; see
+# config/karakeep.env.example for the placeholder template).
+#
+# The service is bound to loopback only (127.0.0.1); there is no public ingress
+# (parent constraint: never expose Karakeep publicly). Mimer never connects to
+# Karakeep -- only Heimdal does, through the KMA-03 adapter.
+services:
+  karakeep:
+    image: ghcr.io/karakeep-app/karakeep:0.28.0
+    restart: unless-stopped
+    # Loopback bind only -- reachable by the Heimdal adapter on the host, never
+    # published to a public interface.
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      # Operator-owned; gitignored. Populated from config/karakeep.env.example.
+      - ./config/karakeep.env
+    environment:
+      # Non-secret wiring only. Secrets/endpoints stay in the env_file above.
+      MEILI_ADDR: http://karakeep-meilisearch:7700
+      DATA_DIR: /data
+    depends_on:
+      karakeep-meilisearch:
+        condition: service_healthy
+    volumes:
+      - karakeep-data:/data
+    healthcheck:
+      # Liveness against the app web root (deliberately NOT /api/health, which
+      # the repo reserves for the expensive operator diagnostic route).
+      # Use 127.0.0.1, not localhost: the image's BusyBox wget resolves
+      # localhost to IPv6 ::1 first, but the app binds IPv4 -> false "unhealthy".
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  karakeep-meilisearch:
+    image: getmeili/meilisearch:v1.13.3
+    restart: unless-stopped
+    env_file:
+      - ./config/karakeep.env
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - karakeep-meilisearch-data:/meili_data
+    healthcheck:
+      # 127.0.0.1, not localhost: BusyBox wget prefers IPv6 ::1 but Meilisearch
+      # binds IPv4 0.0.0.0 -> localhost probe gets connection-refused.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7700/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  # Durable named volumes survive `docker compose down` / restart / image update
+  # (only `down -v` removes them). Karakeep bookmarks/assets and the search
+  # index are the durable data referenced by the backup/rollback runbook.
+  karakeep-data:
+  karakeep-meilisearch-data:

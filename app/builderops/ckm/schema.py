@@ -85,7 +85,7 @@ CKM_REQUIRED_COLUMNS = {
             "operational_readiness", "operational_readiness_citations",
             "architectural_stability", "architectural_stability_citations",
             "requirement_coverage", "requirement_coverage_citations", "candidate_shares",
-            "formula_ids", "aggregate", "aggregate_formula_id", "low_confidence",
+            "dimension_status", "formula_ids", "aggregate", "aggregate_formula_id", "low_confidence",
             "edge_fingerprint", "watermark_set", "valid_from", "asserted_at",
         }
     ),
@@ -112,7 +112,7 @@ CKM_LEGACY_ADDED_COLUMNS = {
     "ckm_assessment": frozenset(
         {
             "public_id", "candidate_shares", "formula_ids", "aggregate_formula_id",
-            "low_confidence", "edge_fingerprint",
+            "dimension_status", "low_confidence", "edge_fingerprint",
         }
     ),
     "ckm_finding": frozenset({"public_id"}),
@@ -287,6 +287,7 @@ CKM_DDL_STATEMENTS = [
         requirement_coverage REAL NOT NULL,
         requirement_coverage_citations TEXT NOT NULL,
         candidate_shares TEXT NOT NULL,
+        dimension_status TEXT NOT NULL DEFAULT '{}',
         formula_ids TEXT NOT NULL,
         aggregate REAL NOT NULL,
         aggregate_formula_id TEXT NOT NULL,

@@ -18,6 +18,7 @@ from app.cli import cli
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import _compute_ingest_fingerprint, run_vault_alpha_ingest
 from app.retrieval.hybrid import get_store, rebuild_from_durable_index, reset_durable_rebuild_state
+from tests._click_compat import cli_runner
 from app.services.companion_note import companion_path, read_companion, write_companion, CompanionNote
 from app.stores import get_object_store, reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
@@ -842,7 +843,7 @@ def test_vault_alpha_ingest_json_summary(tmp_path: Path) -> None:
     reset_store_backends()
     get_store().set_documents([])
     vault = _prepare_vault(tmp_path)
-    runner = CliRunner(mix_stderr=False)
+    runner = cli_runner(mix_stderr=False)
     env = _base_env(tmp_path)
 
     with patch.dict(os.environ, env, clear=False):

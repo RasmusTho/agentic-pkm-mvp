@@ -1,6 +1,6 @@
 ---
 name: Dev Overview HTML Projection
-description: Static-HTML Development Overview — capability map + maturity heatmap + gap list — rendered from the store, plus the parent-closure handoff
+description: Static-HTML Development Overview — capability map + per-dimension evidence vector + gap list — rendered from the store, plus the parent-closure handoff
 task_id: CKM-10
 source_anchor: docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md :: 5.15 Interfaces (Development Overview UI)
 parent_capability: Capability Knowledge Model
@@ -13,12 +13,12 @@ can_parallelize_with: []
 
 ## Purpose
 
-Give the owner the one-glance surface: a static HTML Development Overview rendering the capability map as a maturity heatmap with drill-down to evidence. One consumer of the model, not the product (SRS §System Context).
+Give the owner the one-glance surface: a static HTML Development Overview rendering the capability map with a per-dimension evidence vector and drill-down to evidence. One consumer of the model, not the product (SRS §System Context).
 
 ## What This Task Does
 
 - Implements `app/builderops/ckm/overview_html.py`: a pure `render_overview_html(store) -> str` function (mirroring the companion-UI `render_index_html` pure-render pattern) producing one self-contained HTML file — no server, no build step, no external assets:
-  - capability forest as an indented tree, each node colored by aggregate band with the seven-dimension mini-bars;
+  - capability forest as an indented tree, each node carrying the seven-dimension mini-bars without a cross-dimension aggregate band or heatmap;
   - low-confidence, staleness, and candidate-share markers rendered per node (inheriting CKM-09's flags);
   - per-capability expandable detail: dimension citations, evidence list with basis strings, findings;
   - gaps panel listing current findings;
@@ -30,7 +30,7 @@ Give the owner the one-glance surface: a static HTML Development Overview render
 
 ```bash
 python -m app.builderops ckm overview --out ~/Desktop/ckm-overview.html
-open ~/Desktop/ckm-overview.html   # heatmap over real repo state, no server needed
+open ~/Desktop/ckm-overview.html   # per-dimension view over real repo state, no server needed
 ```
 
 ## Why This Matters
@@ -39,8 +39,8 @@ The Development Overview is the owner-facing payoff and the surface most likely 
 
 ## Acceptance Criteria
 
-- [ ] `render_overview_html` is pure (store in, string out) and renders the fixture graph with tree, heatmap bands, and dimension bars present.
-  - Verify: `tests/builderops/ckm/test_overview_html.py::test_pure_render_over_fixture_graph`
+- [ ] `render_overview_html` is pure (store in, string out) and renders the fixture graph with tree and dimension bars present, without a rendered cross-dimension aggregate or maturity band; aggregate persistence remains a compatibility concern outside the render.
+  - Verify: `tests/builderops/ckm/test_overview_html.py::test_pure_render_over_fixture_graph`; `tests/builderops/ckm/test_overview_html.py::test_aggregate_demoted_label`
 - [ ] Staleness, low-confidence, and candidate-share markers from the store render in the HTML (enforcement of INV-CKM-3/5 at the final egress).
   - Verify: `tests/builderops/ckm/test_overview_html.py::test_honesty_markers_render`
 - [ ] The projection footer (self-identification + watermarks) is present in every rendered document.

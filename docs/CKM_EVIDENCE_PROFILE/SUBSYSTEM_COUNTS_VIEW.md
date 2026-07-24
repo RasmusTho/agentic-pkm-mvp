@@ -120,8 +120,9 @@ render. No deferred or in-memory state is introduced; a restart changes nothing 
 
 ## Related GitHub Issues
 
-Not yet filed. The coordinator creates this slice from the merged spec. Delivered as its own issue/PR
-(separate from CKM-EP-01/CKM-EP-02). Point `Context` at the parent feature issue and reference
-"Implements CKM_EVIDENCE_PROFILE/SUBSYSTEM_COUNTS_VIEW". TCD hint: Sonnet / high — the honest-counting
-requirement (distinct-artifact + shared-evidence indicator over a 79%-duplicated graph) is the
-correctness-sensitive part; a naive raw-edge implementation would ship a fresh false picture.
+Filed as [#4092](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4092), the third serial child
+of parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). It remains
+blocked until the preceding serial work is delivered; its exact PR/SHA, validation, owner-doc result,
+and parent handoff belong on #4089. TCD hint: Sonnet / high — the honest-counting requirement
+(distinct-artifact + shared-evidence indicator over a 79%-duplicated graph) is the correctness-
+sensitive part; a naive raw-edge implementation would ship a fresh false picture.

@@ -32,7 +32,7 @@ class Formula:
 _DIMENSION_FORMULA_IDS = {
     "functional_completeness": "functional-evidence-balance-v1",
     "test_completeness": "test-evidence-balance-v1",
-    "documentation_quality": "current-doc-evidence-v1",
+    "documentation_quality": "current-doc-evidence-v2",
     "integration_completeness": "source-and-surface-span-v1",
     "operational_readiness": "operational-evidence-balance-v1",
     "architectural_stability": "architecture-vs-churn-v1",
@@ -55,6 +55,11 @@ FORMULAS: dict[str, Formula] = {
         "current-doc-evidence-v1",
         "documentation_quality",
         "Current State:-bearing supporting documentation divided by all cited documentation evidence.",
+    ),
+    "current-doc-evidence-v2": Formula(
+        "current-doc-evidence-v2",
+        "documentation_quality",
+        "Current State:-bearing supporting documentation divided by all cited documentation evidence; an empty selected set is unassessed.",
     ),
     "source-and-surface-span-v1": Formula(
         "source-and-surface-span-v1",
@@ -93,6 +98,7 @@ FORMULAS: dict[str, Formula] = {
 class DimensionResult:
     score: float
     edges: tuple[CkmEvidenceEdge, ...]
+    status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -191,7 +197,7 @@ def _documentation(
         and artifacts[edge.artifact_id].artifact_kind == "document"
     )
     if not selected:
-        return DimensionResult(0.0, ())
+        return DimensionResult(0.0, (), "unassessed")
     current = 0.0
     total = 0.0
     for edge in selected:
@@ -470,6 +476,7 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
         scores: dict[str, float] = {}
         citations: dict[str, list[dict[str, object]]] = {}
         candidate_shares: dict[str, float] = {}
+        dimension_status: dict[str, str] = {}
         formula_ids: dict[str, str] = {}
         for dimension in MATURITY_DIMENSIONS:
             result = _SCORERS[dimension](edges, artifacts)
@@ -482,12 +489,16 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
             candidate_shares[dimension] = (
                 len(candidates) / len(supporting) if supporting else 0.0
             )
+            dimension_status[dimension] = result.status or (
+                "measured" if result.edges else "missing"
+            )
             formula_ids[dimension] = _DIMENSION_FORMULA_IDS[dimension]
         assessment = store.append_assessment(
             capability_id=capability.id,
             scores=scores,
             citations=citations,
             candidate_shares=candidate_shares,
+            dimension_status=dimension_status,
             formula_ids=formula_ids,
             aggregate=compute_aggregate(scores),
             aggregate_formula_id=AGGREGATE_FORMULA_ID,

@@ -25,6 +25,7 @@ from app.builderops.config import BuilderOpsPaths, load_paths, validate_db_path_
 from app.builderops.store import SqliteBuilderOpsStore
 
 from app.builderops.ckm.contracts import (
+    SUPPORTED_VALUE_STATES,
     CkmStateIdentity,
     canonical_digest,
     canonical_json,
@@ -212,12 +213,15 @@ class CkmStore:
                 )
             legacy = bool(existing_tables) and "ckm_state" not in existing_tables
             if existing_tables:
+                # Additive current-version columns must land before strict
+                # validation; otherwise a valid pre-column v5 store refuses
+                # before it can migrate.
+                self._migrate_assessment_explainability(conn)
                 self._validate_required_columns(conn, legacy=legacy)
                 if not legacy:
                     self._validate_persisted_identity_values(conn)
             self._add_public_identity_columns(conn)
             self._migrate_evidence_edge_basis(conn)
-            self._migrate_assessment_explainability(conn)
             for statement in CKM_DDL_STATEMENTS:
                 if "CREATE UNIQUE INDEX" in statement and (
                     "public_id" in statement or "identity_key" in statement
@@ -889,6 +893,7 @@ class CkmStore:
             "scores": {dimension: row[dimension] for dimension in MATURITY_DIMENSIONS},
             "candidate_shares": row["candidate_shares"],
             "formula_ids": row["formula_ids"],
+            "dimension_status": row["dimension_status"],
             "aggregate": row["aggregate"],
             "aggregate_formula_id": row["aggregate_formula_id"],
             "low_confidence": row["low_confidence"],
@@ -1012,6 +1017,7 @@ class CkmStore:
         additions = (
             ("candidate_shares", "TEXT NOT NULL DEFAULT '{}'"),
             ("formula_ids", "TEXT NOT NULL DEFAULT '{}'"),
+            ("dimension_status", "TEXT NOT NULL DEFAULT '{}'"),
             (
                 "aggregate_formula_id",
                 "TEXT NOT NULL DEFAULT 'legacy-pre-ckm07'",
@@ -2020,6 +2026,7 @@ class CkmStore:
         scores: Mapping[str, float],
         citations: Mapping[str, list[JsonDict]],
         candidate_shares: Mapping[str, float] | None = None,
+        dimension_status: Mapping[str, str] | None = None,
         formula_ids: Mapping[str, str] | None = None,
         aggregate: float,
         aggregate_formula_id: str = "legacy-pre-ckm07",
@@ -2040,6 +2047,37 @@ class CkmStore:
         resolved_candidate_shares = candidate_shares or {
             dimension: 0.0 for dimension in MATURITY_DIMENSIONS
         }
+        resolved_dimension_status = (
+            dict(dimension_status)
+            if dimension_status is not None
+            else {
+                dimension: (
+                    "missing"
+                    if float(scores[dimension]) == 0.0 and not citations[dimension]
+                    else "measured"
+                )
+                for dimension in MATURITY_DIMENSIONS
+            }
+        )
+        missing_statuses = set(MATURITY_DIMENSIONS) - set(resolved_dimension_status)
+        if missing_statuses:
+            raise CkmValidationError(
+                f"assessment missing dimension status(es): {sorted(missing_statuses)}"
+            )
+        unknown_statuses = set(resolved_dimension_status) - set(MATURITY_DIMENSIONS)
+        if unknown_statuses:
+            raise CkmValidationError(
+                f"assessment has unknown dimension status key(s): {sorted(unknown_statuses)}"
+            )
+        unsupported_statuses = {
+            status
+            for status in resolved_dimension_status.values()
+            if status not in SUPPORTED_VALUE_STATES
+        }
+        if unsupported_statuses:
+            raise CkmValidationError(
+                f"assessment has unsupported dimension status(es): {sorted(unsupported_statuses)}"
+            )
         resolved_formula_ids = formula_ids or {
             dimension: "legacy-pre-ckm07" for dimension in MATURITY_DIMENSIONS
         }
@@ -2060,6 +2098,7 @@ class CkmStore:
             values.append(_dumps(citations[dimension]))
         columns += [
             "candidate_shares",
+            "dimension_status",
             "formula_ids",
             "aggregate",
             "aggregate_formula_id",
@@ -2071,6 +2110,7 @@ class CkmStore:
         ]
         values += [
             _dumps(resolved_candidate_shares),
+            _dumps(resolved_dimension_status),
             _dumps(resolved_formula_ids),
             aggregate,
             aggregate_formula_id,
@@ -2093,6 +2133,7 @@ class CkmStore:
                     for dimension in MATURITY_DIMENSIONS
                 },
                 "candidate_shares": _dumps(resolved_candidate_shares),
+                "dimension_status": _dumps(resolved_dimension_status),
                 "formula_ids": _dumps(resolved_formula_ids),
                 "aggregate": aggregate,
                 "aggregate_formula_id": aggregate_formula_id,
@@ -2165,6 +2206,7 @@ class CkmStore:
             dimension: _loads(row[f"{dimension}_citations"]) for dimension in MATURITY_DIMENSIONS
         }
         candidate_shares = _loads(row["candidate_shares"])
+        dimension_status = _loads(row["dimension_status"])
         formula_ids = _loads(row["formula_ids"])
         watermark_set = _loads(row["watermark_set"])
         return CkmAssessment.from_row(
@@ -2172,6 +2214,7 @@ class CkmStore:
             scores=scores,
             citations=citations,
             candidate_shares=candidate_shares,
+            dimension_status=dimension_status,
             formula_ids=formula_ids,
             watermark_set=watermark_set,
         )

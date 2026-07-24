@@ -5,7 +5,7 @@ Owner: BuilderOps governance
 Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: mixed (this directory for task shape; ADR-0057 for decisions)
-Last reviewed: 2026-07-15
+Last reviewed: 2026-07-24
 
 # Capability Knowledge Model (CKM / Kvasir) — MVP Specification
 
@@ -31,6 +31,11 @@ The CKM is the Builder System subsystem that continuously constructs and maintai
 | [DEV_OVERVIEW_HTML_PROJECTION.md](DEV_OVERVIEW_HTML_PROJECTION.md) | CKM-10 | Static-HTML Development Overview (capability map + maturity heatmap) + parent-closure handoff |
 
 Post-MVP presentation refinement: [DEV_OVERVIEW_DIRECTION_A.md](DEV_OVERVIEW_DIRECTION_A.md) defines the CKM-11 redesign contract implemented by issue #3689. It preserves CKM-10's static, self-contained projection boundary; owner visual acceptance remains on parent #3138.
+
+Target-state presentation successor:
+[CKM Cockpit Direction B](../CKM_COCKPIT_DIRECTION_B/README.md) specifies a bounded opt-in
+enhancement of the same generated Development Overview. It is not delivered and makes no
+current-state support claim; implementation remains sequenced behind CKM Evidence Profile Phase 1.
 
 ## Execution order
 

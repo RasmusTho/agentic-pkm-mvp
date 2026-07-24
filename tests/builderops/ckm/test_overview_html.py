@@ -84,12 +84,18 @@ def overview_store(tmp_path: Path) -> CkmStore:
     }
     scores = {dimension: 0.8 for dimension in MATURITY_DIMENSIONS}
     citations = {dimension: [citation] for dimension in MATURITY_DIMENSIONS}
+    dimension_status = {dimension: "measured" for dimension in MATURITY_DIMENSIONS}
     scores["operational_readiness"] = 0.0
     citations["operational_readiness"] = []
+    dimension_status["operational_readiness"] = "missing"
+    scores["documentation_quality"] = 0.0
+    citations["documentation_quality"] = []
+    dimension_status["documentation_quality"] = "unassessed"
     store.append_assessment(
         capability_id=parent.id,
         scores=scores,
         citations=citations,
+        dimension_status=dimension_status,
         candidate_shares={dimension: 0.75 for dimension in MATURITY_DIMENSIONS},
         formula_ids={dimension: "fixture-formula" for dimension in MATURITY_DIMENSIONS},
         aggregate=0.8,
@@ -106,6 +112,84 @@ def overview_store(tmp_path: Path) -> CkmStore:
         citations=[citation],
     )
     store.set_watermark("fixture", "two")
+    return store
+
+
+@pytest.fixture()
+def fanout_overview_store(tmp_path: Path) -> CkmStore:
+    store = CkmStore(tmp_path / "fanout-overview.sqlite3")
+    store.ensure_schema()
+    subsystem = store.upsert_capability(
+        identity_key="fixture:counts:subsystem",
+        name="Retrieval subsystem",
+        definition="Fixture subsystem.",
+        existence_provenance="seeded:fixture",
+        lifecycle="confirmed",
+        boundary_ref="RCA",
+    )
+    child = store.upsert_capability(
+        identity_key="fixture:counts:child",
+        name="Retrieval",
+        definition="Fixture child capability.",
+        existence_provenance="seeded:fixture-child",
+        lifecycle="confirmed",
+        parent_id=subsystem.id,
+        boundary_ref="RCA",
+    )
+    other = store.upsert_capability(
+        identity_key="fixture:counts:other",
+        name="Observability subsystem",
+        definition="Fixture second subsystem.",
+        existence_provenance="seeded:fixture-other",
+        lifecycle="confirmed",
+        boundary_ref="OEF",
+    )
+    shared = store.upsert_artifact(
+        source_ref="docs/shared.md",
+        artifact_kind="document",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"docs/shared.md"}',
+    )
+    subsystem_only = store.upsert_artifact(
+        source_ref="app/retrieval.py",
+        artifact_kind="source_file",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"app/retrieval.py"}',
+    )
+    child_only = store.upsert_artifact(
+        source_ref="tests/test_retrieval.py",
+        artifact_kind="test",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"tests/test_retrieval.py"}',
+    )
+
+    def edge(*, artifact_id: str, capability_id: str, basis: str) -> None:
+        store.upsert_evidence_edge(
+            artifact_id=artifact_id,
+            capability_id=capability_id,
+            evidence_kind="source",
+            polarity="supports",
+            maturity_dimension="functional_completeness",
+            confidence=1.0,
+            extraction_method="deterministic",
+            lifecycle="confirmed",
+            source_ref=f"fixture:{artifact_id}",
+            basis=basis,
+        )
+
+    edge(artifact_id=shared.id, capability_id=subsystem.id, basis="fixture:fanout")
+    edge(artifact_id=shared.id, capability_id=subsystem.id, basis="fixture:second-edge")
+    edge(
+        artifact_id=subsystem_only.id,
+        capability_id=subsystem.id,
+        basis="fixture:subsystem-only",
+    )
+    edge(artifact_id=shared.id, capability_id=child.id, basis="fixture:fanout")
+    edge(artifact_id=child_only.id, capability_id=child.id, basis="fixture:child-only")
+    edge(artifact_id=shared.id, capability_id=other.id, basis="fixture:fanout")
     return store
 
 
@@ -133,8 +217,11 @@ def test_pure_render_over_fixture_graph(overview_store: CkmStore) -> None:
     assert '<div class="capability-tree">' in first
     assert "Retrieval" in first and "Context Assembly" in first
     assert 'style="--depth:1"' in first
-    assert 'data-aggregate-band="healthy"' in first
-    assert first.count('class="dimension-bar"') == len(MATURITY_DIMENSIONS)
+    assert "data-aggregate-band" not in first
+    assert "band-critical" not in first
+    assert "band-watch" not in first
+    assert "band-healthy" not in first
+    assert first.count('class="dimension-bar"') == len(MATURITY_DIMENSIONS) - 1
     summary = first.split("</summary>", maxsplit=1)[0]
     assert summary.count('class="mini-dimension ') == len(MATURITY_DIMENSIONS)
     assert '<details class="drilldown"><summary>Evidence and basis</summary>' in first
@@ -148,7 +235,7 @@ def test_honesty_markers_render(overview_store: CkmStore) -> None:
     assert "LOW CONFIDENCE" in rendered
     assert "candidate share 75.0%" in rendered
     assert "candidate share unavailable" in rendered
-    assert rendered.count('mini-dimension mini-unassessed') == len(MATURITY_DIMENSIONS)
+    assert rendered.count('mini-dimension mini-unassessed') == len(MATURITY_DIMENSIONS) + 1
     assert "2 confirmed / 1 candidate" not in rendered
     assert "1 confirmed / 1 candidate" in rendered
     assert '<span class="badge evidence-status">candidate</span>' in rendered
@@ -170,10 +257,22 @@ def test_dimension_cells_render_three_states_and_proportional_fill(
     assert 'class="mini-dimension mini-scored"' in rendered
     assert 'style="--score:80.0%"' in rendered
     assert 'class="mini-dimension mini-starved"' in rendered
+    assert (
+        '<section class="dimension dimension-unassessed" '
+        'data-dimension="documentation_quality" data-cell-state="unassessed">'
+        in rendered
+    )
+    unassessed_section = rendered.split(
+        'data-dimension="documentation_quality" data-cell-state="unassessed">',
+        maxsplit=1,
+    )[1].split("</section>", maxsplit=1)[0]
+    assert "<strong>—</strong>" in unassessed_section
+    assert "dimension-track" not in unassessed_section
+    assert "dimension-bar" not in unassessed_section
     unknown_cells = re.findall(
         r'<span class="mini-dimension mini-unassessed"[^>]*>—</span>', rendered
     )
-    assert len(unknown_cells) == len(MATURITY_DIMENSIONS)
+    assert len(unknown_cells) == len(MATURITY_DIMENSIONS) + 1
     assert all("--score" not in cell for cell in unknown_cells)
 
 
@@ -198,8 +297,11 @@ def test_gap_capability_crosslinks(overview_store: CkmStore) -> None:
 def test_aggregate_demoted_label(overview_store: CkmStore) -> None:
     rendered = render_overview_html(overview_store)
 
-    assert '<span class="aggregate" title="Minimum of seven maturity dimensions">min 0.80</span>' in rendered
-    assert '<span class="aggregate" title="Minimum of seven maturity dimensions">min —</span>' in rendered
+    assert 'class="aggregate"' not in rendered
+    assert "Minimum of seven maturity dimensions" not in rendered
+    assert "data-aggregate-band" not in rendered
+    assert 'class="band-label"' not in rendered
+    assert 'class="band-dot"' not in rendered
 
 
 def test_legend_dimension_mapping(overview_store: CkmStore) -> None:
@@ -243,7 +345,7 @@ def test_accessibility_and_responsive_contract(overview_store: CkmStore) -> None
     assert 'font-size:1rem' in rendered
     assert 'role="img"' in rendered
     assert "Citations — operational readiness (0)" in rendered
-    assert '<span class="band-dot" aria-hidden="true"></span>' in rendered
+    assert 'class="band-dot"' not in rendered
 
 
 def test_node_lifecycle_and_evidence_confirmation_are_distinct(
@@ -284,6 +386,74 @@ def test_provenance_banner_precedes_map_and_footer_remains(
         assert rendered.index("Generated projection — not source of truth") < rendered.index(
             'id="map-heading"'
         )
+
+
+def test_subsystem_counts_distinct_artifacts(
+    fanout_overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(fanout_overview_store)
+
+    subsystem = re.search(
+        r'<section class="subsystem-counts-card"[^>]*data-subsystem-name="Retrieval subsystem"'
+        r'[^>]*data-capability-count="2"[^>]*data-distinct-artifacts="3"',
+        rendered,
+    )
+    assert subsystem is not None
+    root = re.search(
+        r'<li class="capability-count"[^>]*data-capability-name="Retrieval subsystem"'
+        r'[^>]*data-distinct-artifacts="2"[^>]*data-edge-count="3"',
+        rendered,
+    )
+    child = re.search(
+        r'<li class="capability-count"[^>]*data-capability-name="Retrieval"'
+        r'[^>]*data-distinct-artifacts="2"[^>]*data-edge-count="2"',
+        rendered,
+    )
+    assert root is not None
+    assert child is not None
+    assert "distinct artifacts: <strong>3</strong>" in subsystem.group(0) + rendered[
+        subsystem.end() : subsystem.end() + 300
+    ]
+
+
+def test_subsystem_counts_shared_evidence_indicator(
+    fanout_overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(fanout_overview_store)
+
+    assert re.search(
+        r'data-subsystem-name="Retrieval subsystem"[^>]*data-shared-edge-count="2"'
+        r'[^>]*data-edge-count="5"[^>]*data-shared-evidence="40.0%"',
+        rendered,
+    )
+    assert re.search(
+        r'data-capability-name="Retrieval subsystem"[^>]*data-shared-edge-count="1"'
+        r'[^>]*data-edge-count="3"[^>]*data-shared-evidence="33.3%"',
+        rendered,
+    )
+    assert re.search(
+        r'data-capability-name="Retrieval"[^>]*data-shared-edge-count="1"'
+        r'[^>]*data-edge-count="2"[^>]*data-shared-evidence="50.0%"',
+        rendered,
+    )
+    assert rendered.count("shared evidence:") == 6
+
+
+def test_subsystem_counts_global_masthead(
+    fanout_overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(fanout_overview_store)
+
+    assert re.search(
+        r'class="linkage-masthead" data-denominator="global" '
+        r'data-distinct-artifacts="3" data-capability-count="3" '
+        r'data-shared-edge-count="3" data-edge-count="6" '
+        r'data-shared-evidence="50.0%"',
+        rendered,
+    )
+    assert "3 distinct artifacts across 3 capabilities" in rendered
+    assert "50.0%</strong> of all 6 edges (global)" in rendered
+
 
 def test_no_external_references(overview_store: CkmStore) -> None:
     rendered = render_overview_html(overview_store)

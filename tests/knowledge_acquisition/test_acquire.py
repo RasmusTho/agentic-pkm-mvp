@@ -467,11 +467,10 @@ def test_acquire_youtube_cli_exits_nonzero_on_blocked_write(
     receipt-handling/exit logic without a real Postgres connection (the real DB path is covered
     by `test_acquire_youtube_writeguard_blocked_is_not_ok_no_note`, which drives the actual
     `acquire_youtube` core with a denying guard and a fake conn)."""
-    from click.testing import CliRunner
-
     from app.cli import cli
     from app.knowledge_acquisition.acquire import AcquireStageReceipt, AcquisitionReceipt
     import app.knowledge_acquisition.acquire as acquire_mod
+    from tests._click_compat import cli_runner
 
     blocked_receipt = AcquisitionReceipt(
         source_kind="youtube_url",
@@ -503,7 +502,7 @@ def test_acquire_youtube_cli_exits_nonzero_on_blocked_write(
     vault_root = tmp_path / "vault"
     vault_root.mkdir(parents=True, exist_ok=True)
 
-    runner = CliRunner(mix_stderr=False)
+    runner = cli_runner(mix_stderr=False)
     result = runner.invoke(
         cli,
         ["acquire-youtube", FAKE_URL, "--vault-root", str(vault_root)],

@@ -113,7 +113,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "docs/builderops/",
             "importlinter.ini",
         ),
-        ("tests/builderops", "tests/dispatcher", "tests/governance"),
+        (
+            "tests/builderops",
+            "tests/dispatcher",
+            "tests/governance",
+            "tests/architecture/test_builderops_store_boundary.py",
+        ),
     ),
     (
         "settings",
@@ -143,6 +148,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/knowledge/",
             "docs/VAULT",
             "docs/builderops/BUILDEROPS_VAULT",
+            # Vault-layout hardcoded-literal fitness guard. Keep this exact
+            # file owned without widening vault to all architecture tests.
+            "tests/architecture/test_no_hardcoded_vault_layout.py",
         ),
         ("tests/instance", "tests/vault", "tests/knowledge", "tests/ports"),
     ),

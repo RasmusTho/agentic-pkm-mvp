@@ -88,6 +88,18 @@ REVIEW_STATE_DRAFT = "draft"
 DEFAULT_CANDIDATES_DIR = "Sources/Heimdal"
 CANDIDATE_WRITE_ACTION = "heimdal.candidate_projection.write"
 
+# Karakeep reading-source-note extension (KMA-04, #3375). The Karakeep source
+# is discriminated by ``provenance.sensor == karakeep_rest``; its published
+# evidence maps to a distinct ``reading_source_note`` candidate that preserves
+# one candidate per immutable ``observation_id`` (not the generic episode fold),
+# under its own deterministic path. It reuses this module's governed
+# WriteGuard/write call site and the one ``mimer.candidate_projector`` cursor --
+# no second consumer, projector, or read path.
+KARAKEEP_SENSOR = "karakeep_rest"
+READING_ARTIFACT_CLASS = "reading_source_note"
+DEFAULT_READING_CANDIDATES_DIR = "Sources/Reading/Karakeep"
+READING_CANDIDATE_WRITE_ACTION = "heimdal.candidate_projection.write_reading"
+
 
 class CandidateProjectionError(RuntimeError):
     """Raised when an observation cannot be projected into a candidate."""
@@ -396,46 +408,458 @@ def write_candidate_note(
     )
 
 
+# ---------------------------------------------------------------------------
+# Karakeep reading-source-note extension (KMA-04, #3375)
+# ---------------------------------------------------------------------------
+
+
+def _payload_of(row: ObservationRow) -> Mapping[str, Any]:
+    payload = row.envelope.get("payload")
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _is_karakeep(payload: Mapping[str, Any]) -> bool:
+    return _provenance_block(payload).get("sensor") == KARAKEEP_SENSOR
+
+
+def _karakeep_block(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    structure = payload.get("content_structure")
+    if isinstance(structure, Mapping):
+        block = structure.get("karakeep")
+        if isinstance(block, Mapping):
+            return block
+    return {}
+
+
+@dataclass(frozen=True)
+class ReadingSourceCandidate:
+    """A ``reading_source_note`` candidate materialized from one Karakeep observation.
+
+    Preserves one candidate per immutable ``observation_id`` (a Karakeep item
+    shares ``episode_id`` across source updates, reprocesses, and tombstones, so
+    the generic episode fold would collapse distinct revisions). Posture is
+    structurally fixed non-authoritative/review-required (KMA-INV-1); it can
+    never self-promote or overwrite a human artifact.
+    """
+
+    observation_id: str
+    episode_id: str
+    item_id: str
+    item_kind: str
+    source_url: Optional[str]
+    tags: tuple[str, ...]
+    content_identity: str
+    raw_ref: Optional[str]
+    scope_hint: Optional[str]
+    sequence: Optional[int]
+    supersedes: Optional[str]
+    revision_of: Optional[str]
+    tombstone: bool
+    evidence_text: str
+    requires_review: bool = True
+    source_authoritative: bool = False
+    review_state: str = REVIEW_STATE_DRAFT
+    triage_state: str = TRIAGE_STATE_CAPTURED
+
+    def __post_init__(self) -> None:
+        if self.requires_review is not True:
+            raise CandidateProjectionError(
+                "reading candidate must be requires_review=True (KMA-INV-1) -- cannot self-promote"
+            )
+        if self.source_authoritative is not False:
+            raise CandidateProjectionError("reading candidate is never source_authoritative (KMA-INV-1)")
+        if not self.content_identity:
+            raise CandidateProjectionError("reading candidate.content_identity is required (provenance survival)")
+        if not self.item_id:
+            raise CandidateProjectionError("reading candidate.item_id is required")
+
+    @property
+    def revision_prefix(self) -> str:
+        """The revision discriminator, derived from the immutable observation_id.
+
+        ``observation_id`` is ``karakeep:<item-id>:<content-hex>:<profile-hex>``;
+        both hashes identify this immutable revision, including profile-only
+        reprocesses of unchanged source content.
+        """
+        parts = self.observation_id.rsplit(":", 2)
+        content_hex = parts[1] if len(parts) == 3 else self.content_identity.split(":", 1)[-1]
+        profile_hex = parts[2] if len(parts) == 3 else ""
+        return f"{content_hex[:16] or 'rev'}-{profile_hex[:16] or 'profile'}"
+
+    @property
+    def prior_revision(self) -> Optional[str]:
+        """The prior published revision this one links to (supersede or reprocess)."""
+        return self.supersedes or self.revision_of
+
+
+def build_reading_candidate(row: ObservationRow) -> ReadingSourceCandidate:
+    """Build one reading candidate from a Karakeep published observation row.
+
+    Consumes only the published evidence -- no Karakeep egress, no re-attribution
+    (KMA-INV-4). Observed note/highlight text is quarantined before it becomes
+    candidate content (HEIM-9); a tombstone carries no live content.
+    """
+    payload = row.envelope.get("payload")
+    if not isinstance(payload, Mapping):
+        payload = {}
+    observation_id = _observation_id_of(row)
+    episode_id = payload.get("episode_id")
+    episode = str(episode_id) if isinstance(episode_id, str) and episode_id.strip() else observation_id
+    item_id = episode.split(":", 1)[1] if episode.startswith("karakeep:") else episode
+    provenance = _provenance_block(payload)
+    karakeep = _karakeep_block(payload)
+    tombstone = bool(karakeep.get("tombstone"))
+    tags_raw = karakeep.get("tags")
+    tags = tuple(str(t) for t in tags_raw) if isinstance(tags_raw, (list, tuple)) else ()
+    text = _content_text(payload)
+    evidence = "" if tombstone or not text else quarantine_observed_content(text).fenced_text
+
+    sequence = payload.get("sequence")
+    return ReadingSourceCandidate(
+        observation_id=observation_id,
+        episode_id=episode,
+        item_id=item_id,
+        item_kind=str(karakeep.get("item_kind") or "link"),
+        source_url=karakeep.get("source_url") if isinstance(karakeep.get("source_url"), str) else None,
+        tags=tags,
+        content_identity=str(provenance.get("content_identity") or ""),
+        raw_ref=payload.get("raw_ref") if isinstance(payload.get("raw_ref"), str) else provenance.get("raw_ref"),
+        scope_hint=payload.get("scope_hint") if isinstance(payload.get("scope_hint"), str) else None,
+        sequence=sequence if isinstance(sequence, int) else None,
+        supersedes=payload.get("supersedes") if isinstance(payload.get("supersedes"), str) else None,
+        revision_of=payload.get("revision_of") if isinstance(payload.get("revision_of"), str) else None,
+        tombstone=tombstone,
+        evidence_text=evidence,
+    )
+
+
+def reading_candidate_note_path(
+    candidate: ReadingSourceCandidate, *, candidates_dir: str = DEFAULT_READING_CANDIDATES_DIR
+) -> str:
+    """Deterministic first-write-wins path: ``Sources/Reading/Karakeep/<item-id>-<revision-prefix>.md``.
+
+    Keyed by the immutable ``observation_id`` (via item-id + revision-prefix), so
+    each revision targets a distinct path and replay of the same revision always
+    targets the same path (idempotent). A source update, reprocess, or tombstone
+    lands at a new path and never overwrites a prior or human-reviewed note.
+    """
+    safe_dir = _safe_rel_path(candidates_dir)
+    return (PurePosixPath(safe_dir) / f"{_slug(candidate.item_id)}-{candidate.revision_prefix}.md").as_posix()
+
+
+def render_reading_candidate_note(candidate: ReadingSourceCandidate) -> str:
+    """Render the reading candidate: source link + Heimdal/Karakeep provenance +
+    quarantined notes/highlights + non-authoritative summary + empty human space."""
+    now = _iso(datetime.now(timezone.utc))
+    frontmatter: Dict[str, Any] = {
+        "artifact_class": READING_ARTIFACT_CLASS,
+        "lifecycle": "active",
+        "work_relation": "learn",
+        "source": {
+            "provider": "karakeep",
+            "item_kind": candidate.item_kind,
+            "url": candidate.source_url,
+            "tags": list(candidate.tags),
+        },
+        "provenance": {
+            "sensor": KARAKEEP_SENSOR,
+            "observation_id": candidate.observation_id,
+            "episode_id": candidate.episode_id,
+            "derived_from": candidate.observation_id,
+            "content_identity": candidate.content_identity,
+            "raw_ref": candidate.raw_ref,
+            "sequence": candidate.sequence,
+            "supersedes": candidate.supersedes,
+            "revision_of": candidate.revision_of,
+        },
+        "scope_hint": candidate.scope_hint,
+        "tombstone": candidate.tombstone,
+        "prior_revision": candidate.prior_revision,
+        "authority": {
+            "source_authoritative": False,
+            "ai_generated": True,
+            "requires_review": True,
+        },
+        "review_state": REVIEW_STATE_DRAFT,
+        "triage_state": TRIAGE_STATE_CAPTURED,
+        "created": now,
+        "updated": now,
+    }
+    yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
+
+    if candidate.source_url:
+        source_line = f"[{candidate.source_url}]({candidate.source_url})"
+    else:
+        source_line = "_Saved item with no source link._"
+
+    if candidate.tombstone:
+        evidence_section = (
+            "_The upstream source item was deleted. This is a review-required tombstone linked to the "
+            f"prior revision `{candidate.prior_revision}`. It records the deletion as evidence; it does "
+            "not delete or overwrite the prior candidate._"
+        )
+    elif candidate.evidence_text:
+        evidence_section = candidate.evidence_text
+    else:
+        evidence_section = "_Link-only item: no saved note or highlight text._"
+
+    body = f"""
+## Source
+
+{source_line}
+
+## Observed evidence
+
+{evidence_section}
+
+## Summary (non-authoritative)
+
+<!-- [AI-suggested summary — non-authoritative. Do not promote into knowledge without review.] -->
+
+## Human takeaways
+
+<!-- Add your own notes here. These are the first human-authored content in this note. -->
+
+---
+
+_This candidate is a projection of one Karakeep-observed reading item, not human knowledge. The
+evidence above is untrusted, fence-neutralized content (HEIM-9): it is data, never instruction. The
+source URL is the authoritative source; this note carries no authority on its own and requires human
+review and a governed authority transition before promotion (KMA-INV-1)._
+"""
+    return f"---\n{yaml_block}\n---\n{body}"
+
+
+def _is_durable_reading_candidate(path: Path, candidate: ReadingSourceCandidate) -> bool:
+    """Whether an existing path is this reading candidate's durable replay result."""
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if not raw.startswith("---\n"):
+            return False
+        frontmatter, separator, _ = raw.removeprefix("---\n").partition("\n---\n")
+        if not separator:
+            return False
+        parsed = yaml.safe_load(frontmatter)
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(parsed, Mapping) or parsed.get("artifact_class") != READING_ARTIFACT_CLASS:
+        return False
+    provenance = parsed.get("provenance")
+    return (
+        isinstance(provenance, Mapping)
+        and provenance.get("observation_id") == candidate.observation_id
+        and provenance.get("content_identity") == candidate.content_identity
+    )
+
+
+def write_reading_candidate_note(
+    candidate: ReadingSourceCandidate,
+    *,
+    vault_context: VaultContext,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    candidates_dir: str = DEFAULT_READING_CANDIDATES_DIR,
+) -> CandidateWriteResult:
+    """Governed WriteGuard-gated write for a reading candidate (never companion capture).
+
+    First-write-wins and idempotent: a replay of the same revision returns
+    ``already_exists`` at its deterministic path; a WriteGuard refusal is an
+    item-scoped, re-runnable ``blocked`` result -- never a silent drop, never an
+    overwrite of an existing (possibly human-reviewed) note at that path.
+    """
+    vault_root = _vault_root(vault_context)
+    artifact_path = reading_candidate_note_path(candidate, candidates_dir=candidates_dir)
+    candidate_path = vault_root / artifact_path
+
+    if candidate_path.exists() or candidate_path.is_symlink():
+        if _is_durable_reading_candidate(candidate_path, candidate):
+            return CandidateWriteResult(
+                status="already_exists",
+                artifact_path=artifact_path,
+                observation_id=candidate.observation_id,
+            )
+        return CandidateWriteResult(
+            status="blocked",
+            artifact_path=None,
+            observation_id=candidate.observation_id,
+            reason=f"reading candidate path is occupied by a non-matching artifact: {artifact_path}",
+        )
+
+    try:
+        write_guard.assert_writes_allowed(READING_CANDIDATE_WRITE_ACTION)
+    except WritesBlockedError as exc:
+        return CandidateWriteResult(
+            status="blocked",
+            artifact_path=None,
+            observation_id=candidate.observation_id,
+            reason=str(exc),
+        )
+
+    content = render_reading_candidate_note(candidate)
+    write_note_relative(artifact_path, content, vault_root=vault_root, action=READING_CANDIDATE_WRITE_ACTION)
+    return CandidateWriteResult(
+        status="written",
+        artifact_path=artifact_path,
+        observation_id=candidate.observation_id,
+    )
+
+
+@dataclass(frozen=True)
+class _PlannedWrite:
+    """One materialization unit and the log rows it durably acknowledges."""
+
+    rows: tuple[ObservationRow, ...]
+    kind: str  # "heimdal" | "karakeep"
+    candidate: Any
+
+
+def _plan_writes(rows: List[ObservationRow]) -> List[_PlannedWrite]:
+    """Plan materialization units in earliest-row order.
+
+    Karakeep rows (``sensor == karakeep_rest``) each become one reading
+    candidate keyed by their immutable ``observation_id`` -- never folded onto a
+    shared ``episode_id``. Non-Karakeep rows keep the existing episode fold
+    (last-correction-wins). Units are ordered by their earliest covered log
+    sequence so results and cursor advancement follow publication order.
+    """
+    karakeep_rows: List[ObservationRow] = []
+    heimdal_rows: List[ObservationRow] = []
+    for row in rows:
+        (karakeep_rows if _is_karakeep(_payload_of(row)) else heimdal_rows).append(row)
+
+    planned: List[_PlannedWrite] = []
+    # Non-Karakeep rows keep the existing episode fold (last-correction-wins),
+    # grouped here so each unit records the exact rows it acknowledges.
+    groups: "dict[str, List[ObservationRow]]" = {}
+    order: List[str] = []
+    for row in heimdal_rows:
+        key = _fold_key(_payload_of(row), _observation_id_of(row))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+    for key in order:
+        group = sorted(groups[key], key=lambda r: r.sequence)
+        planned.append(_PlannedWrite(rows=tuple(group), kind="heimdal", candidate=_build_candidate(group)))
+    for row in karakeep_rows:
+        planned.append(_PlannedWrite(rows=(row,), kind="karakeep", candidate=build_reading_candidate(row)))
+
+    planned.sort(key=lambda unit: min(r.sequence for r in unit.rows))
+    return planned
+
+
+def _durable_prefix(
+    rows: List[ObservationRow], planned: List[_PlannedWrite], durable: Dict[int, bool]
+) -> List[ObservationRow]:
+    """The contiguous prefix of rows (by log sequence) that is safe to acknowledge.
+
+    The acknowledgement boundary starts at the first non-durable row and is then
+    lowered by any durable materialization unit that *straddles* it (a folded
+    chain with rows on both sides). Every row below the final boundary belongs to
+    a fully-durable, non-straddling unit, so acknowledging up to it never
+    half-commits a folded chain and never consumes a row that sits beneath a
+    blocked one. Because ``advance_cursor_for_consumer`` advances to
+    ``max(sequence)+1`` and the batch is a contiguous read from the cursor, the
+    returned prefix advances exactly to that boundary; a later successful row
+    above the boundary stays unread and replays rather than being skipped
+    (KMA-INV-3).
+    """
+    if not rows:
+        return []
+
+    unit_of: Dict[int, int] = {}
+    unit_min: Dict[int, int] = {}
+    unit_max: Dict[int, int] = {}
+    unit_durable: Dict[int, bool] = {}
+    for index, unit in enumerate(planned):
+        seqs = [row.sequence for row in unit.rows]
+        unit_min[index] = min(seqs)
+        unit_max[index] = max(seqs)
+        unit_durable[index] = all(durable.get(seq, False) for seq in seqs)
+        for seq in seqs:
+            unit_of[seq] = index
+
+    ordered = sorted(rows, key=lambda r: r.sequence)
+    boundary: Optional[int] = None
+    for row in ordered:
+        if not unit_durable[unit_of[row.sequence]]:
+            boundary = row.sequence
+            break
+    if boundary is None:
+        return ordered  # every unit durable -- acknowledge the whole batch
+
+    changed = True
+    while changed:
+        changed = False
+        for index, is_durable in unit_durable.items():
+            if is_durable and unit_min[index] < boundary <= unit_max[index]:
+                boundary = unit_min[index]
+                changed = True
+    return [row for row in ordered if row.sequence < boundary]
+
+
 def project_pending_candidates(
     *,
     vault_context: VaultContext,
     consumer_id: str = CANDIDATE_CONSUMER_ID,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     candidates_dir: str = DEFAULT_CANDIDATES_DIR,
+    reading_candidates_dir: str = DEFAULT_READING_CANDIDATES_DIR,
     limit: Optional[int] = None,
     advance: bool = True,
 ) -> List[CandidateWriteResult]:
-    """THE production call site: cursor-consume, fold, and write noncanonical candidates.
+    """THE production call site: cursor-consume, materialize, and advance a durable prefix.
 
     Reads the next unread batch for ``consumer_id`` through the A2 cursor
-    contract (``read_observations_for_consumer`` -- no store/table import),
-    folds supersede/revision chains (:func:`fold_observations`), and writes
-    each resulting candidate through the governed path
-    (:func:`write_candidate_note`). Advances the consumer's own cursor past
-    the processed batch (unless ``advance=False``, e.g. dry-run/replay) --
-    this consumer's cursor is independent of A3's quarantine-proving
-    consumer, so replay/rewind here never affects the other.
+    contract (``read_observations_for_consumer`` -- no store/table import).
+    Non-Karakeep observations fold supersede/revision chains
+    (:func:`fold_observations`) and write through :func:`write_candidate_note`;
+    Karakeep observations write one ``reading_source_note`` per immutable
+    ``observation_id`` through :func:`write_reading_candidate_note`. Both use the
+    governed WriteGuard call site and this one consumer's cursor -- no second
+    consumer, projector, read path, or companion capture.
+
+    Cursor advancement (KMA-INV-3): the consumer's own cursor advances only
+    across the contiguous durable prefix of rows whose materialization returned
+    ``written``/``already_exists``. A WriteGuard refusal or item-scoped failure
+    stops the prefix at that row, so a later successful row is never skipped --
+    it replays on the next run. Replays are safe because a prior successful write
+    is ``already_exists`` at its deterministic path.
     """
-    # The cursor is a durability acknowledgement: do not begin a batch unless
-    # a selected, existing vault can hold its candidates. This happens before
+    # The cursor is a durability acknowledgement: do not begin a batch unless a
+    # selected, existing vault can hold its candidates. This happens before
     # writes so a restart can replay the complete unread batch safely.
     _vault_root(vault_context)
     rows = read_observations_for_consumer(consumer_id, limit=limit)
-    candidates = fold_observations(rows)
-    results = [
-        write_candidate_note(
-            candidate,
-            vault_context=vault_context,
-            write_guard=write_guard,
-            candidates_dir=candidates_dir,
-        )
-        for candidate in candidates
-    ]
-    # A cursor may acknowledge a batch only after every candidate is durable.
-    # Replays are safe because a prior successful write is ``already_exists``
-    # at its deterministic path.
-    if advance and rows and all(result.status in {"written", "already_exists"} for result in results):
-        advance_cursor_for_consumer(consumer_id, rows)
+    planned = _plan_writes(rows)
+
+    results: List[CandidateWriteResult] = []
+    durable: Dict[int, bool] = {}
+    for unit in planned:
+        if unit.kind == "karakeep":
+            result = write_reading_candidate_note(
+                unit.candidate,
+                vault_context=vault_context,
+                write_guard=write_guard,
+                candidates_dir=reading_candidates_dir,
+            )
+        else:
+            result = write_candidate_note(
+                unit.candidate,
+                vault_context=vault_context,
+                write_guard=write_guard,
+                candidates_dir=candidates_dir,
+            )
+        results.append(result)
+        is_durable = result.status in {"written", "already_exists"}
+        for row in unit.rows:
+            durable[row.sequence] = is_durable
+
+    if advance and rows:
+        prefix = _durable_prefix(rows, planned, durable)
+        if prefix:
+            advance_cursor_for_consumer(consumer_id, prefix)
     return results
 
 
@@ -513,14 +937,23 @@ __all__ = [
     "ARTIFACT_CLASS",
     "CANDIDATE_CONSUMER_ID",
     "CANDIDATE_WRITE_ACTION",
+    "DEFAULT_READING_CANDIDATES_DIR",
+    "KARAKEEP_SENSOR",
+    "READING_ARTIFACT_CLASS",
+    "READING_CANDIDATE_WRITE_ACTION",
     "REVIEW_STATE_DRAFT",
     "TRIAGE_STATE_CAPTURED",
     "CandidateProjectionError",
     "CandidateWriteResult",
     "HeimdalCandidate",
+    "ReadingSourceCandidate",
+    "build_reading_candidate",
     "candidate_note_path",
     "fold_observations",
     "project_pending_candidates",
+    "reading_candidate_note_path",
     "render_candidate_note",
+    "render_reading_candidate_note",
     "write_candidate_note",
+    "write_reading_candidate_note",
 ]

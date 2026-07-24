@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # CLI / media / retrieval
-    "click>=8.1,<9",
+    # Upper bound is load-bearing: Click 8.2 removed CliRunner's mix_stderr
+    # kwarg (tests/_click_compat.py shims around it, but stay in the
+    # validated range so `pip install -e .` matches requirements.txt).
+    "click>=8.1,<8.2",
     "faster-whisper>=1.0.0",
     "yt-dlp>=2024.7.2",
     "bgutil-ytdlp-pot-provider>=1.3.1",
@@ -28,7 +31,10 @@ dependencies = [
     "fastapi>=0.115,<1",
     "python-multipart>=0.0.20",
     "uvicorn>=0.30",
-    "starlette>=1.0",
+    # Upper bound is load-bearing: Starlette 1.3 wraps include_router()
+    # sub-routers in an internal representation that breaks naive
+    # app.routes walks (see tests/_route_introspection.py).
+    "starlette>=1.0,<1.3",
     "slowapi>=0.1.9",
     "prometheus-fastapi-instrumentator>=6.0",
     "prometheus-client>=0.20",
@@ -68,7 +74,11 @@ dev = [
     "pytest-asyncio>=1.4,<2",
     "pytest-xdist>=3.6",
     "ruff>=0.5",
-    "mypy>=1.9",
+    "mypy>=1.9,<2",
+    # dev-requirements.txt (CI's pinned mypy install) carries this stub
+    # package; without it here too, a fresh `pip install -e .[dev]` gets
+    # 29 spurious "Library stubs not installed for yaml" mypy errors.
+    "types-PyYAML>=6.0.12",
     "deepeval>=0.20.60",
     "ragas>=0.1.11",
     "datasets>=2.21.0",

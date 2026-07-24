@@ -121,8 +121,8 @@ def test_route_registered_via_seam():
     # The route is registered through the seam in app/api/app.py without an
     # import-time failure (the seam variable resolves to a real router).
     from app.api import app as app_module
+    from tests._route_introspection import openapi_paths
 
     assert app_module.context_bundles_router is not None
 
-    paths = {route.path for route in app.routes}
-    assert "/api/context-bundles/{bundle_id}" in paths
+    assert "/api/context-bundles/{bundle_id}" in openapi_paths(app)

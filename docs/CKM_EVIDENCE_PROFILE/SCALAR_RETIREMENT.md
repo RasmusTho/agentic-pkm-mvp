@@ -38,7 +38,10 @@ view or the tri-state work — is the mechanism that removes the false picture.
 - Bundle the presentation-contract writeback: update the acceptance rows in
   `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` that require the subordinate `min`
   aggregate and the text-and-shape maturity band (its rows 5 and 22, the band-encoding language, and
-  the CKM11 criteria that reference `min`/band) in the same PR as the render change.
+  the CKM11 criteria that reference `min`/band), plus the active Markdown and HTML projection
+  contracts at `docs/CAPABILITY_KNOWLEDGE_MODEL/CKM_PROJECTIONS_AND_QUERY.md` and
+  `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_HTML_PROJECTION.md`, in the same PR as the render
+  change.
 
 ## Concretely
 
@@ -79,9 +82,9 @@ schema epoch, which Phase 1 explicitly forbids (INV-EP-1).
   Verify: `tests/builderops/ckm/test_assessment_engine.py::test_aggregate_transparent_and_min_capped` still passes; `tests/builderops/ckm/test_store.py` assessment round-trip still asserts the column is populated.
 - [ ] Render stays pure, deterministic, read-only, and self-contained after the removal.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_pure_render_over_fixture_graph`; `::test_cli_rejects_missing_database_without_creating_it`; `::test_no_scripts_or_external_references`.
-- [ ] The Direction A acceptance rows that require the `min` aggregate / maturity band are updated in
-  this PR.
-  Verify: doc writeback at `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md :: Acceptance criteria` present in the CKM-EP-01 PR diff.
+- [ ] The Direction A acceptance rows and the active Markdown and HTML projection contracts no longer
+  require a rendered `min` aggregate / maturity band in this PR.
+  Verify: doc writeback at `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md :: Acceptance criteria`, `docs/CAPABILITY_KNOWLEDGE_MODEL/CKM_PROJECTIONS_AND_QUERY.md :: What This Task Does`, and `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_HTML_PROJECTION.md :: What This Task Does` present in the CKM-EP-01 PR diff.
 - [ ] Shared real-store validation gate (INV-EP-6): replaying `seed → ingest → link → assess →
   overview` on the operator's real 31-capability store shows Retrieval no longer rendering falsely red
   / `critical`.
@@ -117,13 +120,16 @@ state is introduced; a process restart changes nothing about what the next rende
 
 - `docs/CKM_EVIDENCE_PROFILE/README.md`
 - `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md`
+- `docs/CAPABILITY_KNOWLEDGE_MODEL/CKM_PROJECTIONS_AND_QUERY.md`
+- `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_HTML_PROJECTION.md`
 - `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
 - `app/builderops/ckm/overview_html.py`, `app/builderops/ckm/projections.py`, `app/builderops/ckm/assess.py`
 
 ## Related GitHub Issues
 
-Not yet filed. The coordinator creates this slice from the merged spec. May be delivered as a single
-issue/PR jointly with CKM-EP-02 (shared overview render surface and the same real-store gate). Point
-`Context` at the parent feature issue and reference "Implements CKM_EVIDENCE_PROFILE/SCALAR_RETIREMENT".
-TCD hint: Sonnet / medium — bounded render-surface deletion mirroring an existing pattern, low blast
-radius, but the Direction A contract writeback and the real-store gate must not be dropped at handoff.
+Filed as [#4090](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4090), the first serial child
+of parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). It is
+delivered independently before CKM-EP-02; its exact PR/SHA, validation, owner-doc result, and parent
+handoff belong on #4089. TCD hint: Sonnet / medium — bounded render-surface deletion mirroring an
+existing pattern, low blast radius, but the Direction A contract writeback and the real-store gate
+must not be dropped at handoff.

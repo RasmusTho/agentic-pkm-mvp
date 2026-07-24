@@ -889,6 +889,7 @@ def test_builder_system_change_selects_its_own_regression_tests() -> None:
     assert selection.subsystems == ("builder_system",)
     assert "tests/builderops" in selection.targets
     assert "tests/governance" in selection.targets
+    assert "tests/architecture/test_builderops_store_boundary.py" in selection.targets
 
 
 def test_runtime_start_harness_change_selects_ops_deploy_regressions() -> None:
