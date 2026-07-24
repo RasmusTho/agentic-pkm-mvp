@@ -115,6 +115,84 @@ def overview_store(tmp_path: Path) -> CkmStore:
     return store
 
 
+@pytest.fixture()
+def fanout_overview_store(tmp_path: Path) -> CkmStore:
+    store = CkmStore(tmp_path / "fanout-overview.sqlite3")
+    store.ensure_schema()
+    subsystem = store.upsert_capability(
+        identity_key="fixture:counts:subsystem",
+        name="Retrieval subsystem",
+        definition="Fixture subsystem.",
+        existence_provenance="seeded:fixture",
+        lifecycle="confirmed",
+        boundary_ref="RCA",
+    )
+    child = store.upsert_capability(
+        identity_key="fixture:counts:child",
+        name="Retrieval",
+        definition="Fixture child capability.",
+        existence_provenance="seeded:fixture-child",
+        lifecycle="confirmed",
+        parent_id=subsystem.id,
+        boundary_ref="RCA",
+    )
+    other = store.upsert_capability(
+        identity_key="fixture:counts:other",
+        name="Observability subsystem",
+        definition="Fixture second subsystem.",
+        existence_provenance="seeded:fixture-other",
+        lifecycle="confirmed",
+        boundary_ref="OEF",
+    )
+    shared = store.upsert_artifact(
+        source_ref="docs/shared.md",
+        artifact_kind="document",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"docs/shared.md"}',
+    )
+    subsystem_only = store.upsert_artifact(
+        source_ref="app/retrieval.py",
+        artifact_kind="source_file",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"app/retrieval.py"}',
+    )
+    child_only = store.upsert_artifact(
+        source_ref="tests/test_retrieval.py",
+        artifact_kind="test",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"tests/test_retrieval.py"}',
+    )
+
+    def edge(*, artifact_id: str, capability_id: str, basis: str) -> None:
+        store.upsert_evidence_edge(
+            artifact_id=artifact_id,
+            capability_id=capability_id,
+            evidence_kind="source",
+            polarity="supports",
+            maturity_dimension="functional_completeness",
+            confidence=1.0,
+            extraction_method="deterministic",
+            lifecycle="confirmed",
+            source_ref=f"fixture:{artifact_id}",
+            basis=basis,
+        )
+
+    edge(artifact_id=shared.id, capability_id=subsystem.id, basis="fixture:fanout")
+    edge(artifact_id=shared.id, capability_id=subsystem.id, basis="fixture:second-edge")
+    edge(
+        artifact_id=subsystem_only.id,
+        capability_id=subsystem.id,
+        basis="fixture:subsystem-only",
+    )
+    edge(artifact_id=shared.id, capability_id=child.id, basis="fixture:fanout")
+    edge(artifact_id=child_only.id, capability_id=child.id, basis="fixture:child-only")
+    edge(artifact_id=shared.id, capability_id=other.id, basis="fixture:fanout")
+    return store
+
+
 def test_pure_render_over_fixture_graph(overview_store: CkmStore) -> None:
     before = (
         overview_store.list_capabilities(),
@@ -308,6 +386,74 @@ def test_provenance_banner_precedes_map_and_footer_remains(
         assert rendered.index("Generated projection — not source of truth") < rendered.index(
             'id="map-heading"'
         )
+
+
+def test_subsystem_counts_distinct_artifacts(
+    fanout_overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(fanout_overview_store)
+
+    subsystem = re.search(
+        r'<section class="subsystem-counts-card"[^>]*data-subsystem-name="Retrieval subsystem"'
+        r'[^>]*data-capability-count="2"[^>]*data-distinct-artifacts="3"',
+        rendered,
+    )
+    assert subsystem is not None
+    root = re.search(
+        r'<li class="capability-count"[^>]*data-capability-name="Retrieval subsystem"'
+        r'[^>]*data-distinct-artifacts="2"[^>]*data-edge-count="3"',
+        rendered,
+    )
+    child = re.search(
+        r'<li class="capability-count"[^>]*data-capability-name="Retrieval"'
+        r'[^>]*data-distinct-artifacts="2"[^>]*data-edge-count="2"',
+        rendered,
+    )
+    assert root is not None
+    assert child is not None
+    assert "distinct artifacts: <strong>3</strong>" in subsystem.group(0) + rendered[
+        subsystem.end() : subsystem.end() + 300
+    ]
+
+
+def test_subsystem_counts_shared_evidence_indicator(
+    fanout_overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(fanout_overview_store)
+
+    assert re.search(
+        r'data-subsystem-name="Retrieval subsystem"[^>]*data-shared-edge-count="2"'
+        r'[^>]*data-edge-count="5"[^>]*data-shared-evidence="40.0%"',
+        rendered,
+    )
+    assert re.search(
+        r'data-capability-name="Retrieval subsystem"[^>]*data-shared-edge-count="1"'
+        r'[^>]*data-edge-count="3"[^>]*data-shared-evidence="33.3%"',
+        rendered,
+    )
+    assert re.search(
+        r'data-capability-name="Retrieval"[^>]*data-shared-edge-count="1"'
+        r'[^>]*data-edge-count="2"[^>]*data-shared-evidence="50.0%"',
+        rendered,
+    )
+    assert rendered.count("shared evidence:") == 6
+
+
+def test_subsystem_counts_global_masthead(
+    fanout_overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(fanout_overview_store)
+
+    assert re.search(
+        r'class="linkage-masthead" data-denominator="global" '
+        r'data-distinct-artifacts="3" data-capability-count="3" '
+        r'data-shared-edge-count="3" data-edge-count="6" '
+        r'data-shared-evidence="50.0%"',
+        rendered,
+    )
+    assert "3 distinct artifacts across 3 capabilities" in rendered
+    assert "50.0%</strong> of all 6 edges (global)" in rendered
+
 
 def test_no_external_references(overview_store: CkmStore) -> None:
     rendered = render_overview_html(overview_store)
