@@ -286,6 +286,21 @@ class CkmQueryService:
                     if requested not in returned:
                         self._raise_missing_capability_identity(conn, requested)
             elif "subtree_root_public_id" in filters:
+                subtree_root_public_id = str(filters["subtree_root_public_id"])
+                active_root = conn.execute(
+                    """
+                    SELECT 1
+                    FROM ckm_capability AS capability
+                    JOIN ckm_public_identity AS identity
+                      ON identity.public_id = capability.public_id
+                     AND identity.resource_type = 'capability'
+                     AND identity.status = 'active'
+                    WHERE capability.public_id = ?
+                    """,
+                    (subtree_root_public_id,),
+                ).fetchone()
+                if active_root is None:
+                    self._raise_missing_capability_identity(conn, subtree_root_public_id)
                 rows = conn.execute(
                     """
                     WITH RECURSIVE subtree(id) AS (
@@ -302,10 +317,8 @@ class CkmQueryService:
                      AND identity.status = 'active'
                     ORDER BY capability.public_id
                     """,
-                    (filters["subtree_root_public_id"],),
+                    (subtree_root_public_id,),
                 ).fetchall()
-                if not rows:
-                    self._raise_missing_capability_identity(conn, str(filters["subtree_root_public_id"]))
             else:
                 rows = conn.execute(
                     """SELECT capability.*, EXISTS(SELECT 1 FROM ckm_assessment AS assessment WHERE assessment.capability_id = capability.id) AS has_assessment
