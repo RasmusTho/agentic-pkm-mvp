@@ -413,11 +413,18 @@ def render_overview_html(
     store: CkmStore,
     *,
     generated_at: str | None = None,
+    class_capture_limit: int | None = None,
+    aggregate_capture_limit: int | None = None,
 ) -> str:
     """Render one self-contained CKM projection without mutating the store."""
 
     timestamp = generated_at or utc_now()
-    batch = store.load_projection_batch()
+    capture_limits: dict[str, int] = {}
+    if class_capture_limit is not None:
+        capture_limits["class_capture_limit"] = class_capture_limit
+    if aggregate_capture_limit is not None:
+        capture_limits["aggregate_capture_limit"] = aggregate_capture_limit
+    batch = store.load_projection_batch(**capture_limits)
     capabilities = batch.capabilities
     capability_by_id = {item.id: item for item in capabilities}
     all_findings = tuple(
@@ -509,11 +516,18 @@ def write_overview_html(
     output_path: Path,
     *,
     generated_at: str | None = None,
+    class_capture_limit: int | None = None,
+    aggregate_capture_limit: int | None = None,
 ) -> Path:
     store.ensure_schema()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        render_overview_html(store, generated_at=generated_at),
+        render_overview_html(
+            store,
+            generated_at=generated_at,
+            class_capture_limit=class_capture_limit,
+            aggregate_capture_limit=aggregate_capture_limit,
+        ),
         encoding="utf-8",
     )
     return output_path

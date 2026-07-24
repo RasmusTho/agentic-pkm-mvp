@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from app.builderops.cli import builderops
 from app.builderops.ckm.models import MATURITY_DIMENSIONS
 from app.builderops.ckm.overview_html import render_overview_html
-from app.builderops.ckm.store import CkmStore
+from app.builderops.ckm.store import CkmProjectionCaptureError, CkmStore
 
 
 @pytest.fixture()
@@ -484,6 +484,105 @@ def test_cli_writes_overview(overview_store: CkmStore, tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert output.is_file()
     assert "Development Overview" in output.read_text(encoding="utf-8")
+
+
+def test_cli_overview_accepts_explicit_capture_bounds(
+    overview_store: CkmStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, int] = {}
+    original = CkmStore.load_projection_batch
+
+    def traced(self: CkmStore, **kwargs: int):
+        observed.update(kwargs)
+        if kwargs.get("class_capture_limit") == 500:
+            raise CkmProjectionCaptureError(
+                "snapshot_too_large",
+                "complete CKM projection snapshot exceeds configured bounds",
+                {"class_limit": 500, "aggregate_limit": 3_000},
+            )
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(CkmStore, "load_projection_batch", traced)
+    output = tmp_path / "bounded" / "ckm-overview.html"
+    result = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--out",
+            str(output),
+            "--class-capture-limit",
+            "501",
+            "--aggregate-capture-limit",
+            "3001",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed == {"class_capture_limit": 501, "aggregate_capture_limit": 3001}
+    assert output.is_file()
+
+
+def test_cli_overview_preserves_default_and_insufficient_bound_refusal(
+    overview_store: CkmStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(self: CkmStore, **kwargs: int):
+        raise CkmProjectionCaptureError(
+            "snapshot_too_large",
+            "complete CKM projection snapshot exceeds configured bounds",
+            {
+                "class_limit": kwargs.get("class_capture_limit", 500),
+                "aggregate_limit": kwargs.get("aggregate_capture_limit", 3_000),
+            },
+        )
+
+    monkeypatch.setattr(CkmStore, "load_projection_batch", refuse)
+    output = tmp_path / "refused" / "ckm-overview.html"
+    result = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--out",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "snapshot" in result.output
+    assert not output.exists()
+
+
+def test_cli_overview_rejects_non_positive_capture_bounds(
+    overview_store: CkmStore,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "invalid" / "ckm-overview.html"
+    result = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--out",
+            str(output),
+            "--class-capture-limit",
+            "0",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
+    assert not output.exists()
 
 
 def test_cli_rejects_missing_database_without_creating_it(tmp_path: Path) -> None:
