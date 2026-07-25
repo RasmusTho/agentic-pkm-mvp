@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ from click.testing import CliRunner
 
 from app.builderops.cli import builderops
 from app.builderops.ckm.models import MATURITY_DIMENSIONS
-from app.builderops.ckm.overview_html import render_overview_html
+from app.builderops.ckm.overview_html import CockpitRenderContext, render_overview_html
 from app.builderops.ckm.store import CkmStore
 
 
@@ -604,3 +605,153 @@ def test_cli_rejects_missing_database_without_creating_it(tmp_path: Path) -> Non
     assert "CKM database does not exist" in result.output
     assert not database.exists()
     assert not output.exists()
+
+
+def test_cli_cockpit_is_opt_in_and_default_remains_direction_a(
+    overview_store: CkmStore, tmp_path: Path
+) -> None:
+    default_output = tmp_path / "default.html"
+    cockpit_output = tmp_path / "cockpit.html"
+    default = CliRunner().invoke(
+        builderops,
+        ["--db-path", str(overview_store.db_path), "ckm", "overview", "--out", str(default_output)],
+    )
+    cockpit = CliRunner().invoke(
+        builderops,
+        ["--db-path", str(overview_store.db_path), "ckm", "overview", "--cockpit", "--out", str(cockpit_output)],
+    )
+    assert default.exit_code == cockpit.exit_code == 0
+    assert "Cockpit trust frame" not in default_output.read_text(encoding="utf-8")
+    assert "Cockpit trust frame" in cockpit_output.read_text(encoding="utf-8")
+
+
+def test_cockpit_uses_existing_overview_renderer_call_site(overview_store: CkmStore) -> None:
+    context = CockpitRenderContext(batch=overview_store.load_projection_batch())
+    rendered = render_overview_html(
+        overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context
+    )
+    assert "Cockpit trust frame" in rendered
+    assert "Capability map" in rendered
+
+
+def test_cockpit_preserves_evidence_profile_count_context(
+    fanout_overview_store: CkmStore,
+) -> None:
+    context = CockpitRenderContext(batch=fanout_overview_store.load_projection_batch())
+    cockpit = render_overview_html(
+        fanout_overview_store,
+        generated_at="2026-07-25T10:00:00Z",
+        cockpit=context,
+    )
+    default = render_overview_html(
+        fanout_overview_store,
+        generated_at="2026-07-25T10:00:00Z",
+    )
+
+    for rendered in (cockpit, default):
+        assert 'data-subsystem-name="Retrieval subsystem"' in rendered
+        assert 'data-distinct-artifacts="3"' in rendered
+        assert 'data-shared-evidence="40.0%"' in rendered
+    assert "Cockpit trust frame" in cockpit
+    assert "Cockpit trust frame" not in default
+
+
+def test_cockpit_uses_one_projection_batch_without_mutation(
+    overview_store: CkmStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    batch = overview_store.load_projection_batch()
+    calls = 0
+
+    def load_once(**_: int) -> object:
+        nonlocal calls
+        calls += 1
+        return batch
+
+    monkeypatch.setattr(overview_store, "load_projection_batch", load_once)
+    before = overview_store.state_identity()
+    render_overview_html(overview_store, cockpit=CockpitRenderContext(batch=batch))
+    assert calls == 0
+    assert overview_store.state_identity() == before
+
+
+def test_cockpit_trust_frame_binds_complete_projection_identity(overview_store: CkmStore) -> None:
+    batch = overview_store.load_projection_batch()
+    rendered = render_overview_html(
+        overview_store,
+        generated_at="2026-07-25T10:00:00Z",
+        cockpit=CockpitRenderContext(batch=batch),
+    )
+    for value in (batch.state_identity.epoch, str(batch.state_identity.state_revision), str(batch.state_identity.schema_version), "fixture=two"):
+        assert value in rendered
+    for label in ("capabilities", "artifacts", "evidence edges", "assessments", "findings", "projection-input digest"):
+        assert label in rendered
+
+
+def test_cockpit_empty_store_keeps_fixed_information_architecture(tmp_path: Path) -> None:
+    store = CkmStore(tmp_path / "empty-cockpit.sqlite3")
+    store.ensure_schema()
+    rendered = render_overview_html(
+        store,
+        generated_at="2026-07-25T10:00:00Z",
+        cockpit=CockpitRenderContext(batch=store.load_projection_batch()),
+    )
+    headings = ("Cockpit trust frame", "Interpretation hazards", "Comparison", "Filters", "Capability map", "Current gaps", "Proposal drafts")
+    assert all(heading in rendered for heading in headings)
+    assert rendered.index("Cockpit trust frame") < rendered.index("Interpretation hazards") < rendered.index("Comparison") < rendered.index("Filters") < rendered.index("Capability map") < rendered.index("Current gaps") < rendered.index("Proposal drafts")
+    assert "Is this projection fresh and complete enough to inspect?" in rendered
+    assert "What differs between the two newest active retained observation records" in rendered
+    assert "Where is evidence weakest?" in rendered
+    assert "What should not be taken at face value?" in rendered
+
+
+def test_cockpit_cli_fails_closed_before_writing_partial_output(
+    overview_store: CkmStore, tmp_path: Path
+) -> None:
+    database = tmp_path / "missing" / "ckm.sqlite3"
+    output = tmp_path / "cockpit.html"
+    result = CliRunner().invoke(builderops, ["--db-path", str(database), "ckm", "overview", "--cockpit", "--out", str(output)])
+    assert result.exit_code != 0
+    assert not database.exists()
+    assert not output.exists()
+
+    _make_snapshot_exceed_default(overview_store)
+    oversized_output = tmp_path / "oversized.html"
+    oversized = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--cockpit",
+            "--out",
+            str(oversized_output),
+        ],
+    )
+    assert oversized.exit_code != 0
+    assert "snapshot" in oversized.output
+    assert not oversized_output.exists()
+
+    with sqlite3.connect(overview_store.db_path) as conn:
+        conn.execute("UPDATE ckm_state SET schema_version = 999 WHERE singleton = 1")
+    unsupported_output = tmp_path / "unsupported.html"
+    unsupported = CliRunner().invoke(
+        builderops,
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--cockpit",
+            "--out",
+            str(unsupported_output),
+        ],
+    )
+    assert unsupported.exit_code != 0
+    assert not unsupported_output.exists()
+
+
+def test_cockpit_render_is_byte_deterministic(overview_store: CkmStore) -> None:
+    batch = overview_store.load_projection_batch()
+    context = CockpitRenderContext(batch=batch)
+    assert render_overview_html(overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context) == render_overview_html(overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context)
