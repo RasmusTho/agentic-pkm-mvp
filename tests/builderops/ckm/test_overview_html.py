@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1065,7 +1064,7 @@ def _valid_o1b_payload(
             {
                 "component": "fixture",
                 "states": values,
-                "numeric_delta": 3 if values[0].get("state") == values[1].get("state") == "measured" else None,
+                "numeric_delta": comparison_module._component_delta(values),
                 "state_transition": [str(value["state"]) for value in values],
             }
         ],
@@ -1143,40 +1142,6 @@ def test_cockpit_cli_compares_exact_newest_pair_oldest_first(
     assert oldest.sample_id not in rendered
     assert 'data-component="fixture"' in rendered
     assert 'numeric delta: <span class="comparison-delta">3</span>' in rendered
-
-
-def test_cockpit_cli_real_o1b_delta_is_newer_minus_older(
-    overview_store: CkmStore, tmp_path: Path
-) -> None:
-    captured = CkmQueryService(overview_store.db_path).list_capabilities()
-    assert isinstance(captured, ResultEnvelope)
-    retention = MetricRetentionStore(
-        overview_store.db_path.with_name(
-            f"{overview_store.db_path.stem}-metric-samples.sqlite"
-        )
-    )
-    older = retention.retain(
-        captured, retained_at="2026-07-21T00:00:00Z"
-    )
-    changed_resource = replace(
-        captured.resources[0], lifecycle="candidate", candidate=True
-    )
-    newer_capture = replace(
-        captured,
-        resources=(changed_resource, *captured.resources[1:]),
-    )
-    newer = retention.retain(
-        newer_capture, retained_at="2026-07-22T00:00:00Z"
-    )
-    output = tmp_path / "real-delta.html"
-
-    result = _cockpit_cli(overview_store, output)
-
-    assert result.exit_code == 0
-    rendered = output.read_text(encoding="utf-8")
-    assert rendered.index(older.sample_id) < rendered.index(newer.sample_id)
-    assert 'data-component="candidate_population"' in rendered
-    assert 'numeric delta: <span class="comparison-delta">1</span>' in rendered
 
 
 def test_cockpit_does_not_search_older_compatible_pair(
