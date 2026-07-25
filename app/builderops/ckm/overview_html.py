@@ -109,6 +109,25 @@ def _capability_noun(count: int) -> str:
     return "capability" if count == 1 else "capabilities"
 
 
+def _stale_source_markers(projection: CkmAssessmentProjection) -> str:
+    """Render only captured watermark differences that make an assessment stale."""
+
+    assessment_markers = projection.assessment.watermark_set
+    current_markers = projection.current_watermark_set
+    differences = [
+        source
+        for source in sorted(set(assessment_markers) | set(current_markers))
+        if assessment_markers.get(source) != current_markers.get(source)
+    ]
+    if not differences:
+        return ""
+    return "; ".join(
+        f'{_e(source)}: assessment={_e(assessment_markers.get(source, "absent"))} '
+        f'→ current={_e(current_markers.get(source, "absent"))}'
+        for source in differences
+    )
+
+
 def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
     """Render only observed, snapshot-bound interpretation caveats.
 
@@ -117,28 +136,34 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
     """
 
     capabilities = {capability.id: capability for capability in batch.capabilities}
-    rows: list[tuple[int, int, str, str]] = []
+    rows: list[tuple[int, int, str, str, str | None]] = []
 
     def add(
         kind_order: int,
         dimension_order: int,
         kind: str,
         body: str,
+        value_state: str | None = None,
     ) -> None:
-        rows.append((kind_order, dimension_order, kind, body))
+        rows.append((kind_order, dimension_order, kind, body, value_state))
 
     stale = [
-        capabilities[capability_id]
+        (capabilities[capability_id], _stale_source_markers(projection))
         for capability_id, projection in batch.assessments_by_capability.items()
         if projection.stale_relative_to_evidence and capability_id in capabilities
     ]
     if stale:
+        stale.sort(key=lambda item: (item[0].public_id.casefold(), item[0].id))
+        stale_links = ", ".join(
+            f'<a href="#cap-{_e(capability.id)}">{_e(capability.public_id)}</a>'
+            + (f" ({markers})" if markers else "")
+            for capability, markers in stale
+        )
         add(
             0,
             0,
             "stale",
-            f"{len(stale)} stale assessment{'s' if len(stale) != 1 else ''}: "
-            f"{_hazard_capability_links(stale)}.",
+            f"{len(stale)} stale assessment{'s' if len(stale) != 1 else ''}: " f"{stale_links}.",
         )
 
     unavailable = [
@@ -160,8 +185,7 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
             capabilities[capability_id]
             for capability_id, projection in batch.assessments_by_capability.items()
             if capability_id in capabilities
-            and projection.assessment.dimension_status.get(dimension)
-            in {"unassessed", "unsupported"}
+            and projection.assessment.dimension_status.get(dimension) == "unassessed"
         ]
         if unassessed:
             add(
@@ -171,6 +195,24 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
                 f"{_e(DIMENSION_LABELS[dimension][1])}: unassessed for {len(unassessed)} "
                 f"assessed {_capability_noun(len(unassessed))}: "
                 f"{_hazard_capability_links(unassessed)}. Unassessed is not a zero score.",
+                "unassessed",
+            )
+
+        unsupported = [
+            capabilities[capability_id]
+            for capability_id, projection in batch.assessments_by_capability.items()
+            if capability_id in capabilities
+            and projection.assessment.dimension_status.get(dimension) == "unsupported"
+        ]
+        if unsupported:
+            add(
+                1,
+                dimension_order + 1,
+                "unsupported",
+                f"{_e(DIMENSION_LABELS[dimension][1])}: unsupported for {len(unsupported)} "
+                f"assessed {_capability_noun(len(unsupported))}: "
+                f"{_hazard_capability_links(unsupported)}. Unsupported is not a zero score.",
+                "unsupported",
             )
 
         candidate_heavy = [
@@ -214,18 +256,28 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
 
     assessed = tuple(batch.assessments_by_capability.items())
     for dimension_order, dimension in enumerate(MATURITY_DIMENSIONS):
-        if assessed and all(
-            projection.assessment.dimension_status.get(dimension)
+        zero_assessed = [
+            (capability_id, projection)
+            for capability_id, projection in assessed
+            if projection.assessment.dimension_status.get(dimension)
             not in {"unassessed", "unsupported"}
-            and float(projection.assessment.scores[dimension]) == 0.0
-            for _, projection in assessed
+        ]
+        if zero_assessed and all(
+            float(projection.assessment.scores[dimension]) == 0.0 for _, projection in zero_assessed
         ):
+            zero_capabilities = [
+                capabilities[capability_id]
+                for capability_id, _ in zero_assessed
+                if capability_id in capabilities
+            ]
             add(
                 4,
                 dimension_order,
                 "snapshot-wide-zero",
                 f"Snapshot-wide zero: {_e(DIMENSION_LABELS[dimension][1])} is 0.00 for every "
-                "assessed capability in this snapshot. CKM cannot determine whether that reflects "
+                "assessed capability in this snapshot. "
+                f"Affected: {len(zero_capabilities)} assessed {_capability_noun(len(zero_capabilities))}: "
+                f"{_hazard_capability_links(zero_capabilities)}. CKM cannot determine whether that reflects "
                 "missing evidence, current metric coverage, or portfolio state.",
             )
 
@@ -235,10 +287,12 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
         content = (
             '<ul class="hazard-list">'
             + "".join(
-                f'<li class="hazard hazard-{kind}" data-hazard-kind="{kind}" '
+                f'<li class="hazard hazard-{kind}" data-hazard-kind="{kind}"'
+                + (f' data-value-state="{value_state}"' if value_state else "")
+                + " "
                 'data-renderer-authored="interpretation">'
                 f"{body}</li>"
-                for _, _, kind, body in sorted(rows)
+                for _, _, kind, body, value_state in sorted(rows)
             )
             + "</ul>"
         )

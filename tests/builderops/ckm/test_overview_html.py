@@ -846,11 +846,13 @@ def test_cockpit_hazards_render_observed_states_without_coercion(
         for capability in overview_store.list_capabilities()
         if capability.id != original.capability_id
     )
+    second_statuses = dict(original.dimension_status)
+    second_statuses["documentation_quality"] = "unsupported"
     overview_store.append_assessment(
         capability_id=second_capability.id,
         scores=original.scores,
         citations=original.citations,
-        dimension_status=original.dimension_status,
+        dimension_status=second_statuses,
         candidate_shares=original.candidate_shares,
         formula_ids=original.formula_ids,
         aggregate=original.aggregate,
@@ -864,9 +866,13 @@ def test_cockpit_hazards_render_observed_states_without_coercion(
     )
     assert 'data-hazard-kind="stale"' in rendered
     assert 'data-hazard-kind="unassessed"' in rendered
+    assert 'data-hazard-kind="unsupported" data-value-state="unsupported"' in rendered
     assert 'data-hazard-kind="candidate-heavy"' in rendered
-    assert "documentation quality: unassessed for 2 assessed capabilities:" in rendered
+    assert 'data-hazard-kind="unassessed" data-value-state="unassessed"' in rendered
+    assert "documentation quality: unassessed for 1 assessed capability:" in rendered
+    assert "documentation quality: unsupported for 1 assessed capability:" in rendered
     assert "functional completeness: candidate-heavy for 2 assessed capabilities:" in rendered
+    assert "fixture: assessment=one → current=two" in rendered
     assert "Unassessed is not a zero score." in rendered
     shared = render_overview_html(
         fanout_overview_store,
@@ -884,9 +890,10 @@ def test_snapshot_wide_zero_is_descriptive_not_diagnostic(overview_store: CkmSto
     # deliberately not coerced into this claim.
     rendered = render_overview_html(overview_store, cockpit=CockpitRenderContext(batch=batch))
     assert (
-        "Snapshot-wide zero: operational readiness is 0.00 for every assessed capability in this snapshot."
-        in rendered
+        "Snapshot-wide zero: operational readiness is 0.00 for every assessed capability in this snapshot. "
+        "Affected: 1 assessed capability:" in rendered
     )
+    assert 'href="#cap-' in rendered
     assert (
         "CKM cannot determine whether that reflects missing evidence, current metric coverage, or portfolio state."
         in rendered
