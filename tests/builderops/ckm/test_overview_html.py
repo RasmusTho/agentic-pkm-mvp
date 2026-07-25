@@ -249,7 +249,7 @@ def test_honesty_markers_render(overview_store: CkmStore) -> None:
     assert "LOW CONFIDENCE" in rendered
     assert "candidate share 75.0%" in rendered
     assert "candidate share unavailable" in rendered
-    assert rendered.count('mini-dimension mini-unassessed') == len(MATURITY_DIMENSIONS) + 1
+    assert rendered.count("mini-dimension mini-unassessed") == len(MATURITY_DIMENSIONS) + 1
     assert "2 confirmed / 1 candidate" not in rendered
     assert "1 confirmed / 1 candidate" in rendered
     assert '<span class="badge evidence-status">candidate</span>' in rendered
@@ -273,8 +273,7 @@ def test_dimension_cells_render_three_states_and_proportional_fill(
     assert 'class="mini-dimension mini-starved"' in rendered
     assert (
         '<section class="dimension dimension-unassessed" '
-        'data-dimension="documentation_quality" data-cell-state="unassessed">'
-        in rendered
+        'data-dimension="documentation_quality" data-cell-state="unassessed">' in rendered
     )
     unassessed_section = rendered.split(
         'data-dimension="documentation_quality" data-cell-state="unassessed">',
@@ -353,10 +352,10 @@ def test_accessibility_and_responsive_contract(overview_store: CkmStore) -> None
 
     assert '<details class="capability-details">' in rendered
     assert '<summary class="capability-summary">' in rendered
-    assert ':focus-visible' in rendered
-    assert 'summary::before' in rendered and 'details[open] > summary::before' in rendered
-    assert '@media (max-width:680px)' in rendered
-    assert 'font-size:1rem' in rendered
+    assert ":focus-visible" in rendered
+    assert "summary::before" in rendered and "details[open] > summary::before" in rendered
+    assert "@media (max-width:680px)" in rendered
+    assert "font-size:1rem" in rendered
     assert 'role="img"' in rendered
     assert "Citations — operational readiness (0)" in rendered
     assert 'class="band-dot"' not in rendered
@@ -425,9 +424,10 @@ def test_subsystem_counts_distinct_artifacts(
     )
     assert root is not None
     assert child is not None
-    assert "distinct artifacts: <strong>3</strong>" in subsystem.group(0) + rendered[
-        subsystem.end() : subsystem.end() + 300
-    ]
+    assert (
+        "distinct artifacts: <strong>3</strong>"
+        in subsystem.group(0) + rendered[subsystem.end() : subsystem.end() + 300]
+    )
 
 
 def test_subsystem_counts_shared_evidence_indicator(
@@ -565,8 +565,16 @@ def test_cli_overview_preserves_default_and_insufficient_bound_refusal(
     insufficient_result = CliRunner().invoke(
         builderops,
         [
-            "--db-path", str(overview_store.db_path), "ckm", "overview", "--out", str(insufficient),
-            "--class-capture-limit", "1", "--aggregate-capture-limit", "1",
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--out",
+            str(insufficient),
+            "--class-capture-limit",
+            "1",
+            "--aggregate-capture-limit",
+            "1",
         ],
     )
     assert insufficient_result.exit_code != 0
@@ -583,8 +591,14 @@ def test_cli_overview_rejects_non_positive_capture_bounds(
         result = CliRunner().invoke(
             builderops,
             [
-                "--db-path", str(overview_store.db_path), "ckm", "overview", "--out", str(output),
-                "--class-capture-limit", value,
+                "--db-path",
+                str(overview_store.db_path),
+                "ckm",
+                "overview",
+                "--out",
+                str(output),
+                "--class-capture-limit",
+                value,
             ],
         )
         assert result.exit_code != 0
@@ -618,7 +632,15 @@ def test_cli_cockpit_is_opt_in_and_default_remains_direction_a(
     )
     cockpit = CliRunner().invoke(
         builderops,
-        ["--db-path", str(overview_store.db_path), "ckm", "overview", "--cockpit", "--out", str(cockpit_output)],
+        [
+            "--db-path",
+            str(overview_store.db_path),
+            "ckm",
+            "overview",
+            "--cockpit",
+            "--out",
+            str(cockpit_output),
+        ],
     )
     assert default.exit_code == cockpit.exit_code == 0
     assert "Cockpit trust frame" not in default_output.read_text(encoding="utf-8")
@@ -681,9 +703,21 @@ def test_cockpit_trust_frame_binds_complete_projection_identity(overview_store: 
         generated_at="2026-07-25T10:00:00Z",
         cockpit=CockpitRenderContext(batch=batch),
     )
-    for value in (batch.state_identity.epoch, str(batch.state_identity.state_revision), str(batch.state_identity.schema_version), "fixture=two"):
+    for value in (
+        batch.state_identity.epoch,
+        str(batch.state_identity.state_revision),
+        str(batch.state_identity.schema_version),
+        "fixture=two",
+    ):
         assert value in rendered
-    for label in ("capabilities", "artifacts", "evidence edges", "assessments", "findings", "projection-input digest"):
+    for label in (
+        "capabilities",
+        "artifacts",
+        "evidence edges",
+        "assessments",
+        "findings",
+        "projection-input digest",
+    ):
         assert label in rendered
 
 
@@ -695,9 +729,25 @@ def test_cockpit_empty_store_keeps_fixed_information_architecture(tmp_path: Path
         generated_at="2026-07-25T10:00:00Z",
         cockpit=CockpitRenderContext(batch=store.load_projection_batch()),
     )
-    headings = ("Cockpit trust frame", "Interpretation hazards", "Comparison", "Filters", "Capability map", "Current gaps", "Proposal drafts")
+    headings = (
+        "Cockpit trust frame",
+        "Interpretation hazards",
+        "Comparison",
+        "Filters",
+        "Capability map",
+        "Current gaps",
+        "Proposal drafts",
+    )
     assert all(heading in rendered for heading in headings)
-    assert rendered.index("Cockpit trust frame") < rendered.index("Interpretation hazards") < rendered.index("Comparison") < rendered.index("Filters") < rendered.index("Capability map") < rendered.index("Current gaps") < rendered.index("Proposal drafts")
+    assert (
+        rendered.index("Cockpit trust frame")
+        < rendered.index("Interpretation hazards")
+        < rendered.index("Comparison")
+        < rendered.index("Filters")
+        < rendered.index("Capability map")
+        < rendered.index("Current gaps")
+        < rendered.index("Proposal drafts")
+    )
     assert "Is this projection fresh and complete enough to inspect?" in rendered
     assert "What differs between the two newest active retained observation records" in rendered
     assert "Where is evidence weakest?" in rendered
@@ -709,7 +759,10 @@ def test_cockpit_cli_fails_closed_before_writing_partial_output(
 ) -> None:
     database = tmp_path / "missing" / "ckm.sqlite3"
     output = tmp_path / "cockpit.html"
-    result = CliRunner().invoke(builderops, ["--db-path", str(database), "ckm", "overview", "--cockpit", "--out", str(output)])
+    result = CliRunner().invoke(
+        builderops,
+        ["--db-path", str(database), "ckm", "overview", "--cockpit", "--out", str(output)],
+    )
     assert result.exit_code != 0
     assert not database.exists()
     assert not output.exists()
@@ -754,4 +807,116 @@ def test_cockpit_cli_fails_closed_before_writing_partial_output(
 def test_cockpit_render_is_byte_deterministic(overview_store: CkmStore) -> None:
     batch = overview_store.load_projection_batch()
     context = CockpitRenderContext(batch=batch)
-    assert render_overview_html(overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context) == render_overview_html(overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context)
+    assert render_overview_html(
+        overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context
+    ) == render_overview_html(overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context)
+
+
+def test_cockpit_hazards_are_snapshot_bound_and_deterministic(
+    overview_store: CkmStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    batch = overview_store.load_projection_batch()
+    monkeypatch.setattr(
+        overview_store, "load_projection_batch", lambda **_: pytest.fail("extra store read")
+    )
+    context = CockpitRenderContext(batch=batch)
+    first = render_overview_html(
+        overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context
+    )
+    second = render_overview_html(
+        overview_store, generated_at="2026-07-25T10:00:00Z", cockpit=context
+    )
+    assert first == second
+    hazards = first.split('<section class="cockpit-hazards"', 1)[1].split("</section>", 1)[0]
+    assert (
+        hazards.index('data-hazard-kind="stale"')
+        < hazards.index('data-hazard-kind="unassessed"')
+        < hazards.index('data-hazard-kind="candidate-heavy"')
+    )
+
+
+def test_cockpit_hazards_render_observed_states_without_coercion(
+    overview_store: CkmStore, fanout_overview_store: CkmStore
+) -> None:
+    rendered = render_overview_html(
+        overview_store, cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch())
+    )
+    assert 'data-hazard-kind="stale"' in rendered
+    assert 'data-hazard-kind="unassessed"' in rendered
+    assert 'data-hazard-kind="candidate-heavy"' in rendered
+    assert "Unassessed is not a zero score." in rendered
+    shared = render_overview_html(
+        fanout_overview_store,
+        cockpit=CockpitRenderContext(batch=fanout_overview_store.load_projection_batch()),
+    )
+    assert 'data-hazard-kind="shared-evidence"' in shared
+    assert "3 capabilities" in shared
+
+
+def test_snapshot_wide_zero_is_descriptive_not_diagnostic(overview_store: CkmStore) -> None:
+    batch = overview_store.load_projection_batch()
+    projection = next(iter(batch.assessments_by_capability.values()))
+    assert projection.assessment.scores["operational_readiness"] == 0.0
+    # The fixture's only numeric operational assessment is zero, while its unavailable child is
+    # deliberately not coerced into this claim.
+    rendered = render_overview_html(overview_store, cockpit=CockpitRenderContext(batch=batch))
+    assert (
+        "Snapshot-wide zero: operational readiness is 0.00 for every assessed capability in this snapshot."
+        in rendered
+    )
+    assert (
+        "CKM cannot determine whether that reflects missing evidence, current metric coverage, or portfolio state."
+        in rendered
+    )
+
+
+def test_new_cockpit_interpretation_copy_avoids_banned_rhetoric(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store, cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch())
+    )
+    authored = " ".join(
+        re.findall(
+            r'<(?:section|li)[^>]*data-renderer-authored="interpretation"[^>]*>(.*?)</(?:section|li)>',
+            rendered,
+            re.S,
+        )
+    )
+    assert authored
+    assert not re.search(
+        r"\b(rank|cause|regression|trend|forecast|urgent|priority|action|diagnos)\w*\b",
+        authored,
+        re.I,
+    )
+
+
+def test_cockpit_hazard_empty_and_unavailable_states_are_explicit(tmp_path: Path) -> None:
+    empty = CkmStore(tmp_path / "hazard-empty.sqlite3")
+    empty.ensure_schema()
+    rendered = render_overview_html(
+        empty, cockpit=CockpitRenderContext(batch=empty.load_projection_batch())
+    )
+    assert "No listed interpretation hazards for this captured projection." in rendered
+    unavailable = CkmStore(tmp_path / "hazard-unavailable.sqlite3")
+    unavailable.ensure_schema()
+    capability = unavailable.upsert_capability(
+        identity_key="hazard:unavailable",
+        name="Unavailable",
+        definition="Fixture.",
+        existence_provenance="fixture",
+        lifecycle="confirmed",
+    )
+    output = render_overview_html(
+        unavailable, cockpit=CockpitRenderContext(batch=unavailable.load_projection_batch())
+    )
+    assert "Assessment unavailable for 1 capability" in output
+    assert capability.public_id in output
+
+
+def test_cockpit_hazard_links_preserve_map_and_gap_order(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store, cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch())
+    )
+    hazards = rendered.split('<section class="cockpit-hazards"', 1)[1].split("</section>", 1)[0]
+    assert re.search(r'href="#cap-[^"]+"', hazards)
+    assert rendered.index("Capability map") < rendered.index("Current gaps")
+    assert 'href="#gaps-' in rendered
