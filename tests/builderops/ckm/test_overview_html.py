@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from app.builderops.__main__ import _root
 from app.builderops.cli import builderops
 from app.builderops.ckm import comparison as comparison_module
 from app.builderops.ckm.contracts import ResultEnvelope
@@ -1183,8 +1184,38 @@ def test_cockpit_recovery_commands_match_click_help(overview_store: CkmStore) ->
     rendered = render_overview_html(
         overview_store, cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch())
     )
-    measure_help = CliRunner().invoke(builderops, ["ckm", "measure", "--help"])
-    compare_help = CliRunner().invoke(builderops, ["ckm", "compare", "--help"])
+    database = str(overview_store.db_path)
+    measure_help = CliRunner().invoke(
+        _root, ["builderops", "--db-path", database, "ckm", "measure", "--help"]
+    )
+    compare_help = CliRunner().invoke(
+        _root,
+        [
+            "builderops",
+            "--db-path",
+            database,
+            "ckm",
+            "compare",
+            "--sample-id",
+            "older",
+            "--sample-id",
+            "newer",
+            "--help",
+        ],
+    )
+    invalid_former_ordering = CliRunner().invoke(
+        _root, ["--db-path", database, "ckm", "measure", "--help"]
+    )
     assert measure_help.exit_code == compare_help.exit_code == 0
-    assert "--retain" in measure_help.output and "ckm measure --retain" in rendered
-    assert "--sample-id" in compare_help.output and "ckm compare --sample-id" in rendered
+    assert invalid_former_ordering.exit_code == 2
+    assert "No such option: --db-path" in invalid_former_ordering.output
+    assert "--retain" in measure_help.output
+    assert "--sample-id" in compare_help.output
+    comparison = rendered.split('<section class="cockpit-comparison"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert re.findall(r"<code>(python -m app\.builderops[^<]+)</code>", comparison) == [
+        "python -m app.builderops builderops --db-path &lt;db&gt; ckm measure --retain",
+        "python -m app.builderops builderops --db-path &lt;db&gt; ckm compare "
+        "--sample-id &lt;older&gt; --sample-id &lt;newer&gt;",
+    ]

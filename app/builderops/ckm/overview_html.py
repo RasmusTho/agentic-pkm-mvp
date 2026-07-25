@@ -346,7 +346,7 @@ def _cockpit_comparison_markup(comparison: Mapping[str, Any]) -> str:
             f'<pre class="comparison-freshness">{_e(canonical_json(comparison.get("freshness", [])))}</pre>'
             f'<pre class="comparison-limitations">{_e(canonical_json(comparison.get("limitations", [])))}</pre>'
         )
-    return f'''<section class="cockpit-comparison" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p class="comparison-disclaimer">{disclaimer}</p>{body}<p>Recovery: <code>python -m app.builderops --db-path &lt;db&gt; ckm measure --retain</code> · <code>python -m app.builderops --db-path &lt;db&gt; ckm compare --sample-id &lt;older&gt; --sample-id &lt;newer&gt;</code></p></section>'''
+    return f'''<section class="cockpit-comparison" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p class="comparison-disclaimer">{disclaimer}</p>{body}<p>Recovery: <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm measure --retain</code> · <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm compare --sample-id &lt;older&gt; --sample-id &lt;newer&gt;</code></p></section>'''
 
 
 def _cockpit_reserved_markup(comparison: Mapping[str, Any]) -> str:
