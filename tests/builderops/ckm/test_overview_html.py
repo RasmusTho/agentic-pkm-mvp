@@ -838,19 +838,42 @@ def test_cockpit_hazards_are_snapshot_bound_and_deterministic(
 def test_cockpit_hazards_render_observed_states_without_coercion(
     overview_store: CkmStore, fanout_overview_store: CkmStore
 ) -> None:
+    original = next(
+        iter(overview_store.load_projection_batch().assessments_by_capability.values())
+    ).assessment
+    second_capability = next(
+        capability
+        for capability in overview_store.list_capabilities()
+        if capability.id != original.capability_id
+    )
+    overview_store.append_assessment(
+        capability_id=second_capability.id,
+        scores=original.scores,
+        citations=original.citations,
+        dimension_status=original.dimension_status,
+        candidate_shares=original.candidate_shares,
+        formula_ids=original.formula_ids,
+        aggregate=original.aggregate,
+        aggregate_formula_id=original.aggregate_formula_id,
+        low_confidence=original.low_confidence,
+        edge_fingerprint="hazard-second-fingerprint",
+        watermark_set=original.watermark_set,
+    )
     rendered = render_overview_html(
         overview_store, cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch())
     )
     assert 'data-hazard-kind="stale"' in rendered
     assert 'data-hazard-kind="unassessed"' in rendered
     assert 'data-hazard-kind="candidate-heavy"' in rendered
+    assert "documentation quality: unassessed for 2 assessed capabilities:" in rendered
+    assert "functional completeness: candidate-heavy for 2 assessed capabilities:" in rendered
     assert "Unassessed is not a zero score." in rendered
     shared = render_overview_html(
         fanout_overview_store,
         cockpit=CockpitRenderContext(batch=fanout_overview_store.load_projection_batch()),
     )
     assert 'data-hazard-kind="shared-evidence"' in shared
-    assert "3 capabilities" in shared
+    assert "Shared evidence indicator applies to 3 capabilities:" in shared
 
 
 def test_snapshot_wide_zero_is_descriptive_not_diagnostic(overview_store: CkmStore) -> None:
@@ -910,6 +933,18 @@ def test_cockpit_hazard_empty_and_unavailable_states_are_explicit(tmp_path: Path
     )
     assert "Assessment unavailable for 1 capability" in output
     assert capability.public_id in output
+    unavailable.upsert_capability(
+        identity_key="hazard:unavailable-second",
+        name="Unavailable second",
+        definition="Fixture.",
+        existence_provenance="fixture",
+        lifecycle="confirmed",
+    )
+    plural_output = render_overview_html(
+        unavailable,
+        cockpit=CockpitRenderContext(batch=unavailable.load_projection_batch()),
+    )
+    assert "Assessment unavailable for 2 capabilities:" in plural_output
 
 
 def test_cockpit_hazard_links_preserve_map_and_gap_order(overview_store: CkmStore) -> None:

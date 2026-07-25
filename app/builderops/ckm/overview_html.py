@@ -103,6 +103,12 @@ def _hazard_capability_links(capabilities: Sequence[CkmCapability]) -> str:
     )
 
 
+def _capability_noun(count: int) -> str:
+    """Use the complete noun form for a count in renderer-authored copy."""
+
+    return "capability" if count == 1 else "capabilities"
+
+
 def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
     """Render only observed, snapshot-bound interpretation caveats.
 
@@ -145,8 +151,7 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
             1,
             0,
             "assessment-unavailable",
-            f"Assessment unavailable for {len(unavailable)} capability"
-            f"{'ies' if len(unavailable) != 1 else 'y'}: "
+            f"Assessment unavailable for {len(unavailable)} {_capability_noun(len(unavailable))}: "
             f"{_hazard_capability_links(unavailable)}. Unavailable is not a zero score.",
         )
 
@@ -164,7 +169,7 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
                 dimension_order + 1,
                 "unassessed",
                 f"{_e(DIMENSION_LABELS[dimension][1])}: unassessed for {len(unassessed)} "
-                f"assessed capability{'ies' if len(unassessed) != 1 else 'y'}: "
+                f"assessed {_capability_noun(len(unassessed))}: "
                 f"{_hazard_capability_links(unassessed)}. Unassessed is not a zero score.",
             )
 
@@ -188,8 +193,7 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
                 dimension_order,
                 "candidate-heavy",
                 f"{_e(DIMENSION_LABELS[dimension][1])}: candidate-heavy for "
-                f"{len(candidate_heavy)} assessed capability"
-                f"{'ies' if len(candidate_heavy) != 1 else 'y'}: {links}.",
+                f"{len(candidate_heavy)} assessed {_capability_noun(len(candidate_heavy))}: {links}.",
             )
 
     shared_pairs = _shared_evidence_pairs(batch.edges_by_capability)
@@ -204,8 +208,8 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
             3,
             0,
             "shared-evidence",
-            f"Shared evidence indicator applies to {len(shared)} capability"
-            f"{'ies' if len(shared) != 1 else 'y'}: {_hazard_capability_links(shared)}.",
+            f"Shared evidence indicator applies to {len(shared)} {_capability_noun(len(shared))}: "
+            f"{_hazard_capability_links(shared)}.",
         )
 
     assessed = tuple(batch.assessments_by_capability.items())
