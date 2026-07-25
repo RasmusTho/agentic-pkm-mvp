@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
-from app.builderops.ckm.models import MATURITY_DIMENSIONS
+from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmCapability
 from app.builderops.ckm.overview_html import CockpitRenderContext, render_overview_html
 from app.builderops.ckm.store import CkmStore
 
@@ -883,21 +883,72 @@ def test_cockpit_hazards_render_observed_states_without_coercion(
 
 
 def test_snapshot_wide_zero_is_descriptive_not_diagnostic(overview_store: CkmStore) -> None:
-    batch = overview_store.load_projection_batch()
-    projection = next(iter(batch.assessments_by_capability.values()))
-    assert projection.assessment.scores["operational_readiness"] == 0.0
-    # The fixture's only numeric operational assessment is zero, while its unavailable child is
-    # deliberately not coerced into this claim.
-    rendered = render_overview_html(overview_store, cockpit=CockpitRenderContext(batch=batch))
-    assert (
+    original = next(
+        iter(overview_store.load_projection_batch().assessments_by_capability.values())
+    ).assessment
+    unavailable = next(
+        capability
+        for capability in overview_store.list_capabilities()
+        if capability.id != original.capability_id
+    )
+
+    def append_state(name: str, operational_state: str) -> CkmCapability:
+        capability = overview_store.upsert_capability(
+            identity_key=f"hazard:zero:{name}",
+            name=name,
+            definition="Fixture.",
+            existence_provenance="fixture",
+            lifecycle="confirmed",
+        )
+        statuses = dict(original.dimension_status)
+        statuses["operational_readiness"] = operational_state
+        overview_store.append_assessment(
+            capability_id=capability.id,
+            scores=original.scores,
+            citations=original.citations,
+            dimension_status=statuses,
+            candidate_shares=original.candidate_shares,
+            formula_ids=original.formula_ids,
+            aggregate=original.aggregate,
+            aggregate_formula_id=original.aggregate_formula_id,
+            low_confidence=original.low_confidence,
+            edge_fingerprint=f"hazard-zero-{name}",
+            watermark_set=original.watermark_set,
+        )
+        return capability
+
+    second_zero = append_state("Second zero", "measured")
+    unsupported = append_state("Unsupported zero", "unsupported")
+    unassessed = append_state("Unassessed zero", "unassessed")
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+    zero_row = re.search(
+        r'<li[^>]*data-hazard-kind="snapshot-wide-zero"[^>]*>(.*?)</li>',
+        rendered,
+        re.S,
+    )
+    assert zero_row is not None
+    row = zero_row.group(1)
+    caveat = (
         "Snapshot-wide zero: operational readiness is 0.00 for every assessed capability in this snapshot. "
-        "Affected: 1 assessed capability:" in rendered
-    )
-    assert 'href="#cap-' in rendered
-    assert (
         "CKM cannot determine whether that reflects missing evidence, current metric coverage, or portfolio state."
-        in rendered
     )
+    assert caveat in row
+    assert row.index(caveat) < row.index("Affected: 2 assessed capabilities:")
+    original_capability = overview_store.get_capability(original.capability_id)
+    assert original_capability is not None
+    expected = sorted(
+        (original_capability, second_zero),
+        key=lambda capability: (capability.public_id.casefold(), capability.id),
+    )
+    assert [item.public_id for item in expected] == re.findall(
+        r'href="#cap-[^"]+">([^<]+)</a>', row
+    )
+    assert unavailable.public_id not in row
+    assert unsupported.public_id not in row
+    assert unassessed.public_id not in row
 
 
 def test_new_cockpit_interpretation_copy_avoids_banned_rhetoric(overview_store: CkmStore) -> None:

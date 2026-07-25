@@ -275,10 +275,10 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
                 dimension_order,
                 "snapshot-wide-zero",
                 f"Snapshot-wide zero: {_e(DIMENSION_LABELS[dimension][1])} is 0.00 for every "
-                "assessed capability in this snapshot. "
+                "assessed capability in this snapshot. CKM cannot determine whether that reflects "
+                "missing evidence, current metric coverage, or portfolio state. "
                 f"Affected: {len(zero_capabilities)} assessed {_capability_noun(len(zero_capabilities))}: "
-                f"{_hazard_capability_links(zero_capabilities)}. CKM cannot determine whether that reflects "
-                "missing evidence, current metric coverage, or portfolio state.",
+                f"{_hazard_capability_links(zero_capabilities)}.",
             )
 
     if not rows:
