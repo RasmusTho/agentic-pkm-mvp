@@ -70,6 +70,7 @@ class CkmProjectionCaptureError(CkmValidationError):
 @dataclass(frozen=True)
 class CkmProjectionBatch:
     state_identity: CkmStateIdentity
+    object_counts: Mapping[str, int]
     capabilities: tuple[CkmCapability, ...]
     artifacts: tuple[CkmArtifact, ...]
     edges_by_capability: Mapping[str, tuple[CkmEvidenceEdge, ...]]
@@ -1474,6 +1475,7 @@ class CkmStore:
             )
         return CkmProjectionBatch(
             state_identity=state_identity,
+            object_counts=object_counts,
             capabilities=tuple(CkmCapability.from_row(row) for row in capability_rows),
             artifacts=tuple(CkmArtifact.from_row(row) for row in artifact_rows),
             edges_by_capability={key: tuple(value) for key, value in edges.items()},

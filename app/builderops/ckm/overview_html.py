@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -16,7 +17,8 @@ from app.builderops.ckm.models import (
     CkmAssessmentProjection,
     utc_now,
 )
-from app.builderops.ckm.store import CkmStore
+from app.builderops.ckm.contracts import canonical_digest
+from app.builderops.ckm.store import CkmProjectionBatch, CkmStore
 
 
 DIMENSION_LABELS = {
@@ -28,6 +30,76 @@ DIMENSION_LABELS = {
     "architectural_stability": ("ARC", "architectural stability"),
     "requirement_coverage": ("REQ", "requirement coverage"),
 }
+
+
+@dataclass(frozen=True)
+class CockpitRenderContext:
+    """Immutable, data-only input captured before cockpit rendering begins."""
+
+    batch: CkmProjectionBatch
+
+
+def _cockpit_digest(batch: CkmProjectionBatch) -> str:
+    """Bind cockpit provenance to every captured projection input deterministically."""
+
+    return canonical_digest(
+        {
+            "state_identity": batch.state_identity.to_dict(),
+            "object_counts": dict(sorted(batch.object_counts.items())),
+            "capabilities": [item.to_dict() for item in batch.capabilities],
+            "artifacts": [item.to_dict() for item in batch.artifacts],
+            "edges": [
+                edge.to_dict()
+                for capability_id in sorted(batch.edges_by_capability)
+                for edge in batch.edges_by_capability[capability_id]
+            ],
+            "assessments": [
+                batch.assessments_by_capability[capability_id].assessment.to_dict()
+                for capability_id in sorted(batch.assessments_by_capability)
+            ],
+            "findings": [
+                finding.to_dict()
+                for capability_id in sorted(batch.findings_by_capability)
+                for finding in batch.findings_by_capability[capability_id]
+            ],
+            "watermarks": dict(sorted(batch.current_watermark_set.items())),
+        }
+    )
+
+
+def _cockpit_trust_markup(batch: CkmProjectionBatch, timestamp: str) -> str:
+    identity = batch.state_identity
+    counts = batch.object_counts
+    count_text = " · ".join(
+        f"{_e(label)}: {counts.get(key, 0)}"
+        for key, label in (
+            ("capability", "capabilities"),
+            ("artifact", "artifacts"),
+            ("evidence_edge", "evidence edges"),
+            ("assessment", "assessments"),
+            ("finding", "findings"),
+            ("watermark", "watermarks"),
+        )
+    )
+    return f"""<header class="cockpit-header"><h1>CKM Cockpit</h1><p class="subtitle">Portfolio-first, generated, non-authoritative inspection surface.</p></header>
+    <section class="cockpit-trust" aria-labelledby="cockpit-trust-heading">
+      <h2 id="cockpit-trust-heading">Cockpit trust frame</h2>
+      <p>Is this projection fresh and complete enough to inspect?</p>
+      <p>Generated: {_e(timestamp)} · epoch: {_e(identity.epoch)} · state revision: {identity.state_revision} · schema version: {identity.schema_version}</p>
+      <p>Watermarks: {_watermarks(batch.current_watermark_set)}</p>
+      <p>Bounded counts: {count_text}</p>
+      <p>projection-input digest: <code>{_cockpit_digest(batch)}</code></p>
+    </section>"""
+
+
+def _cockpit_reserved_markup() -> str:
+    return """<section class="cockpit-reserved" aria-labelledby="hazards-heading"><h2 id="hazards-heading">Interpretation hazards</h2><p>What should not be taken at face value?</p><p>Unavailable in this framing slice. No interpretation is generated here.</p></section>
+    <section class="cockpit-reserved" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p>Unavailable in this framing slice. No retained-observation comparison was read.</p></section>
+    <section class="cockpit-reserved" aria-labelledby="filters-heading"><h2 id="filters-heading">Filters</h2><p>Unavailable in this framing slice. All capability rows are shown.</p></section>"""
+
+
+def _cockpit_proposals_markup() -> str:
+    return '<section class="cockpit-reserved" aria-labelledby="proposals-heading"><h2 id="proposals-heading">Proposal drafts</h2><p>Unavailable in this framing slice. No proposal content is generated.</p></section>'
 
 
 def _e(value: object) -> str:
@@ -415,6 +487,7 @@ def render_overview_html(
     generated_at: str | None = None,
     class_capture_limit: int | None = None,
     aggregate_capture_limit: int | None = None,
+    cockpit: CockpitRenderContext | None = None,
 ) -> str:
     """Render one self-contained CKM projection without mutating the store."""
 
@@ -424,7 +497,7 @@ def render_overview_html(
         capture_limits["class_capture_limit"] = class_capture_limit
     if aggregate_capture_limit is not None:
         capture_limits["aggregate_capture_limit"] = aggregate_capture_limit
-    batch = store.load_projection_batch(**capture_limits)
+    batch = cockpit.batch if cockpit is not None else store.load_projection_batch(**capture_limits)
     capabilities = batch.capabilities
     capability_by_id = {item.id: item for item in capabilities}
     all_findings = tuple(
@@ -461,6 +534,21 @@ def render_overview_html(
         if capability_id in capability_by_id
     ) or "<li>No current findings.</li>"
     watermark_text = _watermarks(batch.current_watermark_set)
+    cockpit_header = _cockpit_trust_markup(batch, timestamp) if cockpit else ""
+    cockpit_reserved = _cockpit_reserved_markup() if cockpit else ""
+    cockpit_proposals = _cockpit_proposals_markup() if cockpit else ""
+    cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""
+    overview_header = (
+        cockpit_header
+        if cockpit
+        else '<header><h1>Development Overview</h1><p class="subtitle">Capability Knowledge Model maturity, trust, and cited drill-down.</p></header>'
+    )
+    subsystem_counts = "" if cockpit else _subsystem_counts_markup(forest, batch.edges_by_capability)
+    footer_identity = (
+        f'<br>State identity: epoch {_e(batch.state_identity.epoch)} · revision {batch.state_identity.state_revision} · schema {batch.state_identity.schema_version}<br>projection-input digest: <code>{_cockpit_digest(batch)}</code>'
+        if cockpit
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -489,21 +577,24 @@ def render_overview_html(
 <body>
   <div class="projection-banner"><strong>Generated projection — not source of truth.</strong> Read watermarks and trust states before maturity values.</div>
   <main>
-    <header><h1>Development Overview</h1><p class="subtitle">Capability Knowledge Model maturity, trust, and cited drill-down.</p></header>
-    {_trust_strip(capabilities, assessments, len(all_findings))}
-    {_subsystem_counts_markup(forest, batch.edges_by_capability)}
+    {overview_header}
+    {"" if cockpit else _trust_strip(capabilities, assessments, len(all_findings))}
+    {cockpit_reserved}
+    {subsystem_counts}
     <section aria-labelledby="map-heading">
       <h2 id="map-heading">Capability map</h2>
       {_legend()}
       <div class="dimension-rail" aria-hidden="true">{"".join(f"<span>{abbr}</span>" for abbr, _ in DIMENSION_LABELS.values())}</div>
       <div class="capability-tree">{cards}</div>
     </section>
-    <section class="gaps-panel" aria-labelledby="gaps-heading"><h2 id="gaps-heading">Current gaps</h2><ul>{gap_groups}</ul></section>
+    <section class="gaps-panel" aria-labelledby="gaps-heading"><h2 id="gaps-heading">Current gaps</h2>{cockpit_gap_prompt}<ul>{gap_groups}</ul></section>
+    {cockpit_proposals}
   </main>
   <footer class="projection-footer">
     <strong>Generated projection (BuilderOps CKM). Not source of truth.</strong><br>
     Generated: {_e(timestamp)}<br>
     Watermarks: {watermark_text}<br>
+    {footer_identity}
     Candidate and confirmed evidence remain distinct. Regenerate from the CKM store; do not edit this file as authority.
   </footer>
 </body>
@@ -518,16 +609,17 @@ def write_overview_html(
     generated_at: str | None = None,
     class_capture_limit: int | None = None,
     aggregate_capture_limit: int | None = None,
+    cockpit: CockpitRenderContext | None = None,
 ) -> Path:
-    store.ensure_schema()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        render_overview_html(
+    if cockpit is None:
+        store.ensure_schema()
+    rendered = render_overview_html(
             store,
             generated_at=generated_at,
             class_capture_limit=class_capture_limit,
             aggregate_capture_limit=aggregate_capture_limit,
-        ),
-        encoding="utf-8",
+            cockpit=cockpit,
     )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(rendered, encoding="utf-8")
     return output_path

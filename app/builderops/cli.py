@@ -31,7 +31,7 @@ from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
-from app.builderops.ckm.overview_html import write_overview_html
+from app.builderops.ckm.overview_html import CockpitRenderContext, write_overview_html
 from app.builderops.ckm.projections import (
     PROJECTION_FILENAMES as CKM_PROJECTION_FILENAMES,
     render_capability_show,
@@ -689,6 +689,11 @@ def ckm_project(ctx: click.Context, projection_type: str, output_dir: Path) -> N
 
 @ckm.command("overview", help="Write the self-contained CKM Development Overview HTML.")
 @click.option(
+    "--cockpit",
+    is_flag=True,
+    help="Render the opt-in non-authoritative CKM cockpit framing.",
+)
+@click.option(
     "--out",
     "output_path",
     type=click.Path(dir_okay=False, path_type=Path),
@@ -712,16 +717,28 @@ def ckm_overview(
     output_path: Path,
     class_capture_limit: int | None,
     aggregate_capture_limit: int | None,
+    cockpit: bool,
 ) -> None:
     try:
         store = _ckm_store(ctx)
         if not store.db_path.is_file():
             raise CkmValidationError(f"CKM database does not exist: {store.db_path}")
+        cockpit_context = None
+        if cockpit:
+            capture_limits = {}
+            if class_capture_limit is not None:
+                capture_limits["class_capture_limit"] = class_capture_limit
+            if aggregate_capture_limit is not None:
+                capture_limits["aggregate_capture_limit"] = aggregate_capture_limit
+            cockpit_context = CockpitRenderContext(
+                batch=store.load_projection_batch(**capture_limits)
+            )
         result = write_overview_html(
             store,
             output_path,
             class_capture_limit=class_capture_limit,
             aggregate_capture_limit=aggregate_capture_limit,
+            cockpit=cockpit_context,
         )
     except (CkmValidationError, OSError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm overview failed: {exc}") from exc
