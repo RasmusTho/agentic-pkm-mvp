@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1076,6 +1077,40 @@ def _valid_o1b_payload(
     }
 
 
+def _retention_storage_identity(path: Path) -> tuple[tuple[object, ...], tuple[tuple[object, ...], ...]]:
+    siblings = tuple(
+        sorted(
+            (
+                item.name,
+                item.stat().st_mode,
+                item.stat().st_ino,
+                item.stat().st_size,
+                item.stat().st_mtime_ns,
+            )
+            for item in path.parent.iterdir()
+            if item.name == path.name
+            or item.name
+            in {
+                f"{path.name}-journal",
+                f"{path.name}-shm",
+                f"{path.name}-wal",
+            }
+        )
+    )
+    if not path.exists():
+        return (), siblings
+    with sqlite3.connect(
+        f"{path.resolve().as_uri()}?mode=ro&immutable=1", uri=True
+    ) as connection:
+        schema = tuple(
+            connection.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+                "ORDER BY type, name, tbl_name"
+            ).fetchall()
+        )
+    return schema, siblings
+
+
 def test_cockpit_cli_compares_exact_newest_pair_oldest_first(
     overview_store: CkmStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1110,6 +1145,40 @@ def test_cockpit_cli_compares_exact_newest_pair_oldest_first(
     assert 'numeric delta: <span class="comparison-delta">3</span>' in rendered
 
 
+def test_cockpit_cli_real_o1b_delta_is_newer_minus_older(
+    overview_store: CkmStore, tmp_path: Path
+) -> None:
+    captured = CkmQueryService(overview_store.db_path).list_capabilities()
+    assert isinstance(captured, ResultEnvelope)
+    retention = MetricRetentionStore(
+        overview_store.db_path.with_name(
+            f"{overview_store.db_path.stem}-metric-samples.sqlite"
+        )
+    )
+    older = retention.retain(
+        captured, retained_at="2026-07-21T00:00:00Z"
+    )
+    changed_resource = replace(
+        captured.resources[0], lifecycle="candidate", candidate=True
+    )
+    newer_capture = replace(
+        captured,
+        resources=(changed_resource, *captured.resources[1:]),
+    )
+    newer = retention.retain(
+        newer_capture, retained_at="2026-07-22T00:00:00Z"
+    )
+    output = tmp_path / "real-delta.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered.index(older.sample_id) < rendered.index(newer.sample_id)
+    assert 'data-component="candidate_population"' in rendered
+    assert 'numeric delta: <span class="comparison-delta">1</span>' in rendered
+
+
 def test_cockpit_does_not_search_older_compatible_pair(
     overview_store: CkmStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1142,38 +1211,40 @@ def test_cockpit_retention_absent_and_insufficient_states_are_read_only(
 ) -> None:
     output = tmp_path / "missing.html"
     retention_path = overview_store.db_path.with_name(f"{overview_store.db_path.stem}-metric-samples.sqlite")
+    missing_before = _retention_storage_identity(retention_path)
     result = _cockpit_cli(overview_store, output)
     assert result.exit_code == 0
     assert "source_unavailable" in output.read_text(encoding="utf-8")
     assert not retention_path.exists()
+    assert _retention_storage_identity(retention_path) == missing_before
 
     with sqlite3.connect(retention_path) as conn:
         conn.execute("CREATE TABLE incomplete (id TEXT)")
-    incomplete_before = retention_path.read_bytes()
+    incomplete_before = _retention_storage_identity(retention_path)
     incomplete = tmp_path / "incomplete.html"
     result = _cockpit_cli(overview_store, incomplete)
     assert result.exit_code == 0
     assert "source_unavailable" in incomplete.read_text(encoding="utf-8")
-    assert retention_path.read_bytes() == incomplete_before
+    assert _retention_storage_identity(retention_path) == incomplete_before
 
     retention_path.unlink()
     MetricRetentionStore(retention_path).initialize()
-    empty_before = retention_path.read_bytes()
+    empty_before = _retention_storage_identity(retention_path)
     empty = tmp_path / "empty.html"
     result = _cockpit_cli(overview_store, empty)
     assert result.exit_code == 0
     assert "insufficient_retained_samples" in empty.read_text(encoding="utf-8")
     assert "&quot;count&quot;:0" in empty.read_text(encoding="utf-8")
-    assert retention_path.read_bytes() == empty_before
+    assert _retention_storage_identity(retention_path) == empty_before
 
     retention, _ = _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
-    before = retention.path.read_bytes()
+    before = _retention_storage_identity(retention.path)
     insufficient = tmp_path / "insufficient.html"
     result = _cockpit_cli(overview_store, insufficient)
     assert result.exit_code == 0
     rendered = insufficient.read_text(encoding="utf-8")
     assert "insufficient_retained_samples" in rendered and "&quot;count&quot;:1" in rendered
-    assert retention.path.read_bytes() == before
+    assert _retention_storage_identity(retention.path) == before
 
 
 @pytest.mark.parametrize(
@@ -1296,7 +1367,19 @@ def test_cockpit_comparison_preserves_tagged_state_transitions(overview_store: C
     assert "numeric delta" not in rendered
     assert "comparison-result" in rendered
 
-    for comparison in (None, {}, {"kind": "unknown"}, {"error": {}}):
+    exact_kind_incomplete = {"kind": "ckm_compatible_observation_comparison_v1"}
+    mixed = dict(tagged)
+    mixed["error"] = CkmContractError(
+        "source_unavailable", "mixed envelope must refuse", {}
+    ).to_dict()
+    for comparison in (
+        None,
+        {},
+        {"kind": "unknown"},
+        exact_kind_incomplete,
+        mixed,
+        {"error": {}},
+    ):
         refusal = render_overview_html(
             overview_store,
             cockpit=CockpitRenderContext(

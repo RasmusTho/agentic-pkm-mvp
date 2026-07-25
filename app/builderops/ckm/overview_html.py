@@ -332,7 +332,11 @@ def _is_o1b_success(comparison: Mapping[str, Any]) -> bool:
         "limitations",
         "comparison_digest",
     }
-    if comparison.get("kind") != _COMPARISON_KIND or not required <= set(comparison):
+    if (
+        "error" in comparison
+        or comparison.get("kind") != _COMPARISON_KIND
+        or not required <= set(comparison)
+    ):
         return False
     if not isinstance(comparison["inputs"], list) or len(comparison["inputs"]) != 2:
         return False
