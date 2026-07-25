@@ -92,9 +92,216 @@ def _cockpit_trust_markup(batch: CkmProjectionBatch, timestamp: str) -> str:
     </section>"""
 
 
+def _hazard_capability_links(capabilities: Sequence[CkmCapability]) -> str:
+    """Render stable capability links without treating their definitions as interpretation."""
+
+    return ", ".join(
+        f'<a href="#cap-{_e(capability.id)}">{_e(capability.public_id)}</a>'
+        for capability in sorted(
+            capabilities, key=lambda item: (item.public_id.casefold(), item.id)
+        )
+    )
+
+
+def _capability_noun(count: int) -> str:
+    """Use the complete noun form for a count in renderer-authored copy."""
+
+    return "capability" if count == 1 else "capabilities"
+
+
+def _stale_source_markers(projection: CkmAssessmentProjection) -> str:
+    """Render only captured watermark differences that make an assessment stale."""
+
+    assessment_markers = projection.assessment.watermark_set
+    current_markers = projection.current_watermark_set
+    differences = [
+        source
+        for source in sorted(set(assessment_markers) | set(current_markers))
+        if assessment_markers.get(source) != current_markers.get(source)
+    ]
+    if not differences:
+        return ""
+    return "; ".join(
+        f'{_e(source)}: assessment={_e(assessment_markers.get(source, "absent"))} '
+        f'→ current={_e(current_markers.get(source, "absent"))}'
+        for source in differences
+    )
+
+
+def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
+    """Render only observed, snapshot-bound interpretation caveats.
+
+    This intentionally consumes the caller-provided batch rather than the store: hazards must
+    describe the same captured projection as the trust frame, map, and gaps panel.
+    """
+
+    capabilities = {capability.id: capability for capability in batch.capabilities}
+    rows: list[tuple[int, int, str, str, str | None]] = []
+
+    def add(
+        kind_order: int,
+        dimension_order: int,
+        kind: str,
+        body: str,
+        value_state: str | None = None,
+    ) -> None:
+        rows.append((kind_order, dimension_order, kind, body, value_state))
+
+    stale = [
+        (capabilities[capability_id], _stale_source_markers(projection))
+        for capability_id, projection in batch.assessments_by_capability.items()
+        if projection.stale_relative_to_evidence and capability_id in capabilities
+    ]
+    if stale:
+        stale.sort(key=lambda item: (item[0].public_id.casefold(), item[0].id))
+        stale_links = ", ".join(
+            f'<a href="#cap-{_e(capability.id)}">{_e(capability.public_id)}</a>'
+            + (f" ({markers})" if markers else "")
+            for capability, markers in stale
+        )
+        add(
+            0,
+            0,
+            "stale",
+            f"{len(stale)} stale assessment{'s' if len(stale) != 1 else ''}: " f"{stale_links}.",
+        )
+
+    unavailable = [
+        capability
+        for capability in batch.capabilities
+        if capability.id not in batch.assessments_by_capability
+    ]
+    if unavailable:
+        add(
+            1,
+            0,
+            "assessment-unavailable",
+            f"Assessment unavailable for {len(unavailable)} {_capability_noun(len(unavailable))}: "
+            f"{_hazard_capability_links(unavailable)}. Unavailable is not a zero score.",
+        )
+
+    for dimension_order, dimension in enumerate(MATURITY_DIMENSIONS):
+        unassessed = [
+            capabilities[capability_id]
+            for capability_id, projection in batch.assessments_by_capability.items()
+            if capability_id in capabilities
+            and projection.assessment.dimension_status.get(dimension) == "unassessed"
+        ]
+        if unassessed:
+            add(
+                1,
+                dimension_order + 1,
+                "unassessed",
+                f"{_e(DIMENSION_LABELS[dimension][1])}: unassessed for {len(unassessed)} "
+                f"assessed {_capability_noun(len(unassessed))}: "
+                f"{_hazard_capability_links(unassessed)}. Unassessed is not a zero score.",
+                "unassessed",
+            )
+
+        unsupported = [
+            capabilities[capability_id]
+            for capability_id, projection in batch.assessments_by_capability.items()
+            if capability_id in capabilities
+            and projection.assessment.dimension_status.get(dimension) == "unsupported"
+        ]
+        if unsupported:
+            add(
+                1,
+                dimension_order + 1,
+                "unsupported",
+                f"{_e(DIMENSION_LABELS[dimension][1])}: unsupported for {len(unsupported)} "
+                f"assessed {_capability_noun(len(unsupported))}: "
+                f"{_hazard_capability_links(unsupported)}. Unsupported is not a zero score.",
+                "unsupported",
+            )
+
+        candidate_heavy = [
+            (capabilities[capability_id], projection.assessment.candidate_shares[dimension])
+            for capability_id, projection in batch.assessments_by_capability.items()
+            if capability_id in capabilities
+            and projection.assessment.dimension_status.get(dimension)
+            not in {"unassessed", "unsupported"}
+            and float(projection.assessment.candidate_shares[dimension]) >= 0.5
+        ]
+        if candidate_heavy:
+            candidate_heavy.sort(key=lambda item: (item[0].public_id.casefold(), item[0].id))
+            links = ", ".join(
+                f'<a href="#cap-{_e(capability.id)}">{_e(capability.public_id)} '
+                f"({_e(f'{share:.1%}')})</a>"
+                for capability, share in candidate_heavy
+            )
+            add(
+                2,
+                dimension_order,
+                "candidate-heavy",
+                f"{_e(DIMENSION_LABELS[dimension][1])}: candidate-heavy for "
+                f"{len(candidate_heavy)} assessed {_capability_noun(len(candidate_heavy))}: {links}.",
+            )
+
+    shared_pairs = _shared_evidence_pairs(batch.edges_by_capability)
+    shared = [
+        capabilities[capability_id]
+        for capability_id, edges in batch.edges_by_capability.items()
+        if capability_id in capabilities
+        and any((edge.artifact_id, edge.basis) in shared_pairs for edge in edges)
+    ]
+    if shared:
+        add(
+            3,
+            0,
+            "shared-evidence",
+            f"Shared evidence indicator applies to {len(shared)} {_capability_noun(len(shared))}: "
+            f"{_hazard_capability_links(shared)}.",
+        )
+
+    assessed = tuple(batch.assessments_by_capability.items())
+    for dimension_order, dimension in enumerate(MATURITY_DIMENSIONS):
+        zero_assessed = [
+            (capability_id, projection)
+            for capability_id, projection in assessed
+            if projection.assessment.dimension_status.get(dimension)
+            not in {"unassessed", "unsupported"}
+        ]
+        if zero_assessed and all(
+            float(projection.assessment.scores[dimension]) == 0.0 for _, projection in zero_assessed
+        ):
+            zero_capabilities = [
+                capabilities[capability_id]
+                for capability_id, _ in zero_assessed
+                if capability_id in capabilities
+            ]
+            add(
+                4,
+                dimension_order,
+                "snapshot-wide-zero",
+                f"Snapshot-wide zero: {_e(DIMENSION_LABELS[dimension][1])} is 0.00 for every "
+                "assessed capability in this snapshot. CKM cannot determine whether that reflects "
+                "missing evidence, current metric coverage, or portfolio state. "
+                f"Affected: {len(zero_capabilities)} assessed {_capability_noun(len(zero_capabilities))}: "
+                f"{_hazard_capability_links(zero_capabilities)}.",
+            )
+
+    if not rows:
+        content = "<p>No listed interpretation hazards for this captured projection.</p>"
+    else:
+        content = (
+            '<ul class="hazard-list">'
+            + "".join(
+                f'<li class="hazard hazard-{kind}" data-hazard-kind="{kind}"'
+                + (f' data-value-state="{value_state}"' if value_state else "")
+                + " "
+                'data-renderer-authored="interpretation">'
+                f"{body}</li>"
+                for _, _, kind, body, value_state in sorted(rows)
+            )
+            + "</ul>"
+        )
+    return f"""<section class="cockpit-hazards" aria-labelledby="hazards-heading" data-renderer-authored="interpretation">
+      <h2 id="hazards-heading">Interpretation hazards</h2><p>What should not be taken at face value?</p>{content}</section>"""
+
+
 def _cockpit_reserved_markup() -> str:
-    return """<section class="cockpit-reserved" aria-labelledby="hazards-heading"><h2 id="hazards-heading">Interpretation hazards</h2><p>What should not be taken at face value?</p><p>Unavailable in this framing slice. No interpretation is generated here.</p></section>
-    <section class="cockpit-reserved" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p>Unavailable in this framing slice. No retained-observation comparison was read.</p></section>
+    return """<section class="cockpit-reserved" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p>Unavailable in this framing slice. No retained-observation comparison was read.</p></section>
     <section class="cockpit-reserved" aria-labelledby="filters-heading"><h2 id="filters-heading">Filters</h2><p>Unavailable in this framing slice. All capability rows are shown.</p></section>"""
 
 
@@ -151,13 +358,9 @@ def _shared_evidence_pairs(
     capability_ids_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
     for edges in edges_by_capability.values():
         for edge in edges:
-            capability_ids_by_pair[(edge.artifact_id, edge.basis)].add(
-                edge.capability_id
-            )
+            capability_ids_by_pair[(edge.artifact_id, edge.basis)].add(edge.capability_id)
     return frozenset(
-        pair
-        for pair, capability_ids in capability_ids_by_pair.items()
-        if len(capability_ids) >= 2
+        pair for pair, capability_ids in capability_ids_by_pair.items() if len(capability_ids) >= 2
     )
 
 
@@ -167,12 +370,8 @@ def _evidence_count_values(
 ) -> tuple[int, int, int, str]:
     distinct_artifacts = len({edge.artifact_id for edge in edges})
     edge_count = len(edges)
-    shared_edge_count = sum(
-        (edge.artifact_id, edge.basis) in shared_pairs for edge in edges
-    )
-    shared_percentage = (
-        f"{shared_edge_count / edge_count:.1%}" if edge_count else "0.0%"
-    )
+    shared_edge_count = sum((edge.artifact_id, edge.basis) in shared_pairs for edge in edges)
+    shared_percentage = f"{shared_edge_count / edge_count:.1%}" if edge_count else "0.0%"
     return distinct_artifacts, edge_count, shared_edge_count, shared_percentage
 
 
@@ -182,9 +381,7 @@ def _subsystem_counts_markup(
 ) -> str:
     shared_pairs = _shared_evidence_pairs(edges_by_capability)
     all_edges = tuple(
-        edge
-        for _, capability in forest
-        for edge in edges_by_capability.get(capability.id, ())
+        edge for _, capability in forest for edge in edges_by_capability.get(capability.id, ())
     )
     (
         global_artifacts,
@@ -209,9 +406,7 @@ def _subsystem_counts_markup(
     for group in groups:
         root = group[0][1]
         group_edges = tuple(
-            edge
-            for _, capability in group
-            for edge in edges_by_capability.get(capability.id, ())
+            edge for _, capability in group for edge in edges_by_capability.get(capability.id, ())
         )
         distinct_artifacts, edge_count, shared_edge_count, shared_percentage = (
             _evidence_count_values(group_edges, shared_pairs)
@@ -283,12 +478,11 @@ def _dimension_markup(
       </section>"""
     percent = max(0.0, min(100.0, score * 100.0))
     starved = score == 0 and not citations
-    citation_items = "".join(
-        f"<li>{_e(_citation_source(citation))}</li>" for citation in citations
-    ) or "<li>No selected citations.</li>"
-    low_conf = (
-        '<span class="flag flag-low">LOW CONF</span>' if candidate_share > 0.5 else ""
+    citation_items = (
+        "".join(f"<li>{_e(_citation_source(citation))}</li>" for citation in citations)
+        or "<li>No selected citations.</li>"
     )
+    low_conf = '<span class="flag flag-low">LOW CONF</span>' if candidate_share > 0.5 else ""
     return f"""
       <section class="dimension{' dimension-starved' if starved else ''}" data-dimension="{_e(dimension)}">
         <div class="dimension-label"><span>{_e(label)}</span><strong>{score:.2f}</strong>{low_conf}</div>
@@ -361,12 +555,16 @@ def _evidence_markup(edges: Sequence[CkmEvidenceEdge]) -> str:
 def _finding_markup(findings: Sequence[CkmFinding]) -> str:
     if not findings:
         return '<p class="empty">No current findings.</p>'
-    return '<ul class="finding-list">' + "".join(
-        f'<li><span class="badge">{_e(item.kind)}</span> '
-        f'<strong>{_e(item.dimension.replace("_", " "))}</strong>: {_e(item.statement)} '
-        f'<small>({len(item.citations)} citation(s))</small></li>'
-        for item in findings
-    ) + "</ul>"
+    return (
+        '<ul class="finding-list">'
+        + "".join(
+            f'<li><span class="badge">{_e(item.kind)}</span> '
+            f'<strong>{_e(item.dimension.replace("_", " "))}</strong>: {_e(item.statement)} '
+            f'<small>({len(item.citations)} citation(s))</small></li>'
+            for item in findings
+        )
+        + "</ul>"
+    )
 
 
 def _honesty_markup(
@@ -376,7 +574,7 @@ def _honesty_markup(
     if assessment is None:
         return (
             '<aside class="honesty"><p>Assessment is unavailable; unavailable is not a zero score.</p>'
-            '<p>candidate share unavailable.</p></aside>'
+            "<p>candidate share unavailable.</p></aside>"
         )
     stale = bool(projection and projection.stale_relative_to_evidence)
     max_share = max(float(value) for value in assessment.candidate_shares.values())
@@ -399,9 +597,7 @@ def _capability_markup(
     assessment = projection.assessment if projection else None
     summary_flags: list[str] = []
     if projection and projection.stale_relative_to_evidence:
-        summary_flags.append(
-            '<span class="flag flag-stale">STALE relative to evidence</span>'
-        )
+        summary_flags.append('<span class="flag flag-stale">STALE relative to evidence</span>')
     if assessment and assessment.low_confidence:
         summary_flags.append('<span class="flag flag-low">LOW CONFIDENCE</span>')
     if assessment:
@@ -451,8 +647,7 @@ def _capability_markup(
 
 def _legend() -> str:
     dimensions = "".join(
-        f"<li><code>{abbr}</code> {_e(label)}</li>"
-        for abbr, label in DIMENSION_LABELS.values()
+        f"<li><code>{abbr}</code> {_e(label)}</li>" for abbr, label in DIMENSION_LABELS.values()
     )
     return f"""<aside class="legend" aria-label="Maturity legend">
       <div><strong>Dimensions</strong><ul>{dimensions}</ul></div>
@@ -470,8 +665,13 @@ def _trust_strip(
     finding_count: int,
 ) -> str:
     assessed = sum(assessment is not None for assessment, _ in assessments.values())
-    stale = sum(bool(projection and projection.stale_relative_to_evidence) for _, projection in assessments.values())
-    low = sum(bool(assessment and assessment.low_confidence) for assessment, _ in assessments.values())
+    stale = sum(
+        bool(projection and projection.stale_relative_to_evidence)
+        for _, projection in assessments.values()
+    )
+    low = sum(
+        bool(assessment and assessment.low_confidence) for assessment, _ in assessments.values()
+    )
     return f"""<nav class="trust-strip" aria-label="Projection trust summary">
       <a href="#map-heading">{len(capabilities)} capabilities</a>
       <a href="#map-heading">{assessed} assessed</a>
@@ -501,41 +701,49 @@ def render_overview_html(
     capabilities = batch.capabilities
     capability_by_id = {item.id: item for item in capabilities}
     all_findings = tuple(
-        finding
-        for findings in batch.findings_by_capability.values()
-        for finding in findings
+        finding for findings in batch.findings_by_capability.values() for finding in findings
     )
     assessments = {
         capability.id: (
-            projection.assessment if (projection := batch.assessments_by_capability.get(capability.id)) else None,
+            projection.assessment
+            if (projection := batch.assessments_by_capability.get(capability.id))
+            else None,
             projection,
         )
         for capability in capabilities
     }
     forest = _forest(capabilities)
-    cards = "".join(
-        _capability_markup(
-            capability,
-            depth=depth,
-            edges=batch.edges_by_capability.get(capability.id, ()),
-            findings=batch.findings_by_capability.get(capability.id, ()),
-            projection=batch.assessments_by_capability.get(capability.id),
+    cards = (
+        "".join(
+            _capability_markup(
+                capability,
+                depth=depth,
+                edges=batch.edges_by_capability.get(capability.id, ()),
+                findings=batch.findings_by_capability.get(capability.id, ()),
+                projection=batch.assessments_by_capability.get(capability.id),
+            )
+            for depth, capability in forest
         )
-        for depth, capability in forest
-    ) or '<p class="empty">No capabilities in the CKM store.</p>'
+        or '<p class="empty">No capabilities in the CKM store.</p>'
+    )
     grouped: dict[str, list[CkmFinding]] = defaultdict(list)
     for finding in all_findings:
         grouped[finding.capability_id].append(finding)
-    gap_groups = "".join(
-        f'<li id="gaps-{_e(capability_id)}" class="gap-group"><a href="#cap-{_e(capability_id)}"><strong>{_e(capability_by_id[capability_id].name)}</strong></a>'
-        + _finding_markup(findings)
-        + "</li>"
-        for capability_id, findings in sorted(grouped.items())
-        if capability_id in capability_by_id
-    ) or "<li>No current findings.</li>"
+    gap_groups = (
+        "".join(
+            f'<li id="gaps-{_e(capability_id)}" class="gap-group"><a href="#cap-{_e(capability_id)}"><strong>{_e(capability_by_id[capability_id].name)}</strong></a>'
+            + _finding_markup(findings)
+            + "</li>"
+            for capability_id, findings in sorted(grouped.items())
+            if capability_id in capability_by_id
+        )
+        or "<li>No current findings.</li>"
+    )
     watermark_text = _watermarks(batch.current_watermark_set)
     cockpit_header = _cockpit_trust_markup(batch, timestamp) if cockpit else ""
-    cockpit_reserved = _cockpit_reserved_markup() if cockpit else ""
+    cockpit_reserved = (
+        _cockpit_hazards_markup(batch) + _cockpit_reserved_markup() if cockpit else ""
+    )
     cockpit_proposals = _cockpit_proposals_markup() if cockpit else ""
     cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""
     overview_header = (
@@ -545,7 +753,7 @@ def render_overview_html(
     )
     subsystem_counts = _subsystem_counts_markup(forest, batch.edges_by_capability)
     footer_identity = (
-        f'<br>State identity: epoch {_e(batch.state_identity.epoch)} · revision {batch.state_identity.state_revision} · schema {batch.state_identity.schema_version}<br>projection-input digest: <code>{_cockpit_digest(batch)}</code>'
+        f"<br>State identity: epoch {_e(batch.state_identity.epoch)} · revision {batch.state_identity.state_revision} · schema {batch.state_identity.schema_version}<br>projection-input digest: <code>{_cockpit_digest(batch)}</code>"
         if cockpit
         else ""
     )
@@ -614,11 +822,11 @@ def write_overview_html(
     if cockpit is None:
         store.ensure_schema()
     rendered = render_overview_html(
-            store,
-            generated_at=generated_at,
-            class_capture_limit=class_capture_limit,
-            aggregate_capture_limit=aggregate_capture_limit,
-            cockpit=cockpit,
+        store,
+        generated_at=generated_at,
+        class_capture_limit=class_capture_limit,
+        aggregate_capture_limit=aggregate_capture_limit,
+        cockpit=cockpit,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered, encoding="utf-8")
