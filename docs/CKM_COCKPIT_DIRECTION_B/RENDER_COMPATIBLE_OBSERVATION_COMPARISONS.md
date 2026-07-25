@@ -50,8 +50,8 @@ SQLite for a third row.
 Existing real recovery commands are shown only in relevant help text:
 
 ```text
-python -m app.builderops --db-path <db> ckm measure --retain
-python -m app.builderops --db-path <db> ckm compare --sample-id <older> --sample-id <newer>
+python -m app.builderops builderops --db-path <db> ckm measure --retain
+python -m app.builderops builderops --db-path <db> ckm compare --sample-id <older> --sample-id <newer>
 ```
 
 No `ckm observe`, invented capture limit, or automatic retention command may appear.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -37,7 +37,7 @@ class CockpitRenderContext:
     """Immutable, data-only input captured before cockpit rendering begins."""
 
     batch: CkmProjectionBatch
-    comparison: Mapping[str, Any] = field(default_factory=dict)
+    comparison: Mapping[str, Any] | None = None
 
 
 def _cockpit_digest(batch: CkmProjectionBatch) -> str:
@@ -307,12 +307,94 @@ def _tagged_state_markup(state: Mapping[str, Any]) -> str:
     return f'<span class="comparison-state" data-value-state="{_e(tag)}">{_e(tag)}: {_e(detail)}</span>'
 
 
-def _cockpit_comparison_markup(comparison: Mapping[str, Any]) -> str:
+_COMPARISON_KIND = "ckm_compatible_observation_comparison_v1"
+
+
+def _source_unavailable_comparison(reason: str) -> Mapping[str, Any]:
+    return {
+        "error": {
+            "code": "source_unavailable",
+            "message": "retention comparison is unavailable",
+            "details": {"reason": reason},
+        }
+    }
+
+
+def _is_o1b_success(comparison: Mapping[str, Any]) -> bool:
+    required = {
+        "kind",
+        "inputs",
+        "compatibility",
+        "components",
+        "provenance",
+        "freshness",
+        "aggregate",
+        "limitations",
+        "comparison_digest",
+    }
+    if comparison.get("kind") != _COMPARISON_KIND or not required <= set(comparison):
+        return False
+    if not isinstance(comparison["inputs"], list) or len(comparison["inputs"]) != 2:
+        return False
+    if not all(
+        isinstance(item, Mapping)
+        and all(isinstance(item.get(field), str) and item[field] for field in ("sample_id", "observation_id", "semantic_digest"))
+        for item in comparison["inputs"]
+    ):
+        return False
+    compatibility = comparison["compatibility"]
+    if not isinstance(compatibility, Mapping) or compatibility.get("compatible") is not True or not isinstance(compatibility.get("bindings"), Mapping):
+        return False
+    if not isinstance(comparison["components"], list) or not comparison["components"]:
+        return False
+    if not all(
+        isinstance(component, Mapping)
+        and isinstance(component.get("component"), str)
+        and component["component"]
+        and isinstance(component.get("states"), list)
+        and len(component["states"]) == 2
+        and all(isinstance(state, Mapping) and isinstance(state.get("state"), str) for state in component["states"])
+        and "numeric_delta" in component
+        and (component["numeric_delta"] is None or isinstance(component["numeric_delta"], (int, float)))
+        and not isinstance(component["numeric_delta"], bool)
+        and isinstance(component.get("state_transition"), list)
+        and len(component["state_transition"]) == 2
+        for component in comparison["components"]
+    ):
+        return False
+    return (
+        isinstance(comparison["provenance"], list)
+        and len(comparison["provenance"]) == 2
+        and isinstance(comparison["freshness"], list)
+        and len(comparison["freshness"]) == 2
+        and isinstance(comparison["aggregate"], Mapping)
+        and isinstance(comparison["limitations"], list)
+        and isinstance(comparison["comparison_digest"], str)
+        and bool(comparison["comparison_digest"])
+    )
+
+
+def _is_o1b_refusal(comparison: Mapping[str, Any]) -> bool:
+    if set(comparison) != {"error"} or not isinstance(comparison["error"], Mapping):
+        return False
+    error = comparison["error"]
+    return (
+        isinstance(error.get("code"), str)
+        and bool(error["code"])
+        and isinstance(error.get("message"), str)
+        and bool(error["message"])
+        and isinstance(error.get("details"), Mapping)
+    )
+
+
+def _cockpit_comparison_markup(comparison: Mapping[str, Any] | None) -> str:
     disclaimer = "Difference between two snapshots. Not a trend, cause, or forecast."
-    if "error" in comparison:
+    if comparison is None:
+        comparison = _source_unavailable_comparison("comparison data was omitted")
+    elif not _is_o1b_refusal(comparison) and not _is_o1b_success(comparison):
+        comparison = _source_unavailable_comparison("comparison envelope is missing, unknown, empty, or incomplete")
+    if _is_o1b_refusal(comparison):
         error = comparison["error"]
-        if not isinstance(error, Mapping):
-            error = {"code": "source_unavailable", "message": "retention comparison is unavailable", "details": {}}
         code = error.get("code", "source_unavailable")
         message = error.get("message", "retention comparison is unavailable")
         details = error.get("details", {})
@@ -349,7 +431,7 @@ def _cockpit_comparison_markup(comparison: Mapping[str, Any]) -> str:
     return f'''<section class="cockpit-comparison" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p class="comparison-disclaimer">{disclaimer}</p>{body}<p>Recovery: <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm measure --retain</code> · <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm compare --sample-id &lt;older&gt; --sample-id &lt;newer&gt;</code></p></section>'''
 
 
-def _cockpit_reserved_markup(comparison: Mapping[str, Any]) -> str:
+def _cockpit_reserved_markup(comparison: Mapping[str, Any] | None) -> str:
     return _cockpit_comparison_markup(comparison) + """
     <section class="cockpit-reserved" aria-labelledby="filters-heading"><h2 id="filters-heading">Filters</h2><p>Unavailable in this framing slice. All capability rows are shown.</p></section>"""
 
