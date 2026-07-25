@@ -943,9 +943,9 @@ def test_snapshot_wide_zero_is_descriptive_not_diagnostic(overview_store: CkmSto
         (original_capability, second_zero),
         key=lambda capability: (capability.public_id.casefold(), capability.id),
     )
-    assert [item.public_id for item in expected] == re.findall(
-        r'href="#cap-[^"]+">([^<]+)</a>', row
-    )
+    assert [
+        (f"#cap-{capability.id}", capability.public_id) for capability in expected
+    ] == re.findall(r'href="([^"]+)">([^<]+)</a>', row)
     assert unavailable.public_id not in row
     assert unsupported.public_id not in row
     assert unassessed.public_id not in row
