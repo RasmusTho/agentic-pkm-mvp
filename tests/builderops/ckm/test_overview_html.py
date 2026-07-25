@@ -8,8 +8,12 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
+from app.builderops.ckm import comparison as comparison_module
+from app.builderops.ckm.contracts import ResultEnvelope
+from app.builderops.ckm.metrics import MetricRetentionStore
 from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmCapability
 from app.builderops.ckm.overview_html import CockpitRenderContext, render_overview_html
+from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.store import CkmStore
 
 
@@ -1013,3 +1017,174 @@ def test_cockpit_hazard_links_preserve_map_and_gap_order(overview_store: CkmStor
     assert re.search(r'href="#cap-[^"]+"', hazards)
     assert rendered.index("Capability map") < rendered.index("Current gaps")
     assert 'href="#gaps-' in rendered
+
+
+def _retain_for_cockpit(
+    overview_store: CkmStore, *, retained_at: str, metric_id: str = "capability_population"
+) -> tuple[MetricRetentionStore, object]:
+    result = CkmQueryService(overview_store.db_path).list_capabilities()
+    assert isinstance(result, ResultEnvelope)
+    retention = MetricRetentionStore(
+        overview_store.db_path.with_name(f"{overview_store.db_path.stem}-metric-samples.sqlite")
+    )
+    return retention, retention.retain(result, retained_at=retained_at, metric_id=metric_id)
+
+
+def _cockpit_cli(overview_store: CkmStore, output: Path) -> object:
+    return CliRunner().invoke(
+        builderops,
+        ["--db-path", str(overview_store.db_path), "ckm", "overview", "--cockpit", "--out", str(output)],
+    )
+
+
+def test_cockpit_cli_compares_exact_newest_pair_oldest_first(
+    overview_store: CkmStore, tmp_path: Path
+) -> None:
+    _, oldest = _retain_for_cockpit(overview_store, retained_at="2026-07-20T00:00:00Z")
+    _, older = _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
+    _, newer = _retain_for_cockpit(overview_store, retained_at="2026-07-22T00:00:00Z")
+    output = tmp_path / "cockpit.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered.index(older.sample_id) < rendered.index(newer.sample_id)
+    assert oldest.sample_id not in rendered
+    assert 'data-component="confirmed_population"' in rendered
+    assert "numeric delta" in rendered
+
+
+def test_cockpit_does_not_search_older_compatible_pair(
+    overview_store: CkmStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, oldest = _retain_for_cockpit(overview_store, retained_at="2026-07-20T00:00:00Z")
+    _, older = _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
+    _, newer = _retain_for_cockpit(
+        overview_store, retained_at="2026-07-22T00:00:00Z", metric_id="provenance_coverage"
+    )
+    observed: list[str] = []
+    original = comparison_module._observation
+
+    def record(store: MetricRetentionStore, sample_id: str) -> dict[str, object]:
+        observed.append(sample_id)
+        return original(store, sample_id)
+
+    monkeypatch.setattr(comparison_module, "_observation", record)
+    output = tmp_path / "cockpit.html"
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    assert observed == [older.sample_id, newer.sample_id]
+    assert oldest.sample_id not in observed
+    rendered = output.read_text(encoding="utf-8")
+    assert "incompatible_observations" in rendered
+    assert "No older retained row was searched." in rendered
+
+
+def test_cockpit_retention_absent_and_insufficient_states_are_read_only(
+    overview_store: CkmStore, tmp_path: Path
+) -> None:
+    output = tmp_path / "missing.html"
+    retention_path = overview_store.db_path.with_name(f"{overview_store.db_path.stem}-metric-samples.sqlite")
+    result = _cockpit_cli(overview_store, output)
+    assert result.exit_code == 0
+    assert "source_unavailable" in output.read_text(encoding="utf-8")
+    assert not retention_path.exists()
+
+    retention, _ = _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
+    before = retention.path.read_bytes()
+    insufficient = tmp_path / "insufficient.html"
+    result = _cockpit_cli(overview_store, insufficient)
+    assert result.exit_code == 0
+    rendered = insufficient.read_text(encoding="utf-8")
+    assert "insufficient_retained_samples" in rendered and "&quot;count&quot;:1" in rendered
+    assert retention.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "mutation, expected",
+    [
+        ("UPDATE ckm_metric_sample_v1 SET expires_at = '2000-01-01T00:00:00Z' WHERE sample_id = ?", "source_unavailable"),
+        ("UPDATE ckm_metric_sample_v1 SET source_payload = x'7B7D' WHERE sample_id = ?", "corrupt_retained_observation"),
+    ],
+)
+def test_cockpit_selected_source_refusal_is_all_or_nothing(
+    overview_store: CkmStore, tmp_path: Path, mutation: str, expected: str
+) -> None:
+    retention, _ = _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
+    _, selected = _retain_for_cockpit(overview_store, retained_at="2026-07-22T00:00:00Z")
+    with sqlite3.connect(retention.path) as conn:
+        conn.execute(mutation, (selected.sample_id,))
+    output = tmp_path / "refusal.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    rendered = output.read_text(encoding="utf-8")
+    assert expected in rendered
+    assert 'class="comparison-component"' not in rendered
+    assert "No older retained row was searched." in rendered
+
+
+def test_cockpit_renders_bound_o1b_delta_and_fixed_disclaimer(
+    overview_store: CkmStore, tmp_path: Path
+) -> None:
+    _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
+    _retain_for_cockpit(overview_store, retained_at="2026-07-22T00:00:00Z")
+    output = tmp_path / "bound.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    rendered = output.read_text(encoding="utf-8")
+    for marker in (
+        "comparison-inputs",
+        "comparison-result",
+        "comparison-bindings",
+        "comparison-provenance",
+        "comparison-freshness",
+        "comparison-limitations",
+        "Difference between two snapshots. Not a trend, cause, or forecast.",
+    ):
+        assert marker in rendered
+
+
+def test_cockpit_comparison_preserves_tagged_state_transitions(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(
+            batch=overview_store.load_projection_batch(),
+            comparison={
+                "components": [
+                    {
+                        "component": "fixture",
+                        "states": [
+                            {"state": "missing", "reason": "not captured"},
+                            {"state": "unsupported", "reason": "not defined"},
+                        ],
+                        "numeric_delta": None,
+                    }
+                ],
+                "inputs": [],
+                "compatibility": {},
+                "provenance": [],
+                "freshness": [],
+                "limitations": [],
+            },
+        ),
+    )
+    assert "missing: not captured" in rendered
+    assert "unsupported: not defined" in rendered
+    assert "numeric delta" not in rendered
+
+
+def test_cockpit_recovery_commands_match_click_help(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store, cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch())
+    )
+    measure_help = CliRunner().invoke(builderops, ["ckm", "measure", "--help"])
+    compare_help = CliRunner().invoke(builderops, ["ckm", "compare", "--help"])
+    assert measure_help.exit_code == compare_help.exit_code == 0
+    assert "--retain" in measure_help.output and "ckm measure --retain" in rendered
+    assert "--sample-id" in compare_help.output and "ckm compare --sample-id" in rendered

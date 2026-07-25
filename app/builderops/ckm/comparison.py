@@ -135,6 +135,38 @@ def _observation(store: MetricRetentionStore, sample_id: str) -> dict[str, Any]:
         raise CkmContractError("observation_source_mismatch", "retained observation does not reproduce from its bound source", {"sample_id": sample_id})
     return value
 
+
+def newest_active_retained_sample_ids(store: MetricRetentionStore) -> tuple[str, str]:
+    """Select exactly the newest active pair without creating or repairing storage."""
+    if not store.path.is_file():
+        raise CkmContractError(
+            "source_unavailable",
+            "retention storage is unavailable or incomplete",
+            {"path": str(store.path)},
+        )
+    try:
+        with sqlite3.connect(f"{store.path.resolve().as_uri()}?mode=ro", uri=True) as conn:
+            rows = conn.execute(
+                "SELECT sample_id FROM ckm_metric_sample_v1 "
+                "WHERE lifecycle = 'retained' "
+                "ORDER BY retained_at DESC, sample_id DESC LIMIT 2"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise CkmContractError(
+            "source_unavailable",
+            "retention storage is unavailable or incomplete",
+            {"path": str(store.path)},
+        ) from exc
+    if len(rows) < 2:
+        raise CkmContractError(
+            "insufficient_retained_samples",
+            "two active retained samples are required for comparison",
+            {"count": len(rows)},
+        )
+    newest_first = tuple(str(row[0]) for row in rows)
+    return newest_first[1], newest_first[0]
+
+
 def compare_retained_observations(store: MetricRetentionStore, sample_ids: Sequence[str]) -> dict[str, Any]:
     """Return one all-or-nothing, deterministic descriptive comparison."""
     if len(sample_ids) < 2 or len(set(sample_ids)) != len(sample_ids):
