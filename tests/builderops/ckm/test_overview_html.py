@@ -634,6 +634,28 @@ def test_cockpit_uses_existing_overview_renderer_call_site(overview_store: CkmSt
     assert "Capability map" in rendered
 
 
+def test_cockpit_preserves_evidence_profile_count_context(
+    fanout_overview_store: CkmStore,
+) -> None:
+    context = CockpitRenderContext(batch=fanout_overview_store.load_projection_batch())
+    cockpit = render_overview_html(
+        fanout_overview_store,
+        generated_at="2026-07-25T10:00:00Z",
+        cockpit=context,
+    )
+    default = render_overview_html(
+        fanout_overview_store,
+        generated_at="2026-07-25T10:00:00Z",
+    )
+
+    for rendered in (cockpit, default):
+        assert 'data-subsystem-name="Retrieval subsystem"' in rendered
+        assert 'data-distinct-artifacts="3"' in rendered
+        assert 'data-shared-evidence="40.0%"' in rendered
+    assert "Cockpit trust frame" in cockpit
+    assert "Cockpit trust frame" not in default
+
+
 def test_cockpit_uses_one_projection_batch_without_mutation(
     overview_store: CkmStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

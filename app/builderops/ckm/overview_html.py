@@ -543,7 +543,7 @@ def render_overview_html(
         if cockpit
         else '<header><h1>Development Overview</h1><p class="subtitle">Capability Knowledge Model maturity, trust, and cited drill-down.</p></header>'
     )
-    subsystem_counts = "" if cockpit else _subsystem_counts_markup(forest, batch.edges_by_capability)
+    subsystem_counts = _subsystem_counts_markup(forest, batch.edges_by_capability)
     footer_identity = (
         f'<br>State identity: epoch {_e(batch.state_identity.epoch)} · revision {batch.state_identity.state_revision} · schema {batch.state_identity.schema_version}<br>projection-input digest: <code>{_cockpit_digest(batch)}</code>'
         if cockpit
