@@ -78,6 +78,14 @@ The legend spells out every mapping. Verify: CKM11 acceptance criterion 7. Each 
 
 No filters, search, sort, comparison mode, URL state, evolution timeline, print expansion, JavaScript, hosting, Companion UI integration, CLI semantics, store changes, scoring changes, or evidence-model changes. Those are Direction B candidates and require observed owner need plus a separate contract.
 
+## Direction B amendment
+
+The default Direction A output remains byte-deterministic and script-free. Opt-in cockpit output may
+contain exactly one inline script that only enables its disabled-first capability-map filters, reads
+server-rendered filter tokens, toggles capability-row `hidden` state, and updates the filter count.
+It does not change CKM authority, persist state, access a network, or affect trust, hazards,
+comparison/refusal, subsystem counts, gaps, proposals, provenance, or the footer.
+
 ## CKM11-VALIDATION
 
 Run the focused renderer suite, standard lint/type/test baseline, and generate the overview against the live repository-backed CKM store. Capture desktop, expanded-row, 390×844, and 200%-zoom-equivalent views for visual comparison. Post the delivered child receipt and the review artifact on parent #3138; #3138 remains the owner-validation hub and is never a pickup issue.

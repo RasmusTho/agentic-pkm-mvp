@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -667,6 +668,267 @@ def test_cockpit_uses_existing_overview_renderer_call_site(overview_store: CkmSt
     )
     assert "Cockpit trust frame" in rendered
     assert "Capability map" in rendered
+
+
+def _cockpit_filter_script(rendered: str) -> str:
+    match = re.search(r"<script>(.*?)</script>", rendered, re.S)
+    assert match is not None
+    return match.group(1)
+
+
+def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
+    overview_store: CkmStore,
+) -> None:
+    context = CockpitRenderContext(batch=overview_store.load_projection_batch())
+    default = render_overview_html(overview_store)
+    cockpit = render_overview_html(overview_store, cockpit=context)
+
+    assert "<script" not in default
+    assert len(re.findall(r"<script(?:\\s[^>]*)?>", cockpit)) == 1
+    assert '<script src=' not in cockpit
+    assert not re.search(r"\\bon[a-z]+\\s*=", cockpit, re.I)
+    assert not re.search(r"(?:https?:)?//", cockpit, re.I)
+    assert _cockpit_filter_script(cockpit).lstrip().startswith("(() => {")
+    assert cockpit.count('<h2 id="filters-heading">Filters</h2>') == 1
+    assert cockpit.count('id="filters-heading"') == 1
+    assert "Unavailable in this framing slice. All capability rows are shown." not in cockpit
+    assert cockpit.index("Comparison") < cockpit.index("Filters") < cockpit.index("Capability map")
+
+
+def test_cockpit_progressive_enhancement_keeps_full_source_content(
+    overview_store: CkmStore,
+) -> None:
+    batch = overview_store.load_projection_batch()
+    rendered = render_overview_html(overview_store, cockpit=CockpitRenderContext(batch=batch))
+
+    assert rendered.count('class="capability"') == len(batch.capabilities)
+    assert rendered.count('class="capability-body"') == len(batch.capabilities)
+    for name in (
+        "filter-search",
+        "filter-assessment",
+        "filter-confidence",
+        "filter-findings",
+        "filter-evidence",
+    ):
+        assert re.search(rf'name="{name}"[^>]* disabled', rendered)
+    assert f"Showing {len(batch.capabilities)} of {len(batch.capabilities)} capabilities." in rendered
+    assert "Filtering is unavailable; all capability rows are shown." in rendered
+    assert rendered.index("<noscript>") < rendered.index("<script>")
+    assert "Retrieve grounded context." in rendered
+
+
+def test_cockpit_script_has_closed_filter_only_capability(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+    script = _cockpit_filter_script(rendered)
+    row_openings = re.findall(r'<article[^>]+class="capability"[^>]*>', rendered)
+    expected_attributes = {
+        "data-filter-name",
+        "data-filter-definition",
+        "data-filter-public-id",
+        "data-filter-boundary",
+        "data-filter-assessment",
+        "data-filter-confidence",
+        "data-filter-findings",
+        "data-filter-evidence",
+    }
+
+    assert row_openings
+    assert all(
+        {attribute.split("=", 1)[0] for attribute in re.findall(r"data-filter-[^=]+=", opening)}
+        == expected_attributes
+        for opening in row_openings
+    )
+    assert 'data-filter-assessment="available stale"' in rendered
+    assert 'data-filter-confidence="low"' in rendered
+    assert 'data-filter-findings="present"' in rendered
+    assert 'data-filter-evidence="confirmed candidate"' in rendered
+    for token in (
+        "fetch",
+        "XMLHttpRequest",
+        "WebSocket",
+        "clipboard",
+        "localStorage",
+        "sessionStorage",
+        "cookie",
+        "history",
+        "location",
+        "eval",
+        "setTimeout",
+        "setInterval",
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "createElement",
+    ):
+        assert token not in script
+    for token in (
+        "document.querySelector",
+        "document.querySelectorAll",
+        "row.dataset",
+        "row.hidden",
+        "control.disabled",
+        "control.addEventListener",
+        "count.textContent",
+    ):
+        assert token in script
+
+
+def test_cockpit_filters_rendered_rows_with_deterministic_and_semantics(
+    overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+    script = _cockpit_filter_script(rendered)
+    harness = r'''
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+class Control {
+  constructor() { this.value = ''; this.disabled = true; this.listeners = {}; }
+  addEventListener(type, handler) { this.listeners[type] = handler; }
+  emit(type) { this.listeners[type]({ type }); }
+}
+const search = new Control();
+const assessment = new Control();
+const confidence = new Control();
+const findings = new Control();
+const evidence = new Control();
+const count = { textContent: '' };
+const rows = [
+  { dataset: { filterName: 'Retrieval', filterDefinition: 'Retrieve grounded context', filterPublicId: 'CKM-1', filterBoundary: 'RCA', filterAssessment: 'available current', filterConfidence: 'low', filterFindings: 'present', filterEvidence: 'candidate' }, hidden: false },
+  { dataset: { filterName: 'Context Assembly', filterDefinition: 'Assemble a bounded context bundle', filterPublicId: 'CKM-2', filterBoundary: 'RCA', filterAssessment: 'unavailable', filterConfidence: 'unavailable', filterFindings: 'absent', filterEvidence: 'none' }, hidden: false },
+  { dataset: { filterName: 'Observability', filterDefinition: 'Draft telemetry coverage', filterPublicId: 'CKM-3', filterBoundary: 'OEF', filterAssessment: 'available stale', filterConfidence: 'standard', filterFindings: 'absent', filterEvidence: 'confirmed' }, hidden: false },
+  { dataset: { filterName: 'Mixed Evidence', filterDefinition: 'Confirmed and candidate evidence', filterPublicId: 'CKM-4', filterBoundary: 'OEF', filterAssessment: 'available stale', filterConfidence: 'standard', filterFindings: 'present', filterEvidence: 'confirmed candidate' }, hidden: false }
+];
+const bySelector = {
+  '[name="filter-search"]': search,
+  '[name="filter-assessment"]': assessment,
+  '[name="filter-confidence"]': confidence,
+  '[name="filter-findings"]': findings,
+  '[name="filter-evidence"]': evidence,
+  '#filter-count': count
+};
+const document = {
+  querySelector: (selector) => bySelector[selector],
+  querySelectorAll: (selector) => { assert(selector === '#capability-map > .capability[data-filter-name]', 'row selector'); return rows; }
+};
+''' + script + r'''
+const visible = () => rows.filter((row) => !row.hidden).length;
+const setSearch = (value) => { search.value = value; search.emit('input'); };
+const setFacet = (control, value) => { control.value = value; control.emit('change'); };
+const reset = () => {
+  search.value = ''; assessment.value = ''; confidence.value = ''; findings.value = ''; evidence.value = '';
+  search.emit('input'); assessment.emit('change'); confidence.emit('change'); findings.emit('change'); evidence.emit('change');
+};
+assert([search, assessment, confidence, findings, evidence].every((control) => !control.disabled), 'controls enabled');
+assert(visible() === 4 && count.textContent === 'Showing 4 of 4 capabilities.', 'initial count');
+setSearch('cKm-3'); assert(visible() === 1 && !rows[2].hidden, 'public ID text filter');
+setSearch('draft'); assert(visible() === 1 && !rows[2].hidden, 'definition text filter');
+setFacet(assessment, 'available current'); assert(visible() === 0, 'assessment AND text');
+reset();
+setFacet(assessment, 'available current'); assert(visible() === 1 && !rows[0].hidden, 'current assessment');
+setFacet(assessment, 'available stale'); assert(visible() === 2 && !rows[2].hidden && !rows[3].hidden, 'stale assessment');
+setFacet(assessment, 'unavailable'); assert(visible() === 1 && !rows[1].hidden, 'unavailable assessment');
+reset();
+setFacet(confidence, 'low'); assert(visible() === 1 && !rows[0].hidden, 'low confidence');
+setFacet(confidence, 'standard'); assert(visible() === 2 && !rows[2].hidden && !rows[3].hidden, 'standard confidence');
+setFacet(confidence, 'unavailable'); assert(visible() === 1 && !rows[1].hidden, 'unavailable confidence');
+reset();
+setFacet(findings, 'present'); assert(visible() === 2 && !rows[0].hidden && !rows[3].hidden, 'findings present');
+setFacet(findings, 'absent'); assert(visible() === 2, 'findings absent');
+setFacet(evidence, 'confirmed'); assert(visible() === 1 && !rows[2].hidden, 'combined facets');
+reset();
+setFacet(evidence, 'confirmed'); assert(visible() === 2 && !rows[2].hidden && !rows[3].hidden, 'confirmed evidence');
+setFacet(findings, 'present'); assert(visible() === 1 && !rows[3].hidden, 'mixed evidence AND findings');
+reset();
+setFacet(evidence, 'candidate'); assert(visible() === 2 && !rows[0].hidden && !rows[3].hidden, 'candidate evidence');
+setFacet(evidence, 'none'); assert(visible() === 1 && !rows[1].hidden, 'no evidence');
+setSearch('not-present'); assert(visible() === 0 && count.textContent === 'No capabilities match the selected filters. Showing 0 of 4 capabilities.', 'zero result');
+reset(); assert(visible() === 4 && count.textContent === 'Showing 4 of 4 capabilities.', 'reset count');
+'''
+
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+    empty_harness = r'''
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+class Control {
+  constructor() { this.value = ''; this.disabled = true; this.listeners = {}; }
+  addEventListener(type, handler) { this.listeners[type] = handler; }
+}
+const search = new Control();
+const assessment = new Control();
+const confidence = new Control();
+const findings = new Control();
+const evidence = new Control();
+const count = { textContent: '' };
+const document = {
+  querySelector: (selector) => ({
+    '[name="filter-search"]': search,
+    '[name="filter-assessment"]': assessment,
+    '[name="filter-confidence"]': confidence,
+    '[name="filter-findings"]': findings,
+    '[name="filter-evidence"]': evidence,
+    '#filter-count': count
+  })[selector],
+  querySelectorAll: (selector) => {
+    assert(selector === '#capability-map > .capability[data-filter-name]', 'row selector');
+    return [];
+  }
+};
+''' + script + r'''
+assert([search, assessment, confidence, findings, evidence].every((control) => !control.disabled), 'controls enabled');
+assert(count.textContent === 'Showing 0 of 0 capabilities.', 'empty source count');
+'''
+    empty_result = subprocess.run(
+        ["node", "-e", empty_harness], capture_output=True, text=True, check=False
+    )
+    assert empty_result.returncode == 0, empty_result.stderr
+
+
+def test_cockpit_filter_never_hides_trust_or_gap_context(overview_store: CkmStore) -> None:
+    batch = overview_store.load_projection_batch()
+    rendered = render_overview_html(overview_store, cockpit=CockpitRenderContext(batch=batch))
+    script = _cockpit_filter_script(rendered)
+
+    assert script.count("#capability-map > .capability[data-filter-name]") == 1
+    assert script.count("row.hidden") == 1
+    assert f"Showing {len(batch.capabilities)} of {len(batch.capabilities)} capabilities." in rendered
+    for marker in (
+        'class="cockpit-trust"',
+        'class="cockpit-hazards"',
+        'class="cockpit-comparison',
+        'class="subsystem-counts"',
+        'class="gaps-panel"',
+        'id="proposals-heading"',
+    ):
+        section = rendered.split(marker, 1)[1].split("</section>", 1)[0]
+        assert "data-filter-" not in section
+    footer = rendered.split('class="projection-footer"', 1)[1].split("</footer>", 1)[0]
+    assert "data-filter-" not in footer
+
+
+def test_cockpit_filter_controls_are_accessible_and_honest(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+
+    for control_id, label in (
+        ("filter-search", "Search name, definition, public ID, or boundary"),
+        ("filter-assessment", "Assessment freshness"),
+        ("filter-confidence", "Confidence"),
+        ("filter-findings", "Findings"),
+        ("filter-evidence", "Evidence lifecycle"),
+    ):
+        assert f'<label for="{control_id}">{label}</label>' in rendered
+        assert re.search(rf'id="{control_id}"[^>]* disabled[^>]*aria-controls="capability-map"', rendered)
+    assert '<p id="filter-count" aria-live="polite" aria-atomic="true">' in rendered
+    assert "No capabilities match the selected filters." in _cockpit_filter_script(rendered)
+    assert "Filter capability rows only; trust, hazards, comparison, gaps, proposals, and provenance remain visible." in rendered
 
 
 def test_cockpit_preserves_evidence_profile_count_context(
