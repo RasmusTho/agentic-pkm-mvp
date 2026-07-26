@@ -20,7 +20,7 @@ from app.instance.ownership_ledger import (
     LegacyOwner,
     OwnershipLedger,
 )
-from app.instance.vault_registry import RegistrySnapshot, VaultRegistryStore
+from app.instance.vault_registry import RegistryError, RegistrySnapshot, VaultRegistryStore
 
 
 _REQUIRED_CONSUMERS = frozenset({"api", "worker", "watcher", "heimdal-capture-watch"})
@@ -552,39 +552,30 @@ class InstanceStateBackup:
         )
         self.layout.require_existing()
         registry_store = VaultRegistryStore(self.layout.registry_path)
-        registry = registry_store.load()
-        ledger = self._require_registry_ledger_consistency(
-            registry=registry,
-            ledger=self.ledger,
-            global_live_owners=self._global_live_owners(
-                owner_payload=owner_payload,
-                registry=registry,
-            ),
-        )
         destination = Path(backup_root).expanduser().resolve(strict=False)
-        artifacts = {
-            "vault-registry.md": self.layout.registry_path,
-            "vault-registry.md.last-good": registry_store.snapshot_path,
-            "vault-registry.md.last-good.sha256": registry_store.snapshot_checksum_path,
-            "vault-registry.md.legacy-export": registry_store.rollback_export_path,
-            "ownership-ledger.json": self.ledger.path,
-            "ownership-key.json": self.ledger.key_path,
-        }
+        try:
+            payloads = self.ledger.capture_backup_artifacts(
+                capture_registry_artifacts=registry_store.capture_backup_artifacts,
+            )
+        except (LedgerError, OSError, RegistryError) as exc:
+            raise InstanceStatePreflightError(
+                "backup registry/ledger capture failed"
+            ) from exc
         final_export = self.layout.root / "legacy-final-export.md"
         final_checksum = self.layout.root / "legacy-final-export.md.sha256"
         if final_export.exists() != final_checksum.exists():
             raise InstanceStatePreflightError("final legacy export backup source is incomplete")
         if final_export.is_file():
-            artifacts["legacy-final-export.md"] = final_export
-            artifacts["legacy-final-export.md.sha256"] = final_checksum
-        checksums: dict[str, str] = {}
-        payloads: dict[str, bytes] = {}
-        for name, source in artifacts.items():
-            if not source.is_file():
-                raise InstanceStatePreflightError(f"backup source is incomplete: {name}")
-            payload = source.read_bytes()
-            payloads[name] = payload
-            checksums[name] = hashlib.sha256(payload).hexdigest()
+            payloads["legacy-final-export.md"] = final_export.read_bytes()
+            payloads["legacy-final-export.md.sha256"] = final_checksum.read_bytes()
+        ledger, _ = self._verify_staged_backup(
+            payloads=payloads,
+            owner_payload=owner_payload,
+        )
+        checksums = {
+            name: hashlib.sha256(payload).hexdigest()
+            for name, payload in payloads.items()
+        }
         manifest = {
             "schema": _BACKUP_SCHEMA,
             "channel_id": self.layout.channel_id,

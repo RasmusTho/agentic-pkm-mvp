@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -2560,6 +2561,121 @@ def test_backup_create_requires_canonical_quiescence_authority(tmp_path) -> None
         owner_receipt_path=owner_receipt,
     )
     assert receipt.manifest_path.is_file()
+
+
+@pytest.mark.parametrize("writer_kind", ("key-rotation", "registry-mutation"))
+def test_backup_capture_blocks_concurrent_writer_until_generation_is_captured(
+    tmp_path,
+    monkeypatch,
+    writer_kind,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=_current_registry_owners(runtime),
+    )
+    initial = runtime.ledger.require_existing()
+    initial_registry = runtime.registry.load()
+    second_root = tmp_path / "second-vault"
+    second_root.mkdir()
+    second_binding = "binding-concurrent-mutation"
+    backup_root = tmp_path / "backup"
+    capture_reached = threading.Event()
+    allow_capture = threading.Event()
+    writer_started = threading.Event()
+    writer_done = threading.Event()
+    backup_errors: list[BaseException] = []
+    writer_errors: list[BaseException] = []
+    original_read_bytes = Path.read_bytes
+    capture_path = (
+        runtime.ledger.path
+        if writer_kind == "key-rotation"
+        else runtime.layout.registry_path
+    )
+
+    def pause_first_generation_capture(path: Path) -> bytes:
+        if path == capture_path and not capture_reached.is_set():
+            capture_reached.set()
+            if not allow_capture.wait(timeout=5):
+                raise AssertionError("timed out waiting to release backup capture")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", pause_first_generation_capture)
+
+    def create_backup() -> None:
+        try:
+            InstanceStateBackup(layout, runtime.ledger).create(
+                backup_root,
+                quiescence_proof=proof,
+                owner_receipt_path=owner_receipt,
+            )
+        except BaseException as exc:
+            backup_errors.append(exc)
+
+    def mutate_state() -> None:
+        writer_started.set()
+        try:
+            if writer_kind == "key-rotation":
+                runtime.rotate_ledger_key(
+                    quiescence_proof=proof,
+                    legacy_owner_inventory_path=owner_receipt,
+                )
+            else:
+                runtime.registry.register(
+                    VaultRegistration(
+                        vault_binding_id=second_binding,
+                        ref=f"path:{second_root}",
+                        path=str(second_root.resolve()),
+                    ),
+                    expected_revision=initial_registry.revision,
+                )
+        except BaseException as exc:
+            writer_errors.append(exc)
+        finally:
+            writer_done.set()
+
+    backup_thread = threading.Thread(target=create_backup)
+    writer_thread = threading.Thread(target=mutate_state)
+    backup_thread.start()
+    assert capture_reached.wait(timeout=5)
+    writer_thread.start()
+    assert writer_started.wait(timeout=5)
+    writer_blocked = not writer_done.wait(timeout=1)
+    allow_capture.set()
+    backup_thread.join(timeout=5)
+    writer_thread.join(timeout=5)
+
+    assert writer_blocked
+    assert not backup_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert backup_errors == []
+    assert writer_errors == []
+    if writer_kind == "key-rotation":
+        manifest = json.loads((backup_root / "manifest.json").read_text(encoding="utf-8"))
+        backup_key = json.loads(
+            (backup_root / "ownership-key.json").read_text(encoding="utf-8")
+        )
+        backup_ledger = json.loads(
+            (backup_root / "ownership-ledger.json").read_text(encoding="utf-8")
+        )
+        assert manifest["ownership_key_id"] == initial.key_id == backup_key["key_id"]
+        assert (
+            manifest["ownership_generation"]
+            == initial.generation
+            == backup_key["generation"]
+        )
+        assert backup_ledger["key_id"] == initial.key_id
+        assert backup_ledger["generation"] == initial.generation
+    else:
+        backup_registry = VaultRegistryStore(backup_root / "vault-registry.md").load()
+        assert second_binding not in backup_registry.registrations
+        assert second_binding in runtime.registry.load().registrations
 
 
 def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> None:

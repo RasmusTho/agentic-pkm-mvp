@@ -126,6 +126,35 @@ class OwnershipLedger:
             key = self._load_or_create_key_locked(allow_create=False)
             return self._load_or_create_ledger_locked(key, allow_create=False)
 
+    def capture_backup_artifacts(
+        self,
+        *,
+        capture_registry_artifacts: Callable[[], Mapping[str, bytes]],
+    ) -> dict[str, bytes]:
+        """Capture registry and ownership bytes as one immutable lock generation.
+
+        Ledger writers that need registry state already acquire locks in
+        ledger-then-registry order. Backup uses that same order so registry
+        mutation and key rotation cannot interleave the captured artifacts.
+        """
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            self._load_or_create_ledger_locked(key, allow_create=False)
+            payloads = dict(capture_registry_artifacts())
+            for name, source in (
+                ("ownership-ledger.json", self.path),
+                ("ownership-key.json", self.key_path),
+            ):
+                if not source.is_file():
+                    raise LedgerKeyError(
+                        "established registry requires protected ownership ledger "
+                        "and key recovery"
+                    )
+                payloads[name] = source.read_bytes()
+            return payloads
+
     def require_registry_consistency(
         self,
         *,
