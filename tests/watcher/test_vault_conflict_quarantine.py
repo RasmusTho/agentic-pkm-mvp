@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import logging
 from pathlib import Path
 
 from app.knowledge.multiwriter import conflict_artifact_path
+from app.vault import manager
 from app.vault.manager import iter_vault_markdown_files
 
 
@@ -55,7 +57,10 @@ def test_quarantine_preserves_normal_sibling_note(tmp_path: Path) -> None:
 def test_quarantine_does_not_delete_conflict_artifact(
     tmp_path: Path,
     caplog,
+    monkeypatch,
 ) -> None:
+    receipt_policy = manager._ConflictQuarantineReceiptPolicy()
+    monkeypatch.setattr(manager, "_conflict_quarantine_receipts", receipt_policy)
     vault_root = tmp_path / "vault"
     conflict = _write_markdown(
         vault_root / "Notes" / "Plan (conflicted copy Rasmus's Mac).md",
@@ -77,3 +82,57 @@ def test_quarantine_does_not_delete_conflict_artifact(
     assert receipt.classification == "multiwriter_conflict_artifact"
     assert receipt.artifact_path == str(conflict)
     assert receipt.action == "excluded_from_iteration_preserved_on_disk"
+
+    # Capacity + 1 remains bounded across repeated scans: tracked keys are
+    # non-evicting and receipt output has an independent hard ceiling.
+    caplog.clear()
+    bounded_policy = manager._ConflictQuarantineReceiptPolicy(
+        max_tracked_states=4,
+        max_detail_receipts=2,
+    )
+    distinct_states = [
+        (f"/vault/conflict-{index}.md", (1, index, 10, 20, 30))
+        for index in range(5)
+    ]
+    with caplog.at_level(logging.WARNING, logger="app.vault.manager"):
+        for _ in range(2):
+            for artifact_path, state in distinct_states:
+                bounded_policy.observe(artifact_path, state)
+    assert [
+        getattr(record, "receipt_kind", None) for record in caplog.records
+    ] == ["detail", "detail", "suppression_summary"]
+
+    # The policy lock gives one writer ownership of a concurrent first
+    # observation, so identical events cannot race into duplicate receipts.
+    caplog.clear()
+    concurrent_policy = manager._ConflictQuarantineReceiptPolicy()
+    same_state: manager.ConflictArtifactState = (1, 2, 3, 4, 5)
+    with caplog.at_level(logging.WARNING, logger="app.vault.manager"):
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(
+                executor.map(
+                    lambda _: concurrent_policy.observe(
+                        "/vault/concurrent-conflict.md",
+                        same_state,
+                    ),
+                    range(32),
+                )
+            )
+    assert len(caplog.records) == 1
+
+    # Inode/ctime-bearing identity treats a recreated or changed artifact as a
+    # new state. Restart intentionally resets process-local observation state
+    # and permits one fresh, still-bounded detail receipt.
+    caplog.clear()
+    changed_policy = manager._ConflictQuarantineReceiptPolicy()
+    initial_state: manager.ConflictArtifactState = (1, 2, 3, 4, 5)
+    recreated_state: manager.ConflictArtifactState = (1, 9, 3, 4, 8)
+    with caplog.at_level(logging.WARNING, logger="app.vault.manager"):
+        changed_policy.observe("/vault/recreated-conflict.md", initial_state)
+        changed_policy.observe("/vault/recreated-conflict.md", initial_state)
+        changed_policy.observe("/vault/recreated-conflict.md", recreated_state)
+        restarted_policy = manager._ConflictQuarantineReceiptPolicy()
+        restarted_policy.observe("/vault/recreated-conflict.md", recreated_state)
+    assert [
+        getattr(record, "receipt_kind", None) for record in caplog.records
+    ] == ["detail", "detail", "detail"]
