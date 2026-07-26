@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import hashlib
 import logging
 import os
 import stat
@@ -9,8 +10,7 @@ import subprocess
 import sys
 import uuid
 from datetime import UTC, datetime
-import hashlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Sequence
 
 from app.knowledge.contracts import NoteLocator, SearchHit, WriteReceipt
@@ -121,6 +121,52 @@ def _conflict_artifact_name(locator: NoteLocator) -> str:
     return f"{artifact_rel.name}.conflict"
 
 
+def _stage_initial_stale_proposal(
+    parent_fd: int,
+    staged_name: str,
+    locator: NoteLocator,
+    *,
+    writer_identity: str,
+    written_at: datetime,
+) -> PurePosixPath:
+    """Publish a durable, no-clobber sibling artifact for an initially stale write."""
+
+    for attempt in range(9):
+        artifact_writer = (
+            writer_identity
+            if attempt == 0
+            else f"{writer_identity}-{uuid.uuid4().hex}"
+        )
+        artifact_rel = conflict_artifact_path(
+            locator.path,
+            writer_identity=artifact_writer,
+            written_at=written_at,
+        )
+        try:
+            os.link(
+                staged_name,
+                artifact_rel.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            continue
+
+        # The proposed bytes were fsynced before this helper. Persist the
+        # human-visible name before removing the hidden staging name, then
+        # persist that cleanup. A crash at either boundary leaves at least one
+        # durable name for the proposed inode.
+        os.fsync(parent_fd)
+        os.unlink(staged_name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return artifact_rel
+
+    raise KnowledgeCapabilityError(
+        f"could not allocate conflict artifact for rewritten note {locator.path}"
+    )
+
+
 def _read_entry(dir_fd: int, name: str) -> bytes:
     fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=dir_fd)
     with os.fdopen(fd, "rb") as handle:
@@ -195,14 +241,18 @@ class FsVaultAdapter:
     ) -> WriteReceipt:
         target = self._absolute_path(locator)
         note_class = self._classify(locator.path, WriteOperation.WRITE)
+        effective_writer_identity = writer_identity or "mimer.runtime"
+        written_at = datetime.now(UTC)
         # Opt-in optimistic concurrency (VMW-01 enactment-gap model; owner decision
         # 2026-07-13). Enforcement applies ONLY when the caller opts in by passing
         # ``expected_version``: a versionless write is performed normally so legacy
         # writers are never broken during progressive migration (#3570) -- the
         # structured outcome is still recorded on the receipt's ``note_class``. When a
         # caller DOES pass ``expected_version``, a REWRITTEN note whose current bytes no
-        # longer match is refused with ``KnowledgeWriteConflict`` (INV-VW1: no silent
-        # overwrite of a concurrently-changed note).
+        # longer match preserves the caller's proposed bytes as a provenance-bearing
+        # sibling conflict artifact and returns a legible staged-conflict outcome.
+        # Races after this initial comparison retain the hardened atomic exchange,
+        # rollback, displaced-inode, and fail-closed behavior.
         if expected_version is not None and note_class is NoteClass.REWRITTEN:
             parent_fd = -1
             conflict_fd = -1
@@ -247,8 +297,32 @@ class FsVaultAdapter:
                     current_bytes = _read_handle(handle)
                     current_version = hashlib.sha256(current_bytes).hexdigest()
                     if current_version != expected_version:
-                        raise KnowledgeWriteConflict(
-                            f"version mismatch for rewritten note {locator.path}"
+                        preserve_staged_conflict = True
+                        _require_anchored_directory_identity(
+                            parent_fd, target.parent, conflict_fd, locator
+                        )
+                        artifact_rel = _stage_initial_stale_proposal(
+                            parent_fd,
+                            staged_name,
+                            locator,
+                            writer_identity=effective_writer_identity,
+                            written_at=written_at,
+                        )
+                        staged_name = artifact_rel.name
+                        staged_dir_fd = parent_fd
+                        staged_is_artifact = True
+                        _require_anchored_directory_identity(
+                            parent_fd, target.parent, conflict_fd, locator
+                        )
+                        return WriteReceipt(
+                            operation="write_note",
+                            locator=locator,
+                            adapter="fs_vault",
+                            note_class=note_class,
+                            writer_identity=effective_writer_identity,
+                            written_at=written_at.isoformat(),
+                            outcome="conflict_staged",
+                            conflict_artifact=artifact_rel.as_posix(),
                         )
 
                     path_stat = os.stat(
@@ -430,8 +504,8 @@ class FsVaultAdapter:
             locator=locator,
             adapter="fs_vault",
             note_class=note_class,
-            writer_identity=writer_identity or "mimer.runtime",
-            written_at=datetime.now(UTC).isoformat(),
+            writer_identity=effective_writer_identity,
+            written_at=written_at.isoformat(),
         )
 
     def append_note(self, locator: NoteLocator, content: str) -> WriteReceipt:

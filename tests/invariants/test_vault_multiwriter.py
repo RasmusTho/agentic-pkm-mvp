@@ -12,7 +12,13 @@ from app.knowledge import adapters as adapters_module
 from app.knowledge.adapters import FsVaultAdapter
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
-from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note, conflict_artifact_path, is_conflict_artifact
+from app.knowledge.multiwriter import (
+    NoteClass,
+    WriteOperation,
+    classify_note,
+    conflict_artifact_path,
+    is_conflict_artifact,
+)
 from app.knowledge.write_ops import write_note_from_absolute
 
 
@@ -57,6 +63,120 @@ def test_runtime_note_classes_accept_settings_resolved_capture_and_sources_paths
     )
 
 
+def test_rewritten_write_uses_atomic_replace_at_filesystem_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/atomic.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_exchange = adapters_module._atomic_exchange_at
+    exchanges = 0
+
+    def recording_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", recording_exchange)
+
+    receipt = adapter.write_note(
+        locator,
+        "replacement",
+        expected_version=expected_version,
+        writer_identity="mac-runtime",
+    )
+
+    assert exchanges == 1
+    assert target.read_text(encoding="utf-8") == "replacement"
+    assert receipt.operation == "write_note"
+    assert receipt.outcome == "written"
+    assert receipt.conflict_artifact is None
+
+
+def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/shared.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"human-current")
+    stale_version = hashlib.sha256(b"caller-observed").hexdigest()
+
+    def unexpected_exchange(*_args: object) -> None:
+        raise AssertionError("an initially stale write must not exchange the canonical note")
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", unexpected_exchange)
+
+    receipt = adapter.write_note(
+        locator,
+        "caller-proposal",
+        expected_version=stale_version,
+        writer_identity="bifrost-ios",
+    )
+
+    assert receipt.outcome == "conflict_staged"
+    assert receipt.conflict_artifact is not None
+    assert receipt.writer_identity == "bifrost-ios"
+    assert datetime.fromisoformat(receipt.written_at or "").tzinfo is UTC
+    assert target.read_bytes() == b"human-current"
+    artifact = tmp_path / receipt.conflict_artifact
+    assert artifact.parent == target.parent
+    assert artifact.read_bytes() == b"caller-proposal"
+    assert "bifrost-ios" in artifact.name
+
+
+def test_staged_conflict_artifact_matches_quarantine_classifier(tmp_path: Path) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/classified.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"current")
+
+    receipt = adapter.write_note(
+        locator,
+        "stale proposal",
+        expected_version=hashlib.sha256(b"stale").hexdigest(),
+        writer_identity="codex-app",
+    )
+
+    assert receipt.outcome == "conflict_staged"
+    assert receipt.conflict_artifact is not None
+    assert is_conflict_artifact(receipt.conflict_artifact)
+
+
+def test_append_only_write_does_not_stage_stale_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="_heimdal/watchlist.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_text("existing\n", encoding="utf-8")
+
+    def unexpected_version_read(_handle: object) -> bytes:
+        raise AssertionError("append-only writes must not enter rewritten-note stale detection")
+
+    monkeypatch.setattr(adapters_module, "_read_handle", unexpected_version_read)
+
+    receipt = adapter.append_note(locator, "- appended\n")
+
+    assert target.read_text(encoding="utf-8") == "existing\n- appended\n"
+    assert receipt.operation == "append_note"
+    assert receipt.note_class is NoteClass.APPEND_ONLY
+    assert receipt.outcome == "written"
+    assert receipt.conflict_artifact is None
+    assert not any(is_conflict_artifact(path.name) for path in target.parent.iterdir())
+
+
 def test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam(
     tmp_path: Path,
 ) -> None:
@@ -76,12 +196,20 @@ def test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_
     assert note.read_text(encoding="utf-8") == "new"
     assert deferred_receipt.note_class is NoteClass.REWRITTEN
 
-    # Opt-in optimistic concurrency: a mismatched expected_version DOES raise and
-    # leaves the note untouched (no silent overwrite of a concurrently-changed note).
+    # Opt-in optimistic concurrency: a mismatched expected_version stages the
+    # caller's proposed content and leaves the canonical note untouched.
     stale_version = hashlib.sha256(b"old").hexdigest()
-    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
-        write_note_from_absolute(note, "newer", vault_root=tmp_path, expected_version=stale_version)
+    conflict_receipt = write_note_from_absolute(
+        note,
+        "newer",
+        vault_root=tmp_path,
+        expected_version=stale_version,
+        writer_identity="mac-runtime",
+    )
     assert note.read_text(encoding="utf-8") == "new"
+    assert conflict_receipt.outcome == "conflict_staged"
+    assert conflict_receipt.conflict_artifact is not None
+    assert (tmp_path / conflict_receipt.conflict_artifact).read_text(encoding="utf-8") == "newer"
 
     # Opt-in with the correct current version writes and stamps writer provenance.
     current_version = hashlib.sha256(b"new").hexdigest()
