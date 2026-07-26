@@ -12,7 +12,7 @@ from app.builderops.__main__ import _root
 import app.builderops.cli as builderops_cli_module
 from app.builderops.cli import builderops
 from app.builderops.ckm import comparison as comparison_module
-from app.builderops.ckm.contracts import CkmContractError, ResultEnvelope
+from app.builderops.ckm.contracts import CkmContractError, ResultEnvelope, canonical_digest
 from app.builderops.ckm.metrics import MetricRetentionStore
 from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmCapability
 from app.builderops.ckm.overview_html import CockpitRenderContext, render_overview_html
@@ -1144,6 +1144,81 @@ def test_cockpit_cli_compares_exact_newest_pair_oldest_first(
     assert 'numeric delta: <span class="comparison-delta">3</span>' in rendered
 
 
+def test_cockpit_cli_selects_chronological_pair_across_valid_iso_variants(
+    overview_store: CkmStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, deceptive_offset = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-22T00:00:00+02:00",
+    )
+    _, fractional_oldest = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-21T22:30:00.00000000000000000001+00:00",
+    )
+    _, fractional_older = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-21T22:30:00.00000000000000000002Z",
+    )
+    _, fractional_newer = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-21T22:30:00.00000000000000000003+00:00",
+    )
+    retention_path = overview_store.db_path.with_name(
+        f"{overview_store.db_path.stem}-metric-samples.sqlite"
+    )
+    renamed_ids = {
+        deceptive_offset.sample_id: "sample-offset-deceptive",
+        fractional_oldest.sample_id: "sample-z-fraction-oldest",
+        fractional_older.sample_id: "sample-y-fraction-older",
+        fractional_newer.sample_id: "sample-a-fraction-newer",
+    }
+    with sqlite3.connect(retention_path) as conn:
+        for original_id, renamed_id in renamed_ids.items():
+            conn.execute(
+                "UPDATE ckm_metric_sample_v1 SET sample_id = ? WHERE sample_id = ?",
+                (renamed_id, original_id),
+            )
+    observed: list[tuple[str, ...]] = []
+
+    def compare_once(_: MetricRetentionStore, sample_ids: tuple[str, ...]) -> dict[str, object]:
+        observed.append(sample_ids)
+        return _valid_o1b_payload(sample_ids=(sample_ids[0], sample_ids[1]))
+
+    monkeypatch.setattr(builderops_cli_module, "compare_retained_observations", compare_once)
+    output = tmp_path / "chronological-cockpit.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    assert observed == [
+        (
+            renamed_ids[fractional_older.sample_id],
+            renamed_ids[fractional_newer.sample_id],
+        )
+    ]
+    rendered = output.read_text(encoding="utf-8")
+    assert renamed_ids[deceptive_offset.sample_id] not in rendered
+    assert renamed_ids[fractional_oldest.sample_id] not in rendered
+
+    with sqlite3.connect(retention_path) as conn:
+        conn.execute(
+            "UPDATE ckm_metric_sample_v1 "
+            "SET retained_at = '2026-07-22T00:30:00.00000000000000000003+02:00' "
+            "WHERE sample_id = ?",
+            (renamed_ids[fractional_older.sample_id],),
+        )
+    newest_first = sorted(
+        (
+            renamed_ids[fractional_older.sample_id],
+            renamed_ids[fractional_newer.sample_id],
+        ),
+        reverse=True,
+    )
+    assert comparison_module.newest_active_retained_sample_ids(
+        MetricRetentionStore(retention_path)
+    ) == (newest_first[1], newest_first[0])
+
+
 def test_cockpit_does_not_search_older_compatible_pair(
     overview_store: CkmStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1169,6 +1244,102 @@ def test_cockpit_does_not_search_older_compatible_pair(
     rendered = output.read_text(encoding="utf-8")
     assert "incompatible_observations" in rendered
     assert "No older retained row was searched." in rendered
+
+
+def test_cockpit_chronology_repair_preserves_limit_two_and_no_fallback(
+    overview_store: CkmStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retention, deceptive_oldest = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-22T00:00:00+02:00",
+    )
+    _, chronological_older = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-21T22:30:00.000001Z",
+    )
+    _, chronological_newer = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-21T22:30:00.000002+00:00",
+        metric_id="provenance_coverage",
+    )
+    before = _retention_storage_identity(retention.path)
+    selected_reads: list[str] = []
+    statements: list[str] = []
+    original_connect = sqlite3.connect
+    original_observation = comparison_module._observation
+
+    def traced_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        connection = original_connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    def record_observation(
+        store: MetricRetentionStore,
+        sample_id: str,
+    ) -> dict[str, object]:
+        selected_reads.append(sample_id)
+        return original_observation(store, sample_id)
+
+    monkeypatch.setattr(comparison_module.sqlite3, "connect", traced_connect)
+    monkeypatch.setattr(comparison_module, "_observation", record_observation)
+    output = tmp_path / "chronology-no-fallback.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    selector_statements = [
+        statement
+        for statement in statements
+        if "SELECT sample_id FROM ckm_metric_sample_v1" in statement
+    ]
+    assert len(selector_statements) == 1
+    assert "LIMIT 2" in selector_statements[0]
+    assert selected_reads == [
+        chronological_older.sample_id,
+        chronological_newer.sample_id,
+    ]
+    assert deceptive_oldest.sample_id not in selected_reads
+    rendered = output.read_text(encoding="utf-8")
+    assert "incompatible_observations" in rendered
+    assert 'class="comparison-component"' not in rendered
+    assert "No older retained row was searched." in rendered
+    assert _retention_storage_identity(retention.path) == before
+
+
+@pytest.mark.parametrize(
+    "invalid_retained_at",
+    ["not-an-iso-instant", "2026-07-22T00:00:00"],
+)
+def test_cockpit_invalid_retained_timestamp_refuses_typed(
+    overview_store: CkmStore,
+    tmp_path: Path,
+    invalid_retained_at: str,
+) -> None:
+    retention, _ = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-21T00:00:00Z",
+    )
+    _, selected = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-22T00:00:00Z",
+    )
+    with sqlite3.connect(retention.path) as conn:
+        conn.execute(
+            "UPDATE ckm_metric_sample_v1 SET retained_at = ? WHERE sample_id = ?",
+            (invalid_retained_at, selected.sample_id),
+        )
+    before = _retention_storage_identity(retention.path)
+    output = tmp_path / "invalid-retained-at.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    rendered = output.read_text(encoding="utf-8")
+    assert "source_unavailable" in rendered
+    assert 'class="comparison-component"' not in rendered
+    assert "No older retained row was searched." in rendered
+    assert _retention_storage_identity(retention.path) == before
 
 
 def test_cockpit_retention_absent_and_insufficient_states_are_read_only(
@@ -1261,6 +1432,52 @@ def test_cockpit_selected_observation_source_mismatch_refuses(
     rendered = output.read_text(encoding="utf-8")
     assert "observation_source_mismatch" in rendered
     assert 'class="comparison-component"' not in rendered
+
+
+def test_cockpit_selected_malformed_nested_payload_refuses_typed(
+    overview_store: CkmStore, tmp_path: Path
+) -> None:
+    retention, _ = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-21T00:00:00Z",
+    )
+    _, selected = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-22T00:00:00Z",
+    )
+    with sqlite3.connect(retention.path) as conn:
+        source_bytes = conn.execute(
+            "SELECT source_payload FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+            (selected.sample_id,),
+        ).fetchone()[0]
+        source = json.loads(bytes(source_bytes).decode("utf-8"))
+        assert source["resources"]
+        source["resources"][0]["values"] = []
+        canonical_source = json.dumps(
+            source,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        conn.execute(
+            "UPDATE ckm_metric_sample_v1 "
+            "SET source_payload = ?, source_digest = ? WHERE sample_id = ?",
+            (
+                sqlite3.Binary(canonical_source),
+                canonical_digest(source),
+                selected.sample_id,
+            ),
+        )
+    output = tmp_path / "malformed-nested-refusal.html"
+
+    result = _cockpit_cli(overview_store, output)
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    rendered = output.read_text(encoding="utf-8")
+    assert "corrupt_retained_observation" in rendered
+    assert 'class="comparison-component"' not in rendered
+    assert "No older retained row was searched." in rendered
+    assert "Traceback" not in result.output
 
 
 def test_cockpit_selected_source_refusal_race_is_all_or_nothing(
