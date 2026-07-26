@@ -8,11 +8,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import re
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeGuard
 
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
@@ -393,6 +395,14 @@ def _branch_has_active_lease(branch: str, active_resources: set[str]) -> bool:
     return f"branch:{branch}" in active_resources
 
 
+def _is_finite_timestamp(value: object) -> TypeGuard[int | float]:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def _worktree_lifecycle_skip_reason(
     path: str,
     branch: str,
@@ -408,18 +418,32 @@ def _worktree_lifecycle_skip_reason(
     record = lifecycle_records.get(canonical_path)
     if not isinstance(record, Mapping):
         return "unregistered_worktree"
+    owner = record.get("owner")
+    registered_at = record.get("registered_at")
+    heartbeat_at = record.get("heartbeat_at")
+    expires_at = record.get("expires_at")
+    status = record.get("status")
     if (
         record.get("path") != canonical_path
         or record.get("branch") != branch
-        or record.get("status") not in {"active", "released", "complete"}
+        or not isinstance(owner, str)
+        or not owner.strip()
+        or status not in {"active", "released", "complete"}
+        or not _is_finite_timestamp(registered_at)
+        or not _is_finite_timestamp(heartbeat_at)
+        or not _is_finite_timestamp(expires_at)
+        or registered_at > heartbeat_at
+        or heartbeat_at > expires_at
     ):
         return "registration_mismatch"
-    expires_at = record.get("expires_at")
-    if (
-        not isinstance(expires_at, (int, float))
-        or isinstance(expires_at, bool)
-        or expires_at > (time.time() if now is None else now)
-    ):
+    if status in {"released", "complete"}:
+        terminal_at = record.get(f"{status}_at")
+        if (
+            not _is_finite_timestamp(terminal_at)
+            or terminal_at != expires_at
+        ):
+            return "registration_mismatch"
+    if expires_at > (time.time() if now is None else now):
         return "active_registration"
     return None
 
@@ -809,6 +833,7 @@ def janitor_apply(
     remote_policy: str = DEFAULT_REMOTE_POLICY,
     pr_states: dict[str, dict[str, Any]] | None = None,
     lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
+    active_lease_loader: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -826,7 +851,7 @@ def janitor_apply(
                 }
             ],
         }
-    if active_leases is None:
+    if active_lease_loader is None:
         return {
             "mode": "apply",
             "ok": False,
@@ -834,8 +859,8 @@ def janitor_apply(
             "errors": [
                 {
                     "artifact": "lease_snapshot",
-                    "action": "load_active_leases",
-                    "reason": "active_lease_snapshot_required",
+                    "action": "reload_active_leases",
+                    "reason": "authoritative_lease_reload_required",
                 }
             ],
         }
@@ -866,6 +891,42 @@ def janitor_apply(
             errors.append(record)
 
     apply_git(["fetch", "--prune", "origin"], {"artifact": "remote", "action": "fetch_prune"})
+    if errors:
+        return {
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": errors,
+            "ok": False,
+        }
+
+    def reload_active_leases() -> tuple[list[dict[str, Any]], set[str]] | None:
+        try:
+            leases = active_lease_loader()
+            if not isinstance(leases, list) or any(
+                not isinstance(item, dict) for item in leases
+            ):
+                raise TypeError("active lease authority must be a list of objects")
+            resources = _lease_resources(leases)
+        except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+            errors.append(
+                {
+                    "artifact": "lease_snapshot",
+                    "action": "reload_active_leases",
+                    "reason": "active_lease_authority_invalid",
+                }
+            )
+            return None
+        return leases, resources
+
+    initial_authority = reload_active_leases()
+    if initial_authority is None:
+        return {
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": errors,
+            "ok": False,
+        }
+    active_leases, _ = initial_authority
     plan = build_janitor_plan(
         cwd,
         active_leases=active_leases,
@@ -892,14 +953,84 @@ def janitor_apply(
             "ok": False,
         }
 
-    apply_git(["worktree", "prune"], {"artifact": "worktree", "action": "prune_metadata"})
+    def authority_changed_for(
+        *,
+        path: str | None = None,
+        branch: str | None = None,
+    ) -> bool:
+        refreshed = reload_active_leases()
+        if refreshed is None:
+            return True
+        _, resources = refreshed
+        conflicts = {
+            resource
+            for resource in (
+                f"worktree:{path}" if path else None,
+                f"branch:{branch}" if branch else None,
+            )
+            if resource is not None and resource in resources
+        }
+        if conflicts:
+            errors.append(
+                {
+                    "artifact": "worktree",
+                    "action": "preserve",
+                    "reason": "lease_authority_changed",
+                    "path": path,
+                    "branch": branch,
+                    "active_leases": sorted(conflicts),
+                }
+            )
+            return True
+        return False
+
     reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
+    cleanup_worktrees = [
+        *plan.get(
+            "orphaned_worktrees",
+            plan["candidates"].get("orphaned_worktrees", []),
+        ),
+        *reclaimable,
+    ]
+    for cleanup_worktree in cleanup_worktrees:
+        if authority_changed_for(
+            path=cleanup_worktree.get("path"),
+            branch=cleanup_worktree.get("branch"),
+        ):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
+
+    apply_git(["worktree", "prune"], {"artifact": "worktree", "action": "prune_metadata"})
     for worktree in reclaimable:
+        if authority_changed_for(
+            path=worktree.get("path"),
+            branch=worktree.get("branch"),
+        ):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         remove_errors_before = len(errors)
         # Never --force / --ignore-locked: a worktree that turned dirty or locked
         # since planning must fail the remove and keep its branch intact.
         apply_git(["worktree", "remove", worktree["path"]], {"artifact": "worktree", "action": "remove", **worktree})
         if len(errors) == remove_errors_before:
+            if authority_changed_for(branch=worktree.get("branch")):
+                return {
+                    **plan,
+                    "mode": "apply",
+                    "destructive_actions": actions,
+                    "errors": errors,
+                    "ok": False,
+                }
             # Squash/closed-PR-proven branches are not ancestors of origin/main,
             # so `git branch -d` refuses them and the branch would be skipped
             # forever. The merge_proof already establishes safe-to-delete, so use
@@ -912,11 +1043,35 @@ def janitor_apply(
             )
             apply_git(["branch", delete_flag, worktree["branch"]], {"artifact": "local_branch", "action": "delete_after_worktree_remove", "branch": worktree["branch"]})
     for branch in plan["candidates"]["local_branches"]:
+        if authority_changed_for(branch=branch.get("branch")):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         apply_git(["branch", "-d", branch["branch"]], {"artifact": "local_branch", "action": "delete", **branch})
     for remote in plan["candidates"]["remote_branches"]:
+        if authority_changed_for(branch=remote.get("branch")):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         apply_git(["push", "origin", "--delete", remote["branch"]], {"artifact": "remote_branch", "action": "delete", **remote})
     for remote in plan["candidates"]["remote_branches_requiring_rescue"]:
         branch = remote["branch"]
+        if authority_changed_for(branch=branch):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         rescue_ref = remote["rescue_ref"]
         source_ref = f"refs/heads/{branch}"
         protected_source_refs = {
@@ -975,6 +1130,14 @@ def janitor_apply(
             )
             rescue_verified = len(errors) == errors_before_verify
         if rescue_created and rescue_pushed and rescue_verified:
+            if authority_changed_for(branch=branch):
+                return {
+                    **plan,
+                    "mode": "apply",
+                    "destructive_actions": actions,
+                    "errors": errors,
+                    "ok": False,
+                }
             # The repository's direct-main pre-push guard is branch-based and
             # rejects every push made while main is checked out. This transport
             # bypass is deliberately confined to a validated archive ref and a

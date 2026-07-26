@@ -109,7 +109,8 @@ mutation. Broader cleanup belongs to a cold-path janitor flow that reports stale
 orphaned worktrees, old stashes, and prune candidates while respecting active leases and the local
 worktree lifecycle registry. Destructive cleanup is never the default: explicit apply may reclaim
 only registered, expired, clean, unlocked worktrees with proven merge/closure eligibility.
-Unregistered or active lifecycle state is positive preservation evidence.
+Unregistered or active lifecycle state is positive preservation evidence; apply rereads lease
+authority under the lifecycle lock before destructive decisions.
 
 ## Enforcement intent
 

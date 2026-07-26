@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import math
 import os
 import sys
 import tempfile
@@ -156,6 +157,7 @@ def register_worktree(
             and (
                 not isinstance(existing_expiry, (int, float))
                 or isinstance(existing_expiry, bool)
+                or not math.isfinite(existing_expiry)
                 or existing_expiry > timestamp
             )
         )
@@ -294,7 +296,7 @@ def janitor_apply(
     *,
     registry_path: Path | None = None,
     pr_states: dict[str, dict[str, Any]] | None,
-    active_leases: list[dict[str, Any]],
+    lease_path: Path,
     stale_after_days: int = 14,
 ) -> dict[str, Any]:
     path = _canonical(registry_path or _default_registry_path(cwd))
@@ -306,7 +308,7 @@ def janitor_apply(
         }
         return git_hygiene.janitor_apply(
             cwd,
-            active_leases=active_leases,
+            active_lease_loader=lambda: _load_active_lease_snapshot(lease_path),
             stale_after_days=stale_after_days,
             pr_states=pr_states,
             lifecycle_records=records,
@@ -356,10 +358,8 @@ def main(argv: list[str] | None = None) -> int:
         _canonical(Path(args.registry_file)) if args.registry_file else None
     )
     try:
-        active_leases = (
-            _load_active_lease_snapshot(_canonical(Path(args.lease_file)))
-            if args.lease_file
-            else None
+        lease_path = (
+            _canonical(Path(args.lease_file)) if args.lease_file else None
         )
         if args.command == "register":
             result = register_worktree(
@@ -402,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise WorktreeLifecycleError(
                         "janitor apply requires --pr-state-file"
                     )
-                if active_leases is None:
+                if lease_path is None:
                     raise WorktreeLifecycleError(
                         "janitor apply requires --lease-file"
                     )
@@ -410,10 +410,15 @@ def main(argv: list[str] | None = None) -> int:
                     cwd,
                     registry_path=registry_path,
                     pr_states=pr_states,
-                    active_leases=active_leases,
+                    lease_path=lease_path,
                     stale_after_days=args.stale_after_days,
                 )
             else:
+                active_leases = (
+                    _load_active_lease_snapshot(lease_path)
+                    if lease_path is not None
+                    else None
+                )
                 result = janitor_report(
                     cwd,
                     registry_path=registry_path,

@@ -9,6 +9,9 @@ import pytest
 from scripts import agent_worktree, git_hygiene
 
 
+MISSING = object()
+
+
 def test_lifecycle_register_heartbeat_release_and_report(
     tmp_path,
     monkeypatch,
@@ -140,6 +143,100 @@ def test_lifecycle_registration_preserves_active_owner_until_expiry(
     assert takeover["expires_at"] == 220
 
 
+@pytest.mark.parametrize(
+    "malformed_expiry",
+    (True, float("nan"), float("inf"), float("-inf")),
+)
+def test_lifecycle_registration_does_not_treat_malformed_expiry_as_abandoned(
+    tmp_path,
+    monkeypatch,
+    malformed_expiry,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "issue-4015"
+    worktree.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema": agent_worktree.REGISTRY_SCHEMA,
+                "worktrees": {
+                    str(worktree.resolve()): {
+                        "path": str(worktree.resolve()),
+                        "branch": "codex/issue-4015",
+                        "owner": "first-owner",
+                        "status": "active",
+                        "registered_at": 10,
+                        "heartbeat_at": 20,
+                        "expires_at": malformed_expiry,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_identity",
+        lambda _cwd, _worktree: (worktree.resolve(), "codex/issue-4015"),
+    )
+
+    with pytest.raises(
+        agent_worktree.WorktreeLifecycleError,
+        match="active lifecycle owner",
+    ):
+        agent_worktree.register_worktree(
+            repo,
+            worktree=worktree,
+            owner="second-owner",
+            registry_path=registry_path,
+            now=100,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("owner", MISSING),
+        ("owner", ""),
+        ("owner", "   "),
+        ("registered_at", MISSING),
+        ("registered_at", True),
+        ("registered_at", float("nan")),
+        ("heartbeat_at", MISSING),
+        ("heartbeat_at", float("inf")),
+        ("expires_at", True),
+        ("expires_at", float("nan")),
+        ("expires_at", float("-inf")),
+    ),
+)
+def test_janitor_rejects_malformed_lifecycle_authority(field, value) -> None:
+    worktree = Path("/repo/worktrees/issue-4015")
+    record = {
+        "path": str(worktree),
+        "branch": "codex/issue-4015",
+        "owner": "codex-4015",
+        "status": "active",
+        "registered_at": 10,
+        "heartbeat_at": 20,
+        "expires_at": 30,
+    }
+    if value is MISSING:
+        record.pop(field)
+    else:
+        record[field] = value
+
+    reason = git_hygiene._worktree_lifecycle_skip_reason(
+        str(worktree),
+        "codex/issue-4015",
+        {str(worktree): record},
+        now=40,
+    )
+
+    assert reason == "registration_mismatch"
+
+
 def test_janitor_preserves_active_locked_dirty_and_unregistered_worktrees(
     tmp_path,
     monkeypatch,
@@ -202,25 +299,40 @@ def test_janitor_preserves_active_locked_dirty_and_unregistered_worktrees(
         str(active.resolve()): {
             "path": str(active.resolve()),
             "branch": "codex/active",
+            "owner": "active-owner",
             "status": "active",
+            "registered_at": 10,
+            "heartbeat_at": 20,
             "expires_at": 200,
         },
         str(locked.resolve()): {
             "path": str(locked.resolve()),
             "branch": "codex/locked",
+            "owner": "locked-owner",
             "status": "released",
+            "registered_at": 10,
+            "heartbeat_at": 20,
+            "released_at": 50,
             "expires_at": 50,
         },
         str(dirty.resolve()): {
             "path": str(dirty.resolve()),
             "branch": "codex/dirty",
+            "owner": "dirty-owner",
             "status": "released",
+            "registered_at": 10,
+            "heartbeat_at": 20,
+            "released_at": 50,
             "expires_at": 50,
         },
         str(eligible.resolve()): {
             "path": str(eligible.resolve()),
             "branch": "codex/eligible",
+            "owner": "eligible-owner",
             "status": "complete",
+            "registered_at": 10,
+            "heartbeat_at": 20,
+            "complete_at": 50,
             "expires_at": 50,
         },
     }
@@ -272,7 +384,7 @@ def test_janitor_preserves_active_locked_dirty_and_unregistered_worktrees(
     )
     applied = git_hygiene.janitor_apply(
         root,
-        active_leases=[],
+        active_lease_loader=lambda: [],
         pr_states={},
         lifecycle_records=records,
     )
@@ -301,6 +413,9 @@ def test_janitor_apply_forwards_lifecycle_and_lease_authority(
                         "branch": "codex/eligible",
                         "owner": "codex-4015",
                         "status": "complete",
+                        "registered_at": 10,
+                        "heartbeat_at": 20,
+                        "complete_at": 50,
                         "expires_at": 50,
                     }
                 },
@@ -308,17 +423,20 @@ def test_janitor_apply_forwards_lifecycle_and_lease_authority(
         ),
         encoding="utf-8",
     )
-    active_leases = [
+    authoritative_leases = [
         {
             "resource_id": f"worktree:{worktree.resolve()}",
             "execution_id": "active-owner",
             "expires_at": 200,
         }
     ]
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text(json.dumps(authoritative_leases), encoding="utf-8")
     captured: dict[str, object] = {}
 
     def fake_apply(_cwd: Path, **kwargs):
         captured.update(kwargs)
+        captured["loaded_leases"] = kwargs["active_lease_loader"]()
         return {"mode": "apply", "ok": False, "errors": []}
 
     monkeypatch.setattr(git_hygiene, "janitor_apply", fake_apply)
@@ -327,10 +445,10 @@ def test_janitor_apply_forwards_lifecycle_and_lease_authority(
         repo,
         registry_path=registry_path,
         pr_states={"codex/eligible": {"state": "MERGED"}},
-        active_leases=active_leases,
+        lease_path=lease_path,
     )
 
-    assert captured["active_leases"] == active_leases
+    assert captured["loaded_leases"] == authoritative_leases
     records = captured["lifecycle_records"]
     assert isinstance(records, dict)
     assert records[str(worktree.resolve())]["status"] == "complete"
@@ -408,4 +526,4 @@ def test_janitor_apply_cli_requires_and_loads_lease_snapshot(
         )
         == 0
     )
-    assert captured["active_leases"] == leases
+    assert captured["lease_path"] == lease_path.resolve()
