@@ -12,7 +12,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
@@ -277,7 +277,7 @@ def preflight_report(
         or checks["in_progress_operations"]
         or checks["branch_mismatch"]
         or checks["worktree_mismatch"]
-        or checks["base_branch"]["mismatch"]
+        or base_status["mismatch"]
         or checks["lease_conflicts"]
         or (require_dedicated_worktree and shared_root)
     )
@@ -393,6 +393,37 @@ def _branch_has_active_lease(branch: str, active_resources: set[str]) -> bool:
     return f"branch:{branch}" in active_resources
 
 
+def _worktree_lifecycle_skip_reason(
+    path: str,
+    branch: str,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+    *,
+    now: float | None,
+) -> str | None:
+    """Require a matching expired lifecycle registration when records are supplied."""
+
+    if lifecycle_records is None:
+        return None
+    canonical_path = str(Path(path).resolve())
+    record = lifecycle_records.get(canonical_path)
+    if not isinstance(record, Mapping):
+        return "unregistered_worktree"
+    if (
+        record.get("path") != canonical_path
+        or record.get("branch") != branch
+        or record.get("status") not in {"active", "released", "complete"}
+    ):
+        return "registration_mismatch"
+    expires_at = record.get("expires_at")
+    if (
+        not isinstance(expires_at, (int, float))
+        or isinstance(expires_at, bool)
+        or expires_at > (time.time() if now is None else now)
+    ):
+        return "active_registration"
+    return None
+
+
 def _worktree_reclaim_reason(
     path: str,
     branch: str,
@@ -403,6 +434,8 @@ def _worktree_reclaim_reason(
     pr_states: dict[str, dict[str, Any]] | None,
     cwd: Path,
     locked: bool = False,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
+    now: float | None = None,
 ) -> tuple[str | None, str | None]:
     """Decide whether a present worktree is safe to reclaim.
 
@@ -440,6 +473,14 @@ def _worktree_reclaim_reason(
         return "worktree_state_unavailable", None
     if dirty:
         return "dirty_worktree", None
+    lifecycle_reason = _worktree_lifecycle_skip_reason(
+        path,
+        branch,
+        lifecycle_records,
+        now=now,
+    )
+    if lifecycle_reason is not None:
+        return lifecycle_reason, None
     pr = _pr_state(branch, pr_states)
     if pr.get("state") == "OPEN" or pr.get("isDraft"):
         return "open_or_draft_pr", None
@@ -535,8 +576,11 @@ def _lease_resources(active_leases: list[dict[str, Any]], now: float | None = No
 
 PRESERVATION_REASONS = {
     "active_lease",
+    "active_registration",
     "dirty_worktree",
     "locked_worktree",
+    "registration_mismatch",
+    "unregistered_worktree",
     "unknown_merge_state",
     "worktree_state_unavailable",
 }
@@ -549,8 +593,11 @@ def _preservation_receipt(item: dict[str, Any]) -> dict[str, Any] | None:
         return None
     next_action = {
         "active_lease": "wait for the owning agent to release or supersede its lease",
+        "active_registration": "wait for lifecycle expiry or an explicit release/complete receipt",
         "dirty_worktree": "preserve local drift; inspect or commit it before any cleanup",
         "locked_worktree": "preserve the lock; verify the owning session before any cleanup",
+        "registration_mismatch": "repair the lifecycle record; do not infer cleanup authority",
+        "unregistered_worktree": "register ownership explicitly before any cleanup decision",
         "unknown_merge_state": "verify merge and ownership state before any cleanup",
         "worktree_state_unavailable": "restore or inspect the worktree; do not infer abandonment",
     }[reason]
@@ -572,6 +619,7 @@ def build_janitor_plan(
     remote_policy: str = DEFAULT_REMOTE_POLICY,
     pr_states: dict[str, dict[str, Any]] | None = None,
     protected_branches: set[str] | None = None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     active_leases = active_leases or []
@@ -615,8 +663,31 @@ def build_janitor_plan(
         # A missing worktree is an orphan (its metadata is pruned, not reclaimed)
         # — but the root is never missing, and active leases or locks still win
         # so we never touch protected work even if its checkout has gone.
-        if not is_root and not leased and not locked and not Path(path).exists():
-            orphaned_worktrees.append({"path": path, "branch": branch})
+        if not is_root and not Path(path).exists():
+            if locked:
+                reason = "locked_worktree"
+            elif leased:
+                reason = "active_lease"
+            else:
+                reason = _worktree_lifecycle_skip_reason(
+                    path,
+                    branch,
+                    lifecycle_records,
+                    now=now,
+                )
+            if reason is not None:
+                item = {
+                    "artifact": "worktree",
+                    "path": path,
+                    "branch": branch,
+                    "reason": reason,
+                }
+                skipped.append(item)
+                receipt = _preservation_receipt(item)
+                if receipt:
+                    preservation_receipts.append(receipt)
+            else:
+                orphaned_worktrees.append({"path": path, "branch": branch})
             continue
         # Candidacy gates on merge state, not branch prefix.
         reason, merge_proof = _worktree_reclaim_reason(
@@ -628,6 +699,8 @@ def build_janitor_plan(
             pr_states=pr_states,
             cwd=cwd,
             locked=locked,
+            lifecycle_records=lifecycle_records,
+            now=now,
         )
         if reason:
             item = {"artifact": "worktree", "path": path, "branch": branch, "reason": reason}
@@ -708,6 +781,7 @@ def janitor_report(
     *,
     active_leases: list[dict[str, Any]] | None = None,
     stale_after_days: int = 14,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     active_leases = active_leases or []
@@ -716,6 +790,7 @@ def janitor_report(
         active_leases=active_leases,
         stale_after_days=stale_after_days,
         pr_states=None,
+        lifecycle_records=lifecycle_records,
         now=now,
     )
     plan["mode"] = "report-only"
@@ -733,6 +808,7 @@ def janitor_apply(
     stale_after_days: int = 14,
     remote_policy: str = DEFAULT_REMOTE_POLICY,
     pr_states: dict[str, dict[str, Any]] | None = None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -747,6 +823,32 @@ def janitor_apply(
                     "artifact": "github_state",
                     "action": "load_pr_states",
                     "reason": "apply_requires_pr_state_file",
+                }
+            ],
+        }
+    if active_leases is None:
+        return {
+            "mode": "apply",
+            "ok": False,
+            "destructive_actions": [],
+            "errors": [
+                {
+                    "artifact": "lease_snapshot",
+                    "action": "load_active_leases",
+                    "reason": "active_lease_snapshot_required",
+                }
+            ],
+        }
+    if lifecycle_records is None:
+        return {
+            "mode": "apply",
+            "ok": False,
+            "destructive_actions": [],
+            "errors": [
+                {
+                    "artifact": "worktree",
+                    "action": "load_lifecycle_registry",
+                    "reason": "registered_lifecycle_guard_required",
                 }
             ],
         }
@@ -770,6 +872,7 @@ def janitor_apply(
         stale_after_days=stale_after_days,
         remote_policy=remote_policy,
         pr_states=pr_states,
+        lifecycle_records=lifecycle_records,
     )
 
     preservation_receipts = plan.get("preservation_receipts", [])
@@ -957,13 +1060,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.resolve_github_state:
         pr_states = load_pr_states_from_gh(cwd)
     if args.mode == "apply":
-        report = janitor_apply(
-            cwd,
-            active_leases=leases,
-            stale_after_days=args.stale_after_days,
-            remote_policy=args.remote_policy,
-            pr_states=pr_states,
+        _print_json(
+            {
+                "mode": "apply",
+                "ok": False,
+                "errors": [
+                    {
+                        "artifact": "worktree",
+                        "action": "cleanup",
+                        "reason": "registered_lifecycle_guard_required",
+                        "next_action": "use scripts/agent_worktree.py janitor --mode apply",
+                    }
+                ],
+            }
         )
+        return 1
     else:
         report = janitor_report(
             cwd,

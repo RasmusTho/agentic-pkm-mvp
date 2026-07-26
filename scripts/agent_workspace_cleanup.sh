@@ -8,6 +8,7 @@ MODE="report"
 STALE_DAYS=14
 CWD="$(pwd)"
 PR_STATE_FILE=""
+LEASE_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,6 +32,10 @@ while [[ $# -gt 0 ]]; do
       PR_STATE_FILE="$2"
       shift 2
       ;;
+    --lease-file)
+      LEASE_FILE="$2"
+      shift 2
+      ;;
     *)
       echo "Unknown arg: $1" >&2
       exit 2
@@ -41,21 +46,27 @@ done
 cd "$CWD"
 
 if [[ "$MODE" == "report" ]]; then
-  ARGS=(--cwd "$CWD" --stale-after-days "$STALE_DAYS" --mode report)
+  ARGS=(--cwd "$CWD")
+  if [[ -n "$LEASE_FILE" ]]; then
+    ARGS+=(--lease-file "$LEASE_FILE")
+  fi
+  ARGS+=(janitor --stale-after-days "$STALE_DAYS" --mode report)
   if [[ -n "$PR_STATE_FILE" ]]; then
     ARGS+=(--pr-state-file "$PR_STATE_FILE")
   fi
-  python3 scripts/git_hygiene_janitor.py "${ARGS[@]}"
+  python3 scripts/agent_worktree.py "${ARGS[@]}"
   exit 0
 fi
 
-if [[ -z "$PR_STATE_FILE" ]]; then
-  echo "Refusing cleanup: --apply requires --pr-state-file." >&2
+if [[ -z "$PR_STATE_FILE" || -z "$LEASE_FILE" ]]; then
+  echo "Refusing cleanup: --apply requires --pr-state-file and --lease-file." >&2
   exit 1
 fi
 
-python3 scripts/git_hygiene_janitor.py \
+python3 scripts/agent_worktree.py \
   --cwd "$CWD" \
+  --lease-file "$LEASE_FILE" \
+  janitor \
   --stale-after-days "$STALE_DAYS" \
   --mode apply \
   --pr-state-file "$PR_STATE_FILE"

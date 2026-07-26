@@ -764,7 +764,12 @@ def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch
         },
     )
 
-    report = git_hygiene.janitor_apply(tmp_path, pr_states={"closed-unmerged": {"state": "CLOSED"}})
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={"closed-unmerged": {"state": "CLOSED"}},
+    )
 
     assert report["ok"] is True
     assert commands.index(
@@ -782,6 +787,40 @@ def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch
     ) < commands.index(
         ["push", "--no-verify", "origin", ":refs/heads/closed-unmerged"]
     )
+
+
+@pytest.mark.parametrize(
+    ("active_leases", "lifecycle_records", "reason"),
+    (
+        (None, {}, "active_lease_snapshot_required"),
+        ([], None, "registered_lifecycle_guard_required"),
+    ),
+)
+def test_janitor_apply_requires_explicit_cleanup_authority(
+    tmp_path,
+    monkeypatch,
+    active_leases,
+    lifecycle_records,
+    reason,
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git_result",
+        lambda args, _cwd: commands.append(args),
+    )
+
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_leases=active_leases,
+        lifecycle_records=lifecycle_records,
+        pr_states={},
+    )
+
+    assert report["ok"] is False
+    assert report["destructive_actions"] == []
+    assert report["errors"][0]["reason"] == reason
+    assert commands == []
 
 
 def test_janitor_rescue_publication_works_from_guarded_main_checkout(
@@ -850,7 +889,10 @@ def test_janitor_rescue_publication_works_from_guarded_main_checkout(
     assert "direct-main push rejected" in guarded_main.stderr
 
     report = git_hygiene.janitor_apply(
-        repo, pr_states={"closed-unmerged": {"state": "CLOSED"}}
+        repo,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
 
     assert report["ok"] is True
@@ -917,7 +959,12 @@ def test_janitor_apply_does_not_delete_remote_when_rescue_push_fails(
         },
     )
 
-    report = git_hygiene.janitor_apply(tmp_path, pr_states={"closed-unmerged": {"state": "CLOSED"}})
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={"closed-unmerged": {"state": "CLOSED"}},
+    )
 
     assert report["ok"] is False
     assert ["push", "--no-verify", "origin", ":refs/heads/closed-unmerged"] not in commands
@@ -960,7 +1007,10 @@ def test_janitor_apply_does_not_delete_remote_when_rescue_verification_fails(
     )
 
     report = git_hygiene.janitor_apply(
-        tmp_path, pr_states={"closed-unmerged": {"state": "CLOSED"}}
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
 
     assert report["ok"] is False
@@ -1003,7 +1053,10 @@ def test_janitor_rescue_delete_uses_exact_full_ref_for_ref_like_branch(
     )
 
     report = git_hygiene.janitor_apply(
-        tmp_path, pr_states={branch: {"state": "CLOSED"}}
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={branch: {"state": "CLOSED"}},
     )
 
     assert report["ok"] is True
@@ -1049,7 +1102,12 @@ def test_janitor_rescue_transport_rejects_unsafe_branch(
         },
     )
 
-    report = git_hygiene.janitor_apply(tmp_path, pr_states={branch: {"state": "CLOSED"}})
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={branch: {"state": "CLOSED"}},
+    )
 
     assert report["ok"] is False
     assert not any(command[0] == "push" for command in commands)
@@ -1374,7 +1432,12 @@ def test_janitor_apply_removes_reclaimable_worktree_and_branch(
         },
     )
 
-    report = git_hygiene.janitor_apply(tmp_path, pr_states={"deliver/foo": {"state": "MERGED"}})
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={"deliver/foo": {"state": "MERGED"}},
+    )
 
     assert report["ok"] is True
     assert ["worktree", "remove", str(tmp_path / "deliver-foo")] in commands
@@ -1424,7 +1487,12 @@ def test_janitor_apply_skips_branch_delete_when_worktree_remove_fails(
         },
     )
 
-    report = git_hygiene.janitor_apply(tmp_path, pr_states={"deliver/foo": {"state": "MERGED"}})
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={"deliver/foo": {"state": "MERGED"}},
+    )
 
     assert report["ok"] is False
     assert ["branch", "-d", "deliver/foo"] not in commands
@@ -1470,7 +1538,12 @@ def test_janitor_apply_preserves_worktrees_when_receipts_exist(tmp_path, monkeyp
         },
     )
 
-    report = git_hygiene.janitor_apply(tmp_path, pr_states={})
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_leases=[],
+        lifecycle_records={},
+        pr_states={},
+    )
 
     assert report["ok"] is False
     assert report["errors"][0]["reason"] == "preservation_evidence_present"
@@ -1507,7 +1580,20 @@ def test_janitor_apply_worktree_reclaim_is_idempotent(tmp_path) -> None:
 
     pr_states = {"deliver/foo": {"state": "MERGED"}}
 
-    first = git_hygiene.janitor_apply(repo, pr_states=pr_states)
+    lifecycle_records = {
+        str(clean_wt.resolve()): {
+            "path": str(clean_wt.resolve()),
+            "branch": "deliver/foo",
+            "status": "complete",
+            "expires_at": 0,
+        }
+    }
+    first = git_hygiene.janitor_apply(
+        repo,
+        active_leases=[],
+        lifecycle_records=lifecycle_records,
+        pr_states=pr_states,
+    )
     assert first["ok"] is True
     # The worktree was removed (no --force) and its local branch deleted.
     assert not clean_wt.exists()
@@ -1520,7 +1606,12 @@ def test_janitor_apply_worktree_reclaim_is_idempotent(tmp_path) -> None:
     )
 
     # Re-run: the worktree and branch are gone, so there is nothing to reclaim.
-    second = git_hygiene.janitor_apply(repo, pr_states=pr_states)
+    second = git_hygiene.janitor_apply(
+        repo,
+        active_leases=[],
+        lifecycle_records=lifecycle_records,
+        pr_states=pr_states,
+    )
     assert second["ok"] is True
     assert second["reclaimable_worktrees"] == []
     assert not any(

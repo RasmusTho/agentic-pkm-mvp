@@ -169,6 +169,7 @@ Use this lane only when:
   - `scripts/install_skills.sh`
   - `scripts/agent_workspace_preflight.sh`
   - `scripts/agent_workspace_cleanup.sh`
+  - `scripts/agent_worktree.py`
   - `scripts/git_hygiene.py`
   - `scripts/git_hygiene_preflight.py`
   - `scripts/git_hygiene_janitor.py`
@@ -181,6 +182,7 @@ Use this lane only when:
   - `scripts/run_with_host_lease.py`
   - `scripts/verify_runtime_chain.sh`
   - `scripts/validate_source_anchors.py`
+  - `tests/ops/test_agent_worktree.py`
   - `scripts/validate_issue_readiness.py`
   - `companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`
   - `tests/ops/test_git_hygiene.py`
@@ -307,8 +309,13 @@ Enforcement surfaces:
 - Safe cleanup report:
   - `scripts/agent_workspace_cleanup.sh --report`
 - Safe cleanup apply (clean tree required):
-  - `scripts/agent_workspace_cleanup.sh --apply`
-- Cleanup apply only removes merged `codex/` branches/worktrees and old `preserve-local-drift` stashes; it skips the current checkout.
+  - `scripts/agent_workspace_cleanup.sh --apply --pr-state-file <path> --lease-file <path>`
+- Register dedicated issue worktrees with `scripts/agent_worktree.py register`, renew them with
+  `heartbeat`, and record `release` or `complete` when ownership ends. Cleanup is report-only by
+  default. Apply may remove only a registered, expired, clean, unlocked worktree with no active
+  lease and proven merge/closure eligibility; active, dirty, locked, mismatched, and unregistered
+  worktrees are preserved. Apply requires explicit PR-state and active-lease snapshots; absence of
+  either proof is fail-closed. The current checkout is always skipped.
 - Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 

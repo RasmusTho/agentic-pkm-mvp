@@ -204,9 +204,10 @@ lease check, then keep the rest of execution local and deterministic.
   `scripts/git_hygiene_preflight.py`) is the read-only hot-path check for dirty tree, in-progress
   git operations, branch/worktree mismatch, and relevant lease conflicts. This is a script, not a
   skill.
-- `scripts/git_hygiene_janitor.py` (a report-first entrypoint to `scripts/git_hygiene.py`) is the
-  cold-path cleanup helper. It must respect active leases and must not perform destructive cleanup
-  automatically in v1. This is a script, not a skill.
+- `scripts/agent_worktree.py` owns lifecycle registration plus the report-first cold-path cleanup
+  guard. Apply requires explicit lifecycle, active-lease, and PR-state authority; the compatibility
+  `scripts/git_hygiene_janitor.py` entrypoint refuses destructive cleanup. These are scripts, not
+  skills.
 
 ## Cross-cutting invariant: Total Cost of Development (capability routing)
 

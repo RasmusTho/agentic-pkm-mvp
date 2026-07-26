@@ -323,6 +323,11 @@ When continuing through anchor drift:
    - `scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>`
    - This wrapper enforces workspace isolation preflight before removing `agent:ready`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
+   - After a successful claim, register the dedicated checkout without switching the shared root:
+     `python3 scripts/agent_worktree.py --cwd <repo-or-worktree> register --worktree <absolute-worktree> --owner <session_id>`.
+     Heartbeat the same owner before long validation or review waits. Record `release` only when
+     abandoning/handover makes the checkout inactive, or `complete` after terminal delivery; an
+     open PR that may need review fixes remains active.
 3. Run delivered-state preflight before claim when target implementation paths are explicit:
    - Verify whether referenced target modules already exist in the repo.
    - If core implementation already exists, do not proceed as fresh implementation; route to `issue-maintenance-change-control` to correct stale or drifted contract state.
