@@ -906,6 +906,13 @@ def janitor_apply(
                 not isinstance(item, dict) for item in leases
             ):
                 raise TypeError("active lease authority must be a list of objects")
+            for lease in leases:
+                resource_id = lease.get("resource_id")
+                expires_at = lease.get("expires_at")
+                if not isinstance(resource_id, str) or not resource_id.strip():
+                    raise ValueError("active lease resource identity is invalid")
+                if expires_at is not None and not _is_finite_timestamp(expires_at):
+                    raise ValueError("active lease expiry is invalid")
             resources = _lease_resources(leases)
         except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
             errors.append(

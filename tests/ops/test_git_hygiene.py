@@ -1008,6 +1008,49 @@ def test_janitor_apply_aborts_when_fetch_fails(tmp_path, monkeypatch) -> None:
     assert commands == [["fetch", "--prune", "origin"]]
 
 
+@pytest.mark.parametrize(
+    "malformed_expiry",
+    (True, float("nan"), float("inf"), float("-inf")),
+)
+def test_janitor_apply_rejects_malformed_lease_expiry(
+    tmp_path,
+    monkeypatch,
+    malformed_expiry,
+) -> None:
+    commands: list[list[str]] = []
+    plan_called = False
+
+    def fake_result(args: list[str], _cwd: Path):
+        commands.append(args)
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    def forbidden_plan(*_args, **_kwargs):
+        nonlocal plan_called
+        plan_called = True
+        raise AssertionError("plan must not run with malformed lease authority")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", fake_result)
+    monkeypatch.setattr(git_hygiene, "build_janitor_plan", forbidden_plan)
+
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        active_lease_loader=lambda: [
+            {
+                "resource_id": "worktree:/repo/worktrees/active",
+                "execution_id": "active-owner",
+                "expires_at": malformed_expiry,
+            }
+        ],
+        lifecycle_records={},
+        pr_states={},
+    )
+
+    assert report["ok"] is False
+    assert report["errors"][0]["reason"] == "active_lease_authority_invalid"
+    assert plan_called is False
+    assert commands == [["fetch", "--prune", "origin"]]
+
+
 def test_janitor_rescue_publication_works_from_guarded_main_checkout(
     tmp_path, monkeypatch
 ) -> None:
