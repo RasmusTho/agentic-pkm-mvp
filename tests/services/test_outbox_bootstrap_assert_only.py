@@ -25,8 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def scratch_db(monkeypatch: pytest.MonkeyPatch):
-    """A throwaway database at `alembic upgrade head`, wired into DATABASE_URL."""
+def scratch_db_factory(monkeypatch: pytest.MonkeyPatch):
+    """Create throwaway databases, wiring each one into DATABASE_URL."""
     from app.db.dsn import resolve_dsn
 
     admin_dsn = resolve_dsn()
@@ -38,32 +38,74 @@ def scratch_db(monkeypatch: pytest.MonkeyPatch):
         pytest.skip(f"Postgres unavailable: {exc}")
     probe.close()
 
-    name = f"scratch_outbox_assertonly_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')
     base, _, _ = admin_dsn.rpartition("/")
-    dsn = f"{base}/{name}"
+    created: list[str] = []
 
+    def _create() -> str:
+        name = f"scratch_outbox_assertonly_{uuid.uuid4().hex[:12]}"
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(f'CREATE DATABASE "{name}"')
+        created.append(name)
+        dsn = f"{base}/{name}"
+        monkeypatch.setenv("DATABASE_URL", dsn)
+        monkeypatch.delenv("DB_DSN", raising=False)
+        # See tests/migrations/test_outbox_schema_parity.py: an earlier migration
+        # declares `embedding VECTOR`, so pgvector must exist in the scratch DB.
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        return dsn
+
+    yield _create
+
+    for name in created:
+        try:
+            with psycopg.connect(admin_dsn, autocommit=True) as conn:
+                conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        except Exception:
+            pass
+
+
+@pytest.fixture
+def scratch_db(scratch_db_factory, monkeypatch: pytest.MonkeyPatch):
+    """A throwaway database at `alembic upgrade head`, wired into DATABASE_URL."""
     from alembic import command
     from alembic.config import Config
 
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.delenv("DB_DSN", raising=False)
-    # See tests/migrations/test_outbox_schema_parity.py: an earlier migration
-    # declares `embedding VECTOR`, so pgvector must exist in the scratch DB.
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    dsn = scratch_db_factory()
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(REPO_ROOT / "app" / "alembic"))
     command.upgrade(cfg, "head")
+    return dsn
 
-    yield dsn
 
-    try:
-        with psycopg.connect(admin_dsn, autocommit=True) as conn:
-            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-    except Exception:
-        pass
+def _run_legacy_sql_runner(dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts import run_migration
+
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.chdir(REPO_ROOT)
+    run_migration.main()
+
+
+def _outbox_snapshot(dsn: str) -> tuple[list[tuple], list[tuple]]:
+    with psycopg.connect(dsn) as conn:
+        columns = conn.execute(
+            """
+            SELECT column_name, data_type, is_nullable, COALESCE(column_default, '')
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'outbox'
+            ORDER BY column_name
+            """
+        ).fetchall()
+        indexes = conn.execute(
+            """
+            SELECT indexname, indexdef
+            FROM pg_indexes
+            WHERE schemaname = 'public' AND tablename = 'outbox'
+            ORDER BY indexname
+            """
+        ).fetchall()
+    return list(columns), list(indexes)
 
 
 def test_missing_table_raises(scratch_db, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,6 +155,33 @@ def test_migrated_schema_passes_assert_only(scratch_db, monkeypatch: pytest.Monk
     monkeypatch.delenv("DB_DSN", raising=False)
 
     outbox_module.bootstrap()  # must not raise
+
+
+def test_legacy_sql_runner_cannot_create_or_mutate_outbox_before_assert_only_startup(
+    scratch_db_factory, scratch_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production startup path fails loud after legacy SQL and never repairs schema."""
+    from app.services import outbox as outbox_module
+
+    legacy_dsn = scratch_db_factory()
+    _run_legacy_sql_runner(legacy_dsn, monkeypatch)
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+
+    with pytest.raises(OutboxSchemaMissingError, match="alembic upgrade head"):
+        outbox_module.bootstrap()
+    assert _outbox_snapshot(legacy_dsn) == ([], [])
+
+    with psycopg.connect(legacy_dsn, autocommit=True) as conn:
+        conn.execute("CREATE TABLE outbox (id UUID PRIMARY KEY)")
+    incompatible_before = _outbox_snapshot(legacy_dsn)
+
+    with pytest.raises(OutboxSchemaMissingError, match="missing column"):
+        outbox_module.bootstrap()
+    assert _outbox_snapshot(legacy_dsn) == incompatible_before
+
+    monkeypatch.setenv("DATABASE_URL", scratch_db)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    outbox_module.bootstrap()
 
 
 def test_is_transient_marker_classifies_boot_ordering() -> None:
