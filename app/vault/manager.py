@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 from uuid import uuid4
 
 from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
+from app.knowledge.multiwriter import is_conflict_artifact
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 
 if TYPE_CHECKING:
@@ -36,6 +38,103 @@ LOCAL_GITIGNORE = "# Design Handoff local settings\nlocal.md\n*.local.md\nlocal/
 # enumerating everything and validating each candidate.
 VAULT_ROOT_MARKER_REL = (SETTINGS_DIR_NAME, "vault.md")
 logger = logging.getLogger(__name__)
+
+
+ConflictArtifactState = tuple[int, int, int, int, int] | None
+
+
+class _ConflictQuarantineReceiptPolicy:
+    """Bound conflict-quarantine receipts without weakening quarantine.
+
+    State keys are retained without eviction until the fixed tracking limit is
+    reached. Detail receipts have a smaller fixed budget; its first overflow
+    emits one aggregate suppression receipt and all later observations remain
+    silent. The lock owns every transition, so concurrent first observations
+    cannot claim duplicate receipts.
+
+    This is deliberately process-local operational state. A process restart
+    resets both budgets and can therefore emit a fresh bounded set of receipts.
+    Quarantine itself does not depend on this state: every classified artifact
+    remains excluded even after tracking or receipt capacity is exhausted.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_tracked_states: int = 4096,
+        max_detail_receipts: int = 32,
+    ) -> None:
+        if max_detail_receipts < 1:
+            raise ValueError("max_detail_receipts must be positive")
+        if max_tracked_states < max_detail_receipts:
+            raise ValueError(
+                "max_tracked_states must be at least max_detail_receipts"
+            )
+        self._max_tracked_states = max_tracked_states
+        self._max_detail_receipts = max_detail_receipts
+        self._seen_states: set[tuple[str, ConflictArtifactState]] = set()
+        self._detail_receipts = 0
+        self._suppression_receipt_emitted = False
+        self._lock = Lock()
+
+    def observe(
+        self,
+        artifact_path: str,
+        state_signature: ConflictArtifactState,
+    ) -> None:
+        """Observe one quarantined state and emit at most one bounded receipt."""
+
+        state_key = (artifact_path, state_signature)
+        receipt_kind: Literal["detail", "suppression_summary"] | None = None
+        suppressed_observations = 0
+        with self._lock:
+            if state_key in self._seen_states:
+                return
+            if len(self._seen_states) < self._max_tracked_states:
+                self._seen_states.add(state_key)
+
+            if self._detail_receipts < self._max_detail_receipts:
+                self._detail_receipts += 1
+                receipt_kind = "detail"
+            elif not self._suppression_receipt_emitted:
+                self._suppression_receipt_emitted = True
+                suppressed_observations = 1
+                receipt_kind = "suppression_summary"
+
+        if receipt_kind == "detail":
+            logger.warning(
+                "Vault Markdown conflict artifact quarantined before ordinary iteration: %s",
+                artifact_path,
+                extra={
+                    "event": "vault.markdown.quarantined",
+                    "receipt_kind": receipt_kind,
+                    "classification": "multiwriter_conflict_artifact",
+                    "artifact_path": artifact_path,
+                    "artifact_state": state_signature,
+                    "action": "excluded_from_iteration_preserved_on_disk",
+                },
+            )
+        elif receipt_kind == "suppression_summary":
+            logger.warning(
+                "Further Vault Markdown conflict-quarantine detail receipts suppressed "
+                "for this process",
+                extra={
+                    "event": "vault.markdown.quarantine_receipts_suppressed",
+                    "receipt_kind": receipt_kind,
+                    "classification": "multiwriter_conflict_artifact",
+                    "artifact_path": artifact_path,
+                    "artifact_state": state_signature,
+                    "action": "excluded_from_iteration_preserved_on_disk",
+                    "suppressed_observations": suppressed_observations,
+                    "max_detail_receipts": self._max_detail_receipts,
+                    "max_tracked_states": self._max_tracked_states,
+                    "suppression_scope": "all_later_observations_this_process",
+                    "reset_policy": "process_restart",
+                },
+            )
+
+
+_conflict_quarantine_receipts = _ConflictQuarantineReceiptPolicy()
 
 
 @dataclass(frozen=True)
@@ -214,6 +313,15 @@ def iter_vault_markdown_files(
     roots in-place, so the boundary stays cheap on large trees. Yielded paths
     stay in the caller's namespace (for example a symlinked selected vault
     root) while resolved paths are used only for containment/ownership checks.
+
+    Multiwriter conflict artifacts are classified and quarantined here, before
+    any watcher, ingest, index, or recall caller can parse them as ordinary
+    notes. Quarantine is non-mutating: the artifact remains at its filesystem
+    path and a structured warning makes the classification observable for
+    later human resolution. Receipt warnings use locked, fixed-memory
+    process-local observation state and a hard detail-emission budget, followed
+    by one aggregate suppression receipt. A process restart resets that bounded
+    operational state; quarantine itself never depends on receipt capacity.
     """
     selected_root = vault_root.expanduser()
     walk_root = (subtree_root or vault_root).expanduser()
@@ -283,6 +391,23 @@ def iter_vault_markdown_files(
                 continue
             candidate = Path(dirpath) / filename
             if not candidate.is_file():
+                continue
+            if is_conflict_artifact(candidate.name):
+                try:
+                    stat = candidate.stat(follow_symlinks=False)
+                    state_signature: ConflictArtifactState = (
+                        stat.st_dev,
+                        stat.st_ino,
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                        stat.st_ctime_ns,
+                    )
+                except OSError:
+                    state_signature = None
+                _conflict_quarantine_receipts.observe(
+                    str(candidate.absolute()),
+                    state_signature,
+                )
                 continue
             if candidate.is_symlink():
                 try:

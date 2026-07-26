@@ -461,11 +461,12 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "own directly-related-repair convention when #3450 threaded an opt-in "
         "expected_version through write_frontmatter."
     ),
-    ("app/vault/manager.py", 716): (
+    ("app/vault/manager.py", 841): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
-        "reaching this line."
+        "reaching this line. Line drifted 716 -> 841 (site unchanged) when "
+        "#3452 added conflict-quarantine receipt policy above the manager."
     ),
     ("app/vault/settings_service.py", 617): (
         "guarded: SettingsService.update_setting asserts "
@@ -492,9 +493,11 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 496): (
+    ("app/vault/manager.py", 621): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
-        "pre-selection initialization transition; O_EXCL preserves existing owner files."
+        "pre-selection initialization transition; O_EXCL preserves existing owner files. "
+        "Line drifted 496 -> 621 (site unchanged) when #3452 added "
+        "conflict-quarantine receipt policy above the manager."
     ),
     ("app/vault/settings_service.py", 696): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
