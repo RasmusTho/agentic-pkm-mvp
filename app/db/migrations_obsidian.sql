@@ -47,16 +47,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS objects_uuid_idx ON public.objects(uuid);
 CREATE INDEX IF NOT EXISTS objects_created_at_idx ON public.objects (created_at DESC);
 CREATE INDEX IF NOT EXISTS objects_source_ref_idx ON public.objects (source_ref);
 
-CREATE TABLE IF NOT EXISTS public.outbox(
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  topic text NOT NULL,
-  payload jsonb NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  delivered_at timestamptz NULL,
-  attempts int NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS outbox_created_at_idx ON public.outbox (created_at DESC);
-CREATE INDEX IF NOT EXISTS outbox_delivered_null_idx ON public.outbox ((delivered_at IS NULL));
+-- Outbox DDL is intentionally absent here. Alembic revision f3a1c9d2e4b7 is
+-- the sole production owner of the canonical outbox table and its indexes.
+-- This legacy bootstrap may create other compatibility schema, but it must
+-- never create or mutate outbox before assert-only runtime startup.
 
 DROP VIEW IF EXISTS public.view_objects_ready_for_projection;
 DROP VIEW IF EXISTS public.view_objects_missing_review;

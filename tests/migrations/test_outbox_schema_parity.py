@@ -104,6 +104,35 @@ def _run_bootstrap(dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
     outbox_module.bootstrap()
 
 
+def _run_legacy_sql_runner(dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Execute the production legacy SQL entrypoint against a scratch database."""
+    from scripts import run_migration
+
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.chdir(REPO_ROOT)
+    run_migration.main()
+
+
+def _create_authoritative_outbox(dsn: str) -> None:
+    """Install only the outbox shape owned by Alembic revision f3a1c9d2e4b7."""
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            """
+            CREATE TABLE outbox (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                topic TEXT NOT NULL,
+                payload JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                delivered_at TIMESTAMPTZ,
+                attempts INT NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute("CREATE INDEX outbox_created_idx ON outbox (created_at)")
+        conn.execute("CREATE INDEX outbox_delivered_idx ON outbox (delivered_at)")
+
+
 def _schema_snapshot(dsn: str) -> dict:
     """Column/PK/index shape of the outbox table, normalized for comparison."""
     with psycopg.connect(dsn) as conn:
@@ -161,6 +190,25 @@ def test_fresh_db_parity(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) ->
         f"bootstrap: {json.dumps(bootstrapped_shape, indent=2, default=str)}"
     )
     assert migrated_shape["columns"], "outbox table missing after alembic upgrade"
+
+
+def test_legacy_sql_runner_cannot_create_or_mutate_outbox_schema(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The legacy SQL runner has no outbox DDL authority on fresh or existing schema."""
+    dsn = scratch_db_factory()
+
+    _run_legacy_sql_runner(dsn, monkeypatch)
+    with psycopg.connect(dsn) as conn:
+        outbox_oid = conn.execute("SELECT to_regclass('public.outbox')").fetchone()
+    assert outbox_oid == (None,), "legacy SQL runner created the migration-owned outbox table"
+
+    _create_authoritative_outbox(dsn)
+    before = _schema_snapshot(dsn)
+    _run_legacy_sql_runner(dsn, monkeypatch)
+    after = _schema_snapshot(dsn)
+
+    assert after == before, "legacy SQL runner mutated the migration-owned outbox schema"
 
 
 def test_upgrade_idempotent_on_existing(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) -> None:
