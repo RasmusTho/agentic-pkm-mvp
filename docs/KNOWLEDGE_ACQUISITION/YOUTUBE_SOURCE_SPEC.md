@@ -1,4 +1,4 @@
-State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. Liked Videos, multi-playlist product sync, scheduling, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
+State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, rendered summary confidence, and complete normalized-transcript summary input. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. Liked Videos, multi-playlist product sync, scheduling, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
@@ -98,22 +98,25 @@ via provenance. **Raw retention:** `raw` records are retained as rebuildable mac
 for as long as their companion artifact exists — the replay acceptance criterion depends on them.
 Discard follows the machine-mirror rules: safe to delete and re-acquire, never silently.
 
-### YouTube Source Note v2 reconciliation (contract only)
+### YouTube Source Note v2 truth-surface correction
 
-The shipped V1 writeback has exactly three confirmed truth defects. This documentation slice records
-them but does not fix the runtime:
+The shipped candidate writeback now corrects the three confirmed V1 truth defects:
 
-- `transcript_available` is rendered as `true` regardless of the acquired evidence.
-- validated summary confidence is discarded by the renderer.
-- summary input silently contains only the first 500 normalized segments.
+- `transcript_available` is derived from usable normalized segments; a valid empty ASR result
+  renders `false` and does not run transcript-dependent summary extraction. Captionless acquisition
+  remains a loud normalization failure.
+- each rendered summary shows its schema-validated model confidence as non-authoritative.
+- summary input contains every normalized segment, and the rendered note reports the complete
+  segment count rather than hiding a partial window.
 
 Process-local extraction results, fixed rendering, and title-bearing candidate paths are V1
 limitations or deliberate choices, not retroactive defects. They may change only through the
 bounded YouTube Source Note v2 child contracts. Those contracts preserve immutable raw evidence,
 first-write-wins candidate notes, and the rule that a candidate is terminal only after its note has
 materialized. Re-extraction or upgrade must create a versioned proposal companion rather than
-overwrite the original candidate or human-authored content. No v2 runtime behavior is delivered by
-this reconciliation.
+overwrite the original candidate or human-authored content. This bounded correction does not ship
+the later v2 modules, change title-bearing paths or persistence, alter D1–D6, or introduce
+ProfileAgent behavior.
 
 ## Phase 2 vertical slice (TCD milestone)
 

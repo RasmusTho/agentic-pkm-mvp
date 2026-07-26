@@ -23,6 +23,7 @@ from app.knowledge_acquisition.candidate_writeback import (
     CandidateWriteResult,
     assemble_candidate,
     candidate_note_path,
+    render_candidate_note,
     write_candidate_note,
 )
 from app.knowledge_acquisition.extraction_registry import clear_registry
@@ -189,6 +190,40 @@ def test_note_shape_and_posture_markers(tmp_path: Path) -> None:
 
     # The source video remains the authoritative source; the note itself is not authoritative.
     assert frontmatter["authority"]["source_authoritative"] is False
+
+
+def test_candidate_transcript_availability_reflects_usable_evidence() -> None:
+    """An empty ASR result is a valid no-transcript candidate, not evidence for a summary."""
+    raw_without_transcript = {
+        **RAW_RECORD_FIXTURE,
+        "acquisition_method": "asr",
+        "caption_body": "",
+        "asr_segments": [],
+    }
+
+    def _unexpected_completion(**_kwargs) -> str:
+        raise AssertionError("summary extraction must not run without usable transcript evidence")
+
+    summary_extractor.register(complete=_unexpected_completion)
+    candidate = assemble_candidate(raw_without_transcript)
+    rendered = render_candidate_note(candidate)
+    fm_text, body = rendered.split("---\n", 2)[1:]
+
+    assert candidate.transcript_available is False
+    assert candidate.summary_text() is None
+    assert yaml.safe_load(fm_text)["transcript_available"] is False
+    assert "Model confidence" not in body
+    assert "Coverage:" not in body
+
+
+def test_rendered_summary_preserves_model_confidence() -> None:
+    candidate = _assembled_candidate()
+
+    rendered = render_candidate_note(candidate)
+
+    assert "Model confidence (non-authoritative):** 0.75" in rendered
+    assert "Coverage:** 2/2 normalized segments (100%; complete transcript)" in rendered
+    assert "A deterministic test summary." in rendered
 
 
 def test_template_file_carries_mandated_posture_markers() -> None:

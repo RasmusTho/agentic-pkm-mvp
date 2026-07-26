@@ -164,6 +164,24 @@ def test_summary_extractor_lineage_via_registry() -> None:
     assert result.model_identity["provider"] == "mock"
 
 
+def test_summary_coverage_is_complete_or_explicitly_declared() -> None:
+    """The complete normalized transcript reaches the model; no silent 500-segment prefix."""
+    segments = [
+        {"start": float(index), "end": float(index + 1), "text": f"segment-{index}"}
+        for index in range(501)
+    ]
+    normalized = {**NORMALIZED_FIXTURE, "segments": segments}
+    completion = _stub_completion(
+        json.dumps({"summary": "A complete-input summary.", "confidence": 0.7})
+    )
+
+    payload = run(normalized, complete=completion)
+
+    assert payload == {"summary": "A complete-input summary.", "confidence": 0.7}
+    assert "segment-0" in completion.calls[0]["user"]
+    assert "segment-500" in completion.calls[0]["user"]
+
+
 def test_no_network_no_real_llm_call() -> None:
     """Hard-constraint guard: calling `run()` without an injected stub must not attempt any real
     network call. With LLM_PROVIDER=mock (test-session default, `conftest.py` autouse fixture),

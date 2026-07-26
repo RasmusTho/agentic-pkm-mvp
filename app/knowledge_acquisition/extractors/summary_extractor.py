@@ -66,15 +66,15 @@ _SYSTEM_PROMPT = (
     '{"summary": "<free text>", "confidence": <0.0-1.0>}'
 )
 
-# Segment cap keeps the prompt bounded for very long transcripts; the extractor summarizes what
-# it is given rather than silently truncating without a trace — callers passing a full transcript
-# get a bounded-but-representative prompt, not a length-dependent failure.
-_MAX_PROMPT_SEGMENTS = 500
-
-
 def _build_user_prompt(normalized: Mapping[str, Any]) -> str:
     segments = normalized.get("segments") or []
-    lines = [str(seg.get("text", "")).strip() for seg in segments[:_MAX_PROMPT_SEGMENTS] if isinstance(seg, Mapping)]
+    # Every normalized segment is included. A prefix cap would make a partial summary appear to
+    # cover the full transcript unless its exact window were carried into the rendered note.
+    lines = [
+        str(seg.get("text", "")).strip()
+        for seg in segments
+        if isinstance(seg, Mapping)
+    ]
     transcript_text = "\n".join(line for line in lines if line)
     return f"Transcript:\n{transcript_text}\n\nSummarize the transcript above."
 
