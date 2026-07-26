@@ -95,12 +95,12 @@ This is the only partial-success rule authorized by this capability; implementat
 
 ## Execution order and proposed issue state
 
-This stable heading is retained because parent Issue #4107 uses it as an acceptance anchor; the table records the current live Issue state.
+This stable heading is retained because parent Issue #4107 uses it as an acceptance anchor; each merged child records its resulting delivery state here.
 
 | Order | Task | Live Issue / state | Gate |
 | --- | --- | --- | --- |
 | 1 | `RECONCILE_SOURCE_NOTE_V2_CONTRACT` | [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) — contract delivered; no runtime | docs-only reconciliation |
-| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — `agent:blocked` | task 1 |
+| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — next pickup after verified #4108 closure | task 1 |
 | 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — `agent:blocked` | task 2 |
 | 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — `agent:blocked` | task 3; D5 resolved |
 | 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — `agent:blocked` | task 4; D6 resolved |
@@ -118,7 +118,7 @@ Child PRs resolve their own `Verify:` targets and post a concise validation rece
 
 ## Relationship to GitHub Issues
 
-Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. Only #4108 is currently `agent:ready`; every later child remains `agent:blocked` until its recorded dependencies are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
+Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. #4108's contract-only slice is delivered by this change and is no longer a pickup. After its exact merge and closure receipts, `verification-and-closure` promotes #4109 to `agent:ready`; #4110 through #4119 remain `agent:blocked` until their recorded dependencies are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
 
 ## Related Docs
 
