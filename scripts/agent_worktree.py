@@ -101,7 +101,7 @@ def _write_registry(path: Path, payload: dict[str, Any]) -> None:
 
 
 @contextmanager
-def _locked_registry(path: Path) -> Iterator[dict[str, Any]]:
+def _registry_lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -109,11 +109,57 @@ def _locked_registry(path: Path) -> Iterator[dict[str, Any]]:
     with os.fdopen(descriptor, "a+b", closefd=True) as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
-            payload = _read_registry(path)
-            yield payload
-            _write_registry(path, payload)
+            yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _locked_registry(path: Path) -> Iterator[dict[str, Any]]:
+    with _registry_lock(path):
+        payload = _read_registry(path)
+        yield payload
+        _write_registry(path, payload)
+
+
+def _lifecycle_records(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(key): dict(value)
+        for key, value in payload["worktrees"].items()
+        if isinstance(key, str) and isinstance(value, dict)
+    }
+
+
+def _locked_lifecycle_snapshot(path: Path) -> dict[str, dict[str, Any]]:
+    with _registry_lock(path):
+        return _lifecycle_records(_read_registry(path))
+
+
+@contextmanager
+def _locked_lifecycle_authority(
+    path: Path,
+    targets: list[dict[str, Any]],
+) -> Iterator[None]:
+    """Revalidate target lifecycle records and hold authority through one Git action."""
+
+    with _registry_lock(path):
+        records = _lifecycle_records(_read_registry(path))
+        for target in targets:
+            worktree = target.get("path")
+            branch = target.get("branch")
+            if not isinstance(worktree, str) or not isinstance(branch, str):
+                raise WorktreeLifecycleError("cleanup target lifecycle identity is invalid")
+            reason = git_hygiene._worktree_lifecycle_skip_reason(
+                worktree,
+                branch,
+                records,
+                now=None,
+            )
+            if reason is not None:
+                raise WorktreeLifecycleError(
+                    f"cleanup target lifecycle authority changed: {reason}"
+                )
+        yield
 
 
 def load_lifecycle_records(
@@ -122,12 +168,7 @@ def load_lifecycle_records(
     registry_path: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     path = _canonical(registry_path or _default_registry_path(cwd))
-    payload = _read_registry(path)
-    return {
-        str(key): dict(value)
-        for key, value in payload["worktrees"].items()
-        if isinstance(key, str) and isinstance(value, dict)
-    }
+    return _lifecycle_records(_read_registry(path))
 
 
 def register_worktree(
@@ -300,19 +341,18 @@ def janitor_apply(
     stale_after_days: int = 14,
 ) -> dict[str, Any]:
     path = _canonical(registry_path or _default_registry_path(cwd))
-    with _locked_registry(path) as payload:
-        records = {
-            str(key): dict(value)
-            for key, value in payload["worktrees"].items()
-            if isinstance(key, str) and isinstance(value, dict)
-        }
-        return git_hygiene.janitor_apply(
-            cwd,
-            active_lease_loader=lambda: _load_active_lease_snapshot(lease_path),
-            stale_after_days=stale_after_days,
-            pr_states=pr_states,
-            lifecycle_records=records,
-        )
+    records = _locked_lifecycle_snapshot(path)
+    return git_hygiene.janitor_apply(
+        cwd,
+        active_lease_loader=lambda: _load_active_lease_snapshot(lease_path),
+        lifecycle_authority_guard=lambda targets: _locked_lifecycle_authority(
+            path,
+            targets,
+        ),
+        stale_after_days=stale_after_days,
+        pr_states=pr_states,
+        lifecycle_records=records,
+    )
 
 
 def _print_json(payload: dict[str, Any]) -> None:

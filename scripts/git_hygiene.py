@@ -13,6 +13,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Mapping, TypeGuard
 
@@ -834,6 +835,10 @@ def janitor_apply(
     pr_states: dict[str, dict[str, Any]] | None = None,
     lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
     active_lease_loader: Callable[[], list[dict[str, Any]]] | None = None,
+    lifecycle_authority_guard: Callable[
+        [list[dict[str, Any]]], AbstractContextManager[None]
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -874,6 +879,19 @@ def janitor_apply(
                     "artifact": "worktree",
                     "action": "load_lifecycle_registry",
                     "reason": "registered_lifecycle_guard_required",
+                }
+            ],
+        }
+    if lifecycle_authority_guard is None:
+        return {
+            "mode": "apply",
+            "ok": False,
+            "destructive_actions": [],
+            "errors": [
+                {
+                    "artifact": "worktree",
+                    "action": "revalidate_lifecycle_registry",
+                    "reason": "authoritative_lifecycle_revalidation_required",
                 }
             ],
         }
@@ -991,6 +1009,28 @@ def janitor_apply(
             return True
         return False
 
+    def apply_with_lifecycle_authority(
+        args: list[str],
+        action: dict[str, Any],
+        targets: list[dict[str, Any]],
+    ) -> bool:
+        """Run one worktree-destructive command under fresh lifecycle authority."""
+
+        try:
+            with lifecycle_authority_guard(targets):
+                apply_git(args, action)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            errors.append(
+                {
+                    "artifact": "worktree",
+                    "action": "revalidate_lifecycle_registry",
+                    "reason": "lifecycle_authority_changed",
+                    "targets": targets,
+                }
+            )
+            return False
+        return True
+
     reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
     cleanup_worktrees = [
         *plan.get(
@@ -1012,7 +1052,22 @@ def janitor_apply(
                 "ok": False,
             }
 
-    apply_git(["worktree", "prune"], {"artifact": "worktree", "action": "prune_metadata"})
+    orphaned = plan.get(
+        "orphaned_worktrees",
+        plan["candidates"].get("orphaned_worktrees", []),
+    )
+    if orphaned and not apply_with_lifecycle_authority(
+        ["worktree", "prune"],
+        {"artifact": "worktree", "action": "prune_metadata"},
+        orphaned,
+    ):
+        return {
+            **plan,
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": errors,
+            "ok": False,
+        }
     for worktree in reclaimable:
         if authority_changed_for(
             path=worktree.get("path"),
@@ -1028,7 +1083,18 @@ def janitor_apply(
         remove_errors_before = len(errors)
         # Never --force / --ignore-locked: a worktree that turned dirty or locked
         # since planning must fail the remove and keep its branch intact.
-        apply_git(["worktree", "remove", worktree["path"]], {"artifact": "worktree", "action": "remove", **worktree})
+        if not apply_with_lifecycle_authority(
+            ["worktree", "remove", worktree["path"]],
+            {"artifact": "worktree", "action": "remove", **worktree},
+            [worktree],
+        ):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         if len(errors) == remove_errors_before:
             if authority_changed_for(branch=worktree.get("branch")):
                 return {

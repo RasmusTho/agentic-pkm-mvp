@@ -1,9 +1,14 @@
 from pathlib import Path
 import subprocess
+from contextlib import nullcontext
 
 import pytest
 
 from scripts import git_hygiene
+
+
+def _allow_lifecycle_authority(_targets):
+    return nullcontext()
 
 
 def test_preflight_reports_dirty_tree_and_in_progress_operation(
@@ -767,6 +772,7 @@ def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
@@ -790,10 +796,31 @@ def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize(
-    ("active_lease_loader", "lifecycle_records", "reason"),
     (
-        (None, {}, "authoritative_lease_reload_required"),
-        (lambda: [], None, "registered_lifecycle_guard_required"),
+        "active_lease_loader",
+        "lifecycle_records",
+        "lifecycle_authority_guard",
+        "reason",
+    ),
+    (
+        (
+            None,
+            {},
+            _allow_lifecycle_authority,
+            "authoritative_lease_reload_required",
+        ),
+        (
+            lambda: [],
+            None,
+            _allow_lifecycle_authority,
+            "registered_lifecycle_guard_required",
+        ),
+        (
+            lambda: [],
+            {},
+            None,
+            "authoritative_lifecycle_revalidation_required",
+        ),
     ),
 )
 def test_janitor_apply_requires_explicit_cleanup_authority(
@@ -801,6 +828,7 @@ def test_janitor_apply_requires_explicit_cleanup_authority(
     monkeypatch,
     active_lease_loader,
     lifecycle_records,
+    lifecycle_authority_guard,
     reason,
 ) -> None:
     commands: list[list[str]] = []
@@ -814,6 +842,7 @@ def test_janitor_apply_requires_explicit_cleanup_authority(
         tmp_path,
         active_lease_loader=active_lease_loader,
         lifecycle_records=lifecycle_records,
+        lifecycle_authority_guard=lifecycle_authority_guard,
         pr_states={},
     )
 
@@ -886,6 +915,7 @@ def test_janitor_apply_rereads_lease_authority_before_removal(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=load_leases,
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={
             str(worktree): {
                 "path": str(worktree),
@@ -970,6 +1000,7 @@ def test_janitor_apply_rereads_lease_authority_before_branch_delete(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=load_leases,
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={"codex/candidate": {"state": "MERGED"}},
     )
@@ -999,6 +1030,7 @@ def test_janitor_apply_aborts_when_fetch_fails(tmp_path, monkeypatch) -> None:
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={},
     )
@@ -1041,6 +1073,7 @@ def test_janitor_apply_rejects_malformed_lease_expiry(
                 "expires_at": malformed_expiry,
             }
         ],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={},
     )
@@ -1119,6 +1152,7 @@ def test_janitor_rescue_publication_works_from_guarded_main_checkout(
     report = git_hygiene.janitor_apply(
         repo,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
@@ -1190,6 +1224,7 @@ def test_janitor_apply_does_not_delete_remote_when_rescue_push_fails(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
@@ -1237,6 +1272,7 @@ def test_janitor_apply_does_not_delete_remote_when_rescue_verification_fails(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
@@ -1283,6 +1319,7 @@ def test_janitor_rescue_delete_uses_exact_full_ref_for_ref_like_branch(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={branch: {"state": "CLOSED"}},
     )
@@ -1333,6 +1370,7 @@ def test_janitor_rescue_transport_rejects_unsafe_branch(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={branch: {"state": "CLOSED"}},
     )
@@ -1663,6 +1701,7 @@ def test_janitor_apply_removes_reclaimable_worktree_and_branch(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={"deliver/foo": {"state": "MERGED"}},
     )
@@ -1718,6 +1757,7 @@ def test_janitor_apply_skips_branch_delete_when_worktree_remove_fails(
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={"deliver/foo": {"state": "MERGED"}},
     )
@@ -1769,6 +1809,7 @@ def test_janitor_apply_preserves_worktrees_when_receipts_exist(tmp_path, monkeyp
     report = git_hygiene.janitor_apply(
         tmp_path,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
         pr_states={},
     )
@@ -1823,6 +1864,7 @@ def test_janitor_apply_worktree_reclaim_is_idempotent(tmp_path) -> None:
     first = git_hygiene.janitor_apply(
         repo,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records=lifecycle_records,
         pr_states=pr_states,
     )
@@ -1841,6 +1883,7 @@ def test_janitor_apply_worktree_reclaim_is_idempotent(tmp_path) -> None:
     second = git_hygiene.janitor_apply(
         repo,
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records=lifecycle_records,
         pr_states=pr_states,
     )

@@ -14,8 +14,13 @@ path (``build_janitor_plan`` / ``janitor_apply``):
 
 from pathlib import Path
 import subprocess
+from contextlib import nullcontext
 
 from scripts import git_hygiene
+
+
+def _allow_lifecycle_authority(_targets):
+    return nullcontext()
 
 
 def _reclaim_run_git(tmp_path: Path, worktrees_porcelain: str, local_refs: str):
@@ -119,6 +124,7 @@ def test_protected_branch_worktree_branch_is_never_deleted(tmp_path, monkeypatch
         tmp_path,
         pr_states={"stable": {"state": "MERGED"}},
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
     )
 
@@ -190,6 +196,7 @@ def test_apply_uses_force_delete_for_pr_proven_non_ancestor_branch(
             "deliver/ancestor": {"state": "MERGED"},
         },
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records={},
     )
 
@@ -263,6 +270,7 @@ def test_apply_real_git_reclaims_squash_merged_worktree_and_branch(tmp_path) -> 
         repo,
         pr_states={"deliver/squashed": {"state": "MERGED"}},
         active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
         lifecycle_records=lifecycle_records,
     )
 
