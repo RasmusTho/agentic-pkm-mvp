@@ -115,7 +115,12 @@ def test_protected_branch_worktree_branch_is_never_deleted(tmp_path, monkeypatch
     monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_args: True)
     monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda _path: False)
 
-    report = git_hygiene.janitor_apply(tmp_path, pr_states={"stable": {"state": "MERGED"}})
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        pr_states={"stable": {"state": "MERGED"}},
+        active_lease_loader=lambda: [],
+        lifecycle_records={},
+    )
 
     assert report["ok"] is True
     assert ["worktree", "remove", str(stable_wt)] not in commands
@@ -184,6 +189,8 @@ def test_apply_uses_force_delete_for_pr_proven_non_ancestor_branch(
             "docs/closed": {"state": "CLOSED"},
             "deliver/ancestor": {"state": "MERGED"},
         },
+        active_lease_loader=lambda: [],
+        lifecycle_records={},
     )
 
     assert report["ok"] is True
@@ -240,9 +247,23 @@ def test_apply_real_git_reclaims_squash_merged_worktree_and_branch(tmp_path) -> 
     clean_wt = tmp_path / "deliver-squashed-wt"
     subprocess.run(["git", "worktree", "add", str(clean_wt), "deliver/squashed"], cwd=repo, check=True)
 
+    lifecycle_records = {
+        str(clean_wt.resolve()): {
+            "path": str(clean_wt.resolve()),
+            "branch": "deliver/squashed",
+            "owner": "completed-owner",
+            "status": "complete",
+            "registered_at": -20,
+            "heartbeat_at": -10,
+            "complete_at": 0,
+            "expires_at": 0,
+        }
+    }
     report = git_hygiene.janitor_apply(
         repo,
         pr_states={"deliver/squashed": {"state": "MERGED"}},
+        active_lease_loader=lambda: [],
+        lifecycle_records=lifecycle_records,
     )
 
     assert report["ok"] is True, report["errors"]
