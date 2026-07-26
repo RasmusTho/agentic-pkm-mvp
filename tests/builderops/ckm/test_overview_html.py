@@ -682,12 +682,16 @@ def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
     context = CockpitRenderContext(batch=overview_store.load_projection_batch())
     default = render_overview_html(overview_store)
     cockpit = render_overview_html(overview_store, cockpit=context)
+    script_pattern = r"<script\b[^>]*>"
+    handler_pattern = r"\bon[a-z]+\s*="
 
     assert "<script" not in default
-    assert len(re.findall(r"<script(?:\\s[^>]*)?>", cockpit)) == 1
+    assert len(re.findall(script_pattern, cockpit)) == 1
     assert '<script src=' not in cockpit
-    assert not re.search(r"\\bon[a-z]+\\s*=", cockpit, re.I)
+    assert not re.search(handler_pattern, cockpit, re.I)
     assert not re.search(r"(?:https?:)?//", cockpit, re.I)
+    assert len(re.findall(script_pattern, '<script></script><script type="module"></script>')) == 2
+    assert re.search(handler_pattern, '<button onclick="blocked()">', re.I)
     assert _cockpit_filter_script(cockpit).lstrip().startswith("(() => {")
     assert cockpit.count('<h2 id="filters-heading">Filters</h2>') == 1
     assert cockpit.count('id="filters-heading"') == 1
