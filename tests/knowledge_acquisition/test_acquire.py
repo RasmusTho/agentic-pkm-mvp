@@ -364,6 +364,52 @@ def test_acquire_valid_empty_asr_skips_extraction_and_writes_false_candidate(
     assert completed_stages == {"normalize", "candidate"}
 
 
+def test_acquire_malformed_asr_evidence_dead_letters_before_extraction(
+    tmp_path: Path,
+) -> None:
+    raw_record = {
+        "source_kind": "youtube_url",
+        "item_ref": VIDEO_ID,
+        "url": FAKE_URL,
+        "content_identity": "sha256:acquire-malformed-asr",
+        "acquisition_method": "asr",
+        "caption_language": "en",
+        "caption_body": "",
+        "asr_segments": [{"start": float("nan"), "end": 1.0, "text": "invalid timing"}],
+        "metadata": {"title": "Malformed ASR", "chapters": []},
+        "provenance": {
+            "source_kind": "youtube_url",
+            "url": FAKE_URL,
+            "acquisition_method": "asr",
+        },
+    }
+    outcome = plugin.FetchOutcome(
+        object_id="raw-malformed-asr",
+        content_identity=raw_record["content_identity"],
+        is_new=True,
+        acquisition_method="asr",
+        language="en",
+        record=raw_record,
+    )
+    conn = FakeOutboxConn()
+
+    with pytest.raises(AcquisitionError):
+        acquire_youtube(
+            FAKE_URL,
+            vault_context=_vault(tmp_path / "vault"),
+            write_guard=_allowing_guard(),
+            conn=conn,
+            fetch_fn=lambda _url: outcome,
+        )
+
+    dead_letters = conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)
+    assert len(dead_letters) == 1
+    payload = json.loads(dead_letters[0]["payload"])["payload"]
+    assert payload["stage"] == "normalize"
+    assert payload["content_identity"] == "sha256:acquire-malformed-asr"
+    assert list((tmp_path / "vault").rglob("*.md")) == []
+
+
 # ---------------------------------------------------------------------------
 # AC3: loud, item-scoped failure — no fabricated raw record, no partial
 # candidate.

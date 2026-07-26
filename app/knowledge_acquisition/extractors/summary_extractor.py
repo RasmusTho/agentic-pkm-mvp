@@ -68,15 +68,34 @@ _SYSTEM_PROMPT = (
 )
 
 def _build_user_prompt(normalized: Mapping[str, Any]) -> str:
-    segments = normalized.get("segments") or []
+    segments = normalized.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise ExtractionError(
+            extractor_id=EXTRACTOR_ID,
+            version=EXTRACTOR_VERSION,
+            reason="normalized.segments must be a non-empty list",
+        )
+
     # Every normalized segment is included. A prefix cap would make a partial summary appear to
     # cover the full transcript unless its exact window were carried into the rendered note.
-    lines = [
-        str(seg.get("text", "")).strip()
-        for seg in segments
-        if isinstance(seg, Mapping)
-    ]
-    transcript_text = "\n".join(line for line in lines if line)
+    lines: list[str] = []
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, Mapping):
+            raise ExtractionError(
+                extractor_id=EXTRACTOR_ID,
+                version=EXTRACTOR_VERSION,
+                reason=f"normalized.segments[{index}] must be a mapping",
+            )
+        text = segment.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ExtractionError(
+                extractor_id=EXTRACTOR_ID,
+                version=EXTRACTOR_VERSION,
+                reason=f"normalized.segments[{index}].text must be a non-empty string",
+            )
+        lines.append(text.strip())
+
+    transcript_text = "\n".join(lines)
     return f"Transcript:\n{transcript_text}\n\nSummarize the transcript above."
 
 
