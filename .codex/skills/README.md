@@ -208,9 +208,10 @@ lease check, then keep the rest of execution local and deterministic.
   guard. Apply requires explicit generation-bound lifecycle, reloadable active-lease, and PR-state
   authority. Fetch and planning do not retain the lifecycle lock; lease plus live
   path/branch/HEAD/generation authority are reread at the targeted removal boundary, and the
-  lifecycle lock spans only that command. Successful removal durably retires the exact generation
-  before branch deletion, with restart reconciliation for interruptions before the registry write;
-  broad metadata pruning remains report-only. The compatibility
+  lifecycle lock spans only that command. It durably records a generation-bound `removal_pending`
+  transition before Git removal; successful removal retires the exact generation before branch
+  deletion, and restart reconciliation completes only pending transitions. Ordinary missing
+  lifecycle records remain preservation evidence. Broad metadata pruning remains report-only. The compatibility
   `scripts/git_hygiene_janitor.py` entrypoint refuses destructive cleanup. These are scripts, not
   skills.
 

@@ -396,6 +396,20 @@ def _branch_has_active_lease(branch: str, active_resources: set[str]) -> bool:
     return f"branch:{branch}" in active_resources
 
 
+def _branch_has_lifecycle_preservation(
+    branch: str,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> bool:
+    if lifecycle_records is None:
+        return False
+    return any(
+        isinstance(record, Mapping)
+        and record.get("branch") == branch
+        and record.get("status") != "removed"
+        for record in lifecycle_records.values()
+    )
+
+
 def _is_finite_timestamp(value: object) -> TypeGuard[int | float]:
     return (
         isinstance(value, (int, float))
@@ -534,6 +548,7 @@ def _local_branch_skip_reason(
     checked_out: dict[str, str],
     protected_branches: set[str],
     pr_states: dict[str, dict[str, Any]] | None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
     cwd: Path,
 ) -> str | None:
     if branch == current_branch:
@@ -542,6 +557,8 @@ def _local_branch_skip_reason(
         return "protected_branch"
     if _branch_has_active_lease(branch, active_resources):
         return "active_lease"
+    if _branch_has_lifecycle_preservation(branch, lifecycle_records):
+        return "lifecycle_registration"
     pr = _pr_state(branch, pr_states)
     if pr["state"] == "unknown":
         return "unknown_github_state"
@@ -567,6 +584,7 @@ def _remote_branch_skip_reason(
     checked_out: dict[str, str],
     protected_branches: set[str],
     pr_states: dict[str, dict[str, Any]] | None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
     cwd: Path,
 ) -> tuple[str | None, bool]:
     if branch == current_branch:
@@ -575,6 +593,8 @@ def _remote_branch_skip_reason(
         return "protected_branch", False
     if _branch_has_active_lease(branch, active_resources):
         return "active_lease", False
+    if _branch_has_lifecycle_preservation(branch, lifecycle_records):
+        return "lifecycle_registration", False
     if branch in checked_out:
         dirty = _worktree_dirty(checked_out[branch])
         if dirty is None:
@@ -673,6 +693,7 @@ def build_janitor_plan(
             checked_out=checked_out,
             protected_branches=protected,
             pr_states=pr_states,
+            lifecycle_records=lifecycle_records,
             cwd=cwd,
         )
         if reason:
@@ -770,6 +791,7 @@ def build_janitor_plan(
             checked_out=checked_out,
             protected_branches=protected,
             pr_states=pr_states,
+            lifecycle_records=lifecycle_records,
             cwd=cwd,
         )
         if reason:

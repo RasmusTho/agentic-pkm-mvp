@@ -443,6 +443,72 @@ def test_janitor_plan_preserves_open_and_draft_pr_branches(
     }
 
 
+@pytest.mark.parametrize("status", ("active", "released", "complete"))
+def test_janitor_plan_preserves_branch_for_missing_registered_checkout(
+    tmp_path,
+    monkeypatch,
+    status,
+) -> None:
+    missing_worktree = tmp_path / "missing"
+    record = {
+        "path": str(missing_worktree),
+        "branch": "codex/registered",
+        "generation": GENERATION,
+        "owner": "owner",
+        "status": status,
+        "registered_at": 10,
+        "heartbeat_at": 20,
+        "expires_at": 30,
+    }
+    if status in {"released", "complete"}:
+        record[f"{status}_at"] = 30
+    else:
+        record["expires_at"] = 200
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["branch", "--show-current"]:
+            return "main"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["worktree", "list", "--porcelain"]:
+            return f"worktree {tmp_path}\nHEAD root\nbranch refs/heads/main\n\n"
+        if args == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return "main\ncodex/registered\n"
+        if args == [
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin",
+        ]:
+            return "origin/codex/registered\n"
+        if args in (
+            ["stash", "list", "--date=unix"],
+            ["worktree", "prune", "--dry-run"],
+            ["remote", "prune", "origin", "--dry-run"],
+        ):
+            return ""
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
+
+    report = git_hygiene.build_janitor_plan(
+        tmp_path,
+        pr_states={"codex/registered": {"state": "MERGED"}},
+        lifecycle_records={str(missing_worktree): record},
+        now=100,
+    )
+
+    assert report["candidates"]["local_branches"] == []
+    assert report["candidates"]["remote_branches"] == []
+    assert {
+        (item["artifact"], item["reason"])
+        for item in report["skipped"]
+        if item.get("name") == "codex/registered"
+    } == {
+        ("local_branch", "lifecycle_registration"),
+        ("remote_branch", "lifecycle_registration"),
+    }
+
+
 def test_janitor_plan_deletes_only_merged_unchecked_local_branch(
     tmp_path, monkeypatch
 ) -> None:

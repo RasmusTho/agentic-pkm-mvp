@@ -81,6 +81,25 @@ def _write_lifecycle_record(
     )
 
 
+def _write_pending_lifecycle_record(
+    registry_path: Path,
+    worktree: Path,
+    *,
+    prior_status: str = "complete",
+) -> None:
+    _write_lifecycle_record(
+        registry_path,
+        worktree,
+        status=prior_status,
+    )
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    record = payload["worktrees"][str(worktree.resolve())]
+    record["status"] = "removal_pending"
+    record["removal_pending_from_status"] = prior_status
+    record["removal_pending_at"] = 40
+    registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _worktree_porcelain(
     repo: Path,
     worktree: Path,
@@ -1128,7 +1147,7 @@ def test_janitor_restart_reconciles_removed_generation_idempotently(
     registry_path = tmp_path / "agent-worktrees.json"
     lease_path = tmp_path / "leases.json"
     lease_path.write_text("[]\n", encoding="utf-8")
-    _write_lifecycle_record(registry_path, worktree)
+    _write_pending_lifecycle_record(registry_path, worktree)
     captured_statuses: list[str] = []
 
     monkeypatch.setattr(
@@ -1183,6 +1202,89 @@ def test_janitor_restart_reconciles_removed_generation_idempotently(
     assert first_record["generation"] == GENERATION
     assert "removed_at" in first_record
     assert registry_path.read_bytes() == first_payload
+
+
+@pytest.mark.parametrize("status", ("active", "released", "complete"))
+def test_janitor_restart_preserves_ordinary_missing_registration(
+    tmp_path,
+    monkeypatch,
+    status,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "missing"
+    registry_path = tmp_path / "agent-worktrees.json"
+    _write_lifecycle_record(registry_path, worktree, status=status)
+    original = registry_path.read_bytes()
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        lambda args, _cwd: (
+            f"worktree {repo}\nHEAD root\nbranch refs/heads/main\n\n"
+            if args == ["worktree", "list", "--porcelain"]
+            else ""
+        ),
+    )
+
+    agent_worktree._reconcile_removed_generations(repo, registry_path)
+
+    record = agent_worktree.load_lifecycle_records(
+        repo,
+        registry_path=registry_path,
+    )[str(worktree.resolve())]
+    assert record["status"] == status
+    assert registry_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("live_generation", "expected_status"),
+    (
+        (GENERATION, "complete"),
+        ("b" * 32, "removed"),
+    ),
+)
+def test_janitor_restart_reconciles_only_pending_generation(
+    tmp_path,
+    monkeypatch,
+    live_generation,
+    expected_status,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "eligible"
+    worktree.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    _write_pending_lifecycle_record(registry_path, worktree)
+
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        lambda args, _cwd: (
+            _worktree_porcelain(repo, worktree, "codex/eligible")
+            if args == ["worktree", "list", "--porcelain"]
+            else ""
+        ),
+    )
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_generation",
+        lambda _cwd, _worktree, *, create: live_generation,
+    )
+
+    agent_worktree._reconcile_removed_generations(repo, registry_path)
+
+    record = agent_worktree.load_lifecycle_records(
+        repo,
+        registry_path=registry_path,
+    )[str(worktree.resolve())]
+    assert record["status"] == expected_status
+    assert record["generation"] == GENERATION
+    assert "removal_pending_at" not in record
+    assert "removal_pending_from_status" not in record
+    if expected_status == "removed":
+        assert "removed_at" in record
+    else:
+        assert "removed_at" not in record
 
 
 def test_janitor_does_not_delete_branch_until_retirement_is_durable(
@@ -1259,7 +1361,8 @@ def test_janitor_does_not_delete_branch_until_retirement_is_durable(
         repo,
         registry_path=registry_path,
     )[str(worktree.resolve())]
-    assert record["status"] == "complete"
+    assert record["status"] == "removal_pending"
+    assert record["removal_pending_from_status"] == "complete"
 
 
 def test_janitor_restart_fails_closed_when_git_state_is_unavailable(

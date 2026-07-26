@@ -197,6 +197,17 @@ def _locked_lifecycle_snapshot(path: Path) -> dict[str, dict[str, Any]]:
 def _mark_generation_removed(record: dict[str, Any], *, removed_at: float) -> None:
     record["status"] = "removed"
     record["removed_at"] = removed_at
+    record.pop("removal_pending_at", None)
+    record.pop("removal_pending_from_status", None)
+
+
+def _restore_pending_generation(record: dict[str, Any]) -> None:
+    previous_status = record.get("removal_pending_from_status")
+    if previous_status not in {"active", "released", "complete"}:
+        raise WorktreeLifecycleError("pending removal lifecycle state is invalid")
+    record["status"] = previous_status
+    record.pop("removal_pending_at", None)
+    record.pop("removal_pending_from_status", None)
 
 
 def _reconcile_removed_generations(cwd: Path, path: Path) -> None:
@@ -220,9 +231,15 @@ def _reconcile_removed_generations(cwd: Path, path: Path) -> None:
             if not isinstance(key, str) or not isinstance(value, dict):
                 continue
             generation = value.get("generation")
-            if value.get("status") not in {"active", "released", "complete"}:
+            if value.get("status") != "removal_pending":
                 continue
             if not _valid_generation(generation):
+                continue
+            if value.get("removal_pending_from_status") not in {
+                "active",
+                "released",
+                "complete",
+            }:
                 continue
             live_entry = live_paths.get(str(_canonical(Path(key))))
             if live_entry is not None:
@@ -237,6 +254,8 @@ def _reconcile_removed_generations(cwd: Path, path: Path) -> None:
                     # is indeterminate and must remain preserved.
                     continue
                 if live_generation == generation:
+                    _restore_pending_generation(value)
+                    registry_changed = True
                     continue
             _mark_generation_removed(value, removed_at=removed_at)
             registry_changed = True
@@ -276,7 +295,7 @@ def _locked_lifecycle_authority(
     with _registry_lock(path):
         payload = _read_registry(path)
         records = _lifecycle_records(payload)
-        authorized: list[tuple[str, str]] = []
+        authorized: list[tuple[str, str, str]] = []
         for target in targets:
             worktree = target.get("path")
             branch = target.get("branch")
@@ -325,26 +344,49 @@ def _locked_lifecycle_authority(
                 or _worktree_generation(cwd, canonical, create=False) != generation
             ):
                 raise WorktreeLifecycleError("cleanup target generation changed")
-            authorized.append((str(canonical), generation))
+            status = record.get("status")
+            if status not in {"active", "released", "complete"}:
+                raise WorktreeLifecycleError("cleanup target lifecycle state changed")
+            authorized.append((str(canonical), generation, status))
+        pending_at = time.time()
+        for canonical_path, generation, status in authorized:
+            record = payload["worktrees"].get(canonical_path)
+            if (
+                not isinstance(record, dict)
+                or record.get("generation") != generation
+                or record.get("status") != status
+            ):
+                raise WorktreeLifecycleError(
+                    "cleanup target generation changed before pending transition"
+                )
+            record["status"] = "removal_pending"
+            record["removal_pending_from_status"] = status
+            record["removal_pending_at"] = pending_at
+        _write_registry(path, payload)
         command_succeeded = False
 
         def mark_succeeded() -> None:
             nonlocal command_succeeded
             command_succeeded = True
 
-        yield mark_succeeded
-        if command_succeeded:
+        try:
+            yield mark_succeeded
+        finally:
             removed_at = time.time()
-            for canonical_path, generation in authorized:
+            for canonical_path, generation, _status in authorized:
                 record = payload["worktrees"].get(canonical_path)
                 if (
                     not isinstance(record, dict)
                     or record.get("generation") != generation
+                    or record.get("status") != "removal_pending"
                 ):
                     raise WorktreeLifecycleError(
                         "cleanup target generation changed before retirement"
                     )
-                _mark_generation_removed(record, removed_at=removed_at)
+                if command_succeeded:
+                    _mark_generation_removed(record, removed_at=removed_at)
+                else:
+                    _restore_pending_generation(record)
             _write_registry(path, payload)
 
 
