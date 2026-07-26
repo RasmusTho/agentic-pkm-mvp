@@ -152,7 +152,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # file owned without widening vault to all architecture tests.
             "tests/architecture/test_no_hardcoded_vault_layout.py",
         ),
-        ("tests/instance", "tests/vault", "tests/knowledge", "tests/ports"),
+        (
+            "tests/instance",
+            "tests/vault",
+            "tests/knowledge",
+            "tests/ports",
+            "tests/architecture/test_no_hardcoded_vault_layout.py",
+        ),
     ),
     (
         "companion_ui",

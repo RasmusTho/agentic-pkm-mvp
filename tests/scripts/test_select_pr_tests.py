@@ -39,6 +39,7 @@ def test_instance_registry_change_selects_vault_coverage() -> None:
     selection = select_tests(
         ["app/instance/vault_registry.py", "tests/instance/test_vault_registry.py"]
     )
+    vault_module_selection = select_tests(["app/vault/some_new_file.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("vault",)
@@ -46,6 +47,10 @@ def test_instance_registry_change_selects_vault_coverage() -> None:
     assert "tests/instance" in selection.targets
     assert "tests/vault" in selection.targets
     assert "tests/instance/test_vault_registry.py" in selection.targets
+    assert (
+        "tests/architecture/test_no_hardcoded_vault_layout.py"
+        in vault_module_selection.targets
+    )
 
 
 def test_ci_workflow_change_selects_governance_contract_tests() -> None:
