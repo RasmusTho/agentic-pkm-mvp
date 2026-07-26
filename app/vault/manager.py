@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 from uuid import uuid4
 
 from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
+from app.knowledge.multiwriter import is_conflict_artifact
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 
 if TYPE_CHECKING:
@@ -214,6 +215,12 @@ def iter_vault_markdown_files(
     roots in-place, so the boundary stays cheap on large trees. Yielded paths
     stay in the caller's namespace (for example a symlinked selected vault
     root) while resolved paths are used only for containment/ownership checks.
+
+    Multiwriter conflict artifacts are classified and quarantined here, before
+    any watcher, ingest, index, or recall caller can parse them as ordinary
+    notes. Quarantine is non-mutating: the artifact remains at its filesystem
+    path and a structured warning makes the classification observable for
+    later human resolution.
     """
     selected_root = vault_root.expanduser()
     walk_root = (subtree_root or vault_root).expanduser()
@@ -283,6 +290,18 @@ def iter_vault_markdown_files(
                 continue
             candidate = Path(dirpath) / filename
             if not candidate.is_file():
+                continue
+            if is_conflict_artifact(candidate.name):
+                logger.warning(
+                    "Vault Markdown conflict artifact quarantined before ordinary iteration: %s",
+                    candidate,
+                    extra={
+                        "event": "vault.markdown.quarantined",
+                        "classification": "multiwriter_conflict_artifact",
+                        "artifact_path": str(candidate),
+                        "action": "excluded_from_iteration_preserved_on_disk",
+                    },
+                )
                 continue
             if candidate.is_symlink():
                 try:
