@@ -8,8 +8,8 @@ YouTube Source Note v2 turns the delivered review-required candidate from a shor
 
 ## Reconciliation baseline
 
-The external design brief was inspected as non-authoritative input. Issue #4109 / PR #4130 is
-actively correcting the three confirmed V1 truth defects without shipping the later v2 modules:
+The external design brief was inspected as non-authoritative input. Issue #4109 was delivered by
+PR #4130, correcting the three confirmed V1 truth defects without shipping the later v2 modules:
 
 - `transcript_available` is now derived from usable normalized evidence; valid empty ASR produces
   the explicit false candidate path without transcript extraction, while captionless and malformed
@@ -104,8 +104,8 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 | Order | Task | Live Issue / state | Gate |
 | --- | --- | --- | --- |
 | 1 | `RECONCILE_SOURCE_NOTE_V2_CONTRACT` | [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) — contract delivered; no runtime | docs-only reconciliation |
-| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — active delivery in PR #4130; not a pickup while claimed | task 1 |
-| 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — `agent:blocked` | task 2 |
+| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — delivered by PR #4130; bounded V1 truth correction only | task 1 |
+| 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — dependency satisfied; live `agent:blocked` label awaits coordinator reconciliation | task 2 |
 | 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — `agent:blocked` | task 3; D5 resolved |
 | 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — `agent:blocked` | task 4; D6 resolved |
 | 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — `agent:blocked` | task 4; D2/D3 resolved; D5 companion seam required |
@@ -122,7 +122,7 @@ Child PRs resolve their own `Verify:` targets and post a concise validation rece
 
 ## Relationship to GitHub Issues
 
-Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. #4108's contract-only slice is delivered. #4109's bounded V1 truth-surface correction is in active delivery through PR #4130 and is not a pickup while claimed; #4110 remains blocked pending verified #4109 closure. #4111 through #4119 remain dependency-gated until their recorded predecessors are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
+Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. #4108's contract-only slice and #4109's bounded V1 truth-surface correction are delivered; PR #4130 delivered #4109 without shipping the later v2 modules. #4110's recorded dependency is satisfied, while its live `agent:blocked` label awaits coordinator reconciliation. #4111 through #4119 remain dependency-gated until their recorded predecessors are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
 
 ## Related Docs
 
