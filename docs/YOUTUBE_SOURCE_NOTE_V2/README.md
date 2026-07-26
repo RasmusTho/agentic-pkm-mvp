@@ -14,7 +14,7 @@ The external design brief was inspected as non-authoritative input. Current docs
 - the validated summary confidence is discarded by the renderer.
 - summary input silently contains only the first 500 normalized segments.
 
-The following are V1 limitations or deliberate choices, not retroactive defects: process-local extraction results, fixed rendering, and title-bearing paths. V2 may replace those choices only through the task contracts below. The brief's metadata-bundle examples are not adopted: bundle fields are top-level, `scope_binding` is an object, and the required identity, provenance, episode, sensitivity, and suppression fields must be resolved by the implementation contract.
+The following are V1 limitations or deliberate choices, not retroactive defects: process-local extraction results, fixed rendering, and title-bearing paths. V2 may replace those choices only through the task contracts below. The brief's metadata-bundle examples are not adopted. Every usable bundle resolves the schema-required fields at the top level: identity (`object_id`, `object_type`), scope (`scope_id`), semantic standing (`source_role`, `authority_state`, `evidence_role`, `sensitivity`, `suppression_state`), provenance (`created_by`, `created_at`, `provenance_event_ids`), and episode binding (`episode_ref`). `scope_binding`, when present, is the object defined by the shared schema rather than a string or nested substitute. Conditional schema requirements such as `derived_from` for derived types and `authority_receipt_ref` for canonical standing remain in force.
 
 ## Capability boundary
 
@@ -67,6 +67,10 @@ The previous “nine slices” statement is corrected: S0 through S9 are ten con
 - **D5 — resolved 2026-07-26:** Every re-extraction or upgrade writes a new versioned proposal companion. It records its content identity, predecessor/proposal reference, inputs, and receipt, and never overwrites the original candidate note or human-authored content. A companion is review material, not automatic promotion.
 - **D6 — resolved 2026-07-26:** System-generated synthesis, section prose, and `system_paraphrase` are in English unless the source's original language is Swedish, in which case they are in Swedish. `source_wording` and direct quotations always remain in their original source language; the system must not present a translation as a quotation.
 
+**YSNV2-01 preservation receipt (2026-07-26):** D1–D6 above remain unchanged, binding inputs to
+their implementation children. This contract reconciliation implements none of them and makes no
+v2 or ProfileAgent runtime claim.
+
 ## Cross-Task Invariants / Interaction Safety
 
 1. **Immutable evidence.** Raw acquisition evidence is immutable and keyed by content identity. A derived artifact never edits it.
@@ -91,12 +95,12 @@ This is the only partial-success rule authorized by this capability; implementat
 
 ## Execution order and proposed issue state
 
-This stable heading is retained because parent Issue #4107 uses it as an acceptance anchor; the table records the current live Issue state.
+This stable heading is retained because parent Issue #4107 uses it as an acceptance anchor; each merged child records its resulting delivery state here.
 
 | Order | Task | Live Issue / state | Gate |
 | --- | --- | --- | --- |
-| 1 | `RECONCILE_SOURCE_NOTE_V2_CONTRACT` | [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) — `agent:ready` | docs-only reconciliation |
-| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — `agent:blocked` | task 1 |
+| 1 | `RECONCILE_SOURCE_NOTE_V2_CONTRACT` | [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) — contract delivered; no runtime | docs-only reconciliation |
+| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — next pickup after verified #4108 closure | task 1 |
 | 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — `agent:blocked` | task 2 |
 | 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — `agent:blocked` | task 3; D5 resolved |
 | 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — `agent:blocked` | task 4; D6 resolved |
@@ -114,7 +118,7 @@ Child PRs resolve their own `Verify:` targets and post a concise validation rece
 
 ## Relationship to GitHub Issues
 
-Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. Only #4108 is currently `agent:ready`; every later child remains `agent:blocked` until its recorded dependencies are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
+Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. #4108's contract-only slice is delivered by this change and is no longer a pickup. After its exact merge and closure receipts, `verification-and-closure` promotes #4109 to `agent:ready`; #4110 through #4119 remain `agent:blocked` until their recorded dependencies are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
 
 ## Related Docs
 

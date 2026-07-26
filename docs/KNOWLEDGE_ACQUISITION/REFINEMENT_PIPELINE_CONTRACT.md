@@ -84,6 +84,26 @@ create another projector/cursor. See
   `content_identity`, below minimum duration, channel ignored) run as early as their inputs allow
   — most at discovery/metadata time, before content is fetched — and produce a trace, not silence.
 
+### YouTube Source Note v2 materialization policy (target state)
+
+The shipped pipeline still withholds a candidate when any selected extractor dead-letters. The
+rules below are the contract for later YouTube Source Note v2 implementation; this documentation
+slice does not change runtime behavior:
+
+- Before execution, the note profile declares every selected extractor as either
+  `required_for_materialization` or `optional_for_materialization`. Failure never assigns or changes
+  that classification after the fact.
+- Valid `raw` and `normalized` evidence are always required. A required extractor failure preserves
+  successful outputs, emits its item-scoped dead-letter, and prevents a new candidate from
+  materializing.
+- An optional extractor failure preserves all successful required evidence and emits a durable,
+  independently rerunnable failure receipt. If no required extractor failed, the candidate may
+  materialize with an explicit degraded marker that names the unavailable section and its rerun
+  handle.
+- A failure cannot erase successful evidence or an already materialized candidate. Candidate
+  assembly is terminal only after the governed note write has materialized; otherwise it remains
+  visibly rerunnable.
+
 ## Lineage and replay
 
 Every derived artifact records: the `raw` record's `content_identity` it descends from, the stage

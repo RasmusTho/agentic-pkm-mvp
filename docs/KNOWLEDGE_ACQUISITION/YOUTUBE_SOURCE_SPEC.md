@@ -98,6 +98,23 @@ via provenance. **Raw retention:** `raw` records are retained as rebuildable mac
 for as long as their companion artifact exists — the replay acceptance criterion depends on them.
 Discard follows the machine-mirror rules: safe to delete and re-acquire, never silently.
 
+### YouTube Source Note v2 reconciliation (contract only)
+
+The shipped V1 writeback has exactly three confirmed truth defects. This documentation slice records
+them but does not fix the runtime:
+
+- `transcript_available` is rendered as `true` regardless of the acquired evidence.
+- validated summary confidence is discarded by the renderer.
+- summary input silently contains only the first 500 normalized segments.
+
+Process-local extraction results, fixed rendering, and title-bearing candidate paths are V1
+limitations or deliberate choices, not retroactive defects. They may change only through the
+bounded YouTube Source Note v2 child contracts. Those contracts preserve immutable raw evidence,
+first-write-wins candidate notes, and the rule that a candidate is terminal only after its note has
+materialized. Re-extraction or upgrade must create a versioned proposal companion rather than
+overwrite the original candidate or human-authored content. No v2 runtime behavior is delivered by
+this reconciliation.
+
 ## Phase 2 vertical slice (TCD milestone)
 
 One explicit URL, end to end, nothing more — no discovery, no scheduling, no UI, one extractor.
