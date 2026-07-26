@@ -22,7 +22,7 @@ from app.instance.instance_state import (
     preflight_instance_state,
     validate_registry_disjoint_from_content,
 )
-from app.instance.ownership_ledger import LedgerCollisionError
+from app.instance.ownership_ledger import LedgerCollisionError, LedgerError
 from app.instance.runtime import (
     InstanceRegistryRuntime,
     _begin_instance_state_deployment,
@@ -296,6 +296,67 @@ def _canonical_test_quiescence_authority(
         ),
         owner_inventory,
     )
+
+
+def _current_registry_owners(
+    runtime: InstanceRegistryRuntime,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "channel_id": runtime.layout.channel_id,
+            "vault_binding_id": binding_id,
+            "root": registration.path,
+        }
+        for binding_id, registration in runtime.registry.load().registrations.items()
+    ]
+
+
+def _create_canonical_backup(
+    *,
+    runtime: InstanceRegistryRuntime,
+    backup_root: Path,
+    legacy_path: Path,
+) -> tuple[DeploymentQuiescenceProof, Path]:
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=legacy_path,
+        owners=_current_registry_owners(runtime),
+    )
+    InstanceStateBackup(runtime.layout, runtime.ledger).create(
+        backup_root,
+        quiescence_proof=proof,
+        owner_receipt_path=owner_receipt,
+    )
+    return proof, owner_receipt
+
+
+def _refresh_backup_checksums(backup_root: Path) -> None:
+    manifest_path = backup_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["checksums"] = {
+        name: hashlib.sha256((backup_root / name).read_bytes()).hexdigest()
+        for name in manifest["checksums"]
+    }
+    manifest["registry_checksum"] = manifest["checksums"]["vault-registry.md"]
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(manifest_path, 0o600)
+
+
+def _clear_test_deployment_authority(
+    *, layout: InstanceStateLayout, host_global_root: Path
+) -> None:
+    for path in (
+        host_global_root / "deployment-host-global-lease.json",
+        host_global_root / "deployment-quiescence-inventory.json",
+        host_global_root / "deployment-quiescence-proof.json",
+        host_global_root / "legacy-owner-inventory.json",
+        _deployment_fence_path(host_global_root, layout.channel_id),
+    ):
+        path.unlink(missing_ok=True)
 
 
 def _linux_stat_fixture(
@@ -884,7 +945,11 @@ def test_restore_rejects_missing_durable_quiescence_proof_before_writes(tmp_path
     root = tmp_path / "vault"
     root.mkdir()
     runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
-    InstanceStateBackup(layout, runtime.ledger).create(tmp_path / "backup")
+    _create_canonical_backup(
+        runtime=runtime,
+        backup_root=tmp_path / "backup",
+        legacy_path=tmp_path / "missing-legacy.md",
+    )
     before = {path.name: path.read_bytes() for path in layout.root.iterdir() if path.is_file()}
 
     with pytest.raises(InstanceStatePreflightError, match="quiescence proof"):
@@ -2460,6 +2525,545 @@ def test_registry_override_cannot_become_content_owned(tmp_path) -> None:
     assert not content_state.joinpath("agentic-pkm").exists()
 
 
+def test_backup_create_requires_canonical_quiescence_authority(tmp_path) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=_current_registry_owners(runtime),
+    )
+
+    for name, candidate, receipt in (
+        ("missing", None, owner_receipt),
+        ("noncanonical", _durable_test_quiescence_proof(tmp_path, "prod"), None),
+    ):
+        backup_root = tmp_path / f"{name}-backup"
+        with pytest.raises(
+            InstanceStatePreflightError,
+            match="canonical quiescence authority",
+        ):
+            InstanceStateBackup(layout, runtime.ledger).create(
+                backup_root,
+                quiescence_proof=candidate,
+                owner_receipt_path=receipt,
+            )
+        assert not backup_root.exists()
+
+    receipt = InstanceStateBackup(layout, runtime.ledger).create(
+        tmp_path / "canonical-backup",
+        quiescence_proof=proof,
+        owner_receipt_path=owner_receipt,
+    )
+    assert receipt.manifest_path.is_file()
+
+
+def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> None:
+    for divergence in ("registration-without-lease", "lease-without-registration"):
+        case_root = tmp_path / divergence
+        layout = InstanceStateLayout.for_channel(case_root / "prod-state", "prod")
+        runtime = InstanceRegistryRuntime.for_paths(layout, case_root / "host-global")
+        root = case_root / "vault"
+        root.mkdir(parents=True)
+        runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+        second_root = case_root / "second-vault"
+        second_root.mkdir()
+        second_binding = f"binding-{divergence}"
+        if divergence == "registration-without-lease":
+            current = runtime.registry.load()
+            runtime.registry.register(
+                VaultRegistration(
+                    vault_binding_id=second_binding,
+                    ref=f"path:{second_root}",
+                    path=str(second_root.resolve()),
+                ),
+                expected_revision=current.revision,
+            )
+        else:
+            runtime.ledger.reserve(
+                channel_id="prod",
+                vault_binding_id=second_binding,
+                root=second_root,
+            )
+            runtime.ledger.activate(second_binding)
+        proof, owner_receipt = _canonical_test_quiescence_authority(
+            layout=layout,
+            host_global_root=runtime.ledger.root,
+            legacy_path=case_root / "missing-legacy.md",
+            owners=_current_registry_owners(runtime),
+        )
+        rejected_backup = case_root / "rejected-backup"
+        with pytest.raises(
+            InstanceStatePreflightError,
+            match="registry/ledger consistency",
+        ):
+            InstanceStateBackup(layout, runtime.ledger).create(
+                rejected_backup,
+                quiescence_proof=proof,
+                owner_receipt_path=owner_receipt,
+            )
+        assert not rejected_backup.exists()
+
+        valid_root = case_root / "valid"
+        valid_layout = InstanceStateLayout.for_channel(
+            valid_root / "prod-state",
+            "prod",
+        )
+        valid_runtime = InstanceRegistryRuntime.for_paths(
+            valid_layout,
+            valid_root / "host-global",
+        )
+        valid_vault = valid_root / "vault"
+        valid_vault.mkdir(parents=True)
+        valid_runtime.bootstrap_env_binding(
+            vault_root=valid_vault,
+            watcher_vault_path=valid_vault,
+        )
+        backup_root = valid_root / "backup"
+        valid_proof, valid_owner_receipt = _create_canonical_backup(
+            runtime=valid_runtime,
+            backup_root=backup_root,
+            legacy_path=valid_root / "missing-legacy.md",
+        )
+        tampered_root = valid_root / "tampered-vault"
+        tampered_root.mkdir()
+        if divergence == "registration-without-lease":
+            backup_registry = VaultRegistryStore(backup_root / "vault-registry.md")
+            backup_snapshot = backup_registry.load()
+            backup_registry.register(
+                VaultRegistration(
+                    vault_binding_id=second_binding,
+                    ref=f"path:{tampered_root}",
+                    path=str(tampered_root.resolve()),
+                ),
+                expected_revision=backup_snapshot.revision,
+            )
+        else:
+            backup_ledger = InstanceRegistryRuntime.for_paths(
+                InstanceStateLayout.for_channel(
+                    backup_root / "scratch-state",
+                    "prod",
+                ),
+                backup_root,
+            ).ledger
+            backup_ledger.reserve(
+                channel_id="prod",
+                vault_binding_id=second_binding,
+                root=tampered_root,
+            )
+            backup_ledger.activate(second_binding)
+        _refresh_backup_checksums(backup_root)
+        protected_roots = (valid_layout.root, valid_runtime.ledger.root)
+        before = {
+            path.relative_to(valid_root): path.read_bytes()
+            for protected_root in protected_roots
+            for path in protected_root.rglob("*")
+            if path.is_file()
+        }
+
+        with pytest.raises(
+            InstanceStatePreflightError,
+            match="registry/ledger consistency",
+        ):
+            InstanceStateBackup(valid_layout, valid_runtime.ledger).restore(
+                backup_root,
+                quiescence_proof=valid_proof,
+                owner_receipt_path=valid_owner_receipt,
+            )
+
+        assert {
+            path.relative_to(valid_root): path.read_bytes()
+            for protected_root in protected_roots
+            for path in protected_root.rglob("*")
+            if path.is_file()
+        } == before
+
+    for divergence in (
+        "cross-channel-corrupt-live",
+        "cross-channel-orphan-live",
+        "cross-channel-wrong-binding",
+        "cross-channel-corrupt-tombstone",
+        "cross-channel-corrupt-lineage",
+        "cross-channel-self-lineage",
+        "cross-channel-blank-lineage-id",
+        "cross-channel-nonstring-lineage-id",
+    ):
+        case_root = tmp_path / divergence
+        layout = InstanceStateLayout.for_channel(case_root / "prod-state", "prod")
+        runtime = InstanceRegistryRuntime.for_paths(layout, case_root / "host-global")
+        prod_root = case_root / "prod-vault"
+        foreign_root = case_root / "foreign-vault"
+        prod_root.mkdir(parents=True)
+        foreign_root.mkdir()
+        runtime.bootstrap_env_binding(
+            vault_root=prod_root,
+            watcher_vault_path=prod_root,
+        )
+        foreign_binding = f"binding-{divergence}"
+        runtime.ledger.reserve(
+            channel_id="dev",
+            vault_binding_id=foreign_binding,
+            root=foreign_root,
+        )
+        runtime.ledger.activate(foreign_binding)
+        live_channel = "dev"
+        live_binding = foreign_binding
+        if divergence.endswith("tombstone") or "lineage" in divergence:
+            destination_binding = f"destination-{divergence}"
+            runtime.ledger.begin_transfer(
+                source_binding_id=foreign_binding,
+                destination_channel_id="test",
+                destination_binding_id=destination_binding,
+            )
+            runtime.ledger.activate_transfer()
+            live_channel = "test"
+            live_binding = destination_binding
+        if divergence == "cross-channel-self-lineage":
+            final_binding = f"final-{divergence}"
+            runtime.ledger.begin_transfer(
+                source_binding_id=destination_binding,
+                destination_channel_id="native",
+                destination_binding_id=final_binding,
+            )
+            runtime.ledger.activate_transfer()
+            live_channel = "native"
+            live_binding = final_binding
+
+        complete_owners = _current_registry_owners(runtime) + [
+            {
+                "channel_id": live_channel,
+                "vault_binding_id": live_binding,
+                "root": str(foreign_root.resolve()),
+            }
+        ]
+        if divergence == "cross-channel-orphan-live":
+            authority_owners = _current_registry_owners(runtime)
+        elif divergence == "cross-channel-wrong-binding":
+            authority_owners = [
+                *complete_owners[:-1],
+                complete_owners[-1]
+                | {"vault_binding_id": f"wrong-{live_binding}"},
+            ]
+        else:
+            authority_owners = complete_owners
+        proof, owner_receipt = _canonical_test_quiescence_authority(
+            layout=layout,
+            host_global_root=runtime.ledger.root,
+            legacy_path=case_root / "missing-legacy.md",
+            owners=authority_owners,
+        )
+        ledger_payload = json.loads(
+            runtime.ledger.path.read_text(encoding="utf-8")
+        )
+        if divergence == "cross-channel-corrupt-live":
+            ledger_payload["leases"][foreign_binding]["root_fingerprint"] = "0" * 64
+        elif divergence == "cross-channel-corrupt-tombstone":
+            ledger_payload["tombstones"][foreign_binding]["root_fingerprint"] = "0" * 64
+        elif divergence == "cross-channel-corrupt-lineage":
+            ledger_payload["transfer_lineage"][0]["root_fingerprint"] = "0" * 64
+        elif divergence == "cross-channel-self-lineage":
+            ledger_payload["transfer_lineage"][0] |= {
+                "source_channel_id": "test",
+                "source_binding_id": destination_binding,
+                "destination_channel_id": "test",
+                "destination_binding_id": destination_binding,
+            }
+        elif divergence == "cross-channel-blank-lineage-id":
+            ledger_payload["transfer_lineage"][0]["transfer_id"] = "   "
+        elif divergence == "cross-channel-nonstring-lineage-id":
+            ledger_payload["transfer_lineage"][0]["transfer_id"] = 7
+        runtime.ledger.path.write_text(
+            json.dumps(ledger_payload),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            InstanceStatePreflightError,
+            match="registry/ledger consistency",
+        ):
+            InstanceStateBackup(layout, runtime.ledger).create(
+                case_root / "rejected-backup",
+                quiescence_proof=proof,
+                owner_receipt_path=owner_receipt,
+            )
+        assert not (case_root / "rejected-backup").exists()
+
+        restore_root = tmp_path / f"{divergence}-restore"
+        restore_layout = InstanceStateLayout.for_channel(
+            restore_root / "prod-state",
+            "prod",
+        )
+        restore_runtime = InstanceRegistryRuntime.for_paths(
+            restore_layout,
+            restore_root / "host-global",
+        )
+        restore_prod_root = restore_root / "prod-vault"
+        restore_foreign_root = restore_root / "foreign-vault"
+        restore_prod_root.mkdir(parents=True)
+        restore_foreign_root.mkdir()
+        restore_runtime.bootstrap_env_binding(
+            vault_root=restore_prod_root,
+            watcher_vault_path=restore_prod_root,
+        )
+        restore_foreign_binding = f"restore-{foreign_binding}"
+        restore_runtime.ledger.reserve(
+            channel_id="dev",
+            vault_binding_id=restore_foreign_binding,
+            root=restore_foreign_root,
+        )
+        restore_runtime.ledger.activate(restore_foreign_binding)
+        restore_live_channel = "dev"
+        restore_live_binding = restore_foreign_binding
+        if divergence.endswith("tombstone") or "lineage" in divergence:
+            restore_destination = f"restore-destination-{divergence}"
+            restore_runtime.ledger.begin_transfer(
+                source_binding_id=restore_foreign_binding,
+                destination_channel_id="test",
+                destination_binding_id=restore_destination,
+            )
+            restore_runtime.ledger.activate_transfer()
+            restore_live_channel = "test"
+            restore_live_binding = restore_destination
+        if divergence == "cross-channel-self-lineage":
+            restore_final = f"restore-final-{divergence}"
+            restore_runtime.ledger.begin_transfer(
+                source_binding_id=restore_destination,
+                destination_channel_id="native",
+                destination_binding_id=restore_final,
+            )
+            restore_runtime.ledger.activate_transfer()
+            restore_live_channel = "native"
+            restore_live_binding = restore_final
+        restore_complete_owners = _current_registry_owners(restore_runtime) + [
+            {
+                "channel_id": restore_live_channel,
+                "vault_binding_id": restore_live_binding,
+                "root": str(restore_foreign_root.resolve()),
+            }
+        ]
+        backup_root = restore_root / "backup"
+        restore_proof, restore_owner_receipt = _canonical_test_quiescence_authority(
+            layout=restore_layout,
+            host_global_root=restore_runtime.ledger.root,
+            legacy_path=restore_root / "missing-legacy.md",
+            owners=restore_complete_owners,
+        )
+        InstanceStateBackup(
+            restore_layout,
+            restore_runtime.ledger,
+        ).create(
+            backup_root,
+            quiescence_proof=restore_proof,
+            owner_receipt_path=restore_owner_receipt,
+        )
+        backup_ledger_payload = json.loads(
+            (backup_root / "ownership-ledger.json").read_text(encoding="utf-8")
+        )
+        if divergence == "cross-channel-corrupt-live":
+            backup_ledger_payload["leases"][restore_foreign_binding][
+                "root_fingerprint"
+            ] = "0" * 64
+        elif divergence in {
+            "cross-channel-orphan-live",
+            "cross-channel-wrong-binding",
+        }:
+            _clear_test_deployment_authority(
+                layout=restore_layout,
+                host_global_root=restore_runtime.ledger.root,
+            )
+            restore_authority_owners = _current_registry_owners(restore_runtime)
+            if divergence == "cross-channel-wrong-binding":
+                restore_authority_owners += [
+                    restore_complete_owners[-1]
+                    | {"vault_binding_id": f"wrong-{restore_live_binding}"}
+                ]
+            restore_proof, restore_owner_receipt = _canonical_test_quiescence_authority(
+                layout=restore_layout,
+                host_global_root=restore_runtime.ledger.root,
+                legacy_path=restore_root / "missing-legacy.md",
+                owners=restore_authority_owners,
+            )
+        elif divergence == "cross-channel-corrupt-tombstone":
+            backup_ledger_payload["tombstones"][restore_foreign_binding][
+                "root_fingerprint"
+            ] = "0" * 64
+        elif divergence == "cross-channel-corrupt-lineage":
+            backup_ledger_payload["transfer_lineage"][0][
+                "root_fingerprint"
+            ] = "0" * 64
+        elif divergence == "cross-channel-self-lineage":
+            backup_ledger_payload["transfer_lineage"][0] |= {
+                "source_channel_id": "test",
+                "source_binding_id": restore_destination,
+                "destination_channel_id": "test",
+                "destination_binding_id": restore_destination,
+            }
+        elif divergence == "cross-channel-blank-lineage-id":
+            backup_ledger_payload["transfer_lineage"][0]["transfer_id"] = "   "
+        elif divergence == "cross-channel-nonstring-lineage-id":
+            backup_ledger_payload["transfer_lineage"][0]["transfer_id"] = 7
+        (backup_root / "ownership-ledger.json").write_text(
+            json.dumps(backup_ledger_payload),
+            encoding="utf-8",
+        )
+        _refresh_backup_checksums(backup_root)
+        before = {
+            path.relative_to(restore_root): path.read_bytes()
+            for protected_root in (restore_layout.root, restore_runtime.ledger.root)
+            for path in protected_root.rglob("*")
+            if path.is_file()
+        }
+        with pytest.raises(
+            InstanceStatePreflightError,
+            match="registry/ledger consistency",
+        ):
+            InstanceStateBackup(
+                restore_layout,
+                restore_runtime.ledger,
+            ).restore(
+                backup_root,
+                quiescence_proof=restore_proof,
+                owner_receipt_path=restore_owner_receipt,
+            )
+        assert {
+            path.relative_to(restore_root): path.read_bytes()
+            for protected_root in (restore_layout.root, restore_runtime.ledger.root)
+            for path in protected_root.rglob("*")
+            if path.is_file()
+        } == before
+
+
+@pytest.mark.parametrize("key_failure", ["missing", "mismatched"])
+def test_prod_volume_loss_requires_fenced_rekey_and_ledger_reconstruction(
+    tmp_path,
+    key_failure,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    backup_root = tmp_path / "backup"
+    proof, owner_receipt = _create_canonical_backup(
+        runtime=runtime,
+        backup_root=backup_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+    )
+    if key_failure == "missing":
+        (backup_root / "ownership-key.json").unlink()
+    else:
+        foreign = InstanceRegistryRuntime.for_paths(
+            InstanceStateLayout.for_channel(tmp_path / "foreign-state", "prod"),
+            tmp_path / "foreign-host-global",
+        )
+        foreign.ledger.load()
+        (backup_root / "ownership-key.json").write_bytes(
+            foreign.ledger.key_path.read_bytes()
+        )
+        os.chmod(backup_root / "ownership-key.json", 0o600)
+        _refresh_backup_checksums(backup_root)
+
+    for path in layout.root.iterdir():
+        if path.is_file():
+            path.unlink()
+    runtime.ledger.path.unlink()
+    runtime.ledger.key_path.unlink()
+
+    with pytest.raises(
+        (InstanceStatePreflightError, LedgerError),
+        match="re-key and ledger reconstruction",
+    ):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=owner_receipt,
+            backup_root=tmp_path / "new-backup",
+            restore_root=backup_root,
+            quiescence_proof=proof,
+        )
+
+    assert _deployment_fence_path(runtime.ledger.root, "prod").is_file()
+    assert (runtime.ledger.root / "deployment-host-global-lease.json").is_file()
+    assert not layout.registry_path.exists()
+    assert not runtime.ledger.path.exists()
+    assert not runtime.ledger.key_path.exists()
+    with pytest.raises(RegistryError, match="host-global deployment lease"):
+        _preflight_runtime(
+            channel="prod",
+            instance_state_root=layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            consumer="api",
+        )
+
+
+def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_start(
+    tmp_path,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    backup_root = tmp_path / "backup"
+    proof, owner_receipt = _create_canonical_backup(
+        runtime=runtime,
+        backup_root=backup_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+    )
+    expected_key = json.loads(
+        (backup_root / "ownership-key.json").read_text(encoding="utf-8")
+    )
+    foreign = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "foreign-state", "prod"),
+        tmp_path / "foreign-host-global",
+    )
+    foreign.ledger.load()
+    (backup_root / "ownership-key.json").write_bytes(foreign.ledger.key_path.read_bytes())
+    os.chmod(backup_root / "ownership-key.json", 0o600)
+    _refresh_backup_checksums(backup_root)
+    protected_roots = (layout.root, runtime.ledger.root)
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for protected_root in protected_roots
+        for path in protected_root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="re-key and ledger reconstruction",
+    ):
+        InstanceStateBackup(layout, runtime.ledger).restore(
+            backup_root,
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
+        )
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for protected_root in protected_roots
+        for path in protected_root.rglob("*")
+        if path.is_file()
+    } == before
+    deploy = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
+    start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert deploy.index("prepare_instance_state_deployment compose") < deploy.index(
+        'run_postmutation_gate "service recreate/liveness gate failed"'
+    )
+    assert start.index("prepare_instance_state_deployment run_docker_compose") < start.index(
+        'start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"'
+    )
+    assert expected_key["key_id"] != json.loads(
+        (backup_root / "ownership-key.json").read_text(encoding="utf-8")
+    )["key_id"]
+
+
 def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore(tmp_path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     prod = _load_compose(repo_root / "docker-compose.prod.yml")
@@ -2487,8 +3091,14 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
         background_state={"mode": "compatibility"},
         runtime_floors={"registry": "01b"},
     )
-    backup = InstanceStateBackup(layout, runtime.ledger).create(tmp_path / "backup")
-    expected = json.loads(backup.manifest_path.read_text(encoding="utf-8"))
+    _create_canonical_backup(
+        runtime=runtime,
+        backup_root=tmp_path / "backup",
+        legacy_path=tmp_path / "missing-legacy.md",
+    )
+    expected = json.loads(
+        (tmp_path / "backup" / "manifest.json").read_text(encoding="utf-8")
+    )
     assert {
         "vault-registry.md.last-good",
         "vault-registry.md.last-good.sha256",
@@ -2569,7 +3179,15 @@ def test_prod_restore_rejects_noncanonical_quiescence_authority_without_mutation
         watcher_vault_path=root,
     )
     backup_root = tmp_path / "backup"
-    InstanceStateBackup(layout, runtime.ledger).create(backup_root)
+    _create_canonical_backup(
+        runtime=runtime,
+        backup_root=backup_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+    )
+    _clear_test_deployment_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+    )
     runtime.registry.set_extension_state(
         default_vault_binding_id="new-default",
         dimensions={"new": [registration.vault_binding_id]},
@@ -2684,8 +3302,10 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
         vault_root=source_root,
         watcher_vault_path=source_root,
     )
-    InstanceStateBackup(source_layout, source_runtime.ledger).create(
-        tmp_path / "dev-backup"
+    _create_canonical_backup(
+        runtime=source_runtime,
+        backup_root=tmp_path / "dev-backup",
+        legacy_path=tmp_path / "missing-dev-legacy.md",
     )
 
     target_layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")

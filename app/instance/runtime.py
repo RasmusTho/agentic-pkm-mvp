@@ -1043,7 +1043,11 @@ def _finish_instance_state_deployment(
     if not ledger_snapshot.legacy_bootstrap_complete:
         raise InstanceStatePreflightError("legacy owner bootstrap did not complete")
 
-    backup_receipt = backup.create(backup_root)
+    backup_receipt = backup.create(
+        backup_root,
+        quiescence_proof=quiescence_proof,
+        owner_receipt_path=inventory_path,
+    )
     fence_path = _deployment_fence_path(ownership_root, channel)
     fence_path.unlink()
     _deployment_lease_path(ownership_root).unlink()

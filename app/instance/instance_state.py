@@ -10,7 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from app.instance.ownership_ledger import OwnershipLedger
+from app.instance.filesystem_identity import (
+    resolve_filesystem_root_identity,
+    same_filesystem_root,
+)
+from app.instance.ownership_ledger import (
+    LedgerError,
+    LedgerSnapshot,
+    LegacyOwner,
+    OwnershipLedger,
+)
 from app.instance.vault_registry import RegistrySnapshot, VaultRegistryStore
 
 
@@ -83,7 +92,7 @@ class DeploymentQuiescenceProof:
         host_global_root: Path,
         owner_receipt_path: Path | None,
         legacy_path: Path | None = None,
-    ) -> None:
+    ) -> Mapping[str, object]:
         """Authenticate the complete host-global deployment authority in place."""
 
         root = Path(host_global_root).expanduser().resolve(strict=False)
@@ -207,6 +216,7 @@ class DeploymentQuiescenceProof:
             raise InstanceStatePreflightError(
                 "canonical quiescence authority is required"
             ) from exc
+        return owner_payload
 
 
 @dataclass(frozen=True)
@@ -513,6 +523,8 @@ class InstanceStateBackupReceipt:
 @dataclass(frozen=True)
 class InstanceStateRestoreReceipt:
     registry_checksum: str
+    ownership_key_id: str
+    ownership_generation: int
 
 
 class InstanceStateBackup:
@@ -522,14 +534,34 @@ class InstanceStateBackup:
         self.layout = layout
         self.ledger = ledger
 
-    def create(self, backup_root: Path) -> InstanceStateBackupReceipt:
-        self.layout.ensure()
+    def create(
+        self,
+        backup_root: Path,
+        *,
+        quiescence_proof: DeploymentQuiescenceProof | None,
+        owner_receipt_path: Path | None = None,
+    ) -> InstanceStateBackupReceipt:
+        if quiescence_proof is None:
+            raise InstanceStatePreflightError(
+                "canonical quiescence authority is required"
+            )
+        owner_payload = quiescence_proof.require_canonical_authority(
+            channel_id=self.layout.channel_id,
+            host_global_root=self.ledger.root,
+            owner_receipt_path=owner_receipt_path,
+        )
+        self.layout.require_existing()
         registry_store = VaultRegistryStore(self.layout.registry_path)
-        registry_store.load()
-        self.ledger.load()
+        registry = registry_store.load()
+        ledger = self._require_registry_ledger_consistency(
+            registry=registry,
+            ledger=self.ledger,
+            global_live_owners=self._global_live_owners(
+                owner_payload=owner_payload,
+                registry=registry,
+            ),
+        )
         destination = Path(backup_root).expanduser().resolve(strict=False)
-        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(destination, 0o700)
         artifacts = {
             "vault-registry.md": self.layout.registry_path,
             "vault-registry.md.last-good": registry_store.snapshot_path,
@@ -546,18 +578,25 @@ class InstanceStateBackup:
             artifacts["legacy-final-export.md"] = final_export
             artifacts["legacy-final-export.md.sha256"] = final_checksum
         checksums: dict[str, str] = {}
+        payloads: dict[str, bytes] = {}
         for name, source in artifacts.items():
             if not source.is_file():
                 raise InstanceStatePreflightError(f"backup source is incomplete: {name}")
             payload = source.read_bytes()
-            _atomic_private_write(destination / name, payload)
+            payloads[name] = payload
             checksums[name] = hashlib.sha256(payload).hexdigest()
         manifest = {
             "schema": _BACKUP_SCHEMA,
             "channel_id": self.layout.channel_id,
             "registry_checksum": checksums["vault-registry.md"],
+            "ownership_key_id": ledger.key_id,
+            "ownership_generation": ledger.generation,
             "checksums": checksums,
         }
+        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(destination, 0o700)
+        for name, payload in payloads.items():
+            _atomic_private_write(destination / name, payload)
         manifest_path = destination / "manifest.json"
         _atomic_private_write(
             manifest_path,
@@ -574,7 +613,7 @@ class InstanceStateBackup:
     ) -> InstanceStateRestoreReceipt:
         if quiescence_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
-        quiescence_proof.require_canonical_authority(
+        owner_payload = quiescence_proof.require_canonical_authority(
             channel_id=self.layout.channel_id,
             host_global_root=self.ledger.root,
             owner_receipt_path=owner_receipt_path,
@@ -611,47 +650,200 @@ class InstanceStateBackup:
             raise InstanceStatePreflightError("backup final legacy export is incomplete")
         required |= selected_optional
         if not all((source / name).is_file() for name in required):
-            raise InstanceStatePreflightError("restore requires a complete ledger/key backup")
+            raise InstanceStatePreflightError(
+                "restore requires a complete ledger/key backup; keep the global fence "
+                "until fenced re-key and ledger reconstruction complete"
+            )
+        payloads: dict[str, bytes] = {}
         try:
             for name in required - {"manifest.json"}:
-                actual = hashlib.sha256((source / name).read_bytes()).hexdigest()
+                payload = (source / name).read_bytes()
+                payloads[name] = payload
+                actual = hashlib.sha256(payload).hexdigest()
                 if checksums.get(name) != actual:
                     raise ValueError
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise InstanceStatePreflightError("backup verification failed") from exc
+        staged_ledger, global_live_owners = self._verify_staged_backup(
+            payloads=payloads,
+            owner_payload=owner_payload,
+        )
+        if (
+            manifest.get("registry_checksum") != checksums.get("vault-registry.md")
+            or not isinstance(manifest.get("ownership_key_id"), str)
+            or not isinstance(manifest.get("ownership_generation"), int)
+            or isinstance(manifest.get("ownership_generation"), bool)
+            or manifest.get("ownership_key_id") != staged_ledger.key_id
+            or manifest.get("ownership_generation") != staged_ledger.generation
+        ):
+            raise InstanceStatePreflightError(
+                "backup key identity is inconsistent; keep the global fence until "
+                "fenced re-key and ledger reconstruction complete"
+            )
         self.layout.ensure()
         self.ledger.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.ledger.root, 0o700)
         registry_store = VaultRegistryStore(self.layout.registry_path)
         _atomic_private_write(
             registry_store.snapshot_path,
-            (source / "vault-registry.md.last-good").read_bytes(),
+            payloads["vault-registry.md.last-good"],
         )
         _atomic_private_write(
             registry_store.snapshot_checksum_path,
-            (source / "vault-registry.md.last-good.sha256").read_bytes(),
+            payloads["vault-registry.md.last-good.sha256"],
         )
         _atomic_private_write(
             registry_store.rollback_export_path,
-            (source / "vault-registry.md.legacy-export").read_bytes(),
+            payloads["vault-registry.md.legacy-export"],
         )
-        _atomic_private_write(
-            self.ledger.path, (source / "ownership-ledger.json").read_bytes()
-        )
-        _atomic_private_write(
-            self.ledger.key_path, (source / "ownership-key.json").read_bytes()
-        )
-        _atomic_private_write(
-            self.layout.registry_path, (source / "vault-registry.md").read_bytes()
-        )
+        _atomic_private_write(self.ledger.path, payloads["ownership-ledger.json"])
+        _atomic_private_write(self.ledger.key_path, payloads["ownership-key.json"])
+        _atomic_private_write(self.layout.registry_path, payloads["vault-registry.md"])
         for name in sorted(selected_optional):
-            _atomic_private_write(self.layout.root / name, (source / name).read_bytes())
+            _atomic_private_write(self.layout.root / name, payloads[name])
         if not selected_optional:
             (self.layout.root / "legacy-final-export.md").unlink(missing_ok=True)
             (self.layout.root / "legacy-final-export.md.sha256").unlink(missing_ok=True)
-        registry_store.load()
-        self.ledger.load()
-        return InstanceStateRestoreReceipt(str(manifest["registry_checksum"]))
+        restored_registry = registry_store.load()
+        restored_ledger = self._require_registry_ledger_consistency(
+            registry=restored_registry,
+            ledger=self.ledger,
+            global_live_owners=global_live_owners,
+        )
+        if (
+            restored_ledger.key_id != staged_ledger.key_id
+            or restored_ledger.generation != staged_ledger.generation
+        ):
+            raise InstanceStatePreflightError(
+                "restored ownership key identity does not match the verified backup"
+            )
+        return InstanceStateRestoreReceipt(
+            str(manifest["registry_checksum"]),
+            restored_ledger.key_id,
+            restored_ledger.generation,
+        )
+
+    def _verify_staged_backup(
+        self,
+        *,
+        payloads: Mapping[str, bytes],
+        owner_payload: Mapping[str, object],
+    ) -> tuple[LedgerSnapshot, tuple[LegacyOwner, ...]]:
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="agentic-pkm-instance-state-verify-"
+            ) as temporary_root:
+                scratch_root = Path(temporary_root)
+                scratch_layout = InstanceStateLayout.for_channel(
+                    scratch_root / "instance-state",
+                    self.layout.channel_id,
+                )
+                scratch_layout.ensure()
+                scratch_ledger = OwnershipLedger(scratch_root / "host-global")
+                scratch_ledger.root.mkdir(mode=0o700)
+                for name, payload in payloads.items():
+                    if name.startswith("ownership-"):
+                        target = scratch_ledger.root / name
+                    else:
+                        target = scratch_layout.root / name
+                    _atomic_private_write(target, payload)
+                registry = VaultRegistryStore(scratch_layout.registry_path).load()
+                global_live_owners = self._global_live_owners(
+                    owner_payload=owner_payload,
+                    registry=registry,
+                )
+                ledger = self._require_registry_ledger_consistency(
+                    registry=registry,
+                    ledger=scratch_ledger,
+                    global_live_owners=global_live_owners,
+                )
+                return ledger, global_live_owners
+        except Exception as exc:
+            raise InstanceStatePreflightError(
+                "backup registry/ledger consistency verification failed; keep the "
+                "global fence until fenced re-key and ledger reconstruction complete"
+            ) from exc
+
+    def _require_registry_ledger_consistency(
+        self,
+        *,
+        registry: RegistrySnapshot,
+        ledger: OwnershipLedger,
+        global_live_owners: Sequence[LegacyOwner],
+    ) -> LedgerSnapshot:
+        try:
+            return ledger.require_registry_consistency(
+                channel_id=self.layout.channel_id,
+                registrations={
+                    binding_id: Path(registration.path)
+                    for binding_id, registration in registry.registrations.items()
+                },
+                tombstones={
+                    binding_id: Path(tombstone.path)
+                    for binding_id, tombstone in registry.removal_tombstones.items()
+                },
+                transfer_lineage=tuple(
+                    {
+                        "ownership_transfer_id": item.ownership_transfer_id,
+                        "source_channel_id": item.source_channel_id,
+                        "source_binding_id": item.source_binding_id,
+                        "destination_channel_id": item.destination_channel_id,
+                        "destination_binding_id": item.destination_binding_id,
+                    }
+                    for item in registry.transfer_lineage
+                ),
+                global_live_owners=global_live_owners,
+            )
+        except LedgerError as exc:
+            raise InstanceStatePreflightError(
+                "registry/ledger consistency verification failed"
+            ) from exc
+
+    def _global_live_owners(
+        self,
+        *,
+        owner_payload: Mapping[str, object],
+        registry: RegistrySnapshot,
+    ) -> tuple[LegacyOwner, ...]:
+        raw_owners = owner_payload.get("owners")
+        if not isinstance(raw_owners, list):
+            raise InstanceStatePreflightError(
+                "canonical global live-owner inventory is invalid"
+            )
+        owners: list[LegacyOwner] = []
+        for item in raw_owners:
+            if not isinstance(item, dict):
+                raise InstanceStatePreflightError(
+                    "canonical global live-owner inventory is invalid"
+                )
+            channel_id = str(item.get("channel_id") or "").strip()
+            root = Path(str(item.get("root") or "")).expanduser().resolve(
+                strict=False
+            )
+            if not channel_id or not root.is_dir():
+                raise InstanceStatePreflightError(
+                    "canonical global live-owner inventory is invalid"
+                )
+            binding_id = str(item.get("vault_binding_id") or "").strip()
+            if channel_id == self.layout.channel_id:
+                for registration in registry.registrations.values():
+                    if same_filesystem_root(
+                        resolve_filesystem_root_identity(root),
+                        resolve_filesystem_root_identity(registration.path),
+                    ):
+                        binding_id = registration.vault_binding_id
+                        break
+            if not binding_id:
+                digest = hashlib.sha256(
+                    f"{channel_id}\0{root}".encode()
+                ).hexdigest()[:20]
+                binding_id = f"legacy-{channel_id}-{digest}"
+            owners.append(LegacyOwner(channel_id, binding_id, root))
+        if len({owner.vault_binding_id for owner in owners}) != len(owners):
+            raise InstanceStatePreflightError(
+                "canonical global live-owner inventory repeats a binding identity"
+            )
+        return tuple(owners)
 
 
 def _atomic_private_write(path: Path, payload: bytes) -> None:
