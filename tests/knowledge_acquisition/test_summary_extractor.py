@@ -87,6 +87,9 @@ def test_schema_mismatch_fails_loud_no_artifact() -> None:
         json.dumps({"summary": "ok", "confidence": 1.5}),  # confidence out of range
         json.dumps({"summary": "ok", "confidence": -0.1}),  # confidence out of range
         json.dumps({"summary": "ok", "confidence": "high"}),  # wrong type
+        json.dumps({"summary": "ok", "confidence": float("nan")}),
+        json.dumps({"summary": "ok", "confidence": float("inf")}),
+        json.dumps({"summary": "ok", "confidence": float("-inf")}),
         json.dumps({"summary": "ok", "confidence": 0.5, "extra": "field"}),  # additionalProperties
         # JSON embedded in prose must not be fished out (no regex extraction).
         'Sure! Here you go: {"summary": "ok", "confidence": 0.5} — hope that helps.',

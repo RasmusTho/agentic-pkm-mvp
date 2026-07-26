@@ -43,6 +43,7 @@ pipeline MUST NOT do"):
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -112,7 +113,11 @@ class Candidate:
             if extraction.extractor_id != "summary":
                 continue
             value = extraction.output.get("confidence")
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+            ):
                 return float(value)
         return None
 

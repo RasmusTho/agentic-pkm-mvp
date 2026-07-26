@@ -23,6 +23,7 @@ without any pipeline-side import of this module.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 
 from app.components.llm.constrained import (
@@ -113,7 +114,18 @@ def run(normalized: Mapping[str, Any], *, complete: CompletionFn | None = None) 
         raise ExtractionError(
             extractor_id=EXTRACTOR_ID, version=EXTRACTOR_VERSION, reason=exc.reason
         ) from exc
-    return {"summary": payload["summary"], "confidence": payload["confidence"]}
+    confidence = payload["confidence"]
+    if (
+        not isinstance(confidence, (int, float))
+        or isinstance(confidence, bool)
+        or not math.isfinite(confidence)
+    ):
+        raise ExtractionError(
+            extractor_id=EXTRACTOR_ID,
+            version=EXTRACTOR_VERSION,
+            reason="confidence must be a finite number between 0.0 and 1.0",
+        )
+    return {"summary": payload["summary"], "confidence": confidence}
 
 
 def _make_spec(*, complete: CompletionFn | None = None) -> ExtractorSpec:

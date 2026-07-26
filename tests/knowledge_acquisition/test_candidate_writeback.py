@@ -26,7 +26,7 @@ from app.knowledge_acquisition.candidate_writeback import (
     render_candidate_note,
     write_candidate_note,
 )
-from app.knowledge_acquisition.extraction_registry import clear_registry
+from app.knowledge_acquisition.extraction_registry import ExtractionResult, clear_registry
 from app.knowledge_acquisition.extractors import summary_extractor
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
@@ -224,6 +224,35 @@ def test_rendered_summary_preserves_model_confidence() -> None:
     assert "Model confidence (non-authoritative):** 0.75" in rendered
     assert "Coverage:** 2/2 normalized segments (100%; complete transcript)" in rendered
     assert "A deterministic test summary." in rendered
+
+
+def test_rendered_summary_rejects_non_finite_confidence_defensively() -> None:
+    candidate = Candidate(
+        content_identity="sha256:non-finite-confidence",
+        source_kind="youtube_url",
+        item_ref="dQw4w9WgXcQ",
+        url="https://youtube.com/watch?v=dQw4w9WgXcQ",
+        title="A Test Video",
+        creator="Test Channel",
+        published="20260101",
+        acquisition_method="captions_manual",
+        transcript_available=True,
+        extractions=(
+            ExtractionResult(
+                extractor_id="summary",
+                extractor_version=1,
+                source_content_identity="sha256:non-finite-confidence",
+                output={"summary": "Must not render.", "confidence": float("nan")},
+                model_identity={"provider": "mock", "model": "mock"},
+            ),
+        ),
+        transcript_segment_count=1,
+    )
+
+    rendered = render_candidate_note(candidate)
+
+    assert "Must not render." not in rendered
+    assert "Model confidence" not in rendered
 
 
 def test_template_file_carries_mandated_posture_markers() -> None:
