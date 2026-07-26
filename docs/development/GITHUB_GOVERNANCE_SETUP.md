@@ -112,8 +112,10 @@ only registered, expired, clean, unlocked worktrees whose live path/branch/HEAD 
 still match, with proven merge/closure eligibility. Unregistered, active, replaced-generation, or
 orphaned lifecycle state is positive preservation evidence. Apply releases the lifecycle lock during
 fetch and planning so active owners can heartbeat, then rereads lease and lifecycle authority and
-holds the lifecycle lock only through the targeted removal. Successful removal retires that exact
-generation; broad worktree-metadata pruning remains report-only.
+holds the lifecycle lock only through the targeted removal. Successful removal durably retires that
+exact generation before branch deletion; restart reconciliation completes the same retirement if
+the process stops between Git removal and the registry write. Broad worktree-metadata pruning
+remains report-only.
 
 ## Enforcement intent
 

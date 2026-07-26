@@ -23,7 +23,7 @@ GENERATION = "a" * 32
 
 
 def _allow_lifecycle_authority(_targets):
-    return nullcontext()
+    return nullcontext(lambda: None)
 
 
 def _reclaim_run_git(tmp_path: Path, worktrees_porcelain: str, local_refs: str):

@@ -318,8 +318,10 @@ Enforcement surfaces:
   worktrees are preserved. Apply requires explicit PR-state and active-lease files; absence of either
   proof is fail-closed. Fetch and planning use a locked lifecycle snapshot without retaining the
   registry lock; lease and lifecycle authority are revalidated at the targeted removal boundary,
-  with the lifecycle lock held through that one command. Successful removal retires the exact
-  generation. Broad `git worktree prune` remains report-only. The current checkout is always skipped.
+  with the lifecycle lock held through that one command. Successful removal durably retires the
+  exact generation before branch deletion, and restart reconciliation completes that retirement
+  after an interruption between Git removal and the registry write. Broad `git worktree prune`
+  remains report-only. The current checkout is always skipped.
 - Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 

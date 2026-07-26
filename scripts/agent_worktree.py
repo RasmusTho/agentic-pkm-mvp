@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -193,6 +194,56 @@ def _locked_lifecycle_snapshot(path: Path) -> dict[str, dict[str, Any]]:
         return _lifecycle_records(_read_registry(path))
 
 
+def _mark_generation_removed(record: dict[str, Any], *, removed_at: float) -> None:
+    record["status"] = "removed"
+    record["removed_at"] = removed_at
+
+
+def _reconcile_removed_generations(cwd: Path, path: Path) -> None:
+    """Durably retire generations whose checkout vanished before tombstoning."""
+
+    with _registry_lock(path):
+        payload = _read_registry(path)
+        entries = git_hygiene._parse_worktrees(
+            git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+        )
+        if not entries:
+            raise WorktreeLifecycleError("git reported no worktrees")
+        live_paths = {
+            str(_canonical(Path(entry["worktree"]))): entry
+            for entry in entries
+            if isinstance(entry.get("worktree"), str)
+        }
+        removed_at = time.time()
+        registry_changed = False
+        for key, value in payload["worktrees"].items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            generation = value.get("generation")
+            if value.get("status") not in {"active", "released", "complete"}:
+                continue
+            if not _valid_generation(generation):
+                continue
+            live_entry = live_paths.get(str(_canonical(Path(key))))
+            if live_entry is not None:
+                try:
+                    live_generation = _worktree_generation(
+                        cwd,
+                        Path(key),
+                        create=False,
+                    )
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    # A present checkout without a trustworthy generation marker
+                    # is indeterminate and must remain preserved.
+                    continue
+                if live_generation == generation:
+                    continue
+            _mark_generation_removed(value, removed_at=removed_at)
+            registry_changed = True
+        if registry_changed:
+            _write_registry(path, payload)
+
+
 def _bind_live_generations(
     cwd: Path,
     records: dict[str, dict[str, Any]],
@@ -219,7 +270,7 @@ def _locked_lifecycle_authority(
     cwd: Path,
     path: Path,
     targets: list[dict[str, Any]],
-) -> Iterator[None]:
+) -> Iterator[Callable[[], None]]:
     """Revalidate target lifecycle records and hold authority through one Git action."""
 
     with _registry_lock(path):
@@ -275,22 +326,25 @@ def _locked_lifecycle_authority(
             ):
                 raise WorktreeLifecycleError("cleanup target generation changed")
             authorized.append((str(canonical), generation))
-        yield
-        removed_at = time.time()
-        registry_changed = False
-        for canonical_path, generation in authorized:
-            try:
-                _worktree_identity(cwd, Path(canonical_path))
-            except WorktreeLifecycleError:
+        command_succeeded = False
+
+        def mark_succeeded() -> None:
+            nonlocal command_succeeded
+            command_succeeded = True
+
+        yield mark_succeeded
+        if command_succeeded:
+            removed_at = time.time()
+            for canonical_path, generation in authorized:
                 record = payload["worktrees"].get(canonical_path)
                 if (
-                    isinstance(record, dict)
-                    and record.get("generation") == generation
+                    not isinstance(record, dict)
+                    or record.get("generation") != generation
                 ):
-                    record["status"] = "removed"
-                    record["removed_at"] = removed_at
-                    registry_changed = True
-        if registry_changed:
+                    raise WorktreeLifecycleError(
+                        "cleanup target generation changed before retirement"
+                    )
+                _mark_generation_removed(record, removed_at=removed_at)
             _write_registry(path, payload)
 
 
@@ -497,6 +551,7 @@ def janitor_apply(
     stale_after_days: int = 14,
 ) -> dict[str, Any]:
     path = _canonical(registry_path or _default_registry_path(cwd))
+    _reconcile_removed_generations(cwd, path)
     records = _bind_live_generations(cwd, _locked_lifecycle_snapshot(path))
     return git_hygiene.janitor_apply(
         cwd,

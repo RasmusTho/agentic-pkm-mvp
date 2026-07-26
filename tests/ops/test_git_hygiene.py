@@ -11,7 +11,7 @@ GENERATION = "a" * 32
 
 
 def _allow_lifecycle_authority(_targets):
-    return nullcontext()
+    return nullcontext(lambda: None)
 
 
 def test_preflight_reports_dirty_tree_and_in_progress_operation(

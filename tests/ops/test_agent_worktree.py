@@ -18,7 +18,7 @@ GENERATION = "a" * 32
 
 
 def _allow_lifecycle_authority(_targets):
-    return nullcontext()
+    return nullcontext(lambda: None)
 
 
 def _reclaim_plan(worktree: Path, branch: str) -> dict[str, object]:
@@ -300,6 +300,61 @@ def test_lifecycle_register_heartbeat_release_and_report(
     records = captured["lifecycle_records"]
     assert isinstance(records, dict)
     assert records[str(worktree.resolve())]["status"] == "complete"
+
+
+@pytest.mark.parametrize("status", ("active", "released", "complete"))
+def test_existing_lifecycle_record_migrates_generation_before_update(
+    tmp_path,
+    monkeypatch,
+    status,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "issue-4015"
+    worktree.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    _write_lifecycle_record(registry_path, worktree, status=status)
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    payload["worktrees"][str(worktree.resolve())].pop("generation")
+    registry_path.write_text(json.dumps(payload), encoding="utf-8")
+    create_values: list[bool] = []
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_identity",
+        lambda _cwd, _worktree: (worktree.resolve(), "codex/eligible"),
+    )
+
+    def generation(_cwd: Path, _worktree: Path, *, create: bool) -> str:
+        create_values.append(create)
+        return GENERATION
+
+    monkeypatch.setattr(agent_worktree, "_worktree_generation", generation)
+
+    if status == "active":
+        updated = agent_worktree.heartbeat_worktree(
+            repo,
+            worktree=worktree,
+            owner="active-owner",
+            registry_path=registry_path,
+            now=40,
+        )
+    else:
+        updated = agent_worktree.complete_worktree(
+            repo,
+            worktree=worktree,
+            owner="active-owner",
+            registry_path=registry_path,
+            now=40,
+        )
+
+    assert create_values == [True]
+    assert updated["generation"] == GENERATION
+    persisted = agent_worktree.load_lifecycle_records(
+        repo,
+        registry_path=registry_path,
+    )[str(worktree.resolve())]
+    assert persisted["generation"] == GENERATION
 
 
 def test_lifecycle_registration_preserves_active_owner_until_expiry(
@@ -673,6 +728,15 @@ def test_janitor_apply_forwards_lifecycle_and_lease_authority(
         "_worktree_generation",
         lambda _cwd, _worktree, *, create: GENERATION,
     )
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        lambda args, _cwd: (
+            _worktree_porcelain(repo, worktree, "codex/eligible")
+            if args == ["worktree", "list", "--porcelain"]
+            else ""
+        ),
+    )
 
     agent_worktree.janitor_apply(
         repo,
@@ -866,6 +930,76 @@ def test_janitor_rechecks_live_checkout_identity_and_generation_before_remove(
     assert commands == [["fetch", "--prune", "origin"]]
 
 
+@pytest.mark.parametrize("boundary_change", ("dirty", "locked", "shared_root"))
+def test_janitor_preserves_target_when_checkout_changes_at_remove_boundary(
+    tmp_path,
+    monkeypatch,
+    boundary_change,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "eligible"
+    worktree.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    _write_lifecycle_record(registry_path, worktree)
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_identity",
+        lambda _cwd, _worktree: (
+            repo.resolve() if boundary_change == "shared_root" else worktree.resolve(),
+            "codex/eligible",
+        ),
+    )
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_generation",
+        lambda _cwd, _worktree, *, create: GENERATION,
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_worktree_dirty",
+        lambda _path: boundary_change == "dirty",
+    )
+
+    def live_worktrees(args: list[str], _cwd: Path) -> str:
+        if args != ["worktree", "list", "--porcelain"]:
+            raise AssertionError(f"unexpected git command: {args}")
+        result = _worktree_porcelain(repo, worktree, "codex/eligible")
+        if boundary_change == "locked":
+            return result.rstrip() + "\nlocked session\n\n"
+        return result
+
+    monkeypatch.setattr(git_hygiene, "run_git", live_worktrees)
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *_args, **_kwargs: _reclaim_plan(worktree, "codex/eligible"),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git_result",
+        lambda args, _cwd: (
+            commands.append(args)
+            or subprocess.CompletedProcess(["git", *args], 0, "", "")
+        ),
+    )
+
+    report = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={"codex/eligible": {"state": "MERGED"}},
+        lease_path=lease_path,
+    )
+
+    assert report["ok"] is False
+    assert report["errors"][0]["reason"] == "lifecycle_authority_changed"
+    assert commands == [["fetch", "--prune", "origin"]]
+
+
 def test_janitor_wins_boundary_blocks_heartbeat_and_retires_generation(
     tmp_path,
     monkeypatch,
@@ -982,6 +1116,185 @@ def test_janitor_wins_boundary_blocks_heartbeat_and_retires_generation(
     assert replay["ok"] is False
     assert replay["errors"][0]["reason"] == "lifecycle_authority_changed"
     assert remove_calls == 1
+
+
+def test_janitor_restart_reconciles_removed_generation_idempotently(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "removed"
+    registry_path = tmp_path / "agent-worktrees.json"
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    _write_lifecycle_record(registry_path, worktree)
+    captured_statuses: list[str] = []
+
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        lambda args, _cwd: (
+            f"worktree {repo}\nHEAD root\nbranch refs/heads/main\n\n"
+            if args == ["worktree", "list", "--porcelain"]
+            else ""
+        ),
+    )
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_generation",
+        lambda _cwd, _worktree, *, create: (
+            (_ for _ in ()).throw(
+                agent_worktree.WorktreeLifecycleError(
+                    "worktree generation marker is missing"
+                )
+            )
+        ),
+    )
+
+    def fake_apply(_cwd: Path, **kwargs):
+        captured_statuses.append(
+            kwargs["lifecycle_records"][str(worktree.resolve())]["status"]
+        )
+        return {"mode": "apply", "ok": True, "errors": []}
+
+    monkeypatch.setattr(git_hygiene, "janitor_apply", fake_apply)
+
+    agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={},
+        lease_path=lease_path,
+    )
+    first_payload = registry_path.read_bytes()
+    first_record = agent_worktree.load_lifecycle_records(
+        repo,
+        registry_path=registry_path,
+    )[str(worktree.resolve())]
+    agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={},
+        lease_path=lease_path,
+    )
+
+    assert captured_statuses == ["removed", "removed"]
+    assert first_record["status"] == "removed"
+    assert first_record["generation"] == GENERATION
+    assert "removed_at" in first_record
+    assert registry_path.read_bytes() == first_payload
+
+
+def test_janitor_does_not_delete_branch_until_retirement_is_durable(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "eligible"
+    worktree.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    _write_lifecycle_record(registry_path, worktree)
+    commands: list[list[str]] = []
+    real_write_registry = agent_worktree._write_registry
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_identity",
+        lambda _cwd, _worktree: (worktree.resolve(), "codex/eligible"),
+    )
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_generation",
+        lambda _cwd, _worktree, *, create: GENERATION,
+    )
+    monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda _path: False)
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        lambda args, _cwd: (
+            _worktree_porcelain(repo, worktree, "codex/eligible")
+            if args == ["worktree", "list", "--porcelain"]
+            else ""
+        ),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *_args, **_kwargs: _reclaim_plan(worktree, "codex/eligible"),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git_result",
+        lambda args, _cwd: (
+            commands.append(args)
+            or subprocess.CompletedProcess(["git", *args], 0, "", "")
+        ),
+    )
+
+    def fail_retirement_write(path: Path, payload: dict[str, object]) -> None:
+        record = payload["worktrees"][str(worktree.resolve())]
+        if record.get("status") == "removed":
+            raise OSError("simulated durable retirement failure")
+        real_write_registry(path, payload)
+
+    monkeypatch.setattr(agent_worktree, "_write_registry", fail_retirement_write)
+
+    report = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={"codex/eligible": {"state": "MERGED"}},
+        lease_path=lease_path,
+    )
+
+    assert report["ok"] is False
+    assert report["errors"][0]["reason"] == "lifecycle_authority_changed"
+    assert commands == [
+        ["fetch", "--prune", "origin"],
+        ["worktree", "remove", str(worktree)],
+    ]
+    record = agent_worktree.load_lifecycle_records(
+        repo,
+        registry_path=registry_path,
+    )[str(worktree.resolve())]
+    assert record["status"] == "complete"
+
+
+def test_janitor_restart_fails_closed_when_git_state_is_unavailable(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "eligible"
+    registry_path = tmp_path / "agent-worktrees.json"
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    _write_lifecycle_record(registry_path, worktree)
+    core_called = False
+
+    def unavailable(_args: list[str], _cwd: Path) -> str:
+        raise subprocess.CalledProcessError(1, ["git", "worktree", "list"])
+
+    def fake_apply(_cwd: Path, **_kwargs):
+        nonlocal core_called
+        core_called = True
+        return {}
+
+    monkeypatch.setattr(git_hygiene, "run_git", unavailable)
+    monkeypatch.setattr(git_hygiene, "janitor_apply", fake_apply)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        agent_worktree.janitor_apply(
+            repo,
+            registry_path=registry_path,
+            pr_states={},
+            lease_path=lease_path,
+        )
+
+    assert core_called is False
 
 
 def test_janitor_apply_cli_requires_and_loads_lease_snapshot(

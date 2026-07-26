@@ -858,7 +858,7 @@ def janitor_apply(
     lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
     active_lease_loader: Callable[[], list[dict[str, Any]]] | None = None,
     lifecycle_authority_guard: Callable[
-        [list[dict[str, Any]]], AbstractContextManager[None]
+        [list[dict[str, Any]]], AbstractContextManager[Callable[[], None]]
     ]
     | None = None,
 ) -> dict[str, Any]:
@@ -918,7 +918,7 @@ def janitor_apply(
             ],
         }
 
-    def apply_git(args: list[str], action: dict[str, Any]) -> None:
+    def apply_git(args: list[str], action: dict[str, Any]) -> bool:
         result = run_git_result(args, cwd)
         record = {**action, "command": ["git", *args], "returncode": result.returncode}
         if result.stdout.strip():
@@ -927,8 +927,10 @@ def janitor_apply(
             record["stderr"] = result.stderr.strip()
         if result.returncode == 0:
             actions.append(record)
+            return True
         else:
             errors.append(record)
+            return False
 
     apply_git(["fetch", "--prune", "origin"], {"artifact": "remote", "action": "fetch_prune"})
     if errors:
@@ -1039,8 +1041,9 @@ def janitor_apply(
         """Run one worktree-destructive command under fresh lifecycle authority."""
 
         try:
-            with lifecycle_authority_guard(targets):
-                apply_git(args, action)
+            with lifecycle_authority_guard(targets) as mark_succeeded:
+                if apply_git(args, action):
+                    mark_succeeded()
         except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
             errors.append(
                 {
