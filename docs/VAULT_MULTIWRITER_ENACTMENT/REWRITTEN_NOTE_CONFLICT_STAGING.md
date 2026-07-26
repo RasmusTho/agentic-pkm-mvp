@@ -21,7 +21,7 @@ Consume VMW-01's SHA-256 expected-version request at the shared rewritten-note f
 
 ## Concretely
 
-The production `FsVaultAdapter.write_note` path writes through temp-file-plus-`os.replace`. A stale rewritten write must never replace the current file and must never lose the proposed bytes. Append-only operations bypass this path. The integration fixture hands the staged artifact to the VMW-01 classifier, proving VMW-03 can quarantine it without inferring a second filename convention.
+The production `FsVaultAdapter.write_note` path writes through temp-file-plus-`os.replace`. A stale rewritten write must never replace the current file and must never lose the proposed bytes. Initial-stale publication keeps a trusted candidate link through final public-artifact verification; a public-name replacement before that receipt fence fails without a receipt and leaves the exact candidate recoverable. Append-only operations bypass this path. The integration fixture hands the staged artifact to the VMW-01 classifier, proving VMW-03 can quarantine it without inferring a second filename convention.
 
 ## Why This Matters
 

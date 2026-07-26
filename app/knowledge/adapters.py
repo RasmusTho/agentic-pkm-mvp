@@ -148,6 +148,7 @@ def _stage_initial_stale_proposal(
     candidate_fd = -1
     candidate_stat: os.stat_result | None = None
     artifact_rel: PurePosixPath | None = None
+    artifact_verified_for_receipt = False
     try:
         candidate_fd = os.open(
             candidate_name,
@@ -205,14 +206,14 @@ def _stage_initial_stale_proposal(
                 "staged conflict artifact verification failed"
             )
 
-        # Persist the human-visible name before removing hidden names. Cleanup
-        # is identity-guarded so a concurrent directory writer cannot make this
-        # operation unlink a replacement that it did not create.
+        # Persist the human-visible name before removing the original rewrite
+        # staging entry. Keep the trusted candidate link until the final public
+        # artifact verification: if another directory writer replaces the
+        # public name in that window, the exact proposal must remain recoverable
+        # even though no receipt can be returned.
         os.fsync(parent_fd)
         if _entry_has_identity(parent_fd, staged_name, staged_stat):
             os.unlink(staged_name, dir_fd=parent_fd)
-        if _entry_has_identity(parent_fd, candidate_name, candidate_stat):
-            os.unlink(candidate_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
 
         if (
@@ -224,12 +225,19 @@ def _stage_initial_stale_proposal(
                 f"version mismatch for rewritten note {locator.path}: "
                 "staged conflict artifact changed before receipt"
             )
+        artifact_verified_for_receipt = True
+        if _entry_has_identity(parent_fd, candidate_name, candidate_stat):
+            os.unlink(candidate_name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
         return artifact_rel
     finally:
         if candidate_fd >= 0:
             os.close(candidate_fd)
         if (
-            candidate_stat is not None
+            artifact_verified_for_receipt
+            and candidate_stat is not None
+            and artifact_rel is not None
+            and _entry_has_identity(parent_fd, artifact_rel.name, candidate_stat)
             and _entry_has_identity(parent_fd, candidate_name, candidate_stat)
         ):
             try:

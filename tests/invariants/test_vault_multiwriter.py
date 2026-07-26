@@ -179,6 +179,56 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
     assert (target.parent / racer_entry_name).read_bytes() == b"directory-racer"
 
 
+def test_stale_rewritten_write_retains_trusted_candidate_if_public_artifact_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/public-replacement.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"human-current")
+    real_read_entry = adapters_module._read_entry
+    artifact_reads = 0
+
+    def replace_artifact_during_final_verification(dir_fd: int, name: str) -> bytes:
+        nonlocal artifact_reads
+        if is_conflict_artifact(name):
+            artifact_reads += 1
+            if artifact_reads == 2:
+                os.unlink(name, dir_fd=dir_fd)
+                replacement_fd = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=dir_fd,
+                )
+                with os.fdopen(replacement_fd, "wb") as replacement:
+                    replacement.write(b"directory-racer")
+                    replacement.flush()
+                    os.fsync(replacement.fileno())
+                os.fsync(dir_fd)
+        return real_read_entry(dir_fd, name)
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_read_entry",
+        replace_artifact_during_final_verification,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="changed before receipt"):
+        adapter.write_note(
+            locator,
+            "caller-proposal",
+            expected_version=hashlib.sha256(b"caller-observed").hexdigest(),
+            writer_identity="remote-writer",
+        )
+
+    assert target.read_bytes() == b"human-current"
+    trusted_candidates = list(target.parent.glob(".*.conflict-stage"))
+    assert len(trusted_candidates) == 1
+    assert trusted_candidates[0].read_bytes() == b"caller-proposal"
+
+
 def test_staged_conflict_artifact_matches_quarantine_classifier(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/classified.md")
