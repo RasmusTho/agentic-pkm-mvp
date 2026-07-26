@@ -25,7 +25,7 @@ def _iter_relative(vault_root: Path) -> set[str]:
 
 def test_conflicted_copy_is_not_yielded_as_ordinary_note(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
-    _write_markdown(vault_root / "Notes" / "Plan (conflicted copy Rasmus's Mac).md")
+    _write_markdown(vault_root / "Notes" / "Plan (conflicted copy fixture-device).md")
 
     assert _iter_relative(vault_root) == set()
 
@@ -34,7 +34,7 @@ def test_staged_conflict_artifact_is_not_yielded_as_ordinary_note(tmp_path: Path
     vault_root = tmp_path / "vault"
     staged_relative = conflict_artifact_path(
         "Notes/Plan.md",
-        writer_identity="bifrost-ios",
+        writer_identity="synthetic-writer",
         written_at=datetime(2026, 7, 26, 14, 2, tzinfo=UTC),
     )
     _write_markdown(vault_root / Path(staged_relative))
@@ -45,7 +45,7 @@ def test_staged_conflict_artifact_is_not_yielded_as_ordinary_note(tmp_path: Path
 def test_quarantine_preserves_normal_sibling_note(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     _write_markdown(vault_root / "Notes" / "Plan.md")
-    _write_markdown(vault_root / "Notes" / "Plan (conflicted copy Rasmus's Mac).md")
+    _write_markdown(vault_root / "Notes" / "Plan (conflicted copy fixture-device).md")
     _write_markdown(vault_root / "Notes" / "Unrelated.md")
 
     assert _iter_relative(vault_root) == {
@@ -63,7 +63,7 @@ def test_quarantine_does_not_delete_conflict_artifact(
     monkeypatch.setattr(manager, "_conflict_quarantine_receipts", receipt_policy)
     vault_root = tmp_path / "vault"
     conflict = _write_markdown(
-        vault_root / "Notes" / "Plan (conflicted copy Rasmus's Mac).md",
+        vault_root / "Notes" / "Plan (conflicted copy fixture-device).md",
         "Competing content must survive.\n",
     )
 
