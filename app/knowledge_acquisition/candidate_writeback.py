@@ -54,7 +54,7 @@ import yaml
 
 from app.knowledge.write_ops import write_note_relative
 from app.knowledge_acquisition.extraction_registry import ExtractionResult, run_extractor
-from app.knowledge_acquisition.normalize import normalize
+from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -169,7 +169,7 @@ def assemble_candidate(
 
     normalized_dict = normalized.as_dict()
     transcript_segment_count = len(normalized.segments)
-    transcript_available = transcript_segment_count > 0
+    transcript_available = has_usable_transcript(normalized)
     extractions: list[ExtractionResult] = []
     if transcript_available:
         for extractor_id in extractor_ids:

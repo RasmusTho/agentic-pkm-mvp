@@ -306,6 +306,64 @@ def test_acquire_youtube_asr_dedup_skips_reacquisition(monkeypatch: pytest.Monke
     assert asr_calls["count"] == 1  # ASR never re-invoked on the dedup hit
 
 
+def test_acquire_valid_empty_asr_skips_extraction_and_writes_false_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_record = {
+        "source_kind": "youtube_url",
+        "item_ref": VIDEO_ID,
+        "url": FAKE_URL,
+        "content_identity": "sha256:acquire-empty-asr",
+        "acquisition_method": "asr",
+        "caption_language": "en",
+        "caption_body": "",
+        "asr_segments": [],
+        "metadata": {"title": "Silent Video", "chapters": []},
+        "provenance": {
+            "source_kind": "youtube_url",
+            "url": FAKE_URL,
+            "acquisition_method": "asr",
+        },
+    }
+    outcome = plugin.FetchOutcome(
+        object_id="raw-empty-asr",
+        content_identity=raw_record["content_identity"],
+        is_new=True,
+        acquisition_method="asr",
+        language="en",
+        record=raw_record,
+    )
+
+    def _unexpected_completion(**_kwargs) -> str:
+        raise AssertionError("valid empty ASR must bypass transcript extraction")
+
+    summary_extractor.register(complete=_unexpected_completion)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+
+    receipt = acquire_youtube(
+        FAKE_URL,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        conn=conn,
+        fetch_fn=lambda _url: outcome,
+    )
+
+    assert receipt.ok is True
+    assert [stage.stage for stage in receipt.stages] == ["raw", "normalize", "candidate"]
+    candidate_stage = receipt.stages[-1]
+    assert candidate_stage.status == "written"
+    note = (tmp_path / "vault" / candidate_stage.artifact_path).read_text(encoding="utf-8")
+    assert "transcript_available: false" in note
+    assert "Model confidence" not in note
+    assert conn.rows_for(STAGE_DEAD_LETTERED_TOPIC) == []
+    completed_stages = {
+        json.loads(row["payload"])["payload"]["stage"]
+        for row in conn.rows_for(STAGE_COMPLETED_TOPIC)
+    }
+    assert completed_stages == {"normalize", "candidate"}
+
+
 # ---------------------------------------------------------------------------
 # AC3: loud, item-scoped failure — no fabricated raw record, no partial
 # candidate.
@@ -483,7 +541,7 @@ def test_acquire_youtube_cli_exits_nonzero_on_blocked_write(
             AcquireStageReceipt(stage="raw", status="persisted"),
             AcquireStageReceipt(stage="normalize", status="ok"),
             AcquireStageReceipt(
-                stage="extracted", status="ok", extractor_id="summary", extractor_version=1
+                stage="extracted", status="ok", extractor_id="summary", extractor_version=2
             ),
             AcquireStageReceipt(
                 stage="candidate",

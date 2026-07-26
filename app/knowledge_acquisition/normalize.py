@@ -102,6 +102,16 @@ class NormalizedTranscript:
         }
 
 
+def has_usable_transcript(normalized: NormalizedTranscript) -> bool:
+    """Whether normalized evidence contains at least one usable transcript segment.
+
+    All live pipeline producers call this on the typed result of :func:`normalize`, so acquire,
+    replay, and candidate assembly share one decision for the valid empty-ASR terminal state.
+    Captionless and malformed inputs never reach this helper because ``normalize`` fails loudly.
+    """
+    return bool(normalized.segments)
+
+
 # Quality notes are deterministic, fixed strings keyed by acquisition method — per
 # REFINEMENT_PIPELINE_CONTRACT.md § normalized ("a quality note: consumers may weigh acquisition
 # methods differently") and RESEARCH_2026-07.md § 3 ("manual captions > faster-whisper ASR >
@@ -311,6 +321,7 @@ __all__ = [
     "NormalizeError",
     "NormalizedSegment",
     "NormalizedTranscript",
+    "has_usable_transcript",
     "normalize",
     "parse_caption_cues",
     "dedup_rolling_cues",

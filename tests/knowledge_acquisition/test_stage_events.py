@@ -23,6 +23,7 @@ from app.knowledge_acquisition.extraction_registry import (
     register_extractor,
 )
 from app.knowledge_acquisition.extractors import summary_extractor
+from app.knowledge_acquisition.extractors.summary_extractor import EXTRACTOR_VERSION
 from app.knowledge_acquisition.normalize import normalize
 from app.knowledge_acquisition.stage_events import (
     STAGE_COMPLETED_TOPIC,
@@ -174,7 +175,7 @@ def test_extractor_run_emits_one_event_per_extractor_at_the_emit_site() -> None:
     envelope = Event.model_validate_json(completed[0]["payload"])
     assert envelope.payload["stage"] == "extracted"
     assert envelope.payload["extractor_id"] == "summary"
-    assert envelope.payload["stage_version"] == 1
+    assert envelope.payload["stage_version"] == EXTRACTOR_VERSION
     # Lineage: model identity is carried in the extractor's completion event.
     assert "model_identity" in envelope.payload
 

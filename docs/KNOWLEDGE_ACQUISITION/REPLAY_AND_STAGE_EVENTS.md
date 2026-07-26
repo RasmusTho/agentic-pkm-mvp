@@ -33,7 +33,7 @@ replays from `raw` without source egress (extractor model calls route per `docs/
 ```
 $ python -m app.cli acquire-replay <raw_record_id> --assert-no-source-egress
 normalize@1 … ok (idempotent)
-summary@1  … ok (idempotent)
+summary@2  … ok (idempotent)
 candidate  … ok → note content identical
 replay receipt: equivalent=true source_egress=0
 ```

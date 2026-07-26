@@ -240,7 +240,7 @@ def test_rendered_summary_rejects_non_finite_confidence_defensively() -> None:
         extractions=(
             ExtractionResult(
                 extractor_id="summary",
-                extractor_version=1,
+                extractor_version=2,
                 source_content_identity="sha256:non-finite-confidence",
                 output={"summary": "Must not render.", "confidence": float("nan")},
                 model_identity={"provider": "mock", "model": "mock"},

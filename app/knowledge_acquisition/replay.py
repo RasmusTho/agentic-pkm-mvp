@@ -77,9 +77,10 @@ from app.knowledge_acquisition.candidate_writeback import (
 from app.knowledge_acquisition.extraction_registry import clear_extraction_results
 from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
-from app.knowledge_acquisition.normalize import NormalizeError, normalize
+from app.knowledge_acquisition.normalize import NormalizeError, has_usable_transcript, normalize
 from app.knowledge_acquisition.raw_record import get_raw_record
 from app.knowledge_acquisition.stage_events import (
+    ExtractionRunReport,
     STAGE_EVENT_SOURCE,
     emit_stage_completed,
     emit_stage_dead_letter,
@@ -361,11 +362,15 @@ def run_replay(
         )
 
         # --- extracted: schema + lineage equivalence -----------------------------------
-        report = run_extractors(
-            normalized_dict,
-            extractor_ids=extractor_ids,
-            trace_id=trace_id,
-            conn=conn,
+        report = (
+            run_extractors(
+                normalized_dict,
+                extractor_ids=extractor_ids,
+                trace_id=trace_id,
+                conn=conn,
+            )
+            if has_usable_transcript(normalized)
+            else ExtractionRunReport(successes=(), outcomes=())
         )
         for outcome in report.outcomes:
             if outcome.status == "ok" and outcome.result is not None:

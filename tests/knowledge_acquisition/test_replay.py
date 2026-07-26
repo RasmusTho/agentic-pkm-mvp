@@ -221,7 +221,7 @@ def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> Non
     # extracted: schema + lineage equivalence (NOT byte-identical text).
     assert stages["extracted"].equivalence == "schema_and_lineage"
     assert stages["extracted"].extractor_id == "summary"
-    assert stages["extracted"].extractor_version == 1
+    assert stages["extracted"].extractor_version == 2
 
     # candidate: byte-identical by first-write-wins preservation on the second replay.
     assert stages["candidate"].status == "already_exists"
@@ -269,6 +269,51 @@ def test_fresh_candidate_write_does_not_claim_byte_identity(tmp_path: Path) -> N
     assert receipt.equivalent is False
 
 
+def test_replay_valid_empty_asr_skips_extraction_and_writes_false_candidate(
+    tmp_path: Path,
+) -> None:
+    empty_asr = {
+        **RAW_PAYLOAD,
+        "content_identity": "sha256:replay-empty-asr",
+        "acquisition_method": "asr",
+        "caption_body": "",
+        "asr_segments": [],
+    }
+    persisted = persist_raw_record(
+        source_kind=empty_asr["source_kind"],
+        item_ref=empty_asr["item_ref"],
+        content_identity=empty_asr["content_identity"],
+        payload=empty_asr,
+        source_ref="test:replay-empty-asr",
+    )
+
+    def _unexpected_completion(**_kwargs) -> str:
+        raise AssertionError("valid empty ASR must bypass transcript extraction")
+
+    summary_extractor.register(complete=_unexpected_completion)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+
+    receipt = run_replay(
+        str(persisted.object_id),
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert [stage.stage for stage in receipt.stages] == ["normalize", "candidate"]
+    candidate = receipt.stages[-1]
+    assert candidate.status == "written"
+    note = (tmp_path / "vault" / candidate.artifact_path).read_text(encoding="utf-8")
+    assert "transcript_available: false" in note
+    assert "Model confidence" not in note
+    completed_stages = {
+        json.loads(row["payload"])["payload"]["stage"]
+        for row in conn.rows_for(STAGE_COMPLETED_TOPIC)
+    }
+    assert completed_stages == {"normalize", "candidate"}
+
+
 def test_acquire_replay_fresh_materialization_reports_successful_non_equivalence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -287,7 +332,7 @@ def test_acquire_replay_fresh_materialization_reports_successful_non_equivalence
                 status="ok",
                 equivalence="schema_and_lineage",
                 extractor_id="summary",
-                extractor_version=1,
+                extractor_version=2,
             ),
             StageReplayReceipt(
                 stage="candidate",

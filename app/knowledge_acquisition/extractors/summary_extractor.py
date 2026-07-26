@@ -41,7 +41,7 @@ from app.knowledge_acquisition.extraction_registry import (
 )
 
 EXTRACTOR_ID = "summary"
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2
 TASK_KIND = "extract.summary"
 
 #: Registered schema for the summary completion (KERNEL-07 registry,
