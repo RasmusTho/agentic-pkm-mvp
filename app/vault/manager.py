@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 import logging
 import os
 from pathlib import Path
@@ -37,6 +38,26 @@ LOCAL_GITIGNORE = "# Design Handoff local settings\nlocal.md\n*.local.md\nlocal/
 # enumerating everything and validating each candidate.
 VAULT_ROOT_MARKER_REL = (SETTINGS_DIR_NAME, "vault.md")
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=4096)
+def _emit_conflict_quarantine_receipt(
+    artifact_path: str,
+    state_signature: tuple[int, int] | None,
+) -> None:
+    """Warn once per observed artifact state, with bounded process memory."""
+
+    logger.warning(
+        "Vault Markdown conflict artifact quarantined before ordinary iteration: %s",
+        artifact_path,
+        extra={
+            "event": "vault.markdown.quarantined",
+            "classification": "multiwriter_conflict_artifact",
+            "artifact_path": artifact_path,
+            "artifact_state": state_signature,
+            "action": "excluded_from_iteration_preserved_on_disk",
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -220,7 +241,9 @@ def iter_vault_markdown_files(
     any watcher, ingest, index, or recall caller can parse them as ordinary
     notes. Quarantine is non-mutating: the artifact remains at its filesystem
     path and a structured warning makes the classification observable for
-    later human resolution.
+    later human resolution. Receipt warnings are deduplicated per observed
+    artifact state in each process so an unresolved artifact cannot flood the
+    watcher log; the receipt cache is bounded.
     """
     selected_root = vault_root.expanduser()
     walk_root = (subtree_root or vault_root).expanduser()
@@ -292,16 +315,15 @@ def iter_vault_markdown_files(
             if not candidate.is_file():
                 continue
             if is_conflict_artifact(candidate.name):
-                logger.warning(
-                    "Vault Markdown conflict artifact quarantined before ordinary iteration: %s",
-                    candidate,
-                    extra={
-                        "event": "vault.markdown.quarantined",
-                        "classification": "multiwriter_conflict_artifact",
-                        "artifact_path": str(candidate),
-                        "action": "excluded_from_iteration_preserved_on_disk",
-                    },
-                )
+                try:
+                    stat = candidate.stat()
+                    state_signature: tuple[int, int] | None = (
+                        stat.st_mtime_ns,
+                        stat.st_size,
+                    )
+                except OSError:
+                    state_signature = None
+                _emit_conflict_quarantine_receipt(str(candidate), state_signature)
                 continue
             if candidate.is_symlink():
                 try:

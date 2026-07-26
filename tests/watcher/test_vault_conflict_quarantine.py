@@ -64,6 +64,7 @@ def test_quarantine_does_not_delete_conflict_artifact(
 
     with caplog.at_level(logging.WARNING, logger="app.vault.manager"):
         assert _iter_relative(vault_root) == set()
+        assert _iter_relative(vault_root) == set()
 
     assert conflict.read_text(encoding="utf-8") == "Competing content must survive.\n"
     receipts = [
