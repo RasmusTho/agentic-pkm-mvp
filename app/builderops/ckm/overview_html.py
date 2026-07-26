@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from app.builderops.ckm.models import (
+    EVIDENCE_EDGE_LIFECYCLE_STATES,
     MATURITY_DIMENSIONS,
     CkmAssessment,
     CkmCapability,
@@ -43,25 +44,46 @@ class CockpitRenderContext:
 def _cockpit_digest(batch: CkmProjectionBatch) -> str:
     """Bind cockpit provenance to every captured projection input deterministically."""
 
+    def finding_payload(finding: CkmFinding) -> dict[str, Any]:
+        payload = finding.to_dict()
+        payload["citations"] = sorted(payload["citations"], key=canonical_json)
+        return payload
+
     return canonical_digest(
         {
             "state_identity": batch.state_identity.to_dict(),
             "object_counts": dict(sorted(batch.object_counts.items())),
-            "capabilities": [item.to_dict() for item in batch.capabilities],
-            "artifacts": [item.to_dict() for item in batch.artifacts],
+            "capabilities": [
+                item.to_dict() for item in sorted(batch.capabilities, key=lambda item: (item.public_id, item.id))
+            ],
+            "artifacts": [
+                item.to_dict() for item in sorted(batch.artifacts, key=lambda item: (item.public_id, item.id))
+            ],
             "edges": [
                 edge.to_dict()
                 for capability_id in sorted(batch.edges_by_capability)
-                for edge in batch.edges_by_capability[capability_id]
+                for edge in sorted(
+                    batch.edges_by_capability[capability_id],
+                    key=lambda edge: (edge.public_id, edge.id),
+                )
             ],
             "assessments": [
                 batch.assessments_by_capability[capability_id].assessment.to_dict()
                 for capability_id in sorted(batch.assessments_by_capability)
             ],
             "findings": [
-                finding.to_dict()
+                finding_payload(finding)
                 for capability_id in sorted(batch.findings_by_capability)
-                for finding in batch.findings_by_capability[capability_id]
+                for finding in sorted(
+                    batch.findings_by_capability[capability_id],
+                    key=lambda finding: (
+                        finding.kind,
+                        finding.dimension,
+                        finding.statement,
+                        finding.public_id,
+                        finding.id,
+                    ),
+                )
             ],
             "watermarks": dict(sorted(batch.current_watermark_set.items())),
         }
@@ -435,8 +457,99 @@ def _cockpit_comparison_markup(comparison: Mapping[str, Any] | None) -> str:
     return f'''<section class="cockpit-comparison" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p class="comparison-disclaimer">{disclaimer}</p>{body}<p>Recovery: <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm measure --retain</code> · <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm compare --sample-id &lt;older&gt; --sample-id &lt;newer&gt;</code></p></section>'''
 
 
-def _cockpit_proposals_markup() -> str:
-    return '<section class="cockpit-reserved" aria-labelledby="proposals-heading"><h2 id="proposals-heading">Proposal drafts</h2><p>Unavailable in this framing slice. No proposal content is generated.</p></section>'
+def _normalized_source_ref(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if value.strip() else None
+
+
+def _controlled_lifecycle(value: object) -> str | None:
+    if isinstance(value, str) and value in EVIDENCE_EDGE_LIFECYCLE_STATES:
+        return value
+    return None
+
+
+def _finding_source_lifecycle_pairs(finding: CkmFinding) -> tuple[tuple[str, str], ...]:
+    """Resolve retained source and lifecycle observations without cross-binding snapshots."""
+
+    lifecycle_by_source: dict[str, set[str]] = {}
+    for citation in finding.citations:
+        if not isinstance(citation, Mapping):
+            continue
+        snapshots = (citation, citation.get("edge"), citation.get("artifact"))
+        for snapshot in snapshots:
+            if not isinstance(snapshot, Mapping):
+                continue
+            source_ref = _normalized_source_ref(snapshot.get("source_ref"))
+            if source_ref is None:
+                continue
+            lifecycles = lifecycle_by_source.setdefault(source_ref, set())
+            lifecycle = _controlled_lifecycle(snapshot.get("lifecycle"))
+            if lifecycle is not None:
+                lifecycles.add(lifecycle)
+    return tuple(
+        (source_ref, lifecycle)
+        for source_ref, lifecycles in sorted(lifecycle_by_source.items())
+        for lifecycle in sorted(lifecycles) or ["not captured"]
+    )
+
+
+def _cockpit_proposals_markup(batch: CkmProjectionBatch) -> str:
+    """Render inert, deterministic proposal text from the already-captured projection batch."""
+
+    capability_by_id = {capability.id: capability for capability in batch.capabilities}
+    total = 0
+    ineligible = 0
+    drafts: list[tuple[tuple[str, str, str, str, str], tuple[str, ...]]] = []
+    digest = _cockpit_digest(batch)
+    identity = batch.state_identity
+    watermarks = _watermarks(batch.current_watermark_set)
+
+    for findings in batch.findings_by_capability.values():
+        for finding in findings:
+            total += 1
+            capability = capability_by_id.get(finding.capability_id)
+            sources = _finding_source_lifecycle_pairs(finding)
+            if capability is None or not sources:
+                ineligible += 1
+                continue
+            source_text = ", ".join(
+                f"{_e(source_ref)} [{_e(lifecycle)}]" for source_ref, lifecycle in sources
+            )
+            lines = (
+                "Draft only — not an Issue contract, priority, decision, or ready work.",
+                f"Projection input digest: {_e(digest)}",
+                f"CKM state: epoch={_e(identity.epoch)}; revision={identity.state_revision}; schema={identity.schema_version}",
+                f"Watermarks: {watermarks}",
+                f"Capability public ID: {_e(capability.public_id)}",
+                f'Observed finding (verbatim): <span class="proposal-source-value">{_e(finding.statement)}</span>',
+                f"Dimension/kind: {_e(finding.dimension)} / {_e(finding.kind)}",
+                f'Cited source(s): <span class="proposal-source-value">{source_text}</span>',
+                "Manual review question: Does this cited finding justify a separate governed Issue?",
+            )
+            drafts.append(
+                (
+                    (
+                        capability.public_id,
+                        finding.kind,
+                        finding.dimension,
+                        finding.statement,
+                        finding.public_id or finding.id,
+                    ),
+                    lines,
+                )
+            )
+
+    draft_markup = "".join(
+        f'<pre class="proposal-draft">{"\n".join(lines)}</pre>'
+        for _, lines in sorted(drafts, key=lambda draft: draft[0])
+    )
+    return (
+        '<section class="cockpit-proposals" aria-labelledby="proposals-heading">'
+        '<h2 id="proposals-heading">Proposal drafts</h2>'
+        f'<p class="proposal-counts">Eligible drafts: {len(drafts)} · Ineligible findings: {ineligible} · Total findings: {total}.</p>'
+        f"{draft_markup}</section>"
+    )
 
 
 def _e(value: object) -> str:
@@ -1021,7 +1134,7 @@ def render_overview_html(
         if cockpit
         else ""
     )
-    cockpit_proposals = _cockpit_proposals_markup() if cockpit else ""
+    cockpit_proposals = _cockpit_proposals_markup(batch) if cockpit else ""
     cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""
     cockpit_filters = _cockpit_filter_markup(len(forest)) if cockpit else ""
     cockpit_script = _cockpit_filter_script() if cockpit else ""

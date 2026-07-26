@@ -5,6 +5,8 @@ import re
 import shutil
 import sqlite3
 import subprocess
+from dataclasses import replace
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -17,10 +19,10 @@ from app.builderops.cli import builderops
 from app.builderops.ckm import comparison as comparison_module
 from app.builderops.ckm.contracts import CkmContractError, ResultEnvelope, canonical_digest
 from app.builderops.ckm.metrics import MetricRetentionStore
-from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmCapability
+from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmCapability, CkmFinding
 from app.builderops.ckm.overview_html import CockpitRenderContext, render_overview_html
 from app.builderops.ckm.query_service import CkmQueryService
-from app.builderops.ckm.store import CkmStore
+from app.builderops.ckm.store import CkmProjectionBatch, CkmStore
 
 
 @pytest.fixture()
@@ -1969,3 +1971,330 @@ def test_cockpit_recovery_commands_match_click_help(overview_store: CkmStore) ->
         "python -m app.builderops builderops --db-path &lt;db&gt; ckm compare "
         "--sample-id &lt;older&gt; --sample-id &lt;newer&gt;",
     ]
+
+
+def _proposal_section(rendered: str) -> str:
+    return rendered.split('<section class="cockpit-proposals"', 1)[1].split("</section>", 1)[0]
+
+
+def _visible_html_text(markup: str) -> str:
+    return unescape(re.sub(r"<[^>]+>", "", markup))
+
+
+def _finding_with(
+    finding: CkmFinding,
+    *,
+    public_id: str | None = None,
+    kind: str | None = None,
+    dimension: str | None = None,
+    statement: str | None = None,
+    citations: list[dict[str, object]] | None = None,
+) -> CkmFinding:
+    return replace(
+        finding,
+        public_id=public_id or finding.public_id,
+        kind=kind or finding.kind,
+        dimension=dimension or finding.dimension,
+        statement=statement or finding.statement,
+        citations=citations if citations is not None else finding.citations,
+    )
+
+
+def _first_batch_finding(batch: CkmProjectionBatch) -> tuple[CkmCapability, CkmFinding]:
+    capability_id, findings = next(iter(batch.findings_by_capability.items()))
+    capability = next(item for item in batch.capabilities if item.id == capability_id)
+    return capability, findings[0]
+
+
+def test_cockpit_drafts_require_cited_current_finding(overview_store: CkmStore) -> None:
+    batch = overview_store.load_projection_batch()
+    capability, cited = _first_batch_finding(batch)
+    uncited = _finding_with(
+        cited,
+        public_id="CKM-FIND-UNRESOLVABLE",
+        statement="This finding has no resolvable captured source.",
+        citations=[{"source_ref": "", "lifecycle": "confirmed"}],
+    )
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(
+            batch=replace(batch, findings_by_capability={capability.id: (uncited, cited)})
+        ),
+    )
+    proposals = _proposal_section(rendered)
+
+    assert proposals.count('<pre class="proposal-draft">') == 1
+    assert "Eligible drafts: 1 · Ineligible findings: 1 · Total findings: 2." in proposals
+    assert cited.statement in proposals
+    assert uncited.statement not in proposals
+
+    assessment = batch.assessments_by_capability[capability.id]
+    assert assessment.stale_relative_to_evidence
+    assert assessment.assessment.scores["operational_readiness"] == 0.0
+    no_findings = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(
+            batch=replace(batch, findings_by_capability={}),
+            comparison=_valid_o1b_payload(),
+        ),
+    )
+    no_finding_proposals = _proposal_section(no_findings)
+    assert "Interpretation hazards" in no_findings
+    assert "comparison-result" in no_findings
+    assert "Eligible drafts: 0 · Ineligible findings: 0 · Total findings: 0." in no_finding_proposals
+    assert "<pre" not in no_finding_proposals
+
+
+def test_cockpit_drafts_bind_identity_watermarks_and_verbatim_evidence(
+    overview_store: CkmStore,
+) -> None:
+    batch = overview_store.load_projection_batch()
+    capability, finding = _first_batch_finding(batch)
+    source_bound = _finding_with(
+        finding,
+        statement="Verbatim <finding> statement.",
+        citations=[
+            {"source_ref": "zeta.md", "lifecycle": "confirmed"},
+            {"source_ref": "alpha.md", "lifecycle": "candidate"},
+            {"source_ref": "zeta.md", "lifecycle": "confirmed"},
+            {"source_ref": "source.md", "lifecycle": "candidate"},
+            {"source_ref": " source.md ", "lifecycle": "confirmed"},
+            {"source_ref": "source.md", "lifecycle": "candidate"},
+            {"source_ref": "no-lifecycle.md"},
+            {"edge": {"source_ref": "edge-source.md", "lifecycle": "confirmed"}},
+            {"artifact": {"source_ref": "artifact-source.md"}},
+            {"source_ref": "untrusted-lifecycle.md", "lifecycle": "untrusted"},
+            {"source_ref": "list-lifecycle.md", "lifecycle": ["confirmed"]},
+            {"source_ref": "dict-lifecycle.md", "lifecycle": {"state": "candidate"}},
+            {
+                "source_ref": "edge-lifecycle-wins.md",
+                "lifecycle": "untrusted",
+                "edge": {"source_ref": "edge-lifecycle-wins.md", "lifecycle": "candidate"},
+            },
+            {
+                "source_ref": "mismatched-top.md",
+                "lifecycle": "candidate",
+                "edge": {"source_ref": "mismatched-edge.md", "lifecycle": "confirmed"},
+            },
+        ],
+    )
+    projection = replace(
+        batch,
+        findings_by_capability={capability.id: (source_bound,)},
+        current_watermark_set={"zeta": "3", "alpha": "1", "middle": "2"},
+    )
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=projection),
+    )
+    draft = re.search(r'<pre class="proposal-draft">(.*?)</pre>', rendered, re.S)
+    assert draft is not None
+    lines = _visible_html_text(draft.group(1)).splitlines()
+
+    assert lines == [
+        "Draft only — not an Issue contract, priority, decision, or ready work.",
+        re.fullmatch(r"Projection input digest: [0-9a-f]{64}", lines[1]).group(0),
+        f"CKM state: epoch={projection.state_identity.epoch}; revision={projection.state_identity.state_revision}; schema={projection.state_identity.schema_version}",
+        "Watermarks: alpha=1, middle=2, zeta=3",
+        f"Capability public ID: {capability.public_id}",
+        "Observed finding (verbatim): Verbatim <finding> statement.",
+        f"Dimension/kind: {source_bound.dimension} / {source_bound.kind}",
+        "Cited source(s):  source.md  [confirmed], alpha.md [candidate], artifact-source.md [not captured], dict-lifecycle.md [not captured], edge-lifecycle-wins.md [candidate], edge-source.md [confirmed], list-lifecycle.md [not captured], mismatched-edge.md [confirmed], mismatched-top.md [candidate], no-lifecycle.md [not captured], source.md [candidate], untrusted-lifecycle.md [not captured], zeta.md [confirmed]",
+        "Manual review question: Does this cited finding justify a separate governed Issue?",
+    ]
+    assert re.findall(
+        r'<span class="proposal-source-value">(.*?)</span>', draft.group(1), re.S
+    ) == [
+        "Verbatim &lt;finding&gt; statement.",
+        " source.md  [confirmed], alpha.md [candidate], artifact-source.md [not captured], dict-lifecycle.md [not captured], edge-lifecycle-wins.md [candidate], edge-source.md [confirmed], list-lifecycle.md [not captured], mismatched-edge.md [confirmed], mismatched-top.md [candidate], no-lifecycle.md [not captured], source.md [candidate], untrusted-lifecycle.md [not captured], zeta.md [confirmed]",
+    ]
+    trust_digest = re.search(
+        r'projection-input digest: <code>([0-9a-f]{64})</code>', rendered
+    )
+    assert trust_digest is not None
+    assert lines[1] == f"Projection input digest: {trust_digest.group(1)}"
+
+
+def test_cockpit_draft_order_and_text_are_deterministic(overview_store: CkmStore) -> None:
+    batch = overview_store.load_projection_batch()
+    capability, original = _first_batch_finding(batch)
+    multi_citations = [
+        {"source_ref": "zeta.md", "lifecycle": "confirmed"},
+        {"source_ref": "source.md", "lifecycle": "candidate"},
+        {"source_ref": " source.md ", "lifecycle": "confirmed"},
+        {"source_ref": "source.md", "lifecycle": "candidate"},
+        {"source_ref": "alpha.md", "lifecycle": "candidate"},
+        {"source_ref": "zeta.md", "lifecycle": "confirmed"},
+    ]
+    first = _finding_with(original, citations=multi_citations)
+    reversed_first = _finding_with(original, citations=list(reversed(multi_citations)))
+    second = _finding_with(
+        first,
+        public_id="CKM-FIND-SECOND",
+        kind="missing_evidence",
+        dimension="functional_completeness",
+        statement="A second deterministic finding.",
+        citations=list(reversed(multi_citations)),
+    )
+    forward = replace(batch, findings_by_capability={capability.id: (second, first)})
+    reverse = replace(batch, findings_by_capability={capability.id: (reversed_first, second)})
+    context = lambda projection: CockpitRenderContext(batch=projection)
+    first_render = render_overview_html(
+        overview_store, generated_at="2026-07-27T10:00:00Z", cockpit=context(forward)
+    )
+    second_render = render_overview_html(
+        overview_store, generated_at="2026-07-27T10:00:00Z", cockpit=context(reverse)
+    )
+
+    assert _proposal_section(first_render) == _proposal_section(second_render)
+    assert "Cited source(s):  source.md  [confirmed]" in _visible_html_text(
+        _proposal_section(first_render)
+    )
+    drafts = re.findall(r'<pre class="proposal-draft">(.*?)</pre>', first_render, re.S)
+    assert [_visible_html_text(draft).splitlines()[5] for draft in drafts] == [
+        f"Observed finding (verbatim): {first.statement}",
+        "Observed finding (verbatim): A second deterministic finding.",
+    ]
+
+
+def test_cockpit_drafts_cannot_be_mistaken_for_ready_issue_contracts(
+    overview_store: CkmStore,
+) -> None:
+    batch = overview_store.load_projection_batch()
+    capability, finding = _first_batch_finding(batch)
+    source_text = _finding_with(
+        finding,
+        statement="Fixes #123:\n<em>priority implementation direction.</em>",
+        citations=[{"source_ref": "<ready>\nwork.md", "lifecycle": "confirmed"}],
+    )
+    proposals = _proposal_section(
+        render_overview_html(
+            overview_store,
+            cockpit=CockpitRenderContext(
+                batch=replace(batch, findings_by_capability={capability.id: (source_text,)})
+            ),
+        )
+    )
+    source_values = re.findall(
+        r'<span class="proposal-source-value">(.*?)</span>', proposals, re.S
+    )
+    authored_markup = re.sub(
+        r'<span class="proposal-source-value">.*?</span>', "", proposals, flags=re.S
+    )
+    authored = _visible_html_text(authored_markup)
+    authored = authored.replace(
+        "Draft only — not an Issue contract, priority, decision, or ready work.", ""
+    ).replace("Manual review question: Does this cited finding justify a separate governed Issue?", "")
+
+    assert "Draft only — not an Issue contract, priority, decision, or ready work." in proposals
+    assert "Manual review question: Does this cited finding justify a separate governed Issue?" in proposals
+    assert [_visible_html_text(value) for value in source_values] == [
+        "Fixes #123:\n<em>priority implementation direction.</em>",
+        "<ready>\nwork.md [confirmed]",
+    ]
+    assert "&lt;em&gt;priority implementation direction.&lt;/em&gt;" in source_values[0]
+    assert "&lt;ready&gt;\nwork.md [confirmed]" in source_values[1]
+    assert not re.search(
+        r"\b(?:fixes|closes|resolves|title|label|assignee|rank(?:ing)?|priority|ready|urgent|cause|causal|diagnos(?:is|tic)|recommend(?:ation)?|implementation|direction)\b",
+        authored,
+        re.I,
+    )
+    assert "Fixes #123:" in proposals
+    assert "&lt;ready&gt;" in proposals
+
+
+def test_cockpit_drafts_are_inert_and_network_free(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+    proposals = _proposal_section(rendered)
+
+    assert proposals.count('<pre class="proposal-draft">') == 1
+    assert not re.search(
+        r"<(?:a|button|input|textarea|form|script)\b|\b(?:action|data-|on\w+)=",
+        proposals,
+        re.I,
+    )
+    assert all(token not in proposals.lower() for token in ("clipboard", "fetch", "github", "prefill", "url"))
+    assert rendered.count("<script>") == 1
+
+    direction_a = render_overview_html(overview_store)
+    assert 'class="cockpit-proposals"' not in direction_a
+    assert "<script" not in direction_a
+
+
+def test_cockpit_draft_empty_and_uncited_states_are_honest(tmp_path: Path) -> None:
+    empty = CkmStore(tmp_path / "empty-drafts.sqlite3")
+    empty.ensure_schema()
+    empty_proposals = _proposal_section(
+        render_overview_html(empty, cockpit=CockpitRenderContext(batch=empty.load_projection_batch()))
+    )
+    assert "Eligible drafts: 0 · Ineligible findings: 0 · Total findings: 0." in empty_proposals
+    assert "<pre" not in empty_proposals
+
+    source = CkmStore(tmp_path / "uncited-drafts.sqlite3")
+    source.ensure_schema()
+    capability = source.upsert_capability(
+        identity_key="fixture:uncited",
+        name="Uncited",
+        definition="Fixture.",
+        existence_provenance="fixture",
+        lifecycle="confirmed",
+    )
+    invalid = CkmFinding(
+        id="finding-uncited",
+        public_id="CKM-FIND-UNCITED",
+        kind="gap",
+        capability_id=capability.id,
+        dimension="test_completeness",
+        statement="Unresolvable source.",
+        citations=[{"source_ref": ""}],
+        created_at="2026-07-27T00:00:00Z",
+        updated_at="2026-07-27T00:00:00Z",
+    )
+    batch = source.load_projection_batch()
+    proposals = _proposal_section(
+        render_overview_html(
+            source,
+            cockpit=CockpitRenderContext(
+                batch=replace(batch, findings_by_capability={capability.id: (invalid,)})
+            ),
+        )
+    )
+    assert "Eligible drafts: 0 · Ineligible findings: 1 · Total findings: 1." in proposals
+    assert "<pre" not in proposals
+
+
+def test_cockpit_filters_do_not_mutate_proposal_drafts(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+    proposals = _proposal_section(rendered)
+    script = _cockpit_filter_script(rendered)
+    node = _require_node_for_cockpit_script_execution()
+    harness = r'''
+class Control {
+  constructor() { this.value = ''; this.disabled = true; this.listeners = {}; }
+  addEventListener(type, handler) { this.listeners[type] = handler; }
+  emit(type) { this.listeners[type]({ type }); }
+}
+const search = new Control(); const assessment = new Control(); const confidence = new Control();
+const findings = new Control(); const evidence = new Control(); const count = { textContent: '' };
+const proposals = { hidden: false, textContent: 'proposal text is stable' };
+const rows = [{ dataset: { filterName: 'Retrieval', filterDefinition: '', filterPublicId: '', filterBoundary: '', filterAssessment: 'available current', filterConfidence: 'standard', filterFindings: 'present', filterEvidence: 'confirmed' }, hidden: false }];
+const document = {
+  querySelector: (selector) => ({ '[name="filter-search"]': search, '[name="filter-assessment"]': assessment, '[name="filter-confidence"]': confidence, '[name="filter-findings"]': findings, '[name="filter-evidence"]': evidence, '#filter-count': count, '#proposals-heading': proposals })[selector],
+  querySelectorAll: (selector) => selector === '#capability-map > .capability[data-filter-name]' ? rows : []
+};
+''' + script + r'''
+const before = proposals.textContent;
+search.value = 'no-match'; search.emit('input');
+if (!rows[0].hidden || proposals.hidden || proposals.textContent !== before) process.exit(1);
+'''
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert proposals.count('<pre class="proposal-draft">') == 1
+    assert "proposal" not in script.lower()
