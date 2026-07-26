@@ -11,4 +11,4 @@ python3 scripts/run_with_host_lease.py \
   -v "$(pwd):/repo" \
   -w /repo \
   python:3.12 \
-  bash -lc "pip install -r requirements.txt -r dev-requirements.txt && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m 'not pg'"
+  bash -lc "apt-get update && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* && pip install -r requirements.txt -r dev-requirements.txt && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m 'not pg'"

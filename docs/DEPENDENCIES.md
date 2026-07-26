@@ -32,6 +32,7 @@ Optional / dev-only packages (testing, linting, type-checking, browser automatio
 | Component | Purpose | Installation hint |
 | --- | --- | --- |
 | Python ≥ 3.12 | Primary runtime for CLI/agents. | `pyenv install 3.12.6`, `python -m venv .venv`. |
+| Node.js | Dev/test execution of the CKM generated-HTML JavaScript regression. | `apt-get install nodejs`; `scripts/py312_smoke_test.sh` provisions it in the stock `python:3.12` smoke image. |
 | ffmpeg | Converts audio to 16 kHz wav (`app/media/transcribe.py`). | `brew install ffmpeg` / `apt-get install ffmpeg`. |
 | yt-dlp | Downloads YouTube/audio sources (`app/media/transcribe.py`). | `pip install -r requirements.txt`. |
 | faster-whisper | Local ASR. | Install via pip; GPU builds need a C++ toolchain. |

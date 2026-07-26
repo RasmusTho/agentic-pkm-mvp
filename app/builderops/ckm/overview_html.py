@@ -435,11 +435,6 @@ def _cockpit_comparison_markup(comparison: Mapping[str, Any] | None) -> str:
     return f'''<section class="cockpit-comparison" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p class="comparison-disclaimer">{disclaimer}</p>{body}<p>Recovery: <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm measure --retain</code> · <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm compare --sample-id &lt;older&gt; --sample-id &lt;newer&gt;</code></p></section>'''
 
 
-def _cockpit_reserved_markup(comparison: Mapping[str, Any] | None) -> str:
-    return _cockpit_comparison_markup(comparison) + """
-    <section class="cockpit-reserved" aria-labelledby="filters-heading"><h2 id="filters-heading">Filters</h2><p>Unavailable in this framing slice. All capability rows are shown.</p></section>"""
-
-
 def _cockpit_proposals_markup() -> str:
     return '<section class="cockpit-reserved" aria-labelledby="proposals-heading"><h2 id="proposals-heading">Proposal drafts</h2><p>Unavailable in this framing slice. No proposal content is generated.</p></section>'
 
@@ -720,6 +715,55 @@ def _honesty_markup(
     )
 
 
+def _filter_value(value: str | None) -> str:
+    """Normalize the closed vocabulary rendered for cockpit filtering."""
+
+    return " ".join((value or "").lower().split())
+
+
+def _capability_filter_attributes(
+    capability: CkmCapability,
+    *,
+    edges: Sequence[CkmEvidenceEdge],
+    findings: Sequence[CkmFinding],
+    projection: CkmAssessmentProjection | None,
+) -> str:
+    assessment = projection.assessment if projection else None
+    assessment_value = (
+        "unavailable"
+        if assessment is None
+        else "available stale"
+        if projection and projection.stale_relative_to_evidence
+        else "available current"
+    )
+    confidence_value = (
+        "unavailable"
+        if assessment is None
+        else "low"
+        if assessment.low_confidence
+        else "standard"
+    )
+    evidence_value = " ".join(
+        lifecycle
+        for lifecycle in ("confirmed", "candidate")
+        if any(edge.lifecycle == lifecycle for edge in edges)
+    ) or "none"
+    values = {
+        "name": capability.name,
+        "definition": capability.definition,
+        "public-id": capability.public_id,
+        "boundary": capability.boundary_ref,
+        "assessment": assessment_value,
+        "confidence": confidence_value,
+        "findings": "present" if findings else "absent",
+        "evidence": evidence_value,
+    }
+    return " ".join(
+        f'data-filter-{name}="{_e(_filter_value(value))}"'
+        for name, value in values.items()
+    )
+
+
 def _capability_markup(
     capability: CkmCapability,
     *,
@@ -759,8 +803,14 @@ def _capability_markup(
         if assessment
         else '<p class="empty">Assessment missing.</p>'
     )
+    filter_attributes = _capability_filter_attributes(
+        capability,
+        edges=edges,
+        findings=findings,
+        projection=projection,
+    )
     return f"""
-    <article id="cap-{_e(capability.id)}" class="capability" data-capability-id="{_e(capability.id)}" style="--depth:{depth}" aria-label="{_e(capability.name)}, depth {depth}">
+    <article id="cap-{_e(capability.id)}" class="capability" data-capability-id="{_e(capability.id)}" {filter_attributes} style="--depth:{depth}" aria-label="{_e(capability.name)}, depth {depth}">
       <details class="capability-details">
         <summary class="capability-summary">
           <span class="tree-name">{_e(capability.name)}</span>
@@ -814,6 +864,96 @@ def _trust_strip(
       <a href="#map-heading">{low} low confidence</a>
       <a href="#gaps-heading">{finding_count} gaps</a>
     </nav>"""
+
+
+def _cockpit_filter_markup(capability_count: int) -> str:
+    """Render the disabled-first controls for the one bounded cockpit enhancement."""
+
+    return f"""<section class="cockpit-filters" aria-labelledby="filters-heading">
+      <h2 id="filters-heading">Filters</h2>
+      <p>Filter capability rows only; trust, hazards, comparison, gaps, proposals, and provenance remain visible.</p>
+      <div class="filter-controls">
+        <label for="filter-search">Search name, definition, public ID, or boundary</label>
+        <input id="filter-search" name="filter-search" type="search" disabled aria-controls="capability-map">
+        <label for="filter-assessment">Assessment freshness</label>
+        <select id="filter-assessment" name="filter-assessment" disabled aria-controls="capability-map">
+          <option value="">Any assessment state</option>
+          <option value="available current">Available and current</option>
+          <option value="available stale">Available and stale</option>
+          <option value="unavailable">Unavailable</option>
+        </select>
+        <label for="filter-confidence">Confidence</label>
+        <select id="filter-confidence" name="filter-confidence" disabled aria-controls="capability-map">
+          <option value="">Any confidence state</option>
+          <option value="low">Low confidence</option>
+          <option value="standard">Standard confidence</option>
+          <option value="unavailable">Confidence unavailable</option>
+        </select>
+        <label for="filter-findings">Findings</label>
+        <select id="filter-findings" name="filter-findings" disabled aria-controls="capability-map">
+          <option value="">Any finding state</option>
+          <option value="present">Findings present</option>
+          <option value="absent">No findings</option>
+        </select>
+        <label for="filter-evidence">Evidence lifecycle</label>
+        <select id="filter-evidence" name="filter-evidence" disabled aria-controls="capability-map">
+          <option value="">Any evidence lifecycle</option>
+          <option value="confirmed">Confirmed evidence present</option>
+          <option value="candidate">Candidate evidence present</option>
+          <option value="none">No linked evidence</option>
+        </select>
+      </div>
+      <p id="filter-count" aria-live="polite" aria-atomic="true">Showing {capability_count} of {capability_count} capabilities.</p>
+      <noscript>Filtering is unavailable; all capability rows are shown.</noscript>
+    </section>"""
+
+
+def _cockpit_filter_script() -> str:
+    """Return the sole cockpit script, constrained to rendered-row filtering."""
+
+    return """<script>(() => {
+  const controls = [
+    document.querySelector('[name="filter-search"]'),
+    document.querySelector('[name="filter-assessment"]'),
+    document.querySelector('[name="filter-confidence"]'),
+    document.querySelector('[name="filter-findings"]'),
+    document.querySelector('[name="filter-evidence"]')
+  ];
+  const [search, assessment, confidence, findings, evidence] = controls;
+  const count = document.querySelector('#filter-count');
+  const rows = document.querySelectorAll('#capability-map > .capability[data-filter-name]');
+  const normalize = (value) => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+  const update = () => {
+    const searchValue = normalize(search.value);
+    const assessmentValue = normalize(assessment.value);
+    const confidenceValue = normalize(confidence.value);
+    const findingsValue = normalize(findings.value);
+    const evidenceValue = normalize(evidence.value);
+    let visible = 0;
+    rows.forEach((row) => {
+      const matches = (!searchValue || [
+        row.dataset.filterName,
+        row.dataset.filterDefinition,
+        row.dataset.filterPublicId,
+        row.dataset.filterBoundary
+      ].some((value) => normalize(value).includes(searchValue)))
+        && (!assessmentValue || normalize(row.dataset.filterAssessment) === assessmentValue)
+        && (!confidenceValue || normalize(row.dataset.filterConfidence) === confidenceValue)
+        && (!findingsValue || normalize(row.dataset.filterFindings) === findingsValue)
+        && (!evidenceValue || normalize(row.dataset.filterEvidence).split(' ').includes(evidenceValue));
+      row.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    count.textContent = visible || rows.length === 0
+      ? `Showing ${visible} of ${rows.length} capabilities.`
+      : `No capabilities match the selected filters. Showing 0 of ${rows.length} capabilities.`;
+  };
+  controls.forEach((control) => {
+    control.disabled = false;
+    control.addEventListener(control === search ? 'input' : 'change', update);
+  });
+  update();
+})();</script>"""
 
 
 def render_overview_html(
@@ -877,10 +1017,19 @@ def render_overview_html(
     watermark_text = _watermarks(batch.current_watermark_set)
     cockpit_header = _cockpit_trust_markup(batch, timestamp) if cockpit else ""
     cockpit_reserved = (
-        _cockpit_hazards_markup(batch) + _cockpit_reserved_markup(cockpit.comparison) if cockpit else ""
+        _cockpit_hazards_markup(batch) + _cockpit_comparison_markup(cockpit.comparison)
+        if cockpit
+        else ""
     )
     cockpit_proposals = _cockpit_proposals_markup() if cockpit else ""
     cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""
+    cockpit_filters = _cockpit_filter_markup(len(forest)) if cockpit else ""
+    cockpit_script = _cockpit_filter_script() if cockpit else ""
+    capability_map_open = (
+        '<div id="capability-map" class="capability-tree">'
+        if cockpit
+        else '<div class="capability-tree">'
+    )
     overview_header = (
         cockpit_header
         if cockpit
@@ -913,6 +1062,7 @@ def render_overview_html(
     .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-3); text-align:center; line-height:0.55rem; }}
     .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
     .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
+    .cockpit-filters {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .filter-controls {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:0.5rem 0.75rem; align-items:end; }} .filter-controls label {{ color:var(--fg-2); }} .filter-controls input,.filter-controls select {{ min-height:2.25rem; border:1px solid var(--border-strong); border-radius:0.1875rem; background:var(--bg-raised); color:var(--fg-1); padding:0.375rem; }} .filter-controls input:focus-visible,.filter-controls select:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }} .filter-controls input:disabled,.filter-controls select:disabled {{ opacity:0.65; }}
     footer {{ margin-top:1.75rem; padding:1rem 0 2.25rem; border-top:1px solid var(--border); color:var(--fg-2); overflow-wrap:anywhere; }}
     @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .subsystem-counts-grid {{ grid-template-columns:1fr; }} .capability-count {{ grid-template-columns:1fr; gap:0.15rem; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
   </style>
@@ -924,11 +1074,12 @@ def render_overview_html(
     {"" if cockpit else _trust_strip(capabilities, assessments, len(all_findings))}
     {cockpit_reserved}
     {subsystem_counts}
+    {cockpit_filters}
     <section aria-labelledby="map-heading">
       <h2 id="map-heading">Capability map</h2>
       {_legend()}
       <div class="dimension-rail" aria-hidden="true">{"".join(f"<span>{abbr}</span>" for abbr, _ in DIMENSION_LABELS.values())}</div>
-      <div class="capability-tree">{cards}</div>
+      {capability_map_open}{cards}</div>
     </section>
     <section class="gaps-panel" aria-labelledby="gaps-heading"><h2 id="gaps-heading">Current gaps</h2>{cockpit_gap_prompt}<ul>{gap_groups}</ul></section>
     {cockpit_proposals}
@@ -940,6 +1091,7 @@ def render_overview_html(
     {footer_identity}
     Candidate and confirmed evidence remain distinct. Regenerate from the CKM store; do not edit this file as authority.
   </footer>
+  {cockpit_script}
 </body>
 </html>
 """
