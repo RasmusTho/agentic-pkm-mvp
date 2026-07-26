@@ -1,8 +1,10 @@
-State: Unfiled parent-feature Issue draft. Do not claim as a GitHub issue until child contracts validate.
+State: Active parent feature Issue #4107; authoritative backlog and validation hub. It remains `agent:blocked` until all twelve child Issues and the external profile-contract dependency are delivered.
 
 # feature: YouTube Source Note v2 — evidence-anchored review-required source bundles
 
-Proposed labels: `type:task`, `prio:high`, `agent:blocked`
+Live Issue: [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107)
+
+Labels: `type:task`, `prio:high`, `agent:blocked`
 
 ## Context
 
@@ -55,18 +57,18 @@ Deliver the v2 source-note capability through its twelve child task contracts. T
 
 ## Implementation Tasks
 
-1. `RECONCILE_SOURCE_NOTE_V2_CONTRACT.md`
-2. `FIX_CANDIDATE_TRUTH_SURFACES.md`
-3. `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE.md`
-4. `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS.md`
-5. `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS.md`
-6. `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE.md`
-7. `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES.md`
-8. `EXTRACT_GATED_ONTOLOGY_PROPOSALS.md`
-9. `SELECT_TIMESTAMPED_KEY_MOMENTS.md`
-10. `APPLY_GOVERNED_INTEREST_OVERLAY.md`
-11. `CAPTURE_OPT_IN_SOURCE_FRAMES.md`
-12. `EVALUATE_SOURCE_NOTE_QUALITY.md` — final invariant matrix and parent-closure handoff after tasks 1–11
+1. [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) — `RECONCILE_SOURCE_NOTE_V2_CONTRACT.md`
+2. [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — `FIX_CANDIDATE_TRUTH_SURFACES.md`
+3. [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE.md`
+4. [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS.md`
+5. [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS.md`
+6. [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE.md`
+7. [#4114](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4114) — `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES.md`
+8. [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — `EXTRACT_GATED_ONTOLOGY_PROPOSALS.md`
+9. [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — `SELECT_TIMESTAMPED_KEY_MOMENTS.md`
+10. [#4117](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4117) — `APPLY_GOVERNED_INTEREST_OVERLAY.md`
+11. [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `CAPTURE_OPT_IN_SOURCE_FRAMES.md`
+12. [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) — `EVALUATE_SOURCE_NOTE_QUALITY.md`; final invariant matrix and parent-closure handoff after tasks 1–11
 
 ## Verification Path
 

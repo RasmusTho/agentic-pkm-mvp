@@ -1,8 +1,8 @@
-State: Validated pre-filing GitHub Issue templates derived from the task specifications. File only after the containing docs PR is merged, the live parent number replaces `PARENT_ISSUE`, and exact body validation succeeds.
+State: Filed GitHub Issue body records for child Issues #4108–#4119 under parent #4107. The live Issues are the executable task contracts; this file preserves their validated source bodies and label intent without claiming runtime delivery.
 
 # YouTube Source Note v2 Child Issue Drafts
 
-Each block below becomes copy-ready only after `PARENT_ISSUE` is replaced with the live parent feature Issue number. The detailed acceptance and validation instructions remain in its linked task specification; every behavioral draft acceptance repeats its exact test commitment here.
+Each block below records the filed body source after parent replacement. The detailed acceptance and validation instructions remain in its linked task specification; every behavioral acceptance repeats its exact test commitment here.
 
 ## YSNV2-01 — task: reconcile YouTube Source Note v2 contract
 
@@ -10,7 +10,7 @@ Labels: `type:task`, `prio:high`, `agent:ready`
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/RECONCILE_SOURCE_NOTE_V2_CONTRACT`. Prepare the authoritative contract for the v2 capability; no runtime implementation is included. TCD hint: Terra/high — bounded contract reconciliation with multiple authority-sensitive doc anchors.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/RECONCILE_SOURCE_NOTE_V2_CONTRACT`. Prepare the authoritative contract for the v2 capability; no runtime implementation is included. TCD hint: Terra/high — bounded contract reconciliation with multiple authority-sensitive doc anchors.
 
 ## Scope
 
@@ -75,7 +75,7 @@ Labels: `type:task`, `prio:med`, `agent:blocked` (YSNV2-03/05)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES`. V2 needs conservative content-sensitive modules without profile overclaim or a second note shape. TCD hint: Terra/high — bounded router/template work with explicit degradation and language-policy tests.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES`. V2 needs conservative content-sensitive modules without profile overclaim or a second note shape. TCD hint: Terra/high — bounded router/template work with explicit degradation and language-policy tests.
 
 ## Scope
 
@@ -137,7 +137,7 @@ Labels: `type:task`, `prio:med`, `agent:blocked` (YSNV2-05)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/EXTRACT_GATED_ONTOLOGY_PROPOSALS`. Ontology output is useful only when source evidence warrants it and must never become canonical through extraction. TCD hint: Sol/xhigh — provenance and proposal-authority boundaries have high hidden-defect cost.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/EXTRACT_GATED_ONTOLOGY_PROPOSALS`. Ontology output is useful only when source evidence warrants it and must never become canonical through extraction. TCD hint: Sol/xhigh — provenance and proposal-authority boundaries have high hidden-defect cost.
 
 ## Scope
 
@@ -199,7 +199,7 @@ Labels: `type:task`, `prio:med`, `agent:blocked` (YSNV2-05)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/SELECT_TIMESTAMPED_KEY_MOMENTS`. Timestamped moments are independently valuable and must not depend on screenshots. TCD hint: Sol/xhigh — selection, provenance, and the later media seam require mechanism-level review.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/SELECT_TIMESTAMPED_KEY_MOMENTS`. Timestamped moments are independently valuable and must not depend on screenshots. TCD hint: Sol/xhigh — selection, provenance, and the later media seam require mechanism-level review.
 
 ## Scope
 
@@ -261,7 +261,7 @@ Labels: `type:task`, `prio:med`, `agent:blocked` (YSNV2-05; future vault-wide pr
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/APPLY_GOVERNED_INTEREST_OVERLAY`. The owner chose a behavior-derived relevance profile shared across the vault; YouTube must consume it rather than create a separate profile. The future ProfileAgent is the sole system-agent writer of approved profile content. Other agents may submit inspectable ProfileUpdateCandidate A2A handoffs, but those are data rather than instructions or approval. ProfileAgent may offer an update only as an unchecked item in the profile document's high-placement AI panel; a checked item must complete governed Panel confirmation, ProfileAgent's write, and a receipt before its result is consumable. A direct owner correction remains owner authority and is never silently overwritten. TCD hint: Sol/xhigh — cross-scope profile authority and admission semantics are critical; this Issue remains blocked until the separate authoritative contract exists.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/APPLY_GOVERNED_INTEREST_OVERLAY`. The owner chose a behavior-derived relevance profile shared across the vault; YouTube must consume it rather than create a separate profile. The future ProfileAgent is the sole system-agent writer of approved profile content. Other agents may submit inspectable ProfileUpdateCandidate A2A handoffs, but those are data rather than instructions or approval. ProfileAgent may offer an update only as an unchecked item in the profile document's high-placement AI panel; a checked item must complete governed Panel confirmation, ProfileAgent's write, and a receipt before its result is consumable. A direct owner correction remains owner authority and is never silently overwritten. TCD hint: Sol/xhigh — cross-scope profile authority and admission semantics are critical; this Issue remains blocked until the separate authoritative contract exists.
 
 ## Scope
 
@@ -327,7 +327,7 @@ Labels: `type:task`, `prio:low`, `agent:blocked` (YSNV2-09; D1 resolved)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/CAPTURE_OPT_IN_SOURCE_FRAMES`. Frames are source-dependent media derivatives with rights, retention, and egress implications. TCD hint: Sol/xhigh — media rights, retention, egress, and deletion receipts carry high defect cost.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/CAPTURE_OPT_IN_SOURCE_FRAMES`. Frames are source-dependent media derivatives with rights, retention, and egress implications. TCD hint: Sol/xhigh — media rights, retention, egress, and deletion receipts carry high defect cost.
 
 ## Scope
 
@@ -390,7 +390,7 @@ Labels: `type:task`, `prio:med`, `agent:blocked` (final child after YSNV2-01..11
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/EVALUATE_SOURCE_NOTE_QUALITY`. V2 needs a quality gate that measures evidence integrity and selection before broad upgrade/re-extraction; this is the final child and owns the end-to-end invariant matrix plus parent-closure handoff after YSNV2-01 through YSNV2-11. TCD hint: Sol/xhigh — the final gate validates persistence, provenance, replay, media, profile authority, and cross-task convergence.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/EVALUATE_SOURCE_NOTE_QUALITY`. V2 needs a quality gate that measures evidence integrity and selection before broad upgrade/re-extraction; this is the final child and owns the end-to-end invariant matrix plus parent-closure handoff after YSNV2-01 through YSNV2-11. TCD hint: Sol/xhigh — the final gate validates persistence, provenance, replay, media, profile authority, and cross-task convergence.
 
 ## Scope
 
@@ -455,7 +455,7 @@ Labels: `type:bug`, `prio:high`, `agent:blocked` (YSNV2-01)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/FIX_CANDIDATE_TRUTH_SURFACES`. V1 renders hardcoded transcript availability, drops validated confidence, and silently truncates summary input. TCD hint: Terra/high — bounded truth-surface correction with focused tests and a current-state owner-doc writeback.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/FIX_CANDIDATE_TRUTH_SURFACES`. V1 renders hardcoded transcript availability, drops validated confidence, and silently truncates summary input. TCD hint: Terra/high — bounded truth-surface correction with focused tests and a current-state owner-doc writeback.
 
 ## Scope
 
@@ -520,7 +520,7 @@ Labels: `type:task`, `prio:high`, `agent:blocked` (YSNV2-02)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE`. The V1 renderer is fixed-shape and cannot compose new registered extraction results safely. TCD hint: Terra/high — bounded renderer work with authority-sensitive non-overwrite tests.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE`. The V1 renderer is fixed-shape and cannot compose new registered extraction results safely. TCD hint: Terra/high — bounded renderer work with authority-sensitive non-overwrite tests.
 
 ## Scope
 
@@ -583,7 +583,7 @@ Labels: `type:task`, `prio:high`, `agent:blocked` (YSNV2-03; D5 resolved)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS`. V1 extraction results are process-local; v2 needs durable evidence lineage without note overwrite. TCD hint: Sol/xhigh — persistence, provenance, replay, partial failure, and non-destructive authority semantics have high defect cost.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS`. V1 extraction results are process-local; v2 needs durable evidence lineage without note overwrite. TCD hint: Sol/xhigh — persistence, provenance, replay, partial failure, and non-destructive authority semantics have high defect cost.
 
 ## Scope
 
@@ -647,7 +647,7 @@ Labels: `type:task`, `prio:high`, `agent:blocked` (YSNV2-04; D6 resolved)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS`. V2 replaces free-text summary with anchored, coverage-aware synthesis and claims. TCD hint: Sol/xhigh — evidence provenance and language semantics require high-confidence contract work.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS`. V2 replaces free-text summary with anchored, coverage-aware synthesis and claims. TCD hint: Sol/xhigh — evidence provenance and language semantics require high-confidence contract work.
 
 ## Scope
 
@@ -709,7 +709,7 @@ Labels: `type:task`, `prio:high`, `agent:blocked` (YSNV2-04; D2/D3 resolved; D5 
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE`. The attachment layout preserves flat note paths. D2 requires a vault transcript and note link; D3 requires a configurable YouTube attachment root with immutable content-identity/version children beneath the stable source folder; D5 requires an existing candidate upgrade to use a versioned proposal companion rather than rewrite the original. TCD hint: Sol/xhigh — configured paths, persistence, provenance, replay, and non-destructive upgrade semantics require high capability.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE`. The attachment layout preserves flat note paths. D2 requires a vault transcript and note link; D3 requires a configurable YouTube attachment root with immutable content-identity/version children beneath the stable source folder; D5 requires an existing candidate upgrade to use a versioned proposal companion rather than rewrite the original. TCD hint: Sol/xhigh — configured paths, persistence, provenance, replay, and non-destructive upgrade semantics require high capability.
 
 ## Scope
 

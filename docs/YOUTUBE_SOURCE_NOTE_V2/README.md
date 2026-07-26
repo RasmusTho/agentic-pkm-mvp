@@ -1,4 +1,4 @@
-State: Target-state capability specification and validated pre-filing breakdown. No v2 runtime behavior is claimed shipped.
+State: Target-state capability specification with active parent Issue #4107 and child Issues #4108–#4119. No v2 runtime behavior is claimed shipped.
 Doc role: Capability specification directory
 Authority: Defines the YouTube Source Note v2 target boundary, task graph, cross-task invariants, and acceptance path. Current behavior remains owned by `docs/KNOWLEDGE_ACQUISITION/*` and implementation evidence.
 
@@ -89,30 +89,30 @@ Current acquisition skips candidate materialization whenever any selected extrac
 
 This is the only partial-success rule authorized by this capability; implementations must not infer optionality from a failure after the fact.
 
-## Execution order and proposed issue state
+## Execution order and live issue state
 
-| Order | Task | Proposed state at filing | Gate |
+| Order | Task | Live Issue / state | Gate |
 | --- | --- | --- | --- |
-| 1 | `RECONCILE_SOURCE_NOTE_V2_CONTRACT` | `agent:ready` | docs-only reconciliation |
-| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | `agent:blocked` | task 1 |
-| 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | `agent:blocked` | task 2 |
-| 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | `agent:blocked` | task 3; D5 resolved |
-| 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | `agent:blocked` | task 4; D6 resolved |
-| 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | `agent:blocked` | task 4; D2/D3 resolved; D5 companion seam required |
-| 7 | `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES` | `agent:blocked` | tasks 3/5 |
-| 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | `agent:blocked` | task 5 |
-| 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | `agent:blocked` | task 5 |
-| 10 | `APPLY_GOVERNED_INTEREST_OVERLAY` | `agent:blocked` | task 5 + future vault-wide profile contract; D4 direction recorded |
-| 11 | `CAPTURE_OPT_IN_SOURCE_FRAMES` | `agent:blocked` | task 9; D1 resolved |
-| 12 | `EVALUATE_SOURCE_NOTE_QUALITY` | `agent:blocked` | final validation after tasks 1–11; therefore also blocked on task 10's future profile contract |
+| 1 | `RECONCILE_SOURCE_NOTE_V2_CONTRACT` | [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) — `agent:ready` | docs-only reconciliation |
+| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — `agent:blocked` | task 1 |
+| 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — `agent:blocked` | task 2 |
+| 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — `agent:blocked` | task 3; D5 resolved |
+| 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — `agent:blocked` | task 4; D6 resolved |
+| 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — `agent:blocked` | task 4; D2/D3 resolved; D5 companion seam required |
+| 7 | `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES` | [#4114](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4114) — `agent:blocked` | tasks 3/5 |
+| 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — `agent:blocked` | task 5 |
+| 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — `agent:blocked` | task 5 |
+| 10 | `APPLY_GOVERNED_INTEREST_OVERLAY` | [#4117](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4117) — `agent:blocked` | task 5 + future vault-wide profile contract; D4 direction recorded |
+| 11 | `CAPTURE_OPT_IN_SOURCE_FRAMES` | [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `agent:blocked` | task 9; D1 resolved |
+| 12 | `EVALUATE_SOURCE_NOTE_QUALITY` | [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) — `agent:blocked` | final validation after tasks 1–11; therefore also blocked on task 10's future profile contract |
 
 ## Acceptance and evidence
 
-Child PRs resolve their own `Verify:` targets and post a concise validation receipt to the live parent feature issue. YSNV2-12 is the final child: after tasks 1–11 have merged, it owns the end-to-end invariant matrix and the parent-closure handoff. The gold-set annotation scope and any source/media consent are recorded as an operator receipt on that live validation ledger, never inferred from this static specification or runtime data. The parent is accepted only when all twelve children are delivered, its v2 note is evidence-anchored, human content remains non-destructively protected, replay remains no-egress, dependency-gated work has its required authority contract, and the quality evaluation records an operator-visible result. Current-state owner docs are updated only at accepted capability truth.
+Child PRs resolve their own `Verify:` targets and post a concise validation receipt to live parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107). YSNV2-12 is the final child: after tasks 1–11 have merged, it owns the end-to-end invariant matrix and the parent-closure handoff. The gold-set annotation scope and any source/media consent are recorded as an operator receipt on that live validation ledger, never inferred from this static specification or runtime data. The parent is accepted only when all twelve children are delivered, its v2 note is evidence-anchored, human content remains non-destructively protected, replay remains no-egress, dependency-gated work has its required authority contract, and the quality evaluation records an operator-visible result. Current-state owner docs are updated only at accepted capability truth.
 
 ## Relationship to GitHub Issues
 
-`PARENT_FEATURE_ISSUE.md` and each task file are validated pre-filing drafts, not filed GitHub issues. After the docs PR merges, file the parent first, replace `PARENT_ISSUE` in every child template with its live number, validate each exact body, and create dependency links in execution order. Then update this directory with the resulting issue numbers and labels.
+Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. Only #4108 is currently `agent:ready`; every later child remains `agent:blocked` until its recorded dependencies are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
 
 ## Related Docs
 
