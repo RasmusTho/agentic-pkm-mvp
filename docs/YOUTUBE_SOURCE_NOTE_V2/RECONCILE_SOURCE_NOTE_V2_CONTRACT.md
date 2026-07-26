@@ -55,4 +55,6 @@ Code, schemas, GitHub issue filing, and changing the recorded D1–D6 decisions.
 
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:high`, `agent:ready`. SBS class: docs/contract preparation for Product/Runtime work. Recommended capability: Terra/high; this is bounded reconciliation with doc-anchor verification.
+Live Issue: [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108). This task delivers
+contract-only writebacks for later Product/Runtime work and no v2 runtime behavior. Recommended
+capability: Terra/high; this is bounded reconciliation with doc-anchor verification.
