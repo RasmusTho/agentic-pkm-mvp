@@ -49,7 +49,7 @@ VMW-02 relies on this classification to apply stale detection only to rewritten 
 
 ## Out of Scope
 
-VMW-01 does not itself own stale detection/conflict staging (VMW-02) or watcher quarantine (VMW-03), although both are now composed with its shared contract. Migration of remaining versionless rewritten writers, VMW-04 registry reconciliation, and `append_note_relative` WriteGuard coverage (#3129) remain out of scope.
+VMW-01 does not itself own stale detection/conflict staging (VMW-02), watcher quarantine (VMW-03), or `append_note_relative` WriteGuard coverage (INV-VW2 / #3129), although all three are now delivered and composed with its shared contract. Migration of remaining versionless rewritten writers and VMW-04 registry reconciliation remain out of scope.
 
 ## Related Docs
 
