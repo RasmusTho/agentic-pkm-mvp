@@ -676,20 +676,35 @@ class _CockpitHtmlSafetyParser(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
+        self.script_count = 0
         self.script_bodies: list[str] = []
         self.script_sources: list[str] = []
         self.inline_handlers: list[str] = []
         self._script_parts: list[str] | None = None
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def _record_start(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+        *,
+        capture_script_body: bool,
+    ) -> None:
         normalized_tag = tag.lower()
         normalized_attrs = [(name.lower(), value) for name, value in attrs]
         self.inline_handlers.extend(name for name, _ in normalized_attrs if name.startswith("on"))
         if normalized_tag == "script":
-            self._script_parts = []
+            self.script_count += 1
             self.script_sources.extend(
                 value or "" for name, value in normalized_attrs if name == "src"
             )
+            if capture_script_body:
+                self._script_parts = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._record_start(tag, attrs, capture_script_body=True)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._record_start(tag, attrs, capture_script_body=False)
 
     def handle_data(self, data: str) -> None:
         if self._script_parts is not None:
@@ -710,6 +725,7 @@ def _parse_cockpit_html_safety(rendered: str) -> _CockpitHtmlSafetyParser:
 
 def _cockpit_filter_script(rendered: str) -> str:
     parser = _parse_cockpit_html_safety(rendered)
+    assert parser.script_count == 1
     assert len(parser.script_bodies) == 1
     return parser.script_bodies[0]
 
@@ -723,7 +739,9 @@ def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
     default_safety = _parse_cockpit_html_safety(default)
     cockpit_safety = _parse_cockpit_html_safety(cockpit)
 
+    assert default_safety.script_count == 0
     assert default_safety.script_bodies == []
+    assert cockpit_safety.script_count == 1
     assert len(cockpit_safety.script_bodies) == 1
     assert cockpit_safety.script_sources == []
     assert cockpit_safety.inline_handlers == []
@@ -736,6 +754,20 @@ def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
     assert synthetic_safety.script_bodies == ["lower", "upper"]
     assert synthetic_safety.script_sources == ["blocked.js"]
     assert synthetic_safety.inline_handlers == ["onload", "onload", "onclick", "onfocus"]
+    unmatched_safety = _parse_cockpit_html_safety(
+        "<script>closed production body</script><SCRIPT>"
+    )
+    assert unmatched_safety.script_count == 2
+    assert unmatched_safety.script_bodies == ["closed production body"]
+    with pytest.raises(AssertionError):
+        _cockpit_filter_script("<script>closed production body</script><SCRIPT>")
+    self_closing_safety = _parse_cockpit_html_safety(
+        '<ScRiPt SRC="blocked.js" OnLoAd="blocked()" />'
+    )
+    assert self_closing_safety.script_count == 1
+    assert self_closing_safety.script_bodies == []
+    assert self_closing_safety.script_sources == ["blocked.js"]
+    assert self_closing_safety.inline_handlers == ["onload"]
     assert _cockpit_filter_script(cockpit).lstrip().startswith("(() => {")
     assert cockpit.count('<h2 id="filters-heading">Filters</h2>') == 1
     assert cockpit.count('id="filters-heading"') == 1
