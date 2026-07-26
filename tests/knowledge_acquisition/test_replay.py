@@ -24,6 +24,10 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.knowledge_acquisition import youtube_plugin
+from app.knowledge_acquisition.candidate_writeback import (
+    assemble_candidate,
+    write_candidate_note,
+)
 from app.knowledge_acquisition.extraction_registry import clear_registry
 from app.knowledge_acquisition.extractors import summary_extractor
 from app.knowledge_acquisition.normalize import normalize
@@ -221,7 +225,7 @@ def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> Non
     # extracted: schema + lineage equivalence (NOT byte-identical text).
     assert stages["extracted"].equivalence == "schema_and_lineage"
     assert stages["extracted"].extractor_id == "summary"
-    assert stages["extracted"].extractor_version == 1
+    assert stages["extracted"].extractor_version == 2
 
     # candidate: byte-identical by first-write-wins preservation on the second replay.
     assert stages["candidate"].status == "already_exists"
@@ -251,6 +255,37 @@ def test_candidate_byte_identical_across_replay(tmp_path: Path) -> None:
     assert note_path.read_bytes() == bytes_first
 
 
+def test_candidate_write_self_heals_missing_completed_event(tmp_path: Path) -> None:
+    """A crash after note creation but before event emission heals on raw replay."""
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+    raw_id = _persist_raw()
+    candidate = assemble_candidate(RAW_PAYLOAD)
+    direct_write = write_candidate_note(
+        candidate,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+    )
+    assert direct_write.status == "written"
+    assert conn.rows == {}
+
+    receipt = run_replay(
+        raw_id,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    candidate_stage = next(stage for stage in receipt.stages if stage.stage == "candidate")
+    assert candidate_stage.status == "already_exists"
+    candidate_events = [
+        row
+        for row in conn.rows_for(STAGE_COMPLETED_TOPIC)
+        if json.loads(row["payload"])["payload"]["stage"] == "candidate"
+    ]
+    assert len(candidate_events) == 1
+
+
 def test_fresh_candidate_write_does_not_claim_byte_identity(tmp_path: Path) -> None:
     """A replay that freshly writes the candidate note is not byte-comparable.
 
@@ -267,6 +302,88 @@ def test_fresh_candidate_write_does_not_claim_byte_identity(tmp_path: Path) -> N
     assert candidate.status == "written"
     assert candidate.equivalence == "fresh_write_not_byte_comparable"
     assert receipt.equivalent is False
+
+
+def test_replay_valid_empty_asr_skips_extraction_and_writes_false_candidate(
+    tmp_path: Path,
+) -> None:
+    empty_asr = {
+        **RAW_PAYLOAD,
+        "content_identity": "sha256:replay-empty-asr",
+        "acquisition_method": "asr",
+        "caption_body": "",
+        "asr_segments": [],
+    }
+    persisted = persist_raw_record(
+        source_kind=empty_asr["source_kind"],
+        item_ref=empty_asr["item_ref"],
+        content_identity=empty_asr["content_identity"],
+        payload=empty_asr,
+        source_ref="test:replay-empty-asr",
+    )
+
+    def _unexpected_completion(**_kwargs) -> str:
+        raise AssertionError("valid empty ASR must bypass transcript extraction")
+
+    summary_extractor.register(complete=_unexpected_completion)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+
+    receipt = run_replay(
+        str(persisted.object_id),
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert [stage.stage for stage in receipt.stages] == ["normalize", "candidate"]
+    candidate = receipt.stages[-1]
+    assert candidate.status == "written"
+    note = (tmp_path / "vault" / candidate.artifact_path).read_text(encoding="utf-8")
+    assert "transcript_available: false" in note
+    assert "Model confidence" not in note
+    completed_stages = {
+        json.loads(row["payload"])["payload"]["stage"]
+        for row in conn.rows_for(STAGE_COMPLETED_TOPIC)
+    }
+    assert completed_stages == {"normalize", "candidate"}
+
+
+def test_replay_malformed_asr_evidence_dead_letters_before_extraction(
+    tmp_path: Path,
+) -> None:
+    from app.knowledge_acquisition.stage_events import STAGE_DEAD_LETTERED_TOPIC
+
+    malformed_asr = {
+        **RAW_PAYLOAD,
+        "content_identity": "sha256:replay-malformed-asr",
+        "acquisition_method": "asr",
+        "caption_body": "",
+        "asr_segments": [{"start": 2.0, "end": 1.0, "text": "reversed"}],
+    }
+    persisted = persist_raw_record(
+        source_kind=malformed_asr["source_kind"],
+        item_ref=malformed_asr["item_ref"],
+        content_identity=malformed_asr["content_identity"],
+        payload=malformed_asr,
+        source_ref="test:replay-malformed-asr",
+    )
+    conn = FakeOutboxConn()
+
+    with pytest.raises(ReplayError):
+        run_replay(
+            str(persisted.object_id),
+            vault_context=_vault(tmp_path / "vault"),
+            write_guard=_allowing_guard(),
+            conn=conn,
+        )
+
+    dead_letters = conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)
+    assert len(dead_letters) == 1
+    payload = json.loads(dead_letters[0]["payload"])["payload"]
+    assert payload["stage"] == "normalize"
+    assert payload["content_identity"] == "sha256:replay-malformed-asr"
+    assert list((tmp_path / "vault").rglob("*.md")) == []
 
 
 def test_acquire_replay_fresh_materialization_reports_successful_non_equivalence(
@@ -287,7 +404,7 @@ def test_acquire_replay_fresh_materialization_reports_successful_non_equivalence
                 status="ok",
                 equivalence="schema_and_lineage",
                 extractor_id="summary",
-                extractor_version=1,
+                extractor_version=2,
             ),
             StageReplayReceipt(
                 stage="candidate",

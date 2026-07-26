@@ -87,6 +87,9 @@ def test_schema_mismatch_fails_loud_no_artifact() -> None:
         json.dumps({"summary": "ok", "confidence": 1.5}),  # confidence out of range
         json.dumps({"summary": "ok", "confidence": -0.1}),  # confidence out of range
         json.dumps({"summary": "ok", "confidence": "high"}),  # wrong type
+        json.dumps({"summary": "ok", "confidence": float("nan")}),
+        json.dumps({"summary": "ok", "confidence": float("inf")}),
+        json.dumps({"summary": "ok", "confidence": float("-inf")}),
         json.dumps({"summary": "ok", "confidence": 0.5, "extra": "field"}),  # additionalProperties
         # JSON embedded in prose must not be fished out (no regex extraction).
         'Sure! Here you go: {"summary": "ok", "confidence": 0.5} — hope that helps.',
@@ -162,6 +165,52 @@ def test_summary_extractor_lineage_via_registry() -> None:
     # under the test-session LLM_PROVIDER=mock default (conftest.py autouse fixture).
     assert set(result.model_identity.keys()) == {"provider", "model"}
     assert result.model_identity["provider"] == "mock"
+
+
+def test_summary_coverage_is_complete_or_explicitly_declared() -> None:
+    """The complete normalized transcript reaches the model; no silent 500-segment prefix."""
+    segments = [
+        {"start": float(index), "end": float(index + 1), "text": f"segment-{index}"}
+        for index in range(501)
+    ]
+    normalized = {**NORMALIZED_FIXTURE, "segments": segments}
+    completion = _stub_completion(
+        json.dumps({"summary": "A complete-input summary.", "confidence": 0.7})
+    )
+
+    payload = run(normalized, complete=completion)
+
+    assert payload == {"summary": "A complete-input summary.", "confidence": 0.7}
+    assert "segment-0" in completion.calls[0]["user"]
+    assert "segment-500" in completion.calls[0]["user"]
+
+
+@pytest.mark.parametrize(
+    "segments",
+    [
+        None,
+        "not-a-segment-sequence",
+        [],
+        [None],
+        [{"start": 0.0, "end": 1.0}],
+        [{"start": 0.0, "end": 1.0, "text": None}],
+        [{"start": 0.0, "end": 1.0, "text": {"nested": "text"}}],
+        [{"start": 0.0, "end": 1.0, "text": "   "}],
+    ],
+)
+def test_malformed_normalized_segments_fail_before_model_call(segments: object) -> None:
+    """Indeterminate normalized evidence never becomes a model-authored summary claim."""
+    completion = _stub_completion(
+        json.dumps({"summary": "must not be used", "confidence": 0.7})
+    )
+    normalized = {**NORMALIZED_FIXTURE, "segments": segments}
+
+    with pytest.raises(ExtractionError) as excinfo:
+        run(normalized, complete=completion)
+
+    assert excinfo.value.extractor_id == EXTRACTOR_ID
+    assert excinfo.value.version == EXTRACTOR_VERSION
+    assert completion.calls == []
 
 
 def test_no_network_no_real_llm_call() -> None:

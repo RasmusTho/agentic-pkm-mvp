@@ -369,3 +369,38 @@ def test_malformed_asr_segment_raises_normalize_error():
     record = _asr_record(asr_segments=[{"start": 0.0, "end": "not-a-number", "text": "hej"}])
     with pytest.raises(NormalizeError):
         normalize(record)
+
+
+@pytest.mark.parametrize(
+    "asr_segments",
+    [
+        None,
+        "",
+        {},
+        (),
+        "not-a-segment-list",
+        [None],
+        [{"start": 0.0, "end": 1.5, "text": None}],
+        [{"start": 0.0, "end": 1.5, "text": {"nested": "text"}}],
+        [{"start": 0.0, "end": 1.5, "text": "   "}],
+        [{"start": float("nan"), "end": 1.5, "text": "hej"}],
+        [{"start": 0.0, "end": float("inf"), "text": "hej"}],
+        [{"start": 10**400, "end": 10**400, "text": "hej"}],
+        [{"start": True, "end": 1.5, "text": "hej"}],
+        [{"start": 2.0, "end": 1.5, "text": "hej"}],
+    ],
+)
+def test_indeterminate_asr_segments_fail_loud(asr_segments: object) -> None:
+    """Malformed ASR evidence is never coerced into usable transcript truth."""
+    record = _asr_record(caption_body="", asr_segments=asr_segments)
+
+    with pytest.raises(NormalizeError):
+        normalize(record)
+
+
+def test_missing_asr_segments_fails_loud() -> None:
+    record = _asr_record(caption_body="")
+    del record["asr_segments"]
+
+    with pytest.raises(NormalizeError):
+        normalize(record)

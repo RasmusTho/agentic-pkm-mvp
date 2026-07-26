@@ -23,6 +23,7 @@ without any pipeline-side import of this module.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 
 from app.components.llm.constrained import (
@@ -40,7 +41,7 @@ from app.knowledge_acquisition.extraction_registry import (
 )
 
 EXTRACTOR_ID = "summary"
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2
 TASK_KIND = "extract.summary"
 
 #: Registered schema for the summary completion (KERNEL-07 registry,
@@ -66,16 +67,35 @@ _SYSTEM_PROMPT = (
     '{"summary": "<free text>", "confidence": <0.0-1.0>}'
 )
 
-# Segment cap keeps the prompt bounded for very long transcripts; the extractor summarizes what
-# it is given rather than silently truncating without a trace — callers passing a full transcript
-# get a bounded-but-representative prompt, not a length-dependent failure.
-_MAX_PROMPT_SEGMENTS = 500
-
-
 def _build_user_prompt(normalized: Mapping[str, Any]) -> str:
-    segments = normalized.get("segments") or []
-    lines = [str(seg.get("text", "")).strip() for seg in segments[:_MAX_PROMPT_SEGMENTS] if isinstance(seg, Mapping)]
-    transcript_text = "\n".join(line for line in lines if line)
+    segments = normalized.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise ExtractionError(
+            extractor_id=EXTRACTOR_ID,
+            version=EXTRACTOR_VERSION,
+            reason="normalized.segments must be a non-empty list",
+        )
+
+    # Every normalized segment is included. A prefix cap would make a partial summary appear to
+    # cover the full transcript unless its exact window were carried into the rendered note.
+    lines: list[str] = []
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, Mapping):
+            raise ExtractionError(
+                extractor_id=EXTRACTOR_ID,
+                version=EXTRACTOR_VERSION,
+                reason=f"normalized.segments[{index}] must be a mapping",
+            )
+        text = segment.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ExtractionError(
+                extractor_id=EXTRACTOR_ID,
+                version=EXTRACTOR_VERSION,
+                reason=f"normalized.segments[{index}].text must be a non-empty string",
+            )
+        lines.append(text.strip())
+
+    transcript_text = "\n".join(lines)
     return f"Transcript:\n{transcript_text}\n\nSummarize the transcript above."
 
 
@@ -113,7 +133,18 @@ def run(normalized: Mapping[str, Any], *, complete: CompletionFn | None = None) 
         raise ExtractionError(
             extractor_id=EXTRACTOR_ID, version=EXTRACTOR_VERSION, reason=exc.reason
         ) from exc
-    return {"summary": payload["summary"], "confidence": payload["confidence"]}
+    confidence = payload["confidence"]
+    if (
+        not isinstance(confidence, (int, float))
+        or isinstance(confidence, bool)
+        or not math.isfinite(confidence)
+    ):
+        raise ExtractionError(
+            extractor_id=EXTRACTOR_ID,
+            version=EXTRACTOR_VERSION,
+            reason="confidence must be a finite number between 0.0 and 1.0",
+        )
+    return {"summary": payload["summary"], "confidence": confidence}
 
 
 def _make_spec(*, complete: CompletionFn | None = None) -> ExtractorSpec:

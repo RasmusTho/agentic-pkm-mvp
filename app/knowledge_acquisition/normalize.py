@@ -37,9 +37,10 @@ this stage never emits a superficially-valid empty artifact for a record that ca
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 STAGE_NAME = "normalize"
 STAGE_VERSION = 1
@@ -102,6 +103,16 @@ class NormalizedTranscript:
         }
 
 
+def has_usable_transcript(normalized: NormalizedTranscript) -> bool:
+    """Whether normalized evidence contains at least one usable transcript segment.
+
+    All live pipeline producers call this on the typed result of :func:`normalize`, so acquire,
+    replay, and candidate assembly share one decision for the valid empty-ASR terminal state.
+    Captionless and malformed inputs never reach this helper because ``normalize`` fails loudly.
+    """
+    return bool(normalized.segments)
+
+
 # Quality notes are deterministic, fixed strings keyed by acquisition method — per
 # REFINEMENT_PIPELINE_CONTRACT.md § normalized ("a quality note: consumers may weigh acquisition
 # methods differently") and RESEARCH_2026-07.md § 3 ("manual captions > faster-whisper ASR >
@@ -152,23 +163,62 @@ def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
                 "an empty normalized artifact for a record that carried transcript content"
             )
     elif acquisition_method == _ASR_METHOD:
-        asr_segments = raw_record.get("asr_segments") or []
+        asr_segments = raw_record.get("asr_segments")
+        if not isinstance(asr_segments, list):
+            raise NormalizeError("asr record asr_segments must be a list")
+
+        normalized_segments: list[NormalizedSegment] = []
         try:
-            segments = tuple(
-                NormalizedSegment(
-                    start=float(seg["start"]),
-                    end=float(seg["end"]),
-                    text=_normalize_whitespace(str(seg["text"])),
+            for index, segment in enumerate(asr_segments):
+                if not isinstance(segment, Mapping):
+                    raise TypeError(f"asr_segments[{index}] must be a mapping")
+
+                start_raw = segment["start"]
+                end_raw = segment["end"]
+                text_raw = segment["text"]
+                if (
+                    not isinstance(start_raw, (int, float))
+                    or isinstance(start_raw, bool)
+                    or not isinstance(end_raw, (int, float))
+                    or isinstance(end_raw, bool)
+                ):
+                    raise TypeError(
+                        f"asr_segments[{index}] start/end must be numeric values"
+                    )
+                start = float(start_raw)
+                end = float(end_raw)
+                if not math.isfinite(start) or not math.isfinite(end):
+                    raise ValueError(
+                        f"asr_segments[{index}] start/end must be finite"
+                    )
+                if end < start:
+                    raise ValueError(
+                        f"asr_segments[{index}] end must not precede start"
+                    )
+                if not isinstance(text_raw, str):
+                    raise TypeError(
+                        f"asr_segments[{index}].text must be a string"
+                    )
+                normalized_text = _normalize_whitespace(text_raw)
+                if not normalized_text:
+                    raise ValueError(
+                        f"asr_segments[{index}].text must be non-blank"
+                    )
+                normalized_segments.append(
+                    NormalizedSegment(
+                        start=start,
+                        end=end,
+                        text=normalized_text,
+                    )
                 )
-                for seg in asr_segments
-            )
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, OverflowError, TypeError, ValueError) as exc:
             # A malformed asr_segments entry (missing start/end/text key, or a non-numeric
             # start/end) must surface the stage's own uniform error type, not a raw stdlib
             # exception — KA-06 (#2801) stage dead-lettering needs one consistent catch target.
             raise NormalizeError(
                 f"asr record has a malformed asr_segments entry: {exc!r}"
             ) from exc
+        segments = tuple(normalized_segments)
         segments = tuple(seg for seg in segments if seg.text)
         if not segments and body_has_content:
             raise NormalizeError(
@@ -311,6 +361,7 @@ __all__ = [
     "NormalizeError",
     "NormalizedSegment",
     "NormalizedTranscript",
+    "has_usable_transcript",
     "normalize",
     "parse_caption_cues",
     "dedup_rolling_cues",

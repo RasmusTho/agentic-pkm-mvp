@@ -21,8 +21,10 @@ from app.knowledge_acquisition.extraction_registry import (
     ExtractorSpec,
     clear_registry,
     register_extractor,
+    run_extractor,
 )
 from app.knowledge_acquisition.extractors import summary_extractor
+from app.knowledge_acquisition.extractors.summary_extractor import EXTRACTOR_VERSION
 from app.knowledge_acquisition.normalize import normalize
 from app.knowledge_acquisition.stage_events import (
     STAGE_COMPLETED_TOPIC,
@@ -31,6 +33,7 @@ from app.knowledge_acquisition.stage_events import (
     emit_stage_completed,
     run_extractors,
     stage_completed_key,
+    stage_dead_letter_key,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -174,7 +177,7 @@ def test_extractor_run_emits_one_event_per_extractor_at_the_emit_site() -> None:
     envelope = Event.model_validate_json(completed[0]["payload"])
     assert envelope.payload["stage"] == "extracted"
     assert envelope.payload["extractor_id"] == "summary"
-    assert envelope.payload["stage_version"] == 1
+    assert envelope.payload["stage_version"] == EXTRACTOR_VERSION
     # Lineage: model identity is carried in the extractor's completion event.
     assert "model_identity" in envelope.payload
 
@@ -239,6 +242,22 @@ def test_duplicate_delivery_idempotent() -> None:
     assert run_a.successes[0].output == run_b.successes[0].output
     # And the extractor's stage.completed event deduped to a single row (same key).
     assert len(conn.rows_for(STAGE_COMPLETED_TOPIC)) == 2  # normalize (a) + summary (one)
+
+
+def test_cached_extraction_self_heals_missing_completed_event() -> None:
+    """A crash after derived extraction but before event emission heals on replay."""
+    normalized = _normalized_dict()
+    precomputed = run_extractor("summary", normalized)
+    assert precomputed.replayed is False
+    conn = FakeOutboxConn()
+
+    report = run_extractors(normalized, extractor_ids=["summary"], conn=conn)
+
+    assert report.successes[0].replayed is True
+    rows = conn.rows_for(STAGE_COMPLETED_TOPIC)
+    assert len(rows) == 1
+    envelope = Event.model_validate_json(rows[0]["payload"])
+    assert envelope.payload["stage_version"] == EXTRACTOR_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +356,29 @@ def test_dead_letter_duplicate_delivery_dedups() -> None:
     run_extractors(normalized, extractor_ids=["always_fails"], conn=conn)
 
     assert len(conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)) == 1
+
+
+def test_summary_v2_non_finite_confidence_dead_letter_has_v2_identity() -> None:
+    """The v2 finite-confidence boundary owns a distinct durable failure lineage."""
+    summary_extractor.register(
+        complete=_stub_completion(
+            json.dumps({"summary": "invalid confidence", "confidence": float("nan")})
+        )
+    )
+    conn = FakeOutboxConn()
+    normalized = _normalized_dict()
+
+    report = run_extractors(normalized, extractor_ids=["summary"], conn=conn)
+
+    assert report.successes == ()
+    assert len(report.dead_lettered) == 1
+    rows = conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)
+    assert len(rows) == 1
+    envelope = Event.model_validate_json(rows[0]["payload"])
+    assert envelope.payload["stage_version"] == EXTRACTOR_VERSION
+    assert rows[0]["id"] == stage_dead_letter_key(
+        stage="extracted",
+        stage_version=EXTRACTOR_VERSION,
+        content_identity=normalized["source_content_identity"],
+        extractor_id="summary",
+    )

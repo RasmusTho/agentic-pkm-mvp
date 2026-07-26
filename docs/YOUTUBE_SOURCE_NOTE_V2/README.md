@@ -8,11 +8,15 @@ YouTube Source Note v2 turns the delivered review-required candidate from a shor
 
 ## Reconciliation baseline
 
-The external design brief was inspected as non-authoritative input. Current docs and code confirm only these V1 defects:
+The external design brief was inspected as non-authoritative input. Issue #4109 / PR #4130 is
+actively correcting the three confirmed V1 truth defects without shipping the later v2 modules:
 
-- `transcript_available` is rendered as `true` regardless of acquired evidence.
-- the validated summary confidence is discarded by the renderer.
-- summary input silently contains only the first 500 normalized segments.
+- `transcript_available` is now derived from usable normalized evidence; valid empty ASR produces
+  the explicit false candidate path without transcript extraction, while captionless and malformed
+  evidence fail loudly.
+- schema-validated finite summary confidence is retained in the non-authoritative rendering.
+- summary input contains all actual normalized segments and reports complete deterministic
+  segment coverage.
 
 The following are V1 limitations or deliberate choices, not retroactive defects: process-local extraction results, fixed rendering, and title-bearing paths. V2 may replace those choices only through the task contracts below. The brief's metadata-bundle examples are not adopted. Every usable bundle resolves the schema-required fields at the top level: identity (`object_id`, `object_type`), scope (`scope_id`), semantic standing (`source_role`, `authority_state`, `evidence_role`, `sensitivity`, `suppression_state`), provenance (`created_by`, `created_at`, `provenance_event_ids`), and episode binding (`episode_ref`). `scope_binding`, when present, is the object defined by the shared schema rather than a string or nested substitute. Conditional schema requirements such as `derived_from` for derived types and `authority_receipt_ref` for canonical standing remain in force.
 
@@ -100,7 +104,7 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 | Order | Task | Live Issue / state | Gate |
 | --- | --- | --- | --- |
 | 1 | `RECONCILE_SOURCE_NOTE_V2_CONTRACT` | [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) — contract delivered; no runtime | docs-only reconciliation |
-| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — next pickup after verified #4108 closure | task 1 |
+| 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — active delivery in PR #4130; not a pickup while claimed | task 1 |
 | 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — `agent:blocked` | task 2 |
 | 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — `agent:blocked` | task 3; D5 resolved |
 | 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — `agent:blocked` | task 4; D6 resolved |
@@ -118,7 +122,7 @@ Child PRs resolve their own `Verify:` targets and post a concise validation rece
 
 ## Relationship to GitHub Issues
 
-Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. #4108's contract-only slice is delivered by this change and is no longer a pickup. After its exact merge and closure receipts, `verification-and-closure` promotes #4109 to `agent:ready`; #4110 through #4119 remain `agent:blocked` until their recorded dependencies are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
+Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates, attached as sub-issues, and linked through native blocked-by relationships. #4108's contract-only slice is delivered. #4109's bounded V1 truth-surface correction is in active delivery through PR #4130 and is not a pickup while claimed; #4110 remains blocked pending verified #4109 closure. #4111 through #4119 remain dependency-gated until their recorded predecessors are satisfied. #4117 additionally remains blocked until a separate authoritative vault-wide profile contract exists, which also keeps #4119 and #4107 blocked.
 
 ## Related Docs
 

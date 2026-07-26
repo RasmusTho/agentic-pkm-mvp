@@ -33,8 +33,8 @@ extension axis, so this task's real deliverable is the registration mechanism, n
 ## Concretely
 
 ```
-normalized (208 segments) → registry.run("summary@1") → {"summary": "...", "confidence": 0.8}
-registry.run("summary@1") again → no-op (unchanged input, unchanged version)
+normalized (208 segments) → registry.run("summary@2") → {"summary": "...", "confidence": 0.8}
+registry.run("summary@2") again → no-op (unchanged input, unchanged version)
 ```
 
 ## Why This Matters

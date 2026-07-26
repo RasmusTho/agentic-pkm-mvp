@@ -56,9 +56,10 @@ from app.knowledge_acquisition.candidate_writeback import (
 )
 from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
-from app.knowledge_acquisition.normalize import NormalizeError, normalize
+from app.knowledge_acquisition.normalize import NormalizeError, has_usable_transcript, normalize
 from app.knowledge_acquisition.replay import CANDIDATE_STAGE, CANDIDATE_STAGE_VERSION
 from app.knowledge_acquisition.stage_events import (
+    ExtractionRunReport,
     emit_stage_completed,
     emit_stage_dead_letter,
     run_extractors,
@@ -278,8 +279,12 @@ def acquire_youtube(
     )
 
     # --- extracted -------------------------------------------------------------------
-    report = run_extractors(
-        normalized_dict, extractor_ids=extractor_ids, trace_id=trace_id, conn=conn
+    report = (
+        run_extractors(
+            normalized_dict, extractor_ids=extractor_ids, trace_id=trace_id, conn=conn
+        )
+        if has_usable_transcript(normalized)
+        else ExtractionRunReport(successes=(), outcomes=())
     )
     for out in report.outcomes:
         if out.status == "ok" and out.result is not None:

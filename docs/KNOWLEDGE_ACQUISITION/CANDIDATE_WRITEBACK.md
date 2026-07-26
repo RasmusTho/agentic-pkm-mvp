@@ -33,7 +33,7 @@ pipeline ends here; triage is human territory.
 ## Concretely
 
 ```
-candidate(raw=…, extractions=[summary@1]) → vault: Sources/<title>.md
+candidate(raw=…, extractions=[summary@2]) → vault: Sources/<title>.md
 frontmatter: artifact_class=youtube_source_note, requires_review=true, provenance{…},
 transcript_available=true; body: About / AI summary (non-authoritative) / Human takeaways (empty)
 ```

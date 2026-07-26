@@ -43,6 +43,7 @@ pipeline MUST NOT do"):
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,7 +54,7 @@ import yaml
 
 from app.knowledge.write_ops import write_note_relative
 from app.knowledge_acquisition.extraction_registry import ExtractionResult, run_extractor
-from app.knowledge_acquisition.normalize import normalize
+from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -99,11 +100,25 @@ class Candidate:
     acquisition_method: str
     transcript_available: bool
     extractions: tuple[ExtractionResult, ...]
+    transcript_segment_count: int = 0
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
             if extraction.extractor_id == "summary":
                 return extraction.output.get("summary")
+        return None
+
+    def summary_confidence(self) -> float | None:
+        for extraction in self.extractions:
+            if extraction.extractor_id != "summary":
+                continue
+            value = extraction.output.get("confidence")
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+            ):
+                return float(value)
         return None
 
 
@@ -153,15 +168,18 @@ def assemble_candidate(
         ) from exc
 
     normalized_dict = normalized.as_dict()
+    transcript_segment_count = len(normalized.segments)
+    transcript_available = has_usable_transcript(normalized)
     extractions: list[ExtractionResult] = []
-    for extractor_id in extractor_ids:
-        try:
-            extractions.append(run_extractor(extractor_id, normalized_dict))
-        except Exception as exc:  # noqa: BLE001 - re-raised as the assembly-scoped error below
-            raise CandidateAssemblyError(
-                f"extractor {extractor_id!r} failed for "
-                f"content_identity={content_identity!r}: {exc}"
-            ) from exc
+    if transcript_available:
+        for extractor_id in extractor_ids:
+            try:
+                extractions.append(run_extractor(extractor_id, normalized_dict))
+            except Exception as exc:  # noqa: BLE001 - re-raised as the assembly-scoped error below
+                raise CandidateAssemblyError(
+                    f"extractor {extractor_id!r} failed for "
+                    f"content_identity={content_identity!r}: {exc}"
+                ) from exc
 
     return Candidate(
         content_identity=content_identity,
@@ -172,8 +190,9 @@ def assemble_candidate(
         creator=metadata.get("channel") or provenance.get("creator"),
         published=metadata.get("publish_date") or provenance.get("published"),
         acquisition_method=str(raw_record.get("acquisition_method") or ""),
-        transcript_available=True,
+        transcript_available=transcript_available,
         extractions=tuple(extractions),
+        transcript_segment_count=transcript_segment_count,
     )
 
 
@@ -234,9 +253,18 @@ def render_candidate_note(candidate: Candidate) -> str:
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
 
     summary = candidate.summary_text()
-    summary_section = (
-        f"> {summary}" if summary else "> _AI summary goes here if generated. This is not human knowledge._"
-    )
+    confidence = candidate.summary_confidence()
+    if summary is not None and confidence is not None and candidate.transcript_segment_count > 0:
+        segment_count = candidate.transcript_segment_count
+        summary_section = (
+            f"> **Model confidence (non-authoritative):** {confidence:g}\n"
+            f"> **Coverage:** {segment_count}/{segment_count} normalized segments "
+            "(100%; complete transcript)\n"
+            ">\n"
+            f"> {summary}"
+        )
+    else:
+        summary_section = "> _AI summary goes here if generated. This is not human knowledge._"
 
     body = f"""
 ## About
