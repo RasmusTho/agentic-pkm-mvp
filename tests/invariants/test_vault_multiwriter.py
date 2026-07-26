@@ -4,7 +4,7 @@ import hashlib
 import os
 import stat
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -110,11 +110,54 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
     target.parent.mkdir(parents=True)
     target.write_bytes(b"human-current")
     stale_version = hashlib.sha256(b"caller-observed").hexdigest()
+    real_stage = adapters_module._stage_initial_stale_proposal
+    racer_entry_name: str | None = None
 
     def unexpected_exchange(*_args: object) -> None:
         raise AssertionError("an initially stale write must not exchange the canonical note")
 
+    def replace_hidden_entry_before_publication(
+        parent_fd: int,
+        staged_name: str,
+        staged_locator: NoteLocator,
+        *,
+        payload: bytes,
+        payload_version: str,
+        staged_stat: os.stat_result,
+        writer_identity: str,
+        written_at: datetime,
+    ) -> PurePosixPath:
+        nonlocal racer_entry_name
+        os.unlink(staged_name, dir_fd=parent_fd)
+        replacement_fd = os.open(
+            staged_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        with os.fdopen(replacement_fd, "wb") as replacement:
+            replacement.write(b"directory-racer")
+            replacement.flush()
+            os.fsync(replacement.fileno())
+        os.fsync(parent_fd)
+        racer_entry_name = staged_name
+        return real_stage(
+            parent_fd,
+            staged_name,
+            staged_locator,
+            payload=payload,
+            payload_version=payload_version,
+            staged_stat=staged_stat,
+            writer_identity=writer_identity,
+            written_at=written_at,
+        )
+
     monkeypatch.setattr(adapters_module, "_atomic_exchange_at", unexpected_exchange)
+    monkeypatch.setattr(
+        adapters_module,
+        "_stage_initial_stale_proposal",
+        replace_hidden_entry_before_publication,
+    )
 
     receipt = adapter.write_note(
         locator,
@@ -132,6 +175,8 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
     assert artifact.parent == target.parent
     assert artifact.read_bytes() == b"caller-proposal"
     assert "bifrost-ios" in artifact.name
+    assert racer_entry_name is not None
+    assert (target.parent / racer_entry_name).read_bytes() == b"directory-racer"
 
 
 def test_staged_conflict_artifact_matches_quarantine_classifier(tmp_path: Path) -> None:
@@ -185,7 +230,8 @@ def test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_
     normally so legacy writers are never broken during progressive migration
     (#3570), while still recording the structured ``note_class`` outcome on the
     receipt. A caller that opts in with ``expected_version`` gets optimistic
-    concurrency: a stale version is refused with ``KnowledgeWriteConflict``."""
+    concurrency: a stale version stages the caller's proposal as a sibling
+    conflict artifact without overwriting the canonical note."""
     note = tmp_path / "Notes" / "human.md"
     note.parent.mkdir(parents=True)
     note.write_text("old", encoding="utf-8")

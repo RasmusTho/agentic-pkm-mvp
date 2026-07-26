@@ -95,6 +95,16 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
+def _entry_has_identity(
+    dir_fd: int, name: str, expected: os.stat_result
+) -> bool:
+    try:
+        current = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return _same_file_identity(current, expected)
+
+
 def _open_conflict_directory(parent_fd: int) -> int:
     try:
         os.mkdir("_conflicts", mode=0o700, dir_fd=parent_fd)
@@ -126,45 +136,107 @@ def _stage_initial_stale_proposal(
     staged_name: str,
     locator: NoteLocator,
     *,
+    payload: bytes,
+    payload_version: str,
+    staged_stat: os.stat_result,
     writer_identity: str,
     written_at: datetime,
 ) -> PurePosixPath:
     """Publish a durable, no-clobber sibling artifact for an initially stale write."""
 
-    for attempt in range(9):
-        artifact_writer = (
-            writer_identity
-            if attempt == 0
-            else f"{writer_identity}-{uuid.uuid4().hex}"
+    candidate_name = f".{PurePosixPath(locator.path).name}.{uuid.uuid4().hex}.conflict-stage"
+    candidate_fd = -1
+    candidate_stat: os.stat_result | None = None
+    artifact_rel: PurePosixPath | None = None
+    try:
+        candidate_fd = os.open(
+            candidate_name,
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_fd,
         )
-        artifact_rel = conflict_artifact_path(
-            locator.path,
-            writer_identity=artifact_writer,
-            written_at=written_at,
-        )
-        try:
-            os.link(
-                staged_name,
-                artifact_rel.name,
-                src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
-                follow_symlinks=False,
+        open_candidate_fd = candidate_fd
+        candidate_fd = -1
+        with os.fdopen(open_candidate_fd, "wb") as candidate_handle:
+            candidate_handle.write(payload)
+            candidate_handle.flush()
+            os.fsync(candidate_handle.fileno())
+            candidate_stat = os.fstat(candidate_handle.fileno())
+
+        for attempt in range(9):
+            artifact_writer = (
+                writer_identity
+                if attempt == 0
+                else f"{writer_identity}-{uuid.uuid4().hex}"
             )
-        except FileExistsError:
-            continue
+            artifact_rel = conflict_artifact_path(
+                locator.path,
+                writer_identity=artifact_writer,
+                written_at=written_at,
+            )
+            try:
+                os.link(
+                    candidate_name,
+                    artifact_rel.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                continue
+            break
+        else:
+            raise KnowledgeCapabilityError(
+                f"could not allocate conflict artifact for rewritten note {locator.path}"
+            )
 
-        # The proposed bytes were fsynced before this helper. Persist the
-        # human-visible name before removing the hidden staging name, then
-        # persist that cleanup. A crash at either boundary leaves at least one
-        # durable name for the proposed inode.
+        assert candidate_stat is not None
+        assert artifact_rel is not None
+        if (
+            not _entry_has_identity(parent_fd, artifact_rel.name, candidate_stat)
+            or hashlib.sha256(_read_entry(parent_fd, artifact_rel.name)).hexdigest()
+            != payload_version
+        ):
+            raise KnowledgeWriteConflict(
+                f"version mismatch for rewritten note {locator.path}: "
+                "staged conflict artifact verification failed"
+            )
+
+        # Persist the human-visible name before removing hidden names. Cleanup
+        # is identity-guarded so a concurrent directory writer cannot make this
+        # operation unlink a replacement that it did not create.
         os.fsync(parent_fd)
-        os.unlink(staged_name, dir_fd=parent_fd)
+        if _entry_has_identity(parent_fd, staged_name, staged_stat):
+            os.unlink(staged_name, dir_fd=parent_fd)
+        if _entry_has_identity(parent_fd, candidate_name, candidate_stat):
+            os.unlink(candidate_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
+
+        if (
+            not _entry_has_identity(parent_fd, artifact_rel.name, candidate_stat)
+            or hashlib.sha256(_read_entry(parent_fd, artifact_rel.name)).hexdigest()
+            != payload_version
+        ):
+            raise KnowledgeWriteConflict(
+                f"version mismatch for rewritten note {locator.path}: "
+                "staged conflict artifact changed before receipt"
+            )
         return artifact_rel
-
-    raise KnowledgeCapabilityError(
-        f"could not allocate conflict artifact for rewritten note {locator.path}"
-    )
+    finally:
+        if candidate_fd >= 0:
+            os.close(candidate_fd)
+        if (
+            candidate_stat is not None
+            and _entry_has_identity(parent_fd, candidate_name, candidate_stat)
+        ):
+            try:
+                os.unlink(candidate_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except FileNotFoundError:
+                pass
 
 
 def _read_entry(dir_fd: int, name: str) -> bytes:
@@ -261,6 +333,8 @@ class FsVaultAdapter:
             staged_name = f".{target.name}.{uuid.uuid4().hex}.rewrite-swap"
             preserve_staged_conflict = False
             staged_is_artifact = False
+            staged_stat: os.stat_result | None = None
+            staged_cleanup_stat: os.stat_result | None = None
             try:
                 parent_fd = os.open(target.parent, _DIRECTORY_OPEN_FLAGS)
                 conflict_fd = _open_conflict_directory(parent_fd)
@@ -278,9 +352,12 @@ class FsVaultAdapter:
                     staged_handle.write(payload)
                     staged_handle.flush()
                     os.fsync(staged_handle.fileno())
-                staged_stat = os.stat(
-                    staged_name, dir_fd=parent_fd, follow_symlinks=False
-                )
+                    staged_stat = os.fstat(staged_handle.fileno())
+                if staged_stat is None:
+                    raise KnowledgeCapabilityError(
+                        f"could not stat staged rewrite for note {locator.path}"
+                    )
+                staged_cleanup_stat = staged_stat
                 payload_version = hashlib.sha256(payload).hexdigest()
 
                 # Validate twice through one descriptor, then use an atomic path exchange
@@ -305,6 +382,9 @@ class FsVaultAdapter:
                             parent_fd,
                             staged_name,
                             locator,
+                            payload=payload,
+                            payload_version=payload_version,
+                            staged_stat=staged_stat,
                             writer_identity=effective_writer_identity,
                             written_at=written_at,
                         )
@@ -379,6 +459,7 @@ class FsVaultAdapter:
                 # such descriptors close, so every successful optimistic exchange retains
                 # this pre-exchange version as a standard conflicted copy.
                 preserve_staged_conflict = True
+                staged_cleanup_stat = opened_stat
                 os.fsync(parent_fd)
                 _require_anchored_directory_identity(
                     parent_fd, target.parent, conflict_fd, locator
@@ -419,6 +500,7 @@ class FsVaultAdapter:
                                 conflict_fd,
                                 staged_name,
                             )
+                            staged_cleanup_stat = staged_stat
                             os.fsync(parent_fd)
                             os.fsync(conflict_fd)
                         except OSError as exc:
@@ -469,24 +551,46 @@ class FsVaultAdapter:
                 try:
                     if preserve_staged_conflict:
                         if not staged_is_artifact:
-                            artifact_name = _conflict_artifact_name(locator)
-                            os.rename(
-                                staged_name,
-                                artifact_name,
-                                src_dir_fd=staged_dir_fd,
-                                dst_dir_fd=conflict_fd,
-                            )
-                            staged_name = artifact_name
-                            staged_dir_fd = conflict_fd
-                            staged_is_artifact = True
-                            os.fsync(parent_fd)
-                            os.fsync(conflict_fd)
+                            if (
+                                staged_cleanup_stat is not None
+                                and _entry_has_identity(
+                                    staged_dir_fd,
+                                    staged_name,
+                                    staged_cleanup_stat,
+                                )
+                            ):
+                                artifact_name = _conflict_artifact_name(locator)
+                                os.rename(
+                                    staged_name,
+                                    artifact_name,
+                                    src_dir_fd=staged_dir_fd,
+                                    dst_dir_fd=conflict_fd,
+                                )
+                                staged_name = artifact_name
+                                staged_dir_fd = conflict_fd
+                                staged_is_artifact = True
+                                os.fsync(parent_fd)
+                                os.fsync(conflict_fd)
+                            else:
+                                logger.warning(
+                                    "rewritten-note staged entry changed identity; "
+                                    "cleanup left replacement untouched: %s",
+                                    staged_name,
+                                )
                     elif staged_dir_fd >= 0:
-                        try:
-                            os.unlink(staged_name, dir_fd=staged_dir_fd)
-                            os.fsync(staged_dir_fd)
-                        except FileNotFoundError:
-                            pass
+                        if (
+                            staged_cleanup_stat is not None
+                            and _entry_has_identity(
+                                staged_dir_fd,
+                                staged_name,
+                                staged_cleanup_stat,
+                            )
+                        ):
+                            try:
+                                os.unlink(staged_name, dir_fd=staged_dir_fd)
+                                os.fsync(staged_dir_fd)
+                            except FileNotFoundError:
+                                pass
                 except OSError:
                     logger.exception(
                         "rewritten-note swap cleanup failed; retained staged entry %s",
