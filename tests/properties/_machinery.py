@@ -798,6 +798,12 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "'blocked' result), in addition to the port's own guard (#3031, Epic "
         "#3019 A11 Mimer projector)."
     ),
+    ("app/heimdal/candidate_projection.py", "write_reading_candidate_note", 1): (
+        "guarded_by_caller: write_reading_candidate_note asserts write_guard."
+        "assert_writes_allowed(READING_CANDIDATE_WRITE_ACTION) immediately before "
+        "this call, in addition to the port's own guard; a blocked caller guard "
+        "returns the item-scoped, re-runnable 'blocked' result."
+    ),
     ("app/heimdal/capture_note.py", "write_capture_note", 1): (
         "guarded_by_port: write_capture_note passes write_guard through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"

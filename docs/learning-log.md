@@ -207,3 +207,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The plan treated before/after pathname identity checks around `git -C` as checkout-lineage proof, but an ABA replacement can source HEAD/index from a foreign checkout while restoring the trusted path before every check.
 **Upstream artifact:** `docs/BUILDEROPS_MODEL_INQUIRY/MODEL_TURN_ADAPTERS.md :: Host role-entrypoint lifecycle` — require immutable in-process digest/object authority rather than treating Git evidence obtained through a mutable pathname as lineage proof.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
+
+## 2026-07-26 — #4096 (absent Verify target)
+**Source:** issue-to-code
+**Diverged:** The issue named `tests/heimdal/test_candidate_projection.py` as AC2 verification, but that file is absent on current `origin/main` and in git history.
+**Upstream artifact:** `.codex/skills/_shared/ISSUE_CONTRACT.md` — require ready-issue validation to resolve each named `Verify:` path before applying `agent:ready`.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
