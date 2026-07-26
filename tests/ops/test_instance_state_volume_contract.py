@@ -2563,6 +2563,116 @@ def test_backup_create_requires_canonical_quiescence_authority(tmp_path) -> None
     assert receipt.manifest_path.is_file()
 
 
+def test_backup_resolves_foreign_binding_ids_omitted_by_owner_producer(tmp_path) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    prod_root = tmp_path / "prod-vault"
+    foreign_root = tmp_path / "dev-vault"
+    prod_root.mkdir()
+    foreign_root.mkdir()
+    runtime.bootstrap_env_binding(
+        vault_root=prod_root,
+        watcher_vault_path=prod_root,
+    )
+    foreign_binding = "binding-foreign-nonlegacy"
+    runtime.ledger.reserve(
+        channel_id="dev",
+        vault_binding_id=foreign_binding,
+        root=foreign_root,
+    )
+    runtime.ledger.activate(foreign_binding)
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {"channel_id": "prod", "root": str(prod_root)},
+            {"channel_id": "dev", "root": str(foreign_root)},
+        ],
+    )
+
+    receipt = InstanceStateBackup(layout, runtime.ledger).create(
+        tmp_path / "backup",
+        quiescence_proof=proof,
+        owner_receipt_path=owner_receipt,
+    )
+
+    assert receipt.manifest_path.is_file()
+    backup_ledger = json.loads(
+        (receipt.manifest_path.parent / "ownership-ledger.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert foreign_binding in backup_ledger["leases"]
+
+
+def test_restore_derives_key_identity_for_existing_v1_manifest(tmp_path) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    backup_root = tmp_path / "backup"
+    proof, owner_receipt = _create_canonical_backup(
+        runtime=runtime,
+        backup_root=backup_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+    )
+    manifest_path = backup_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema"] == "agentic-pkm.instance-state-backup.v1"
+    expected_key_id = manifest.pop("ownership_key_id")
+    expected_generation = manifest.pop("ownership_generation")
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    receipt = InstanceStateBackup(layout, runtime.ledger).restore(
+        backup_root,
+        quiescence_proof=proof,
+        owner_receipt_path=owner_receipt,
+    )
+
+    assert receipt.ownership_key_id == expected_key_id
+    assert receipt.ownership_generation == expected_generation
+
+
+@pytest.mark.parametrize("omitted_field", ("ownership_key_id", "ownership_generation"))
+def test_restore_rejects_partial_key_identity_in_v1_manifest(
+    tmp_path,
+    omitted_field,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    backup_root = tmp_path / "backup"
+    proof, owner_receipt = _create_canonical_backup(
+        runtime=runtime,
+        backup_root=backup_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+    )
+    manifest_path = backup_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop(omitted_field)
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="backup key identity is inconsistent",
+    ):
+        InstanceStateBackup(layout, runtime.ledger).restore(
+            backup_root,
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
+        )
+
+
 @pytest.mark.parametrize("writer_kind", ("key-rotation", "registry-mutation"))
 def test_backup_capture_blocks_concurrent_writer_until_generation_is_captured(
     tmp_path,

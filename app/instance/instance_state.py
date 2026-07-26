@@ -659,13 +659,23 @@ class InstanceStateBackup:
             payloads=payloads,
             owner_payload=owner_payload,
         )
+        manifest_key_id = manifest.get("ownership_key_id")
+        manifest_generation = manifest.get("ownership_generation")
+        has_manifest_key_id = "ownership_key_id" in manifest
+        has_manifest_generation = "ownership_generation" in manifest
         if (
             manifest.get("registry_checksum") != checksums.get("vault-registry.md")
-            or not isinstance(manifest.get("ownership_key_id"), str)
-            or not isinstance(manifest.get("ownership_generation"), int)
-            or isinstance(manifest.get("ownership_generation"), bool)
-            or manifest.get("ownership_key_id") != staged_ledger.key_id
-            or manifest.get("ownership_generation") != staged_ledger.generation
+            or has_manifest_key_id != has_manifest_generation
+            or (
+                has_manifest_key_id
+                and (
+                    not isinstance(manifest_key_id, str)
+                    or not isinstance(manifest_generation, int)
+                    or isinstance(manifest_generation, bool)
+                    or manifest_key_id != staged_ledger.key_id
+                    or manifest_generation != staged_ledger.generation
+                )
+            )
         ):
             raise InstanceStatePreflightError(
                 "backup key identity is inconsistent; keep the global fence until "
@@ -742,6 +752,7 @@ class InstanceStateBackup:
                 global_live_owners = self._global_live_owners(
                     owner_payload=owner_payload,
                     registry=registry,
+                    ledger=scratch_ledger,
                 )
                 ledger = self._require_registry_ledger_consistency(
                     registry=registry,
@@ -795,6 +806,7 @@ class InstanceStateBackup:
         *,
         owner_payload: Mapping[str, object],
         registry: RegistrySnapshot,
+        ledger: OwnershipLedger,
     ) -> tuple[LegacyOwner, ...]:
         raw_owners = owner_payload.get("owners")
         if not isinstance(raw_owners, list):
@@ -824,17 +836,18 @@ class InstanceStateBackup:
                     ):
                         binding_id = registration.vault_binding_id
                         break
-            if not binding_id:
-                digest = hashlib.sha256(
-                    f"{channel_id}\0{root}".encode()
-                ).hexdigest()[:20]
-                binding_id = f"legacy-{channel_id}-{digest}"
             owners.append(LegacyOwner(channel_id, binding_id, root))
-        if len({owner.vault_binding_id for owner in owners}) != len(owners):
+        try:
+            resolved = ledger.resolve_live_owner_bindings(owners)
+        except LedgerError as exc:
+            raise InstanceStatePreflightError(
+                "canonical global live-owner binding identity is invalid"
+            ) from exc
+        if len({owner.vault_binding_id for owner in resolved}) != len(resolved):
             raise InstanceStatePreflightError(
                 "canonical global live-owner inventory repeats a binding identity"
             )
-        return tuple(owners)
+        return resolved
 
 
 def _atomic_private_write(path: Path, payload: bytes) -> None:

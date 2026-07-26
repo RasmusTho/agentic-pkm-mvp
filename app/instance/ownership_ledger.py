@@ -126,6 +126,42 @@ class OwnershipLedger:
             key = self._load_or_create_key_locked(allow_create=False)
             return self._load_or_create_ledger_locked(key, allow_create=False)
 
+    def resolve_live_owner_bindings(
+        self,
+        owners: Sequence[LegacyOwner],
+    ) -> tuple[LegacyOwner, ...]:
+        """Fill omitted owner binding IDs from the authenticated live ledger."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            resolved: list[LegacyOwner] = []
+            for owner in owners:
+                if owner.vault_binding_id:
+                    resolved.append(owner)
+                    continue
+                try:
+                    matches = [
+                        binding_id
+                        for binding_id, lease in current.leases.items()
+                        if lease.channel_id == owner.channel_id
+                        and lease.state == "active"
+                        and self._matches_complete_root_identity(lease, owner.root, key)
+                    ]
+                except FilesystemIdentityError as exc:
+                    raise LedgerError(
+                        "cannot resolve omitted live-owner binding identity"
+                    ) from exc
+                if len(matches) != 1:
+                    raise LedgerError(
+                        "omitted live-owner binding identity is not unambiguous"
+                    )
+                resolved.append(
+                    LegacyOwner(owner.channel_id, matches[0], owner.root)
+                )
+            return tuple(resolved)
+
     def capture_backup_artifacts(
         self,
         *,
