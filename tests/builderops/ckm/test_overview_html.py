@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 from html.parser import HTMLParser
@@ -730,6 +731,14 @@ def _cockpit_filter_script(rendered: str) -> str:
     return parser.script_bodies[0]
 
 
+def _require_node_for_cockpit_script_execution() -> str:
+    node = shutil.which("node")
+    assert node is not None, (
+        "Node.js is a required test dependency for the CKM generated-HTML JavaScript regression."
+    )
+    return node
+
+
 def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
     overview_store: CkmStore,
 ) -> None:
@@ -864,6 +873,7 @@ def test_cockpit_filters_rendered_rows_with_deterministic_and_semantics(
         cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
     )
     script = _cockpit_filter_script(rendered)
+    node = _require_node_for_cockpit_script_execution()
     harness = r'''
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 class Control {
@@ -930,7 +940,7 @@ setSearch('not-present'); assert(visible() === 0 && count.textContent === 'No ca
 reset(); assert(visible() === 4 && count.textContent === 'Showing 4 of 4 capabilities.', 'reset count');
 '''
 
-    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=False)
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
 
     empty_harness = r'''
@@ -964,7 +974,7 @@ assert([search, assessment, confidence, findings, evidence].every((control) => !
 assert(count.textContent === 'Showing 0 of 0 capabilities.', 'empty source count');
 '''
     empty_result = subprocess.run(
-        ["node", "-e", empty_harness], capture_output=True, text=True, check=False
+        [node, "-e", empty_harness], capture_output=True, text=True, check=False
     )
     assert empty_result.returncode == 0, empty_result.stderr
 
