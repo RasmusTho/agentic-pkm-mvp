@@ -38,20 +38,24 @@ The selector performs one read-only query equivalent to:
 SELECT sample_id
 FROM ckm_metric_sample_v1
 WHERE lifecycle = 'retained'
-ORDER BY retained_at DESC, sample_id DESC
+  AND ckm_iso8601_valid_instant(retained_at)
+ORDER BY retained_at COLLATE ckm_iso8601_chronological DESC, sample_id DESC
 LIMIT 2
 ```
 
-Zero or one row returns `insufficient_retained_samples` with the observed count. The selected two
-rows are reversed into chronological `(older, newer)` order before O1b, whose component delta is
-therefore newer minus older. If O1b refuses, the cockpit renders that refusal; it does not ask
-SQLite for a third row.
+The connection-local deterministic validator and collation parse supported timezone-aware ISO-8601
+offset and arbitrary fractional forms into exact decimal UTC instants; an invalid or timezone-less
+value fails closed as unavailable storage. Equal instants retain deterministic `sample_id DESC`
+tie-breaking. Zero or one row returns `insufficient_retained_samples` with the observed count. The
+selected two rows are reversed into chronological `(older, newer)` order before O1b, whose component
+delta is therefore newer minus older. If O1b refuses, the cockpit renders that refusal; it does not
+ask SQLite for a third row.
 
 Existing real recovery commands are shown only in relevant help text:
 
 ```text
-python -m app.builderops --db-path <db> ckm measure --retain
-python -m app.builderops --db-path <db> ckm compare --sample-id <older> --sample-id <newer>
+python -m app.builderops builderops --db-path <db> ckm measure --retain
+python -m app.builderops builderops --db-path <db> ckm compare --sample-id <older> --sample-id <newer>
 ```
 
 No `ckm observe`, invented capture limit, or automatic retention command may appear.

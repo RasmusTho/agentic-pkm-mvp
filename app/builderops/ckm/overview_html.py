@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from app.builderops.ckm.models import (
     MATURITY_DIMENSIONS,
@@ -17,7 +17,7 @@ from app.builderops.ckm.models import (
     CkmAssessmentProjection,
     utc_now,
 )
-from app.builderops.ckm.contracts import canonical_digest
+from app.builderops.ckm.contracts import canonical_digest, canonical_json
 from app.builderops.ckm.store import CkmProjectionBatch, CkmStore
 
 
@@ -37,6 +37,7 @@ class CockpitRenderContext:
     """Immutable, data-only input captured before cockpit rendering begins."""
 
     batch: CkmProjectionBatch
+    comparison: Mapping[str, Any] | None = None
 
 
 def _cockpit_digest(batch: CkmProjectionBatch) -> str:
@@ -300,8 +301,142 @@ def _cockpit_hazards_markup(batch: CkmProjectionBatch) -> str:
       <h2 id="hazards-heading">Interpretation hazards</h2><p>What should not be taken at face value?</p>{content}</section>"""
 
 
-def _cockpit_reserved_markup() -> str:
-    return """<section class="cockpit-reserved" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p>Unavailable in this framing slice. No retained-observation comparison was read.</p></section>
+def _tagged_state_markup(state: Mapping[str, Any]) -> str:
+    tag = str(state.get("state", "unsupported"))
+    detail = state.get("value") if tag == "measured" else state.get("reason", "")
+    return f'<span class="comparison-state" data-value-state="{_e(tag)}">{_e(tag)}: {_e(detail)}</span>'
+
+
+_COMPARISON_KIND = "ckm_compatible_observation_comparison_v1"
+
+
+def _source_unavailable_comparison(reason: str) -> Mapping[str, Any]:
+    return {
+        "error": {
+            "code": "source_unavailable",
+            "message": "retention comparison is unavailable",
+            "details": {"reason": reason},
+        }
+    }
+
+
+def _is_o1b_success(comparison: Mapping[str, Any]) -> bool:
+    required = {
+        "kind",
+        "inputs",
+        "compatibility",
+        "components",
+        "provenance",
+        "freshness",
+        "aggregate",
+        "limitations",
+        "comparison_digest",
+    }
+    if (
+        "error" in comparison
+        or comparison.get("kind") != _COMPARISON_KIND
+        or not required <= set(comparison)
+    ):
+        return False
+    if not isinstance(comparison["inputs"], list) or len(comparison["inputs"]) != 2:
+        return False
+    if not all(
+        isinstance(item, Mapping)
+        and all(isinstance(item.get(field), str) and item[field] for field in ("sample_id", "observation_id", "semantic_digest"))
+        for item in comparison["inputs"]
+    ):
+        return False
+    compatibility = comparison["compatibility"]
+    if not isinstance(compatibility, Mapping) or compatibility.get("compatible") is not True or not isinstance(compatibility.get("bindings"), Mapping):
+        return False
+    if not isinstance(comparison["components"], list) or not comparison["components"]:
+        return False
+    if not all(
+        isinstance(component, Mapping)
+        and isinstance(component.get("component"), str)
+        and component["component"]
+        and isinstance(component.get("states"), list)
+        and len(component["states"]) == 2
+        and all(isinstance(state, Mapping) and isinstance(state.get("state"), str) for state in component["states"])
+        and "numeric_delta" in component
+        and (component["numeric_delta"] is None or isinstance(component["numeric_delta"], (int, float)))
+        and not isinstance(component["numeric_delta"], bool)
+        and isinstance(component.get("state_transition"), list)
+        and len(component["state_transition"]) == 2
+        for component in comparison["components"]
+    ):
+        return False
+    return (
+        isinstance(comparison["provenance"], list)
+        and len(comparison["provenance"]) == 2
+        and isinstance(comparison["freshness"], list)
+        and len(comparison["freshness"]) == 2
+        and isinstance(comparison["aggregate"], Mapping)
+        and isinstance(comparison["limitations"], list)
+        and isinstance(comparison["comparison_digest"], str)
+        and bool(comparison["comparison_digest"])
+    )
+
+
+def _is_o1b_refusal(comparison: Mapping[str, Any]) -> bool:
+    if set(comparison) != {"error"} or not isinstance(comparison["error"], Mapping):
+        return False
+    error = comparison["error"]
+    return (
+        isinstance(error.get("code"), str)
+        and bool(error["code"])
+        and isinstance(error.get("message"), str)
+        and bool(error["message"])
+        and isinstance(error.get("details"), Mapping)
+    )
+
+
+def _cockpit_comparison_markup(comparison: Mapping[str, Any] | None) -> str:
+    disclaimer = "Difference between two snapshots. Not a trend, cause, or forecast."
+    if comparison is None:
+        comparison = _source_unavailable_comparison("comparison data was omitted")
+    elif not _is_o1b_refusal(comparison) and not _is_o1b_success(comparison):
+        comparison = _source_unavailable_comparison("comparison envelope is missing, unknown, empty, or incomplete")
+    if _is_o1b_refusal(comparison):
+        error = comparison["error"]
+        code = error.get("code", "source_unavailable")
+        message = error.get("message", "retention comparison is unavailable")
+        details = error.get("details", {})
+        body = (
+            f'<p class="comparison-refusal" data-comparison-code="{_e(code)}">'
+            f'<code>{_e(code)}</code>: {_e(message)}</p>'
+            f'<pre class="comparison-details">{_e(canonical_json(details))}</pre>'
+            "<p>No older retained row was searched.</p>"
+        )
+    else:
+        components = comparison.get("components", ())
+        component_markup = "".join(
+            f'<li class="comparison-component" data-component="{_e(component.get("component", ""))}">'
+            f'<strong>{_e(component.get("component", ""))}</strong>: '
+            + " → ".join(_tagged_state_markup(state) for state in component.get("states", ()) if isinstance(state, Mapping))
+            + (
+                f' · numeric delta: <span class="comparison-delta">{_e(component["numeric_delta"])}</span>'
+                if component.get("numeric_delta") is not None
+                else ""
+            )
+            + "</li>"
+            for component in components
+            if isinstance(component, Mapping)
+        )
+        body = (
+            f'<ul class="comparison-components">{component_markup}</ul>'
+            f'<pre class="comparison-result">{_e(canonical_json(comparison))}</pre>'
+            f'<pre class="comparison-inputs">{_e(canonical_json(comparison.get("inputs", [])))}</pre>'
+            f'<pre class="comparison-bindings">{_e(canonical_json(comparison.get("compatibility", {})))}</pre>'
+            f'<pre class="comparison-provenance">{_e(canonical_json(comparison.get("provenance", [])))}</pre>'
+            f'<pre class="comparison-freshness">{_e(canonical_json(comparison.get("freshness", [])))}</pre>'
+            f'<pre class="comparison-limitations">{_e(canonical_json(comparison.get("limitations", [])))}</pre>'
+        )
+    return f'''<section class="cockpit-comparison" aria-labelledby="comparison-heading"><h2 id="comparison-heading">Comparison</h2><p>What differs between the two newest active retained observation records, when O1b says they are compatible?</p><p class="comparison-disclaimer">{disclaimer}</p>{body}<p>Recovery: <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm measure --retain</code> · <code>python -m app.builderops builderops --db-path &lt;db&gt; ckm compare --sample-id &lt;older&gt; --sample-id &lt;newer&gt;</code></p></section>'''
+
+
+def _cockpit_reserved_markup(comparison: Mapping[str, Any] | None) -> str:
+    return _cockpit_comparison_markup(comparison) + """
     <section class="cockpit-reserved" aria-labelledby="filters-heading"><h2 id="filters-heading">Filters</h2><p>Unavailable in this framing slice. All capability rows are shown.</p></section>"""
 
 
@@ -742,7 +877,7 @@ def render_overview_html(
     watermark_text = _watermarks(batch.current_watermark_set)
     cockpit_header = _cockpit_trust_markup(batch, timestamp) if cockpit else ""
     cockpit_reserved = (
-        _cockpit_hazards_markup(batch) + _cockpit_reserved_markup() if cockpit else ""
+        _cockpit_hazards_markup(batch) + _cockpit_reserved_markup(cockpit.comparison) if cockpit else ""
     )
     cockpit_proposals = _cockpit_proposals_markup() if cockpit else ""
     cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""

@@ -47,7 +47,10 @@ from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.ckm.metrics import MetricRetentionStore, build_observation
-from app.builderops.ckm.comparison import compare_retained_observations
+from app.builderops.ckm.comparison import (
+    compare_retained_observations,
+    newest_active_retained_sample_ids,
+)
 from app.builderops.ckm.contracts import CkmContractError, ResultEnvelope
 from app.builderops.config import BuilderOpsPaths, default_state_dir, load_paths
 from app.builderops.cutover_evidence import (
@@ -730,8 +733,16 @@ def ckm_overview(
                 capture_limits["class_capture_limit"] = class_capture_limit
             if aggregate_capture_limit is not None:
                 capture_limits["aggregate_capture_limit"] = aggregate_capture_limit
+            retention_path = store.db_path.with_name(f"{store.db_path.stem}-metric-samples.sqlite")
+            try:
+                sample_ids = newest_active_retained_sample_ids(MetricRetentionStore(retention_path))
+                comparison = compare_retained_observations(
+                    MetricRetentionStore(retention_path), sample_ids
+                )
+            except CkmContractError as exc:
+                comparison = {"error": exc.to_dict()}
             cockpit_context = CockpitRenderContext(
-                batch=store.load_projection_batch(**capture_limits)
+                batch=store.load_projection_batch(**capture_limits), comparison=comparison
             )
         result = write_overview_html(
             store,
