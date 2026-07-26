@@ -541,7 +541,7 @@ def _cockpit_proposals_markup(batch: CkmProjectionBatch) -> str:
             )
 
     draft_markup = "".join(
-        f'<pre class="proposal-draft">{"\n".join(lines)}</pre>'
+        '<pre class="proposal-draft">' + "\n".join(lines) + "</pre>"
         for _, lines in sorted(drafts, key=lambda draft: draft[0])
     )
     return (
