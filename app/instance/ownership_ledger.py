@@ -12,10 +12,13 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
-from app.instance.filesystem_identity import resolve_filesystem_root_identity
+from app.instance.filesystem_identity import (
+    FilesystemIdentityError,
+    resolve_filesystem_root_identity,
+)
 
 
 LEDGER_SCHEMA = "agentic-pkm.host-ownership-ledger.v1"
@@ -122,6 +125,293 @@ class OwnershipLedger:
         with self._locked():
             key = self._load_or_create_key_locked(allow_create=False)
             return self._load_or_create_ledger_locked(key, allow_create=False)
+
+    def resolve_live_owner_bindings(
+        self,
+        owners: Sequence[LegacyOwner],
+    ) -> tuple[LegacyOwner, ...]:
+        """Fill omitted owner binding IDs from the authenticated live ledger."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            resolved: list[LegacyOwner] = []
+            for owner in owners:
+                if owner.vault_binding_id:
+                    resolved.append(owner)
+                    continue
+                try:
+                    matches = [
+                        binding_id
+                        for binding_id, lease in current.leases.items()
+                        if lease.channel_id == owner.channel_id
+                        and lease.state == "active"
+                        and self._matches_complete_root_identity(lease, owner.root, key)
+                    ]
+                except FilesystemIdentityError as exc:
+                    raise LedgerError(
+                        "cannot resolve omitted live-owner binding identity"
+                    ) from exc
+                if len(matches) != 1:
+                    raise LedgerError(
+                        "omitted live-owner binding identity is not unambiguous"
+                    )
+                resolved.append(
+                    LegacyOwner(owner.channel_id, matches[0], owner.root)
+                )
+            return tuple(resolved)
+
+    def capture_backup_artifacts(
+        self,
+        *,
+        capture_registry_artifacts: Callable[[], Mapping[str, bytes]],
+    ) -> dict[str, bytes]:
+        """Capture registry and ownership bytes as one immutable lock generation.
+
+        Ledger writers that need registry state already acquire locks in
+        ledger-then-registry order. Backup uses that same order so registry
+        mutation and key rotation cannot interleave the captured artifacts.
+        """
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            self._load_or_create_ledger_locked(key, allow_create=False)
+            payloads = dict(capture_registry_artifacts())
+            for name, source in (
+                ("ownership-ledger.json", self.path),
+                ("ownership-key.json", self.key_path),
+            ):
+                if not source.is_file():
+                    raise LedgerKeyError(
+                        "established registry requires protected ownership ledger "
+                        "and key recovery"
+                    )
+                payloads[name] = source.read_bytes()
+            return payloads
+
+    def require_registry_consistency(
+        self,
+        *,
+        channel_id: str,
+        registrations: Mapping[str, Path],
+        tombstones: Mapping[str, Path],
+        transfer_lineage: Sequence[Mapping[str, str]],
+        global_live_owners: Sequence[LegacyOwner],
+    ) -> LedgerSnapshot:
+        """Authenticate one channel registry and the complete host-global ledger."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            if current.transfer is not None:
+                raise LedgerError(
+                    "registry/ledger consistency cannot commit an in-progress transfer"
+                )
+
+            ledger_live_roots: list[tuple[str, str, str]] = []
+            for binding_id, lease in current.leases.items():
+                if (
+                    binding_id != lease.vault_binding_id
+                    or lease.state != "active"
+                    or not self._has_complete_self_identity(lease, key)
+                ):
+                    raise LedgerError(
+                        "registry/ledger consistency found an invalid host-global live lease"
+                    )
+                ledger_live_roots.append(
+                    (
+                        lease.channel_id,
+                        lease.vault_binding_id,
+                        lease.root_fingerprint,
+                    )
+                )
+            try:
+                expected_live_roots = [
+                    (
+                        owner.channel_id,
+                        owner.vault_binding_id,
+                        self._lease_for_root(
+                            channel_id=owner.channel_id,
+                            vault_binding_id=owner.vault_binding_id,
+                            root=owner.root,
+                            key=key,
+                            state="active",
+                        ).root_fingerprint,
+                    )
+                    for owner in global_live_owners
+                ]
+            except FilesystemIdentityError as exc:
+                raise LedgerError(
+                    "registry/ledger consistency cannot resolve global live-owner identity"
+                ) from exc
+            if sorted(ledger_live_roots) != sorted(expected_live_roots):
+                raise LedgerError(
+                    "registry/ledger consistency requires one live lease per global owner"
+                )
+
+            for binding_id, retired in current.tombstones.items():
+                if (
+                    binding_id != retired.vault_binding_id
+                    or retired.state != "retired"
+                    or not self._has_complete_self_identity(retired, key)
+                ):
+                    raise LedgerError(
+                        "registry/ledger consistency found an invalid host-global tombstone"
+                    )
+
+            lineage_identities: set[tuple[str, str, str, str, str]] = set()
+            lineage_transfer_ids: set[str] = set()
+            for item in current.transfer_lineage:
+                identity = (
+                    item.transfer_id,
+                    item.source_channel_id,
+                    item.source_binding_id,
+                    item.destination_channel_id,
+                    item.destination_binding_id,
+                )
+                source = current.tombstones.get(item.source_binding_id)
+                destination = current.leases.get(
+                    item.destination_binding_id
+                ) or current.tombstones.get(item.destination_binding_id)
+                lineage_lease = OwnershipLease(
+                    channel_id=item.destination_channel_id,
+                    vault_binding_id=item.destination_binding_id,
+                    root_fingerprint=item.root_fingerprint,
+                    ancestor_fingerprints=item.ancestor_fingerprints,
+                    sealed_root=item.sealed_root,
+                    state="lineage",
+                )
+                if (
+                    identity in lineage_identities
+                    or any(
+                        not isinstance(value, str) or not value.strip()
+                        for value in identity
+                    )
+                    or item.transfer_id in lineage_transfer_ids
+                    or item.source_channel_id == item.destination_channel_id
+                    or item.source_binding_id == item.destination_binding_id
+                    or source is None
+                    or destination is None
+                    or source.channel_id != item.source_channel_id
+                    or destination.channel_id != item.destination_channel_id
+                    or source.root_fingerprint != item.root_fingerprint
+                    or destination.root_fingerprint != item.root_fingerprint
+                    or source.ancestor_fingerprints != item.ancestor_fingerprints
+                    or destination.ancestor_fingerprints != item.ancestor_fingerprints
+                    or not self._has_complete_self_identity(lineage_lease, key)
+                ):
+                    raise LedgerError(
+                        "registry/ledger consistency found invalid host-global transfer lineage"
+                    )
+                lineage_identities.add(identity)
+                lineage_transfer_ids.add(item.transfer_id)
+
+            channel_leases = {
+                binding_id: lease
+                for binding_id, lease in current.leases.items()
+                if lease.channel_id == channel_id
+            }
+            if set(channel_leases) != set(registrations):
+                raise LedgerError(
+                    "registry/ledger consistency requires one live lease per registration"
+                )
+            for binding_id, root in registrations.items():
+                lease = channel_leases[binding_id]
+                if (
+                    lease.state != "active"
+                    or lease.vault_binding_id != binding_id
+                    or not self._matches_complete_root_identity(lease, root, key)
+                ):
+                    raise LedgerError(
+                        "registry/ledger consistency found an incompatible live lease"
+                    )
+
+            channel_tombstones = {
+                binding_id: lease
+                for binding_id, lease in current.tombstones.items()
+                if lease.channel_id == channel_id
+            }
+            if set(channel_tombstones) != set(tombstones):
+                raise LedgerError(
+                    "registry/ledger consistency requires matching removal tombstones"
+                )
+            for binding_id, root in tombstones.items():
+                retired = channel_tombstones[binding_id]
+                if (
+                    retired.state != "retired"
+                    or retired.vault_binding_id != binding_id
+                    or not self._matches_complete_root_identity(retired, root, key)
+                ):
+                    raise LedgerError(
+                        "registry/ledger consistency found an incompatible tombstone"
+                    )
+
+            registry_lineage_items = tuple(
+                item
+                for item in transfer_lineage
+                if item["destination_channel_id"] == channel_id
+            )
+            registry_lineage = {
+                (
+                    item["ownership_transfer_id"],
+                    item["source_channel_id"],
+                    item["source_binding_id"],
+                    item["destination_channel_id"],
+                    item["destination_binding_id"],
+                ): item
+                for item in registry_lineage_items
+            }
+            ledger_lineage_items = tuple(
+                item
+                for item in current.transfer_lineage
+                if item.destination_channel_id == channel_id
+            )
+            ledger_lineage = {
+                (
+                    item.transfer_id,
+                    item.source_channel_id,
+                    item.source_binding_id,
+                    item.destination_channel_id,
+                    item.destination_binding_id,
+                ): item
+                for item in ledger_lineage_items
+            }
+            if (
+                len(registry_lineage) != len(registry_lineage_items)
+                or len(ledger_lineage) != len(ledger_lineage_items)
+                or set(registry_lineage) != set(ledger_lineage)
+            ):
+                raise LedgerError(
+                    "registry/ledger consistency requires matching transfer lineage"
+                )
+            roots = dict(registrations) | dict(tombstones)
+            for identity, item in ledger_lineage.items():
+                destination_binding_id = identity[-1]
+                destination_root = roots.get(destination_binding_id)
+                if destination_root is None:
+                    raise LedgerError(
+                        "registry/ledger consistency lineage has no destination root"
+                    )
+                lineage_lease = OwnershipLease(
+                    channel_id=item.destination_channel_id,
+                    vault_binding_id=item.destination_binding_id,
+                    root_fingerprint=item.root_fingerprint,
+                    ancestor_fingerprints=item.ancestor_fingerprints,
+                    sealed_root=item.sealed_root,
+                    state="lineage",
+                )
+                if not self._matches_complete_root_identity(
+                    lineage_lease,
+                    destination_root,
+                    key,
+                ):
+                    raise LedgerError(
+                        "registry/ledger consistency found an incompatible lineage fingerprint"
+                    )
+            return current
 
     def recover_or_require_active(
         self,
@@ -515,6 +805,42 @@ class OwnershipLedger:
             key=key,
             state=lease.state,
         ).root_fingerprint
+
+    def _matches_complete_root_identity(
+        self,
+        lease: OwnershipLease,
+        root: Path,
+        key: _KeyMaterial,
+    ) -> bool:
+        expected = self._lease_for_root(
+            channel_id=lease.channel_id,
+            vault_binding_id=lease.vault_binding_id,
+            root=root,
+            key=key,
+            state=lease.state,
+        )
+        try:
+            sealed_root = Path(self._open_root(lease.sealed_root, key)).expanduser().resolve(
+                strict=False
+            )
+        except (LedgerError, UnicodeError):
+            return False
+        return (
+            lease.root_fingerprint == expected.root_fingerprint
+            and lease.ancestor_fingerprints == expected.ancestor_fingerprints
+            and sealed_root == Path(root).expanduser().resolve(strict=False)
+        )
+
+    def _has_complete_self_identity(
+        self,
+        lease: OwnershipLease,
+        key: _KeyMaterial,
+    ) -> bool:
+        try:
+            root = Path(self._open_root(lease.sealed_root, key))
+            return self._matches_complete_root_identity(lease, root, key)
+        except (FilesystemIdentityError, LedgerError, UnicodeError):
+            return False
 
     def _lease_for_root(
         self,

@@ -172,6 +172,27 @@ class VaultRegistryStore:
                 return self._restore_or_initialize_missing_locked()
             return self._read_current_locked(recover=True)
 
+    def capture_backup_artifacts(self) -> dict[str, bytes]:
+        """Capture the complete registry generation while holding its writer lock."""
+
+        with self._locked():
+            if not self.path.exists():
+                self._restore_or_initialize_missing_locked()
+            else:
+                self._read_current_locked(recover=True)
+            artifacts = {
+                "vault-registry.md": self.path,
+                "vault-registry.md.last-good": self.snapshot_path,
+                "vault-registry.md.last-good.sha256": self.snapshot_checksum_path,
+                "vault-registry.md.legacy-export": self.rollback_export_path,
+            }
+            payloads: dict[str, bytes] = {}
+            for name, source in artifacts.items():
+                if not source.is_file():
+                    raise RegistryError(f"registry backup source is incomplete: {name}")
+                payloads[name] = source.read_bytes()
+            return payloads
+
     def load_or_migrate(self) -> RegistrySnapshot:
         legacy_upgrade = self._is_owned_legacy_source()
         with self._locked(allow_legacy_directory_upgrade=legacy_upgrade):
