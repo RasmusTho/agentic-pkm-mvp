@@ -27,13 +27,13 @@ Add a centralized note-class/operation classifier aligned with the committed Mim
 
 - `expected_version` omitted → the write is performed normally (enforcement deferred). The `WriteReceipt` still records the structured `note_class` outcome, so the classification is observable even before a caller opts in.
 - `expected_version` provided and matching the current on-disk hash → the write proceeds.
-- `expected_version` provided and stale at the first comparison (mismatched) → once VMW-02 is composed with this request contract, the seam preserves the caller's proposal under the shared sibling conflict-artifact grammar, leaves the canonical note unchanged, and returns a `conflict_staged` receipt. Missing targets and races after the first comparison still fail closed with `KnowledgeWriteConflict`.
+- `expected_version` provided and stale at the first comparison (mismatched) → with VMW-02 composed with this request contract, the seam preserves the caller's proposal under the shared sibling conflict-artifact grammar, leaves the canonical note unchanged, and returns a `conflict_staged` receipt. Missing targets and races after the first comparison still fail closed with `KnowledgeWriteConflict`.
 
 This resolves the earlier "structured non-write outcome vs. hard raise" tension in favour of the opt-in model: a versionless rewrite is a normal write plus a classified receipt, an initially stale opted-in rewrite has the structured staged-conflict outcome supplied by VMW-02, and an in-flight race remains a hard failure. The shared artifact helper owns the sibling filename grammar and `is_conflict_artifact` predicate.
 
 ## Why This Matters
 
-VMW-02 cannot safely apply stale detection until it knows which operation is rewritten. Provenance lets a human understand the two sides of a staged conflict.
+VMW-02 relies on this classification to apply stale detection only to rewritten operations. Provenance lets a human understand the two sides of a staged conflict, while VMW-03 consumes the same artifact grammar to quarantine that sibling before ordinary ingest.
 
 ## Acceptance Criteria
 
@@ -49,7 +49,7 @@ VMW-02 cannot safely apply stale detection until it knows which operation is rew
 
 ## Out of Scope
 
-VMW-01 does not itself own stale detection/conflict staging (VMW-02). Watcher quarantine (VMW-03), migration of non-rewritten legacy writers, and `append_note_relative` WriteGuard coverage (#3129) also remain out of scope.
+VMW-01 does not itself own stale detection/conflict staging (VMW-02) or watcher quarantine (VMW-03), although both are now composed with its shared contract. Migration of remaining versionless rewritten writers, VMW-04 registry reconciliation, and `append_note_relative` WriteGuard coverage (#3129) remain out of scope.
 
 ## Related Docs
 
