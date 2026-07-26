@@ -205,10 +205,11 @@ lease check, then keep the rest of execution local and deterministic.
   git operations, branch/worktree mismatch, and relevant lease conflicts. This is a script, not a
   skill.
 - `scripts/agent_worktree.py` owns lifecycle registration plus the report-first cold-path cleanup
-  guard. Apply requires explicit lifecycle, reloadable active-lease, and PR-state authority. Fetch
-  and planning do not retain the lifecycle lock; lease and lifecycle authority are reread at each
-  destructive boundary, and the lifecycle lock spans only the individual worktree-destructive
-  command. The compatibility
+  guard. Apply requires explicit generation-bound lifecycle, reloadable active-lease, and PR-state
+  authority. Fetch and planning do not retain the lifecycle lock; lease plus live
+  path/branch/HEAD/generation authority are reread at the targeted removal boundary, and the
+  lifecycle lock spans only that command. Successful removal retires the exact generation; broad
+  metadata pruning remains report-only. The compatibility
   `scripts/git_hygiene_janitor.py` entrypoint refuses destructive cleanup. These are scripts, not
   skills.
 

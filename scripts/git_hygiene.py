@@ -423,12 +423,17 @@ def _worktree_lifecycle_skip_reason(
     registered_at = record.get("registered_at")
     heartbeat_at = record.get("heartbeat_at")
     expires_at = record.get("expires_at")
+    generation = record.get("generation")
     status = record.get("status")
     if (
         record.get("path") != canonical_path
         or record.get("branch") != branch
         or not isinstance(owner, str)
         or not owner.strip()
+        or not (
+            isinstance(generation, str)
+            and re.fullmatch(r"[0-9a-f]{32}", generation)
+        )
         or status not in {"active", "released", "complete"}
         or not _is_finite_timestamp(registered_at)
         or not _is_finite_timestamp(heartbeat_at)
@@ -605,6 +610,7 @@ PRESERVATION_REASONS = {
     "dirty_worktree",
     "locked_worktree",
     "registration_mismatch",
+    "orphaned_worktree_report_only",
     "unregistered_worktree",
     "unknown_merge_state",
     "worktree_state_unavailable",
@@ -622,6 +628,7 @@ def _preservation_receipt(item: dict[str, Any]) -> dict[str, Any] | None:
         "dirty_worktree": "preserve local drift; inspect or commit it before any cleanup",
         "locked_worktree": "preserve the lock; verify the owning session before any cleanup",
         "registration_mismatch": "repair the lifecycle record; do not infer cleanup authority",
+        "orphaned_worktree_report_only": "inspect and prune missing worktree metadata manually",
         "unregistered_worktree": "register ownership explicitly before any cleanup decision",
         "unknown_merge_state": "verify merge and ownership state before any cleanup",
         "worktree_state_unavailable": "restore or inspect the worktree; do not infer abandonment",
@@ -713,6 +720,16 @@ def build_janitor_plan(
                     preservation_receipts.append(receipt)
             else:
                 orphaned_worktrees.append({"path": path, "branch": branch})
+                item = {
+                    "artifact": "worktree",
+                    "path": path,
+                    "branch": branch,
+                    "reason": "orphaned_worktree_report_only",
+                }
+                skipped.append(item)
+                receipt = _preservation_receipt(item)
+                if receipt:
+                    preservation_receipts.append(receipt)
             continue
         # Candidacy gates on merge state, not branch prefix.
         reason, merge_proof = _worktree_reclaim_reason(
@@ -735,7 +752,12 @@ def build_janitor_plan(
                 preservation_receipts.append(receipt)
             continue
         reclaimable_worktrees.append(
-            {"path": path, "branch": branch, "merge_proof": merge_proof}
+            {
+                "path": path,
+                "branch": branch,
+                "head": worktree.get("HEAD", ""),
+                "merge_proof": merge_proof,
+            }
         )
 
     remote_branches = []
@@ -1019,7 +1041,7 @@ def janitor_apply(
         try:
             with lifecycle_authority_guard(targets):
                 apply_git(args, action)
-        except (OSError, RuntimeError, TypeError, ValueError):
+        except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
             errors.append(
                 {
                     "artifact": "worktree",
@@ -1052,22 +1074,6 @@ def janitor_apply(
                 "ok": False,
             }
 
-    orphaned = plan.get(
-        "orphaned_worktrees",
-        plan["candidates"].get("orphaned_worktrees", []),
-    )
-    if orphaned and not apply_with_lifecycle_authority(
-        ["worktree", "prune"],
-        {"artifact": "worktree", "action": "prune_metadata"},
-        orphaned,
-    ):
-        return {
-            **plan,
-            "mode": "apply",
-            "destructive_actions": actions,
-            "errors": errors,
-            "ok": False,
-        }
     for worktree in reclaimable:
         if authority_changed_for(
             path=worktree.get("path"),

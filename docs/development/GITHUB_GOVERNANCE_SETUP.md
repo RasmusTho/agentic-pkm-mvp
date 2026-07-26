@@ -108,11 +108,12 @@ in-progress git operations, branch/worktree mismatch, and relevant lease conflic
 mutation. Broader cleanup belongs to a cold-path janitor flow that reports stale merged branches,
 orphaned worktrees, old stashes, and prune candidates while respecting active leases and the local
 worktree lifecycle registry. Destructive cleanup is never the default: explicit apply may reclaim
-only registered, expired, clean, unlocked worktrees with proven merge/closure eligibility.
-Unregistered or active lifecycle state is positive preservation evidence. Apply releases the
-lifecycle lock during fetch and planning so active owners can heartbeat, then rereads lease and
-lifecycle authority and holds the lifecycle lock only through each individual worktree-destructive
-command.
+only registered, expired, clean, unlocked worktrees whose live path/branch/HEAD and generation marker
+still match, with proven merge/closure eligibility. Unregistered, active, replaced-generation, or
+orphaned lifecycle state is positive preservation evidence. Apply releases the lifecycle lock during
+fetch and planning so active owners can heartbeat, then rereads lease and lifecycle authority and
+holds the lifecycle lock only through the targeted removal. Successful removal retires that exact
+generation; broad worktree-metadata pruning remains report-only.
 
 ## Enforcement intent
 

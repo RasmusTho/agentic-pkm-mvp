@@ -8,9 +8,11 @@ import fcntl
 import json
 import math
 import os
+import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -22,6 +24,7 @@ from scripts import git_hygiene
 
 REGISTRY_SCHEMA = "agentic-pkm.agent-worktree-registry.v1"
 DEFAULT_TTL_SECONDS = 4 * 60 * 60
+GENERATION_MARKER = "agent-worktree-generation"
 
 
 class WorktreeLifecycleError(RuntimeError):
@@ -96,8 +99,63 @@ def _write_registry(path: Path, payload: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _valid_generation(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return uuid.UUID(hex=value).hex == value
+    except ValueError:
+        return False
+
+
+def _worktree_generation(cwd: Path, worktree: Path, *, create: bool) -> str:
+    raw = git_hygiene.run_git(
+        ["-C", str(worktree), "rev-parse", "--git-path", GENERATION_MARKER],
+        cwd,
+    )
+    marker = Path(raw)
+    if not marker.is_absolute():
+        marker = worktree / marker
+    marker = marker.resolve(strict=False)
+    if marker.exists():
+        generation = marker.read_text(encoding="utf-8").strip()
+        if not _valid_generation(generation):
+            raise WorktreeLifecycleError("worktree generation marker is invalid")
+        return generation
+    if not create:
+        raise WorktreeLifecycleError("worktree generation marker is missing")
+
+    generation = uuid.uuid4().hex
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=marker.parent,
+        prefix=f".{marker.name}.",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=True) as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(f"{generation}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, marker)
+        _fsync_directory(marker.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return generation
 
 
 @contextmanager
@@ -135,20 +193,70 @@ def _locked_lifecycle_snapshot(path: Path) -> dict[str, dict[str, Any]]:
         return _lifecycle_records(_read_registry(path))
 
 
+def _bind_live_generations(
+    cwd: Path,
+    records: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Invalidate planning copies that do not match the current checkout generation."""
+
+    bound = {key: dict(value) for key, value in records.items()}
+    for key, record in bound.items():
+        generation = record.get("generation")
+        if not _valid_generation(generation):
+            continue
+        try:
+            live_generation = _worktree_generation(cwd, Path(key), create=False)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            record["generation"] = None
+            continue
+        if live_generation != generation:
+            record["generation"] = None
+    return bound
+
+
 @contextmanager
 def _locked_lifecycle_authority(
+    cwd: Path,
     path: Path,
     targets: list[dict[str, Any]],
 ) -> Iterator[None]:
     """Revalidate target lifecycle records and hold authority through one Git action."""
 
     with _registry_lock(path):
-        records = _lifecycle_records(_read_registry(path))
+        payload = _read_registry(path)
+        records = _lifecycle_records(payload)
+        authorized: list[tuple[str, str]] = []
         for target in targets:
             worktree = target.get("path")
             branch = target.get("branch")
             if not isinstance(worktree, str) or not isinstance(branch, str):
                 raise WorktreeLifecycleError("cleanup target lifecycle identity is invalid")
+            canonical, live_branch = _worktree_identity(cwd, Path(worktree))
+            if str(canonical) != str(_canonical(Path(worktree))) or live_branch != branch:
+                raise WorktreeLifecycleError("cleanup target checkout identity changed")
+            if git_hygiene._worktree_dirty(str(canonical)) is not False:
+                raise WorktreeLifecycleError("cleanup target worktree is dirty or unavailable")
+            live_entries = git_hygiene._parse_worktrees(
+                git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+            )
+            live_entry = next(
+                (
+                    entry
+                    for entry in live_entries
+                    if entry.get("worktree")
+                    and _canonical(Path(entry["worktree"])) == canonical
+                ),
+                None,
+            )
+            if live_entry is None or "locked" in live_entry:
+                raise WorktreeLifecycleError("cleanup target is missing or locked")
+            expected_head = target.get("head")
+            if (
+                not isinstance(expected_head, str)
+                or not expected_head
+                or live_entry.get("HEAD") != expected_head
+            ):
+                raise WorktreeLifecycleError("cleanup target HEAD changed")
             reason = git_hygiene._worktree_lifecycle_skip_reason(
                 worktree,
                 branch,
@@ -159,7 +267,31 @@ def _locked_lifecycle_authority(
                 raise WorktreeLifecycleError(
                     f"cleanup target lifecycle authority changed: {reason}"
                 )
+            record = records[str(canonical)]
+            generation = record.get("generation")
+            if (
+                not _valid_generation(generation)
+                or _worktree_generation(cwd, canonical, create=False) != generation
+            ):
+                raise WorktreeLifecycleError("cleanup target generation changed")
+            authorized.append((str(canonical), generation))
         yield
+        removed_at = time.time()
+        registry_changed = False
+        for canonical_path, generation in authorized:
+            try:
+                _worktree_identity(cwd, Path(canonical_path))
+            except WorktreeLifecycleError:
+                record = payload["worktrees"].get(canonical_path)
+                if (
+                    isinstance(record, dict)
+                    and record.get("generation") == generation
+                ):
+                    record["status"] = "removed"
+                    record["removed_at"] = removed_at
+                    registry_changed = True
+        if registry_changed:
+            _write_registry(path, payload)
 
 
 def load_lifecycle_records(
@@ -204,9 +336,11 @@ def register_worktree(
         )
         if existing_active_for_other_owner:
             raise WorktreeLifecycleError("worktree has an active lifecycle owner")
+        generation = _worktree_generation(cwd, canonical, create=True)
         record = {
             "path": str(canonical),
             "branch": branch,
+            "generation": generation,
             "owner": owner,
             "status": "active",
             "registered_at": timestamp,
@@ -240,6 +374,15 @@ def heartbeat_worktree(
             or record.get("status") != "active"
         ):
             raise WorktreeLifecycleError("active matching lifecycle registration is required")
+        recorded_generation = record.get("generation")
+        generation = _worktree_generation(
+            cwd,
+            canonical,
+            create=recorded_generation is None,
+        )
+        if recorded_generation is not None and recorded_generation != generation:
+            raise WorktreeLifecycleError("active matching lifecycle registration is required")
+        record["generation"] = generation
         record["heartbeat_at"] = timestamp
         record["expires_at"] = timestamp + ttl_seconds
         return dict(record)
@@ -263,8 +406,18 @@ def _finish_worktree(
             not isinstance(record, dict)
             or record.get("owner") != owner
             or record.get("branch") != branch
+            or record.get("status") not in {"active", "released", "complete"}
         ):
             raise WorktreeLifecycleError("matching lifecycle registration is required")
+        recorded_generation = record.get("generation")
+        generation = _worktree_generation(
+            cwd,
+            canonical,
+            create=recorded_generation is None,
+        )
+        if recorded_generation is not None and recorded_generation != generation:
+            raise WorktreeLifecycleError("matching lifecycle registration is required")
+        record["generation"] = generation
         record["status"] = status
         record[f"{status}_at"] = timestamp
         record["expires_at"] = timestamp
@@ -316,7 +469,10 @@ def janitor_report(
     stale_after_days: int = 14,
     now: float | None = None,
 ) -> dict[str, Any]:
-    records = load_lifecycle_records(cwd, registry_path=registry_path)
+    records = _bind_live_generations(
+        cwd,
+        load_lifecycle_records(cwd, registry_path=registry_path),
+    )
     report = git_hygiene.build_janitor_plan(
         cwd,
         active_leases=active_leases,
@@ -341,11 +497,12 @@ def janitor_apply(
     stale_after_days: int = 14,
 ) -> dict[str, Any]:
     path = _canonical(registry_path or _default_registry_path(cwd))
-    records = _locked_lifecycle_snapshot(path)
+    records = _bind_live_generations(cwd, _locked_lifecycle_snapshot(path))
     return git_hygiene.janitor_apply(
         cwd,
         active_lease_loader=lambda: _load_active_lease_snapshot(lease_path),
         lifecycle_authority_guard=lambda targets: _locked_lifecycle_authority(
+            cwd,
             path,
             targets,
         ),

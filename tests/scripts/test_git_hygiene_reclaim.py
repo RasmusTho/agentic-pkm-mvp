@@ -19,6 +19,9 @@ from contextlib import nullcontext
 from scripts import git_hygiene
 
 
+GENERATION = "a" * 32
+
+
 def _allow_lifecycle_authority(_targets):
     return nullcontext()
 
@@ -258,6 +261,7 @@ def test_apply_real_git_reclaims_squash_merged_worktree_and_branch(tmp_path) -> 
         str(clean_wt.resolve()): {
             "path": str(clean_wt.resolve()),
             "branch": "deliver/squashed",
+            "generation": GENERATION,
             "owner": "completed-owner",
             "status": "complete",
             "registered_at": -20,

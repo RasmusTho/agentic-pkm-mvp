@@ -7,6 +7,9 @@ import pytest
 from scripts import git_hygiene
 
 
+GENERATION = "a" * 32
+
+
 def _allow_lifecycle_authority(_targets):
     return nullcontext()
 
@@ -920,6 +923,7 @@ def test_janitor_apply_rereads_lease_authority_before_removal(
             str(worktree): {
                 "path": str(worktree),
                 "branch": "codex/candidate",
+                "generation": GENERATION,
                 "owner": "completed-owner",
                 "status": "complete",
                 "registered_at": 10,
@@ -1423,17 +1427,16 @@ def test_janitor_dry_run_integration_with_temp_repo(tmp_path) -> None:
         },
     )
 
-    assert {
-        "path": str(tmp_path / "clean-wt"),
-        "branch": "codex/merged-branch",
-        "merge_proof": "ancestor_of_origin_main",
-    } in report["candidates"]["worktrees"]
+    candidate = next(
+        item
+        for item in report["candidates"]["worktrees"]
+        if item["path"] == str(tmp_path / "clean-wt")
+    )
+    assert candidate["branch"] == "codex/merged-branch"
+    assert candidate["head"]
+    assert candidate["merge_proof"] == "ancestor_of_origin_main"
     # The same enriched candidate is surfaced under the canonical reclaim key.
-    assert {
-        "path": str(tmp_path / "clean-wt"),
-        "branch": "codex/merged-branch",
-        "merge_proof": "ancestor_of_origin_main",
-    } in report["reclaimable_worktrees"]
+    assert candidate in report["reclaimable_worktrees"]
     assert any(item["branch"] == "codex/missing" for item in report["candidates"]["orphaned_worktrees"])
     assert any(
         item["artifact"] == "worktree" and item["branch"] == "codex/dirty" and item["reason"] == "dirty_worktree"
@@ -1853,6 +1856,7 @@ def test_janitor_apply_worktree_reclaim_is_idempotent(tmp_path) -> None:
         str(clean_wt.resolve()): {
             "path": str(clean_wt.resolve()),
             "branch": "deliver/foo",
+            "generation": GENERATION,
             "owner": "completed-owner",
             "status": "complete",
             "registered_at": -20,
