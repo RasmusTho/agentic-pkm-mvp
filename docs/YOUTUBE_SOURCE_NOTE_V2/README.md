@@ -89,7 +89,9 @@ Current acquisition skips candidate materialization whenever any selected extrac
 
 This is the only partial-success rule authorized by this capability; implementations must not infer optionality from a failure after the fact.
 
-## Execution order and live issue state
+## Execution order and proposed issue state
+
+This stable heading is retained because parent Issue #4107 uses it as an acceptance anchor; the table records the current live Issue state.
 
 | Order | Task | Live Issue / state | Gate |
 | --- | --- | --- | --- |
