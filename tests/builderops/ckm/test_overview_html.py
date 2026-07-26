@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -670,10 +671,47 @@ def test_cockpit_uses_existing_overview_renderer_call_site(overview_store: CkmSt
     assert "Capability map" in rendered
 
 
+class _CockpitHtmlSafetyParser(HTMLParser):
+    """Record the parser-normalized script and inline-handler surface of generated HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.script_bodies: list[str] = []
+        self.script_sources: list[str] = []
+        self.inline_handlers: list[str] = []
+        self._script_parts: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_tag = tag.lower()
+        normalized_attrs = [(name.lower(), value) for name, value in attrs]
+        self.inline_handlers.extend(name for name, _ in normalized_attrs if name.startswith("on"))
+        if normalized_tag == "script":
+            self._script_parts = []
+            self.script_sources.extend(
+                value or "" for name, value in normalized_attrs if name == "src"
+            )
+
+    def handle_data(self, data: str) -> None:
+        if self._script_parts is not None:
+            self._script_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "script" and self._script_parts is not None:
+            self.script_bodies.append("".join(self._script_parts))
+            self._script_parts = None
+
+
+def _parse_cockpit_html_safety(rendered: str) -> _CockpitHtmlSafetyParser:
+    parser = _CockpitHtmlSafetyParser()
+    parser.feed(rendered)
+    parser.close()
+    return parser
+
+
 def _cockpit_filter_script(rendered: str) -> str:
-    match = re.search(r"<script>(.*?)</script>", rendered, re.S)
-    assert match is not None
-    return match.group(1)
+    parser = _parse_cockpit_html_safety(rendered)
+    assert len(parser.script_bodies) == 1
+    return parser.script_bodies[0]
 
 
 def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
@@ -682,16 +720,22 @@ def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
     context = CockpitRenderContext(batch=overview_store.load_projection_batch())
     default = render_overview_html(overview_store)
     cockpit = render_overview_html(overview_store, cockpit=context)
-    script_pattern = r"<script\b[^>]*>"
-    handler_pattern = r"\bon[a-z]+\s*="
+    default_safety = _parse_cockpit_html_safety(default)
+    cockpit_safety = _parse_cockpit_html_safety(cockpit)
 
-    assert "<script" not in default
-    assert len(re.findall(script_pattern, cockpit)) == 1
-    assert '<script src=' not in cockpit
-    assert not re.search(handler_pattern, cockpit, re.I)
+    assert default_safety.script_bodies == []
+    assert len(cockpit_safety.script_bodies) == 1
+    assert cockpit_safety.script_sources == []
+    assert cockpit_safety.inline_handlers == []
     assert not re.search(r"(?:https?:)?//", cockpit, re.I)
-    assert len(re.findall(script_pattern, '<script></script><script type="module"></script>')) == 2
-    assert re.search(handler_pattern, '<button onclick="blocked()">', re.I)
+    synthetic_safety = _parse_cockpit_html_safety(
+        '<script TYPE="text/javascript" onload="blocked()">lower</script>'
+        '<SCRIPT SRC="blocked.js" ONLOAD="blocked()">upper</SCRIPT>'
+        '<button ONCLICK="blocked()" onfocus="blocked()">blocked</button>'
+    )
+    assert synthetic_safety.script_bodies == ["lower", "upper"]
+    assert synthetic_safety.script_sources == ["blocked.js"]
+    assert synthetic_safety.inline_handlers == ["onload", "onload", "onclick", "onfocus"]
     assert _cockpit_filter_script(cockpit).lstrip().startswith("(() => {")
     assert cockpit.count('<h2 id="filters-heading">Filters</h2>') == 1
     assert cockpit.count('id="filters-heading"') == 1
