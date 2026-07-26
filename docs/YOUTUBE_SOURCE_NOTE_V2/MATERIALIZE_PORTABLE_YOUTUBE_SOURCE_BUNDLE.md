@@ -17,20 +17,22 @@ Give the owner a browsable, portable source bundle while preserving the machine-
 
 ## What This Task Does
 
-Using resolved D2/D3 and the D5 versioned-companion mechanism delivered by YSNV2-04, keeps the original review-required note at its flat V1 path and materializes rebuildable `transcript.md` and `source.json` under a configured vault-relative YouTube attachment root. A new candidate may carry the transcript link at first materialization; upgrading an existing candidate writes the link into a new versioned proposal companion and leaves the original note byte-identical. The bundle resolves all metadata-bundle fields in their valid top-level shapes.
+Using resolved D2/D3 and the D5 versioned-companion mechanism delivered by YSNV2-04, keeps the original review-required note at its flat V1 path and materializes rebuildable `transcript.md` and `source.json` under a configured vault-relative YouTube attachment root. The stable source-identity folder contains immutable content-identity/version directories; a newer acquisition never overwrites bundle members referenced by an older candidate. A new candidate may carry the transcript link at first materialization; upgrading an existing candidate writes the link into a new versioned proposal companion and leaves the original note byte-identical. The bundle resolves all metadata-bundle fields in their valid top-level shapes.
 
 ## Concretely
 
-The attachment subfolder key is stable source identity, not title or content identity; the flat display note may be renamed. The YouTube plugin/add-on owns the validated vault-relative `youtube_attachment_root` setting, defaulting to `Sources/YouTube/_attachments`. Transcript anchors are time-derived and mirrored with segment identifiers in the manifest. `transcript.md` declares derived/rebuildable/reference standing, cannot become replay input, and is linked from the synthesis/evidence-and-lineage surface of the newly materialized candidate or D5 versioned proposal companion.
+The top attachment subfolder key is stable source identity, not title or content identity; beneath it, each immutable content identity/version gets its own directory containing `transcript.md`, `source.json`, and any retained frames. The flat display note may be renamed. The YouTube plugin/add-on owns the validated vault-relative `youtube_attachment_root` setting, defaulting to `Sources/YouTube/_attachments`. Transcript anchors are time-derived and mirrored with segment identifiers in that version's manifest. `transcript.md` declares derived/rebuildable/reference standing, cannot become replay input, and is linked from the synthesis/evidence-and-lineage surface of the newly materialized candidate or D5 versioned proposal companion.
 
 ## Why This Matters
 
-Portable reading artifacts should stay useful after copying the vault, while upstream caption changes must not fork the human-facing location or consume human edits.
+Portable reading artifacts should stay useful after copying the vault, while upstream caption changes must neither fork the human-facing location nor make an older candidate resolve against newer evidence.
 
 ## Acceptance Criteria
 
 - [ ] Attachment identity is title-independent; content-identity updates do not fork the attachment folder or overwrite the flat candidate note.
   Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_configured_attachment_root_is_source_identity_keyed_and_note_is_non_destructive`.
+- [ ] Each content identity/version has immutable bundle members beneath the stable source folder; a newer version cannot overwrite or retarget an older candidate's transcript, manifest, anchors, or retained-frame links.
+  Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_bundle_members_are_immutable_and_versioned_by_content_identity`.
 - [ ] The configured attachment root is vault-relative, defaults safely, and rejects path traversal or an absolute path.
   Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_youtube_attachment_root_is_configurable_and_vault_relative`.
 - [ ] The vault transcript is a rebuildable derived reference with time-derived anchors; replay reads raw instead.
@@ -44,7 +46,7 @@ Portable reading artifacts should stay useful after copying the vault, while ups
 
 ## How to Verify (Pre-Merge)
 
-- Run the six named focused tests.
+- Run the seven named focused tests.
 - Validate manifest fixtures with `schemas/metadata-bundle.schema.json` and a resolved `scope_binding` object.
 
 ## Out of Scope

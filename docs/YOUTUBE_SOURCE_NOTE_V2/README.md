@@ -36,9 +36,13 @@ flowchart TD
   T5 --> T9["9 Timestamped moments"]
   T5 --> T10["10 Governed interest overlay"]
   T9 --> T11["11 Opt-in source frames"]
-  T5 --> T12["12 Quality evaluation"]
+  T5 --> T12["12 Final quality & invariant validation"]
+  T6 --> T12
+  T7 --> T12
   T8 --> T12
   T9 --> T12
+  T10 --> T12
+  T11 --> T12
   D1["D1 decided: opt-in contextual frame"] -. enables .-> T11
   D2["D2 decided: vault transcript"] -. enables .-> T6
   D3["D3 decided: flat notes + configured attachments"] -. enables .-> T6
@@ -54,7 +58,7 @@ The previous “nine slices” statement is corrected: S0 through S9 are ten con
 
 - **D1 — resolved 2026-07-25:** Frame capture is opt-in per acquisition. When temporary-media capture succeeds, retain one `context_frame` from the video even when it is not information-bearing under the normal visual-necessity rule; that exception is for the owner’s visual orientation. Additional retained frames still require visual necessity and remain subject to the cap. Capture failure or unavailable video degrades to timestamps-only, with no placeholder. Temporary video bytes are deleted in-run; only approved retained frames remain.
 - **D2 — resolved 2026-07-25:** Write a rebuildable, non-authoritative `transcript.md` beside the candidate note and always link it from the note’s synthesis/evidence-and-lineage surface. Machine-side raw evidence remains the replay source and authority.
-- **D3 — resolved 2026-07-25:** Preserve the existing flat candidate-note path. Store `transcript.md`, `source.json`, and retained frames under a vault-relative attachment root configured by the YouTube plugin/add-on (`youtube_attachment_root`, default `Sources/YouTube/_attachments`), with a stable source-identity subfolder such as `yt-<video-id>`. The configuration value is validated as vault-relative; title and content-identity changes never relocate attachments. A copied note therefore needs its linked attachment subfolder exported with it to remain fully browsable.
+- **D3 — resolved 2026-07-25:** Preserve the existing flat candidate-note path. Store `transcript.md`, `source.json`, and retained frames under a vault-relative attachment root configured by the YouTube plugin/add-on (`youtube_attachment_root`, default `Sources/YouTube/_attachments`), with a stable source-identity subfolder such as `yt-<video-id>` and one immutable child directory per content identity/version. The configuration value is validated as vault-relative; title changes never relocate attachments, while a content-identity change creates a new immutable version directory and never retargets an older candidate's links or anchors. A copied note therefore needs its linked attachment subfolder exported with it to remain fully browsable.
 - **D4 — resolved direction 2026-07-25:** The owner wants a behavior-derived relevance profile shared across the whole vault, not a YouTube-only profile. Its future owner contract defines one vault-local, owner-visible Profile Note: an agentic preference-memory artifact that records relevant, reviewable knowledge about the owner. It is not hidden model state, human-authored knowledge, or a local YouTube profile. A future **ProfileAgent is the only system agent allowed to write the Profile Note's approved profile content**. Other agents have no direct profile-write route; they submit provenance-bearing `ProfileUpdateCandidate` handoffs to ProfileAgent over the inspectable A2A/handoff boundary. Such handoffs are data, not instructions or approval, and do not themselves enter the profile or agent context. Any direct owner correction remains owner authority, is never overwritten by an agent, and must be reconciled visibly by the future profile contract.
 
   ProfileAgent evaluates an admissible candidate and may offer one specific update in the Profile Note's visible AI panel. That panel is placed immediately after the frontmatter/title and before all profile content, never at the end of the document. Following PanelAgent's canonical checkbox semantics, the offered change is distinguishable and initially unchecked (`- [ ]`), with its proposed change, source/provenance, and uncertainty visible to the owner. Marking the item `[x]` is the owner's confirmation signal; it enters the governed Panel confirmation path. Only after policy/admission, WriteGuard, idempotency, and a confirmation receipt may ProfileAgent perform the corresponding profile write. It must never write an offered update in the same pass that created it. The future contract must bind the resulting receipt to the candidate/proposal, confirmation, and resulting profile version.
@@ -66,7 +70,7 @@ The previous “nine slices” statement is corrected: S0 through S9 are ten con
 ## Cross-Task Invariants / Interaction Safety
 
 1. **Immutable evidence.** Raw acquisition evidence is immutable and keyed by content identity. A derived artifact never edits it.
-2. **Lineage-bearing derivation.** Every normalized, extracted, transcript, synthesis, claim, bundle manifest, moment, and frame preserves content identity, producing stage/version, and ancestor lineage. Required metadata-bundle fields are resolved at the consuming boundary; no invalid nested substitute is emitted.
+2. **Lineage-bearing derivation.** Every normalized, extracted, transcript, synthesis, claim, bundle manifest, moment, and frame preserves content identity, producing stage/version, and ancestor lineage. Bundle members live under an immutable content-identity/version directory within the stable source-identity root, so newer content cannot retarget older note links or anchors. Required metadata-bundle fields are resolved at the consuming boundary; no invalid nested substitute is emitted.
 3. **Human content is non-destructive.** A candidate note is first-write-wins. It is terminal only after its note has materialized. Re-extraction never overwrites a candidate or human-authored content; under D5 it creates a versioned proposal companion instead.
 4. **Partial failure is visible, not destructive.** Normalize/raw failure prevents candidate materialization. After required evidence has succeeded, an optional extractor failure emits a durable rerunnable failure receipt and an explicit degraded-note marker; it cannot erase successful required evidence or an already materialized candidate. A candidate may materialize only when its declared required evidence set is present.
 5. **Claims have evidence.** Every rendered factual claim, quote, synthesis sentence, and overlay `source_says` field carries one or more resolvable transcript anchors; anchorless output is omitted and reported, never softened into an uncited claim.
@@ -100,11 +104,11 @@ This is the only partial-success rule authorized by this capability; implementat
 | 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | `agent:blocked` | task 5 |
 | 10 | `APPLY_GOVERNED_INTEREST_OVERLAY` | `agent:blocked` | task 5 + future vault-wide profile contract; D4 direction recorded |
 | 11 | `CAPTURE_OPT_IN_SOURCE_FRAMES` | `agent:blocked` | task 9; D1 resolved |
-| 12 | `EVALUATE_SOURCE_NOTE_QUALITY` | `agent:blocked` | tasks 5/8/9 |
+| 12 | `EVALUATE_SOURCE_NOTE_QUALITY` | `agent:blocked` | final validation after tasks 1–11; therefore also blocked on task 10's future profile contract |
 
 ## Acceptance and evidence
 
-Child PRs resolve their own `Verify:` targets and post a concise validation receipt to the live parent feature issue. The gold-set annotation scope and any source/media consent are recorded as an operator receipt on that live validation ledger, never inferred from this static specification or runtime data. The parent is accepted only when all twelve children are delivered, its v2 note is evidence-anchored, human content remains non-destructively protected, replay remains no-egress, dependency-gated work has its required authority contract, and the quality evaluation records an operator-visible result. Current-state owner docs are updated only at accepted capability truth.
+Child PRs resolve their own `Verify:` targets and post a concise validation receipt to the live parent feature issue. YSNV2-12 is the final child: after tasks 1–11 have merged, it owns the end-to-end invariant matrix and the parent-closure handoff. The gold-set annotation scope and any source/media consent are recorded as an operator receipt on that live validation ledger, never inferred from this static specification or runtime data. The parent is accepted only when all twelve children are delivered, its v2 note is evidence-anchored, human content remains non-destructively protected, replay remains no-egress, dependency-gated work has its required authority contract, and the quality evaluation records an operator-visible result. Current-state owner docs are updated only at accepted capability truth.
 
 ## Relationship to GitHub Issues
 

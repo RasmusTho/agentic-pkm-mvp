@@ -66,11 +66,11 @@ Deliver the v2 source-note capability through its twelve child task contracts. T
 9. `SELECT_TIMESTAMPED_KEY_MOMENTS.md`
 10. `APPLY_GOVERNED_INTEREST_OVERLAY.md`
 11. `CAPTURE_OPT_IN_SOURCE_FRAMES.md`
-12. `EVALUATE_SOURCE_NOTE_QUALITY.md`
+12. `EVALUATE_SOURCE_NOTE_QUALITY.md` — final invariant matrix and parent-closure handoff after tasks 1–11
 
 ## Verification Path
 
-Run each child’s focused `Verify:` targets, plus the parent invariant matrix only after all required children are merged. Use host leasing for any repo-wide suite the child contract requires.
+Run each child’s focused `Verify:` targets. YSNV2-12 owns the parent invariant matrix and runs it only after prerequisite children 1–11 are merged; after YSNV2-12 merges, its receipt supplies the parent-closure handoff. Use host leasing for any repo-wide suite the child contract requires.
 
 ## Validation / Acceptance Path
 

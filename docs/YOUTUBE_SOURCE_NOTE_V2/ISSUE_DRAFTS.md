@@ -386,15 +386,15 @@ None.
 
 ## YSNV2-12 — task: evaluate source note quality
 
-Labels: `type:task`, `prio:med`, `agent:blocked` (YSNV2-05/08/09)
+Labels: `type:task`, `prio:med`, `agent:blocked` (final child after YSNV2-01..11; YSNV2-10 also requires the external profile contract)
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/EVALUATE_SOURCE_NOTE_QUALITY`. V2 needs a quality gate that measures evidence integrity and selection before broad upgrade/re-extraction. TCD hint: Terra/high for harness mechanics, with Sol/xhigh independent review because the gate validates persistence, provenance, replay, media, and authority boundaries.
+Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/EVALUATE_SOURCE_NOTE_QUALITY`. V2 needs a quality gate that measures evidence integrity and selection before broad upgrade/re-extraction; this is the final child and owns the end-to-end invariant matrix plus parent-closure handoff after YSNV2-01 through YSNV2-11. TCD hint: Sol/xhigh — the final gate validates persistence, provenance, replay, media, profile authority, and cross-task convergence.
 
 ## Scope
 
-Implement the versioned gold-set/evaluation harness and operator annotation receipt boundary.
+Implement the versioned gold-set/evaluation harness, operator annotation receipt boundary, end-to-end invariant matrix, and parent-closure handoff.
 
 ## Source Anchors
 
@@ -403,7 +403,7 @@ Implement the versioned gold-set/evaluation harness and operator annotation rece
 ## SBS Impact
 
 - Primary subsystem: OEF
-- Secondary subsystem(s): HKA, SIP, GOV
+- Secondary subsystem(s): HKA, SIP, GOV, PDM, EBF, RCA, MEM, CAO
 - Write class: derived
 - Authority impact: evaluation does not promote or edit notes
 - Persistence impact: versioned evaluation fixtures/receipts
@@ -416,12 +416,13 @@ Implement the versioned gold-set/evaluation harness and operator annotation rece
 - New or changed contract: source-note gold set, quality metrics, and operator annotation receipt; `docs/contracts/ARTIFACT_CONTRACT.md` applies and is unchanged
 - Owner-doc impact: will-update-in-PR
 - Transition debt impact: creates the acceptance evidence needed before broad re-extraction
-- Fitness rule impact: claim entailment, anchor validity, must-capture recall, consent receipt, and no-mutation tests
+- Fitness rule impact: claim entailment, anchor validity, must-capture recall, consent receipt, no-mutation, and capability-wide invariant tests
 - Boundary risk: high — a weak evaluation must not launder plausible output into accepted capability truth
 
 ## Constraints
 
 - Evaluation and replay must remain no-egress and non-mutating.
+- Do not run or merge this final validation child before YSNV2-01 through YSNV2-11 are delivered; YSNV2-10 remains blocked until its separate profile contract exists.
 
 ## Acceptance Criteria
 
@@ -429,6 +430,7 @@ Implement the versioned gold-set/evaluation harness and operator annotation rece
 - [ ] Metrics include anchor validity and must-capture recall with fixture lineage. Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_quality_metrics_record_anchor_validity_and_must_capture_recall`.
 - [ ] Gold-set annotation scope and source/media consent are represented by an operator receipt rather than inferred. Verify: operator receipt on the live parent feature Issue validation ledger identified by `docs/YOUTUBE_SOURCE_NOTE_V2/PARENT_FEATURE_ISSUE.md :: Validation / Acceptance Path`.
 - [ ] Evaluation stays no-egress and non-mutating. Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_quality_evaluation_is_no_egress_and_non_mutating`.
+- [ ] A representative v2 fixture proves the capability-wide invariants and supplies the parent-closure handoff after all prerequisite children are delivered. Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_v2_end_to_end_invariant_matrix`.
 
 ## Out of Scope
 
@@ -436,7 +438,7 @@ Automatic subjective acceptance and background re-extraction.
 
 ## Suggested Validation
 
-- Run the three named focused tests.
+- Run the four named focused tests, including the final end-to-end invariant matrix.
 - Record and inspect the operator receipt for gold-set annotation scope and any source/media consent at the parent validation hub.
 
 ## Source Docs
@@ -707,11 +709,11 @@ Labels: `type:task`, `prio:high`, `agent:blocked` (YSNV2-04; D2/D3 resolved; D5 
 
 ## Context
 
-Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE`. The attachment layout preserves flat note paths. D2 requires a vault transcript and note link; D3 requires a configurable YouTube attachment root; D5 requires an existing candidate upgrade to use a versioned proposal companion rather than rewrite the original. TCD hint: Sol/xhigh — configured paths, persistence, provenance, replay, and non-destructive upgrade semantics require high capability.
+Parent validation hub: `PARENT_ISSUE` (replace with the live parent feature Issue number before filing). Implements `YOUTUBE_SOURCE_NOTE_V2/MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE`. The attachment layout preserves flat note paths. D2 requires a vault transcript and note link; D3 requires a configurable YouTube attachment root with immutable content-identity/version children beneath the stable source folder; D5 requires an existing candidate upgrade to use a versioned proposal companion rather than rewrite the original. TCD hint: Sol/xhigh — configured paths, persistence, provenance, replay, and non-destructive upgrade semantics require high capability.
 
 ## Scope
 
-Implement the approved flat-note/configured-attachment layout, derived transcript, valid manifest mapping, and D5-based non-destructive upgrade route.
+Implement the approved flat-note/configured-attachment layout, immutable content-versioned bundle members, derived transcript, valid manifest mapping, and D5-based non-destructive upgrade route.
 
 ## Source Anchors
 
@@ -724,8 +726,8 @@ Implement the approved flat-note/configured-attachment layout, derived transcrip
 - Secondary subsystem(s): WSP, PDM, SIP, EBF, OEF
 - Write class: derived
 - Authority impact: transcript remains non-authoritative derivative
-- Persistence impact: durable bundle location and rebuildable members
-- Derived/rebuildable impact: transcript and manifest are rebuildable projections; raw remains replay authority
+- Persistence impact: stable source folder with immutable content-identity/version directories and rebuildable members
+- Derived/rebuildable impact: each version's transcript and manifest are rebuildable projections; raw remains replay authority
 - Human knowledge impact: flat candidate note and human-authored content remain non-destructive
 - Memory impact: none
 - Retrieval/context impact: note-to-transcript links improve inspection without changing authority
@@ -734,17 +736,19 @@ Implement the approved flat-note/configured-attachment layout, derived transcrip
 - New or changed contract: validated `youtube_attachment_root`, identity-keyed attachment bundle, and resolved metadata manifest; `docs/contracts/ARTIFACT_CONTRACT.md`, `docs/contracts/ACTIVE_CONTEXT_SET.md`, and `docs/contracts/STORE_PORT.md` apply
 - Owner-doc impact: will-update-in-PR
 - Transition debt impact: adds portable vault artifacts without migrating existing note paths
-- Fitness rule impact: path safety, identity stability, replay-source, linkage, schema, and migration tests
-- Boundary risk: critical — path traversal, attachment relocation, invalid metadata, and replay-source confusion must fail closed
+- Fitness rule impact: path safety, source-root stability, immutable content-versioning, replay-source, linkage, schema, and migration tests
+- Boundary risk: critical — path traversal, attachment relocation, cross-version retargeting, invalid metadata, and replay-source confusion must fail closed
 
 ## Constraints
 
 - Preserve the flat note path; reject an attachment-root configuration that escapes the vault.
+- Preserve immutable bundle members per content identity/version beneath the stable source-identity folder; never overwrite or retarget an older candidate's links.
 - A bundle upgrade for an existing candidate must use a new versioned proposal companion and leave the original candidate byte-identical.
 
 ## Acceptance Criteria
 
 - [ ] Configured attachment folder identity is stable and non-destructive. Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_configured_attachment_root_is_source_identity_keyed_and_note_is_non_destructive`.
+- [ ] Bundle members are immutable and versioned by content identity beneath the stable source folder, so newer content cannot retarget older candidate evidence. Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_bundle_members_are_immutable_and_versioned_by_content_identity`.
 - [ ] Attachment-root configuration is vault-relative and safe. Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_youtube_attachment_root_is_configurable_and_vault_relative`.
 - [ ] Transcript is anchored derived reference, never replay input. Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_transcript_projection_is_anchored_derived_and_never_replay_input`.
 - [ ] A new candidate or D5 versioned proposal companion links its derived transcript from synthesis/evidence and lineage without rewriting an existing original candidate. Verify: `tests/knowledge_acquisition/test_youtube_source_bundle.py::test_note_links_derived_transcript_from_synthesis_and_lineage`.
@@ -757,7 +761,7 @@ Source-media acquisition and sibling upgrades.
 
 ## Suggested Validation
 
-- Run the six named focused tests and schema validation.
+- Run the seven named focused tests and schema validation.
 
 ## Source Docs
 
