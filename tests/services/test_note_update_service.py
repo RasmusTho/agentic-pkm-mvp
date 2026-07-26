@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_update import NoteUpdateResult, process_note_update
 from app.settings.panel_actions import PanelActionMapping
@@ -102,6 +103,40 @@ def test_process_note_update_changed_writes_via_knowledge_port(
     assert result.changed is True
     assert writes
     assert "- [x]" not in note_path.read_text(encoding="utf-8")
+
+
+def test_process_note_update_staged_conflict_returns_stale_before_acknowledgements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_path = tmp_path / "note.md"
+    note_uuid = "note-staged-1"
+    current = _note_content(note_uuid, checked=True)
+    note_path.write_text(current, encoding="utf-8")
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_before = _note_content(note_uuid, checked=False)
+    _write_snapshot(snapshot_dir, note_uuid, snapshot_before)
+    executed_id_writes: list[object] = []
+
+    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
+    monkeypatch.setattr(
+        "app.services.note_update.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.note_update.upsert_executed_ids",
+        lambda *args, **kwargs: executed_id_writes.append((args, kwargs)),
+    )
+    ctx = OrchestratorContext(settings={"panel_events_enable": False, "origin": "test.note_update"})
+
+    result = process_note_update(note_path, ctx, snapshot_dir=snapshot_dir)
+
+    assert result.stale is True
+    assert result.changed is False
+    assert executed_id_writes == []
+    assert (snapshot_dir / f"{note_uuid}.md").read_text(encoding="utf-8") == snapshot_before
+    assert note_path.read_text(encoding="utf-8") == current
 
 
 def test_process_note_update_detects_stale_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

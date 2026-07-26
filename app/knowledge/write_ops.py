@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
 from app.knowledge.references import build_obsidian_advanced_uri
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
@@ -41,6 +42,20 @@ def _local_fs_settings() -> KnowledgeSettings:
     )
 
 
+def _require_canonical_write(
+    receipt: WriteReceipt,
+    *,
+    accept_staged_conflict: bool,
+) -> WriteReceipt:
+    if receipt.outcome == "conflict_staged" and not accept_staged_conflict:
+        artifact = receipt.conflict_artifact or "an unknown conflict artifact"
+        raise KnowledgeWriteConflict(
+            f"rewritten note conflict staged at {artifact}; canonical note unchanged",
+            receipt=receipt,
+        )
+    return receipt
+
+
 def write_note_from_absolute(
     path: Path | str,
     content: str,
@@ -50,6 +65,7 @@ def write_note_from_absolute(
     write_guard: "WriteGuard | None" = None,
     expected_version: str | None = None,
     writer_identity: str | None = None,
+    accept_staged_conflict: bool = False,
 ) -> WriteReceipt:
     # Guard-at-seam (#2910): assert WriteGuard inside the port itself, before
     # any path resolution or filesystem mutation, so a blocked write is
@@ -82,7 +98,11 @@ def write_note_from_absolute(
         kwargs["expected_version"] = expected_version
     if writer_identity is not None:
         kwargs["writer_identity"] = writer_identity
-    return port.write_note(locator, content, **kwargs)
+    receipt = port.write_note(locator, content, **kwargs)
+    return _require_canonical_write(
+        receipt,
+        accept_staged_conflict=accept_staged_conflict,
+    )
 
 
 def write_note_relative(
@@ -94,6 +114,7 @@ def write_note_relative(
     write_guard: "WriteGuard | None" = None,
     expected_version: str | None = None,
     writer_identity: str | None = None,
+    accept_staged_conflict: bool = False,
 ) -> WriteReceipt:
     # Guard-at-seam (#2953, extending #2910): assert WriteGuard inside this
     # port too, before any path resolution or filesystem mutation, mirroring
@@ -126,7 +147,11 @@ def write_note_relative(
         kwargs["expected_version"] = expected_version
     if writer_identity is not None:
         kwargs["writer_identity"] = writer_identity
-    return port.write_note(locator, content, **kwargs)
+    receipt = port.write_note(locator, content, **kwargs)
+    return _require_canonical_write(
+        receipt,
+        accept_staged_conflict=accept_staged_conflict,
+    )
 
 
 def append_note_relative(

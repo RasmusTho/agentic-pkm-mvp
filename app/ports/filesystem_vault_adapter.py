@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import advanced_uri_from_vault_path, write_note_from_absolute
 from app.ports.vault_port import EnsureUuidResult, NoteRead
 from app.services.inbox import append_change
@@ -41,6 +42,8 @@ class FilesystemVaultAdapter:
                 uri=self._make_uri(note.path),
             )
             return EnsureUuidResult(deferred=True, wrote=False, uuid_value=None, reason="active_edit")
+        had_uuid_key = "uuid" in note.frontmatter
+        previous_uuid = note.frontmatter.get("uuid")
         note.frontmatter["uuid"] = uuid.uuid4().hex
         wrote = self.write_frontmatter(
             note.path,
@@ -49,6 +52,10 @@ class FilesystemVaultAdapter:
             expected_mtime_ns=expected_mtime_ns,
         )
         if not wrote:
+            if had_uuid_key:
+                note.frontmatter["uuid"] = previous_uuid
+            else:
+                note.frontmatter.pop("uuid", None)
             self.append_inbox_item(
                 f"Deferred UUID injection for {note.path.name} (concurrent edit detected)",
                 vault_path=note.path,
@@ -81,12 +88,15 @@ class FilesystemVaultAdapter:
             # would-be silent overwrite.
             expected_version = hashlib.sha256(resolved.read_bytes()).hexdigest()
         rendered = dump_frontmatter(frontmatter, body)
-        write_note_from_absolute(
-            resolved,
-            rendered,
-            vault_root=self.vault_root,
-            expected_version=expected_version,
-        )
+        try:
+            write_note_from_absolute(
+                resolved,
+                rendered,
+                vault_root=self.vault_root,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict:
+            return False
         return True
 
     def rename_note(self, uuid_value: str, new_path: Path) -> None:

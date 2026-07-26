@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.services import note_uuid
 
 
@@ -42,6 +45,31 @@ def test_ensure_note_uuid_writes_via_knowledge_port(monkeypatch, tmp_path: Path)
     expected_path = note.resolve().relative_to(Path(note.anchor)).as_posix()
     assert captured["path"] == expected_path
     assert "uuid: fixed-uuid" in captured["content"]
+
+
+def test_ensure_note_uuid_staged_conflict_never_returns_uninstalled_candidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    note = tmp_path / "note.md"
+    original = "Body\n"
+    note.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        note_uuid,
+        "write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+    monkeypatch.setattr(note_uuid.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict staged"):
+        note_uuid.ensure_note_uuid(
+            note,
+            vault_root=tmp_path,
+            preferred_uuid="must-not-be-acknowledged",
+        )
+
+    assert note.read_text(encoding="utf-8") == original
 
 
 def test_ensure_note_uuid_rejects_outside_vault_root_before_read_or_write(

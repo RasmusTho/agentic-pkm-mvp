@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.companion as companion_module
 from app.api.app import app
+from app.knowledge.contracts import NoteLocator, WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 from tests.api._vault_test_helpers import bind_initialized_vault
 
@@ -117,6 +119,48 @@ def test_body_update_preserves_frontmatter_and_uuid(
     assert "title: Active" in updated
     assert "Updated body from Companion workspace." in updated
     assert "Initial active body." not in updated
+
+
+def test_staged_rewritten_conflict_returns_409_without_success(
+    client: TestClient,
+    workspace_notes: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace(client, "notes/active.md")
+    before = workspace_notes["active"].read_text(encoding="utf-8")
+    receipt = WriteReceipt(
+        operation="write_note",
+        locator=NoteLocator(vault="Vault", path="notes/active.md"),
+        adapter="fs_vault",
+        outcome="conflict_staged",
+        conflict_artifact="notes/active.concurrent-save-test.md",
+    )
+    monkeypatch.setattr(
+        companion_module,
+        "write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged", receipt=receipt)
+        ),
+    )
+
+    resp = client.post(
+        "/api/companion/workspace/update",
+        json={
+            "active_note_path": "notes/active.md",
+            "target_note_path": "notes/active.md",
+            "new_body": "# Active\n\nStale proposal.\n",
+            "content_hash": workspace["artifact"]["content_hash"],
+        },
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "write_conflict_staged"
+    assert resp.json()["detail"]["state"] == "conflict_staged"
+    assert (
+        resp.json()["detail"]["conflict_artifact"]
+        == "notes/active.concurrent-save-test.md"
+    )
+    assert workspace_notes["active"].read_text(encoding="utf-8") == before
 
 
 def test_workspace_update_rejects_non_markdown_targets(

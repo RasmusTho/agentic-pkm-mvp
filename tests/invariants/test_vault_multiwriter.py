@@ -163,18 +163,18 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
         locator,
         "caller-proposal",
         expected_version=stale_version,
-        writer_identity="bifrost-ios",
+        writer_identity="remote-writer",
     )
 
     assert receipt.outcome == "conflict_staged"
     assert receipt.conflict_artifact is not None
-    assert receipt.writer_identity == "bifrost-ios"
+    assert receipt.writer_identity == "remote-writer"
     assert datetime.fromisoformat(receipt.written_at or "").tzinfo is UTC
     assert target.read_bytes() == b"human-current"
     artifact = tmp_path / receipt.conflict_artifact
     assert artifact.parent == target.parent
     assert artifact.read_bytes() == b"caller-proposal"
-    assert "bifrost-ios" in artifact.name
+    assert "remote-writer" in artifact.name
     assert racer_entry_name is not None
     assert (target.parent / racer_entry_name).read_bytes() == b"directory-racer"
 
@@ -251,6 +251,7 @@ def test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_
         vault_root=tmp_path,
         expected_version=stale_version,
         writer_identity="mac-runtime",
+        accept_staged_conflict=True,
     )
     assert note.read_text(encoding="utf-8") == "new"
     assert conflict_receipt.outcome == "conflict_staged"

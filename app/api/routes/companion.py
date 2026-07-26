@@ -81,6 +81,7 @@ from app.events.panel import (
     PanelIntentPayload,
 )
 from app.health_contract import DEFAULT_CONTRACT
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import write_note_from_absolute
 from app.journaling.day_context import assemble_day_context
 from app.observability.status_service import OrientationSignals, get_orientation_signals
@@ -3715,6 +3716,42 @@ def _compose_note_with_preserved_frontmatter(*, original_content: str, new_body:
     return new_body if new_body.endswith("\n") else f"{new_body}\n"
 
 
+def _write_rewritten_note_or_409(
+    note_path: Path,
+    content: str,
+    *,
+    vault_root: Path,
+    expected_version: str,
+) -> None:
+    try:
+        write_note_from_absolute(
+            note_path,
+            content,
+            vault_root=vault_root,
+            expected_version=expected_version,
+        )
+    except KnowledgeWriteConflict as exc:
+        receipt = exc.receipt
+        if receipt is not None and receipt.outcome == "conflict_staged":
+            detail: dict[str, str] = {
+                "error": "write_conflict_staged",
+                "state": "conflict_staged",
+                "message": (
+                    "The note changed before this edit committed; "
+                    "the proposal was preserved separately."
+                ),
+            }
+            if receipt.conflict_artifact is not None:
+                detail["conflict_artifact"] = receipt.conflict_artifact
+        else:
+            detail = {
+                "error": "write_conflict",
+                "state": "failure",
+                "message": str(exc),
+            }
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+
 @router.get(
     "/vault-browser",
     response_model=VaultBrowserStateResponse | VaultSelectionRequiredResponse,
@@ -4525,7 +4562,12 @@ def update_companion_workspace_note_body(
     # ``original_content`` above for the content-hash freshness check, so its
     # hash is the exact expected_version the filesystem seam recomputes.
     expected_version = hashlib.sha256(original_content.encode("utf-8")).hexdigest()
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
+    _write_rewritten_note_or_409(
+        note_path,
+        new_content,
+        vault_root=vault_root,
+        expected_version=expected_version,
+    )
     updated_content = note_path.read_text(encoding="utf-8")
     content_hash_after = _content_hash(updated_content)
     return WorkspaceBodyUpdateResponse(
@@ -4601,7 +4643,12 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultS
     # so it requires an expected_version. ``current`` was just read above, so
     # its hash is the exact expected_version the filesystem seam recomputes.
     expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
+    _write_rewritten_note_or_409(
+        note_path,
+        new_content,
+        vault_root=vault_root,
+        expected_version=expected_version,
+    )
 
     written = note_path.read_text(encoding="utf-8")
     return BodyUpdateResponse(
@@ -4708,7 +4755,12 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
     # caller supplied one), so its hash is the exact expected_version the
     # filesystem seam recomputes.
     expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
+    _write_rewritten_note_or_409(
+        note_path,
+        new_content,
+        vault_root=vault_root,
+        expected_version=expected_version,
+    )
 
     written = note_path.read_text(encoding="utf-8")
     return NoteSaveResponse(

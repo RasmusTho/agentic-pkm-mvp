@@ -10,6 +10,7 @@ from app.agents.panel.writeback import upsert_executed_ids
 from app.objects import resolve_canonical_object_id
 from app.components.concurrency import OptimisticWriteGuard
 from app.domain.state_axes import resolve_promotion_axes
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_uuid import ensure_note_uuid
@@ -92,7 +93,14 @@ def apply_promotion_frontmatter(
         current_version = _WRITE_GUARD.read_version(note_path)
         if current_version != expected_version:
             return False
-        _write_note_via_knowledge_port(note_path, updated, expected_version=expected_version)
+        try:
+            _write_note_via_knowledge_port(
+                note_path,
+                updated,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict:
+            return False
     return True
 
 
@@ -160,11 +168,22 @@ def process_note_update(
                 events_count=len(panel_result.events),
                 dispatch_count=panel_result.dispatch_count,
             )
-        _write_note_via_knowledge_port(
-            resolved_path,
-            panel_result.panel.updated_markdown,
-            expected_version=expected_version,
-        )
+        try:
+            _write_note_via_knowledge_port(
+                resolved_path,
+                panel_result.panel.updated_markdown,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict:
+            return NoteUpdateResult(
+                uuid=note_uuid,
+                current_path=resolved_path,
+                changed=False,
+                stale=True,
+                uuid_added=uuid_added,
+                events_count=len(panel_result.events),
+                dispatch_count=panel_result.dispatch_count,
+            )
         upsert_executed_ids(canonical_note_id, panel_result.panel.executed_action_ids)
 
     snapshot_path = _snapshot_path(snapshot_dir, note_uuid, ensure_parent=True)

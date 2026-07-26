@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from app.domain.state_axes import normalize_promotion_payload, resolve_promotion_axes
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.services.note_update import apply_promotion_frontmatter
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -53,6 +56,23 @@ def test_promotion_frontmatter_supports_normalized_review_and_maturity_axes(tmp_
     assert frontmatter["uuid"] == "UUID-3"
     assert frontmatter["review_state"] == "reviewed"
     assert frontmatter["maturity"] == "evergreen"
+
+
+def test_promotion_frontmatter_staged_conflict_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_path = tmp_path / "note.md"
+    original = "Body content\n"
+    note_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        "app.services.note_update.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+
+    assert apply_promotion_frontmatter(note_path, "UUID-stale", "evergreen") is False
+    assert note_path.read_text(encoding="utf-8") == original
 
 
 def test_resolve_promotion_axes_accepts_legacy_review_state_evergreen() -> None:

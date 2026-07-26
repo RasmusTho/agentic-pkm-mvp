@@ -17,7 +17,7 @@ Replace silent overwrite of rewritten notes with atomic compare-and-stage behavi
 
 ## What This Task Does
 
-Consume VMW-01's SHA-256 expected-version request at the shared rewritten-note filesystem write path. When current content differs, preserve the caller's proposed content as a sibling conflict artifact using VMW-01's shared grammar and return a legible staged-conflict outcome with provenance.
+Consume VMW-01's SHA-256 expected-version request at the shared rewritten-note filesystem write path. When current content differs, preserve the caller's proposed content as a sibling conflict artifact using VMW-01's shared grammar and produce a legible staged-conflict outcome with provenance. The low-level adapter returns that receipt; shared production helpers raise with the receipt attached unless a conflict-aware caller explicitly opts into consuming the non-canonical outcome.
 
 ## Concretely
 

@@ -27,6 +27,13 @@ This contract follows:
 - `search_notes(vault, query, limit=20)`
 - `open_note(locator)`
 
+The `write_note` receipt above is the low-level port result. Production/service callers use
+`write_note_from_absolute` or `write_note_relative`; those helpers raise
+`KnowledgeWriteConflict` with the staged receipt attached when `outcome="conflict_staged"`.
+Consequently, a normal helper return continues to mean the canonical write completed. A caller
+that understands the non-canonical result may opt in explicitly to receive the staged receipt and
+must branch on `outcome` before acknowledging success or running downstream effects.
+
 Reference types:
 - `NoteLocator(vault, path)` where `path` is vault-relative and portable (`/` separators).
 - `WriteReceipt(operation, locator, adapter, trace_id, fallback_used, note_class, writer_identity, written_at, outcome, conflict_artifact)`.

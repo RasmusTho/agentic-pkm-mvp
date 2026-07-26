@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
 
 
@@ -57,6 +58,34 @@ def test_ensure_uuid_defers_on_mtime_mismatch(monkeypatch, tmp_path: Path) -> No
 
     assert result.deferred
     assert result.reason == "mtime_mismatch"
+    assert any("concurrent edit" in msg for msg in messages)
+
+
+def test_ensure_uuid_defers_when_rewritten_proposal_is_staged(monkeypatch, tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    note.write_text("Body", encoding="utf-8")
+    adapter = FilesystemVaultAdapter(vault_root=tmp_path, backend_writes_enabled=False)
+    monkeypatch.setattr("app.ports.filesystem_vault_adapter.active_edit", lambda _: False)
+    messages: list[str] = []
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.append_change",
+        lambda msg, **kwargs: messages.append(msg),
+    )
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+
+    read = adapter.read_note(note)
+    result = adapter.ensure_uuid(read, expected_mtime_ns=read.mtime_ns)
+
+    assert result.deferred is True
+    assert result.wrote is False
+    assert result.uuid_value is None
+    assert "uuid" not in read.frontmatter
+    assert note.read_text(encoding="utf-8") == "Body"
     assert any("concurrent edit" in msg for msg in messages)
 
 

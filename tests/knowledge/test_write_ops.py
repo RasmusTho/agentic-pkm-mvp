@@ -6,6 +6,7 @@ import pytest
 
 from app.knowledge import write_ops
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 from app.write_guard import WriteGuard, WritesBlockedError
 
@@ -115,6 +116,83 @@ def test_write_note_relative_uses_make_note_locator(monkeypatch, tmp_path: Path)
     assert captured["path"] == "Inbox/a.md"
     assert captured["vault"] == "Vault"
     assert captured["content"] == "body"
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_write_helpers_raise_with_staged_receipt_by_default(
+    relative: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, WriteReceipt] = {}
+
+    class FakePort:
+        def write_note(self, locator, content, **kwargs):  # type: ignore[no-untyped-def]
+            receipt = WriteReceipt(
+                operation="write_note",
+                locator=locator,
+                adapter="fake",
+                outcome="conflict_staged",
+                conflict_artifact="Inbox/note.concurrent-save-test.md",
+            )
+            captured["receipt"] = receipt
+            return receipt
+
+    monkeypatch.setattr(write_ops, "resolve_knowledge_port", lambda **_kwargs: FakePort())
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict staged") as exc_info:
+        if relative:
+            write_ops.write_note_relative(
+                "Inbox/note.md",
+                "proposal",
+                vault_root=tmp_path,
+                expected_version="stale",
+            )
+        else:
+            note = tmp_path / "Inbox" / "note.md"
+            write_ops.write_note_from_absolute(
+                note,
+                "proposal",
+                vault_root=tmp_path,
+                expected_version="stale",
+            )
+
+    assert exc_info.value.receipt is captured["receipt"]
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_write_helpers_return_staged_receipt_only_for_explicitly_aware_caller(
+    relative: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakePort:
+        def write_note(self, locator, content, **kwargs):  # type: ignore[no-untyped-def]
+            return WriteReceipt(
+                operation="write_note",
+                locator=locator,
+                adapter="fake",
+                outcome="conflict_staged",
+                conflict_artifact="Inbox/note.concurrent-save-test.md",
+            )
+
+    monkeypatch.setattr(write_ops, "resolve_knowledge_port", lambda **_kwargs: FakePort())
+
+    if relative:
+        receipt = write_ops.write_note_relative(
+            "Inbox/note.md",
+            "proposal",
+            vault_root=tmp_path,
+            expected_version="stale",
+            accept_staged_conflict=True,
+        )
+    else:
+        receipt = write_ops.write_note_from_absolute(
+            tmp_path / "Inbox" / "note.md",
+            "proposal",
+            vault_root=tmp_path,
+            expected_version="stale",
+            accept_staged_conflict=True,
+        )
+
+    assert receipt.outcome == "conflict_staged"
+    assert receipt.conflict_artifact == "Inbox/note.concurrent-save-test.md"
 
 
 def test_append_note_relative_uses_port_append(monkeypatch, tmp_path: Path) -> None:

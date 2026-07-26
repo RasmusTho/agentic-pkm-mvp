@@ -27,9 +27,9 @@ Add a centralized note-class/operation classifier aligned with the committed Mim
 
 - `expected_version` omitted → the write is performed normally (enforcement deferred). The `WriteReceipt` still records the structured `note_class` outcome, so the classification is observable even before a caller opts in.
 - `expected_version` provided and matching the current on-disk hash → the write proceeds.
-- `expected_version` provided and stale at the first comparison (mismatched) → with VMW-02 composed with this request contract, the seam preserves the caller's proposal under the shared sibling conflict-artifact grammar, leaves the canonical note unchanged, and returns a `conflict_staged` receipt. Missing targets and races after the first comparison still fail closed with `KnowledgeWriteConflict`.
+- `expected_version` provided and stale at the first comparison (mismatched) → with VMW-02 composed with this request contract, the low-level seam preserves the caller's proposal under the shared sibling conflict-artifact grammar, leaves the canonical note unchanged, and returns a `conflict_staged` receipt. Shared production helpers raise `KnowledgeWriteConflict` carrying that receipt by default; only an explicitly conflict-aware caller opts into a normal staged-receipt return. Missing targets and races after the first comparison still fail closed with `KnowledgeWriteConflict`.
 
-This resolves the earlier "structured non-write outcome vs. hard raise" tension in favour of the opt-in model: a versionless rewrite is a normal write plus a classified receipt, an initially stale opted-in rewrite has the structured staged-conflict outcome supplied by VMW-02, and an in-flight race remains a hard failure. The shared artifact helper owns the sibling filename grammar and `is_conflict_artifact` predicate.
+This resolves the earlier "structured non-write outcome vs. hard raise" tension in favour of the opt-in model: a versionless rewrite is a normal write plus a classified receipt, an initially stale opted-in rewrite has the structured staged-conflict outcome supplied by VMW-02 at the low-level adapter, the production helpers preserve hard-failure semantics for unaware consumers, and an in-flight race remains a hard failure. The shared artifact helper owns the sibling filename grammar and `is_conflict_artifact` predicate.
 
 ## Why This Matters
 
