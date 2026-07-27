@@ -344,8 +344,15 @@ scripts/builderops_cli.sh builderops vault init "$BUILDEROPS_VAULT_ROOT" --json
 scripts/builderops_cli.sh builderops vault validate "$BUILDEROPS_VAULT_ROOT" --json
 ```
 
-Signboard may render the resulting `agent-delivery/` Markdown tree for a human. It is a projection
-only and is never an automation API or a source of authoritative lease state.
+The resulting `agent-delivery/` tree holds BMI-01 ticket Markdown for a human to read. It is never
+an automation API or a source of authoritative lease state.
+
+It is **not** the dispatcher Signboard board. The visual Signboard at `/signboard` renders a
+separate, regenerable projection of the dispatcher SQLite store, whose cards carry
+`generated_by: dispatcher.signboard` and a different frontmatter schema from these vault tickets.
+Do not point `SIGNBOARD_ROOT` at this vault's `agent-delivery/`, and do not migrate cards between
+the two trees — see `docs/AGENT_ISSUE_DISPATCHER.md :: The projection root is not the shared
+BuilderOps vault's agent-delivery/`.
 
 Projection regeneration reads from the selected store path using the same mechanisms. Automation
 worktrees that regenerate checked-in projection views should set the intended store explicitly with

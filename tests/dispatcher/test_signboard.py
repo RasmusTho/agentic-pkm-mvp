@@ -473,3 +473,145 @@ def test_cli_signboard_validate_fails_loud_on_findings(
 
     assert exit_code == 1
     assert '"ok": false' in capsys.readouterr().out
+
+
+
+# ---------------------------------------------------------------------------
+# #4198: one Signboard root, and a repair path for cards absent from the store
+# ---------------------------------------------------------------------------
+
+
+def test_signboard_root_is_single_sourced() -> None:
+    """The board-root default is spelled in exactly one place.
+
+    Three independent resolutions of the Signboard root (the API route, the
+    full-stack launcher, and the vault-relative dispatcher default) is the
+    divergence #4198 removes. The route and the shell launchers must derive
+    from ``default_signboard_root`` instead of carrying a home-relative
+    literal of their own.
+    """
+    from app.api.routes import signboard as signboard_route
+
+    repo_root = Path(signboard_module.__file__).resolve().parents[2]
+    literal = "BuilderOpsVault"
+
+    for relative in (
+        "app/api/routes/signboard.py",
+        "scripts/start_full_system.sh",
+        "scripts/export_runtime_env.sh",
+        "scripts/lib/signboard_root.sh",
+    ):
+        source = (repo_root / relative).read_text(encoding="utf-8")
+        assert literal not in source, f"{relative} must not carry its own board-root literal"
+
+    assert literal in Path(signboard_module.__file__).read_text(encoding="utf-8")
+    assert signboard_route.default_signboard_root is default_signboard_root
+
+
+def test_signboard_route_root_falls_back_to_the_single_source(monkeypatch, tmp_path) -> None:
+    from app.api.routes import signboard as signboard_route
+
+    vault_dir = tmp_path / "RouteVault"
+    vault_dir.mkdir()
+    context = VaultContext(status="selected", active_vault_path=str(vault_dir))
+    monkeypatch.setattr(
+        signboard_module, "get_vault_manager", lambda: _StubVaultManager(context)
+    )
+
+    monkeypatch.delenv("SIGNBOARD_ROOT", raising=False)
+    assert signboard_route.signboard_root() == vault_dir.resolve() / DEFAULT_SIGNBOARD_SUBPATH
+
+    # A launcher-forwarded root still wins, so container forwarding keeps working.
+    monkeypatch.setenv("SIGNBOARD_ROOT", str(tmp_path / "forwarded"))
+    assert signboard_route.signboard_root() == (tmp_path / "forwarded").resolve()
+
+
+def _write_stale_card(board: Path, template: Path, *, task_id: str, notes: str | None) -> Path:
+    """Copy a generated card under a task id that is absent from the store.
+
+    This is what the real board accumulates: cards whose dispatcher task no
+    longer exists, which the exporter's own ``{task_id}--*.md`` cleanup can
+    never reach because it only iterates task ids still in the store.
+    """
+    text = template.read_text(encoding="utf-8")
+    original_id = next(
+        line.split('"')[1] for line in text.splitlines() if line.startswith("id: ")
+    )
+    text = text.replace(original_id, task_id)
+    if notes is not None:
+        text = text.replace("## Notes\n\n## Receipts", f"## Notes\n\n{notes}\n\n## Receipts")
+    card = template.parent / f"{task_id}--stale-card.md"
+    card.write_text(text, encoding="utf-8")
+    return card
+
+
+def test_export_prunes_cards_absent_from_store_preserving_notes(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """Cards whose task id vanished from dispatcher become removable.
+
+    A note-free stale card is deleted; a stale card carrying human-authored
+    "## Notes" content is kept and surfaced instead of being destroyed.
+    """
+    tasks = seed_tasks(store)
+    ready = next(task for task in tasks if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+
+    live_card = next(board.glob(f"**/{ready.task_id}--*.md"))
+    plain = _write_stale_card(board, live_card, task_id="task-gone-plain", notes=None)
+    note_text = "Keep this: the owner still owes a decision here."
+    noted = _write_stale_card(board, live_card, task_id="task-gone-noted", notes=note_text)
+    human_file = board / "Ready" / "human-authored.md"
+    human_file.write_text("# Not a generated card\n", encoding="utf-8")
+
+    stale = validate_signboard(store, board)
+    assert {finding["kind"] for finding in stale["findings"]} == {"stale_card"}
+    assert "--prune-absent" in stale["repair"]
+
+    result = export_signboard(store, board, prune_absent=True)
+
+    assert not plain.exists()
+    assert result["pruned"] == [str(plain)]
+    assert noted.exists()
+    assert note_text in noted.read_text(encoding="utf-8")
+    assert result["retained_with_notes"] == [str(noted)]
+    assert live_card.exists()
+    assert human_file.read_text(encoding="utf-8") == "# Not a generated card\n"
+
+    remaining = validate_signboard(store, board)
+    assert [
+        finding["path"] for finding in remaining["findings"] if finding["kind"] == "stale_card"
+    ] == [str(noted.relative_to(board))]
+
+
+def test_export_without_prune_leaves_absent_cards_alone(tmp_env, store, tmp_path: Path) -> None:
+    tasks = seed_tasks(store)
+    ready = next(task for task in tasks if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    stale = _write_stale_card(
+        board, next(board.glob(f"**/{ready.task_id}--*.md")), task_id="task-gone", notes=None
+    )
+
+    result = export_signboard(store, board)
+
+    assert stale.exists()
+    assert result["pruned"] == []
+    assert result["retained_with_notes"] == []
+
+
+def test_cli_export_signboard_prune_absent_flag(tmp_env, store, tmp_path: Path) -> None:
+    from app.dispatcher.cli import main
+
+    tasks = seed_tasks(store)
+    ready = next(task for task in tasks if task.status == "ready")
+    board = tmp_path / "board"
+    assert main(["export-signboard", str(board), "--json"]) == 0
+    stale = _write_stale_card(
+        board, next(board.glob(f"**/{ready.task_id}--*.md")), task_id="task-gone", notes=None
+    )
+
+    assert main(["export-signboard", str(board), "--prune-absent", "--json"]) == 0
+
+    assert not stale.exists()

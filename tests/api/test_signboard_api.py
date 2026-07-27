@@ -126,3 +126,40 @@ def test_signboard_remote_mutations_send_api_key_header() -> None:
     assert "sessionStorage" not in script
     assert "actor = 'signboard-ui'" in script
     assert "card.claimed_by || 'signboard-ui'" in script
+
+
+def test_missing_root_reports_error_state(tmp_path: Path, monkeypatch) -> None:
+    """A missing projection root must read as broken, not as an empty board.
+
+    Six empty columns and HTTP 200 is the false-green surface #4198 removes:
+    the API container ran with SIGNBOARD_ROOT pointing nowhere and /signboard
+    looked like "no work" instead of "misconfigured".
+    """
+    _configure(tmp_path, monkeypatch)
+    payload = TestClient(app).get("/api/signboard/board").json()
+
+    assert payload["status"] == "error"
+    assert payload["errors"] == [f"signboard root does not exist: {tmp_path / 'board'}"]
+    assert all(column["cards"] == [] for column in payload["columns"])
+
+
+def test_unresolvable_root_reports_error_state(tmp_path: Path, monkeypatch) -> None:
+    """With no forwarded root and no selected vault there is no board root."""
+    from app.dispatcher import signboard as signboard_module
+
+    _configure(tmp_path, monkeypatch)
+    monkeypatch.delenv("SIGNBOARD_ROOT", raising=False)
+
+    def _no_vault() -> None:
+        raise signboard_module.NoActiveVaultError("no active vault is selected")
+
+    monkeypatch.setattr(signboard_module, "get_vault_manager", _no_vault)
+
+    payload = TestClient(app).get("/api/signboard/board").json()
+
+    assert payload["status"] == "error"
+    assert payload["root"] is None
+    assert payload["errors"] == ["signboard root is not configured: no active vault is selected"]
+
+    refresh = TestClient(app).post("/api/signboard/refresh")
+    assert refresh.status_code == 503

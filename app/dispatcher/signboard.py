@@ -22,6 +22,11 @@ from app.vault.manager import get_vault_manager
 # no-manual-path-typing posture). This reuses the shipped Option 2
 # active-vault-selection mechanism (``VaultManager`` / ``AppLocalSettingsStore``)
 # rather than inventing a parallel "BuilderOps vault root" concept.
+#
+# This is the single source of the Signboard root default (#4198). The API
+# route and the host launchers derive from ``default_signboard_root`` instead of
+# carrying their own home-relative literal; three independent spellings of the
+# same path is what let the board diverge in the first place.
 DEFAULT_SIGNBOARD_SUBPATH = Path("BuilderOpsVault") / "agent-delivery"
 
 _NOTES_HEADING = "## Notes"
@@ -84,11 +89,25 @@ def column_for_status(status: str) -> str:
     return STATUS_COLUMNS.get(normalized, "Backlog")
 
 
-def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
+def export_signboard(
+    store: SqliteStore,
+    board_root: Path,
+    *,
+    prune_absent: bool = False,
+) -> dict[str, Any]:
     """Write dispatcher tasks as Markdown files grouped by kanban column.
 
-    The exporter only removes prior generated files for task IDs that still
-    exist in dispatcher. It leaves unrelated human notes alone.
+    By default the exporter only removes prior generated files for task IDs
+    that still exist in dispatcher, and it leaves unrelated human notes alone.
+    That default leaves cards whose task ID has vanished from the store
+    unreachable: ``signboard-validate`` reports them as ``stale_card`` and
+    nothing could clear them, so the board grew monotonically (#4198).
+
+    ``prune_absent`` is the opt-in repair for exactly those cards. It removes a
+    generated card only when its task ID is absent from the store *and* the
+    card carries no human-authored ``## Notes`` content; a stale card that does
+    carry notes is kept and surfaced under ``retained_with_notes`` so a human
+    decides its fate. Human material is never silently destroyed.
     """
 
     root = Path(board_root).expanduser()
@@ -136,12 +155,48 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
         target.write_text(_render_task(task, notes=preserved_notes), encoding="utf-8")
         written.append(str(target))
 
+    pruned: list[str] = []
+    retained_with_notes: list[str] = []
+    if prune_absent:
+        pruned, retained_with_notes = _prune_cards_absent_from_store(
+            root, known_task_ids={task.task_id for task in tasks}
+        )
+
     return {
         "root": str(root),
         "count": len(tasks),
         "columns": sorted(set(STATUS_COLUMNS.values())),
         "written": written,
+        "pruned": pruned,
+        "retained_with_notes": retained_with_notes,
     }
+
+
+def _prune_cards_absent_from_store(
+    root: Path, *, known_task_ids: set[str]
+) -> tuple[list[str], list[str]]:
+    """Remove note-free generated cards whose task ID is gone from dispatcher.
+
+    Returns ``(pruned, retained_with_notes)``. Malformed generated cards are
+    left in place: ``signboard-validate`` already reports them under their own
+    finding kind, and their task identity cannot be trusted for a delete.
+    """
+
+    pruned: list[str] = []
+    retained_with_notes: list[str] = []
+    for path in sorted(root.rglob("*.md")) if root.is_dir() else []:
+        text = _read_card_text(path)
+        if text is None or not _is_generated_card_text(text):
+            continue
+        frontmatter = _parse_generated_frontmatter(text)
+        if frontmatter is None or frontmatter["id"] in known_task_ids:
+            continue
+        if _extract_notes_section(text) is not None:
+            retained_with_notes.append(str(path))
+            continue
+        path.unlink()
+        pruned.append(str(path))
+    return pruned, retained_with_notes
 
 
 def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
@@ -149,7 +204,8 @@ def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
 
     Signboard is a derived projection. This intentionally never repairs cards
     or updates the dispatcher store; ``export-signboard`` remains the repair
-    operation after a failing validation run.
+    operation after a failing validation run — with ``--prune-absent`` when the
+    findings include cards whose task ID no longer exists in the store.
     """
     root = Path(board_root).expanduser()
     tasks = {
@@ -224,7 +280,12 @@ def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
                 "detail": f"task {task_id!r} has {len(paths)} generated cards",
             })
 
-    return {"root": str(root), "count": len(tasks), "findings": findings}
+    result: dict[str, Any] = {"root": str(root), "count": len(tasks), "findings": findings}
+    if any(finding["kind"] == "stale_card" for finding in findings):
+        # Name the repair in the lint output itself. A finding an operator
+        # cannot act on is the bug this replaces (#4198).
+        result["repair"] = "python -m app.dispatcher export-signboard [path] --prune-absent"
+    return result
 
 
 def _parse_generated_frontmatter(text: str) -> dict[str, str] | None:

@@ -20,7 +20,13 @@ from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.queue import block, complete
 from app.dispatcher.services import move_task
-from app.dispatcher.signboard import STATUS_COLUMNS, canonical_status, export_signboard
+from app.dispatcher.signboard import (
+    STATUS_COLUMNS,
+    NoActiveVaultError,
+    canonical_status,
+    default_signboard_root,
+    export_signboard,
+)
 from app.dispatcher.store import SqliteStore
 
 router = APIRouter(prefix="/signboard", tags=["signboard"])
@@ -62,9 +68,18 @@ def signboard_root() -> Path:
 
     No request controls this path. Resolving it once prevents a symlinked root
     from turning a card read into arbitrary traversal later on.
+
+    The default is not spelled here: it comes from ``default_signboard_root``
+    in the dispatcher projection module, which is the single source for the
+    Signboard root (#4198). ``SIGNBOARD_ROOT`` is the launcher-forwarded
+    override; when it is absent and no vault is selected this raises
+    :class:`NoActiveVaultError` so the board can render a visible error state
+    rather than an empty, healthy-looking one.
     """
-    raw = os.getenv("SIGNBOARD_ROOT", "~/BuilderOpsVault/agent-delivery")
-    return Path(raw).expanduser().resolve()
+    raw = os.getenv("SIGNBOARD_ROOT", "")
+    if raw.strip():
+        return Path(raw).expanduser().resolve()
+    return default_signboard_root()
 
 
 def _store() -> SqliteStore:
@@ -133,6 +148,12 @@ def read_signboard(root: Path) -> tuple[dict[str, list[dict[str, Any]]], list[st
     board: dict[str, list[dict[str, Any]]] = {column: [] for column in COLUMNS}
     errors: list[str] = []
     if not root.exists():
+        # An unreadable root used to render as six empty columns, which reads
+        # as "no work" instead of "misconfigured" (#4198). Report it.
+        errors.append(f"signboard root does not exist: {root}")
+        return board, errors
+    if not root.is_dir():
+        errors.append(f"signboard root is not a directory: {root}")
         return board, errors
     for column in COLUMNS:
         directory = root / column
@@ -162,18 +183,37 @@ def _board_payload(root: Path) -> dict[str, Any]:
         "root": str(root),
         "columns": [{"name": column, "cards": board[column]} for column in COLUMNS],
         "errors": errors,
+        "status": "error" if errors else "ok",
+        "authority": "dispatcher_projection",
+    }
+
+
+def _unresolved_root_payload(detail: str) -> dict[str, Any]:
+    """Render an explicit error state when no projection root resolves at all."""
+    return {
+        "root": None,
+        "columns": [{"name": column, "cards": []} for column in COLUMNS],
+        "errors": [f"signboard root is not configured: {detail}"],
+        "status": "error",
         "authority": "dispatcher_projection",
     }
 
 
 @router.get("/board")
 def get_board() -> dict[str, Any]:
-    return _board_payload(signboard_root())
+    try:
+        root = signboard_root()
+    except NoActiveVaultError as exc:
+        return _unresolved_root_payload(str(exc))
+    return _board_payload(root)
 
 
 @router.post("/refresh", dependencies=[Depends(require_loopback_or_api_key)])
 def refresh_board() -> dict[str, Any]:
-    root = signboard_root()
+    try:
+        root = signboard_root()
+    except NoActiveVaultError as exc:
+        raise HTTPException(status_code=503, detail=f"signboard root is not configured: {exc}") from exc
     export_signboard(_store(), root)
     return _board_payload(root)
 
@@ -198,7 +238,12 @@ def move_card(task_id: str, request: MoveRequest) -> dict[str, Any]:
             )
         else:
             task = move_task(store, task_id, next_status, request.actor, request.note)
-        root = signboard_root()
+        try:
+            root = signboard_root()
+        except NoActiveVaultError as exc:
+            raise HTTPException(
+                status_code=503, detail=f"signboard root is not configured: {exc}"
+            ) from exc
         export_signboard(store, root)
     except ValueError as exc:
         status_code = 404 if "not found" in str(exc).lower() else 409
