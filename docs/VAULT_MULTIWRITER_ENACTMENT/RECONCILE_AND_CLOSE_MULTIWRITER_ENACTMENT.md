@@ -11,7 +11,7 @@ can_parallelize_with: []
 
 # Reconcile and Close Multiwriter Enactment
 
-State: Implemented by issue #3453 / PR #4148 after VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126.
+State: Delivery candidate in issue #3453 / PR #4148 after VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126; the terminal parent receipt is a governed post-merge effect.
 
 ## Purpose
 
@@ -49,7 +49,7 @@ The registry is an owner-facing truth surface. Premature promotion would recreat
 
 - [x] INV-VW1 names the shipped opt-in stale-detection/conflict-staging enforcement and its current tests. Verify: doc writeback at `docs/testing/invariant-tests.md :: stale_write_rejected_for_rewritten_notes`
 - [x] INV-VW3 names the shipped quarantine enforcement and its current tests. Verify: doc writeback at `docs/testing/invariant-tests.md :: icloud_conflict_artifacts_never_silently_ingested`
-- [x] #3132 contains child PR, validation, owner-doc, and unresolved-risk receipts before closure. Verify: parent #3132 delivery receipt
+- [ ] Closure-time effect: after PR #4148 merges, #3132 must receive the terminal feature receipt containing child PR, validation, owner-doc, transition-debt, and unresolved-risk evidence before the parent closes. Verify: parent #3132 delivery receipt
 
 ## How to Verify (Pre-Merge)
 
