@@ -333,6 +333,67 @@ Interpretation:
 - the outbox is the canonical runtime queue,
 - but the event payload is still an operational artifact layer rather than the whole domain model.
 
+### Self-owned write durability policy (`required_db`)
+
+Source: `app/services/outbox.py::_self_owned_outbox_write_policy` (#4064 / #4203).
+
+A *self-owned* write is a `write_outbox_event()` / `insert_object_and_outbox()` call that passes no
+`conn`. For those calls only, the connection decision is resolved from the environment **before** any
+connection is opened, so a memory-backed runtime never triggers a DSN fallback whose DNS resolution
+could stall:
+
+| `STORE_BACKEND` | `DATABASE_URL` / `DB_DSN` | `required_db=False` (default) | `required_db=True` |
+| --- | --- | --- | --- |
+| `memory` | set or unset | skip, return `""` | connect |
+| `pg` | set or unset | connect | connect |
+| unset | set | connect | connect |
+| unset | unset | skip, return `""` | connect |
+| any other value | any | `RuntimeError` | `RuntimeError` |
+
+- `required_db` is keyword-only and defaults to `False`; `insert_object_and_outbox()` forwards it
+  unchanged. It is a **caller-resolved durability requirement**, not a runtime probe.
+- A skip returns `""` — the same no-insert result already used for a deduplicated event. Only a
+  caller that passed `required_db=True` may treat a return from these functions as evidence that the
+  DB path actually ran.
+- An unsupported explicit `STORE_BACKEND` fails loud before any connection attempt, rather than
+  degrading to a silent skip.
+- A supplied `conn` is authoritative and caller-owned: it bypasses this policy entirely and is never
+  closed by the outbox helper.
+
+**Required (DB-durable) producers.** These call sites are load-bearing — a silent skip would let a
+projection, receipt, or acknowledgement advance past an event that was never queued — so they pass
+`required_db=True` and fail loud instead:
+
+| Producer | Source |
+| --- | --- |
+| Episode closure (outbox-before-projection boundary) | `app/episodes/closure.py` |
+| Promotion receipts | `app/promotion/consumer.py` |
+| Embedding requests | `app/outbox/events.py` |
+| Explicit panel DB persistence | `app/agents/panel_agent/execution.py` |
+| Durable object saves | `app/objects/__init__.py` |
+| Worker transient retries | `app/workers/outbox_worker.py` |
+| Watcher `panel.scan.requested` / `ingest.vault.changed` (when `WATCHER_REQUIRE_DB_OUTBOX`) | `app/watcher/registry.py` |
+
+Optional, best-effort, and compensated producers keep the default `required_db=False` behavior.
+
+### Watcher required-delivery cursor semantics
+
+Source: `app/watcher/registry.py::_emit_changed_entry` (#4203).
+
+When a watcher observation requires DB delivery (`WATCHER_REQUIRE_DB_OUTBOX` set and the spec emits
+`panel.scan.requested` or `ingest.vault.changed`), the required enqueue and its durable observation
+cursor are **one state transition**:
+
+- if the required enqueue raises, the pre-observation `state.files` entry is restored (or removed
+  when the file was previously unseen) and the exception propagates, so the next tick re-observes the
+  unchanged file instead of treating it as already delivered;
+- the cursor advances exactly once, after a successful required enqueue; a subsequent tick over the
+  same unchanged file emits nothing.
+
+Contract regression coverage: `tests/services/test_outbox_memory_mode.py`,
+`tests/services/test_outbox_required_policy_callers.py`,
+`tests/watcher/test_registry_required_outbox.py`.
+
 ## Entity-Review Operation Journal
 
 Migration-owned (EROJ-01, #4350): Alembic revision `e7a2b9c4d1f8` creates the table exactly as the
