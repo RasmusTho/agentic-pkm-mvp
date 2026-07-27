@@ -177,12 +177,27 @@ The system maintains a stable identity record resolved by `get_embedding_identit
 The stored/persisted provenance shape (`store_vector_index.provenance.embedding_identity`,
 `docs/DB_SCHEMA.md`) remains exactly `{provider, model, dim, normalize}` — additive identity notes
 such as `no_prefix` are in-memory/call-site metadata only and are never widened into that persisted
-contract (`app/index/artifact_metadata.py::_embedding_identity_dict` projects explicitly).
+contract (`app/index/artifact_metadata.py::embedding_identity_provenance` projects explicitly; the
+older private name `_embedding_identity_dict` remains as an alias, not a second projection).
 
 This identity must be:
 - resolved **before** embedding,
 - recorded with the vector index metadata / provenance,
 - attached to emitted indexing events.
+
+**Requested identity vs written identity.** `index.embedding.requested` carries the identity the
+producer *asked for*, resolved through the same `get_embeddings_client` / `get_embedding_identity`
+pair the indexer uses when it consumes the event, so the two cannot disagree about what was
+requested. It is **not** a claim about what was written: the indexer may write under a different
+identity after a sanctioned dim-matched fallback (*Fallback rule* below). The vector-index
+provenance and `index.embedding.created` remain authoritative on what actually produced the vector;
+mixed-identity detection and reconcile read those, not the request event.
+
+Emitters attach the identity by resolution, never by a hardcoded model literal. A producer that
+cannot resolve a complete identity must fail loud rather than stamp a default — a substituted
+literal is indistinguishable from a real identity downstream, and a model name no registered
+adapter serves is a false provenance claim (`app/ingest/api.py::_requested_embedding_identity`,
+#4178).
 
 ### Fallback rule
 

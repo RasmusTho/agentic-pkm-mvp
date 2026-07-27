@@ -92,11 +92,14 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "normalizer test flows and the memory-backend CLI path; the object's creation "
         "event is emitted by the caller (ingest API / vault_alpha) that invokes normalize."
     ),
-    ("app/ingest/api.py", 118): (
+    ("app/ingest/api.py", 155): (
         "POST /ingest object persistence: insert_object_and_outbox already emitted "
         "ingest.object.created for this same logical ingest (T-ingest-api splits "
         "event-emission and object-materialization -- see formal-model.md T-materialize); "
-        "this call is the eventual T-materialize-equivalent write for the API path."
+        "this call is the eventual T-materialize-equivalent write for the API path. "
+        "Line drifted 118 -> 155 (site unchanged); re-pinned by #4178, which replaced the "
+        "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
+        "defined above this call."
     ),
     ("app/ingest/vault_alpha.py", 566): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
@@ -1484,10 +1487,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_vector_index directly (bypasses the build_indexed_unit_payload choke); explicit "
         "'unbound'."
     ),
-    ("app/ingest/api.py", 118): (
+    ("app/ingest/api.py", 155): (
         "carries_unbound_default: programmatic ingest helper builds a fresh frontmatter-less "
         "store_objects payload; episode_ref normalized to 'unbound' via the {**...} rebuild; "
-        "save_object -> store_objects."
+        "save_object -> store_objects. Line drifted 118 -> 155 (site unchanged); re-pinned "
+        "by #4178."
     ),
     ("app/reasoning/multi.py", 51): (
         "carries_unbound_default: UUID-addressable reasoning inputs are rebuildable proposal "

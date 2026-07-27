@@ -14,11 +14,34 @@ from typing import Iterable, Iterator, Protocol, Sequence
 
 from app.embedding_config import get_embed_dim
 from app.index import embeddings as _index_embeddings
-from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provider, get_primary_provider
+from app.llm.embeddings import (
+    EMBED_MODEL,
+    PROVIDER_REGISTRY,
+    get_embed_model,
+    get_embedding_provider,
+    get_primary_provider,
+)
 from app.settings.runtime import get_settings_bundle
 
 _MOCK_EMBED_MODEL = "mock-embedding"
-_SUPPORTED_EMBED_PROVIDERS = {"mock", "ollama", "openai", "deepseek", "deterministic", "gemini"}
+
+# Providers served before dispatch reaches PROVIDER_REGISTRY: `deterministic` is
+# short-circuited by get_embedding_client below, so it never needs an adapter.
+_CLIENT_LEVEL_EMBED_PROVIDERS = frozenset({"deterministic"})
+
+
+def _supported_embed_providers() -> frozenset[str]:
+    """Provider names an embedding identity may carry.
+
+    Derived from the live PROVIDER_REGISTRY rather than hand-listed. The previous
+    literal set had drifted to include `openai` and `deepseek`, which no adapter
+    serves: they passed this validation and then raised `Unsupported embedding
+    provider` at `_embed_single` (#4178). Deriving the set makes registering an
+    adapter the single act that makes a name acceptable, so the two cannot drift
+    apart again.
+    """
+
+    return frozenset(PROVIDER_REGISTRY) | _CLIENT_LEVEL_EMBED_PROVIDERS
 
 
 class EmbeddingClientProtocol(Protocol):
@@ -138,7 +161,7 @@ def _resolve_embedding_provider_name(value: str | None) -> str:
         return "mock"
     if not normalized:
         return "mock"
-    if normalized not in _SUPPORTED_EMBED_PROVIDERS:
+    if normalized not in _supported_embed_providers():
         return "mock"
     return normalized
 

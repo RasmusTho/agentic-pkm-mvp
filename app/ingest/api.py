@@ -5,17 +5,50 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
 
+from app.components.embeddings import get_embedding_identity
+from app.components.llm.fabric import get_embeddings_client
+from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import get_embed_dim
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 
-try:
-    from app.config.agent import settings as _agent_settings  # type: ignore
-
-    _EMBED_MODEL = getattr(_agent_settings, "embed_model", "openai/text-embedding-3-large")
-except Exception:
-    _EMBED_MODEL = "openai/text-embedding-3-large"
-
 _ALLOWED_TAGS = {"serendipity", "collaboration"}
+
+
+def _requested_embedding_identity() -> Dict[str, Any]:
+    """Resolve the embedding identity this ingest is requesting.
+
+    Resolution runs through the same two calls the indexer uses when it consumes
+    the event (``app/indexer/consumer.py``), so the request and the work it
+    requests cannot disagree about which provider/model was asked for. Both are
+    pure config resolution — no adapter is invoked and no egress occurs here.
+
+    This is the *requested* identity. The indexer may write under a different one
+    after a sanctioned dim-matched fallback (ADR-0023/ADR-0052); the upsert
+    provenance and ``index.embedding.created`` stay authoritative on what was
+    actually written (docs/EMBEDDINGS.md :: Embedding identity).
+
+    Fails loud rather than substituting a default: stamping a model nothing can
+    serve is the defect this replaced (#4178), and a silent fallback would
+    reintroduce it under a different literal.
+    """
+
+    # Local import: app.index.artifact_metadata imports app.ingest.chunk_policy,
+    # which initializes app.ingest and re-enters this module. Same reason the
+    # object-store and outbox imports below are function-local.
+    from app.index.artifact_metadata import embedding_identity_provenance
+
+    identity = get_embedding_identity(
+        client=get_embeddings_client(
+            LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+        )
+    )
+    provenance = embedding_identity_provenance(identity)
+    if not provenance.get("provider") or not provenance.get("model"):
+        raise RuntimeError(
+            "cannot resolve an embedding identity for ingest; refusing to emit "
+            f"index.embedding.requested with incomplete provenance: {provenance!r}"
+        )
+    return provenance
 
 
 def normalize_payload(payload: Dict[str, Any], text: str) -> Dict[str, Any]:
@@ -98,6 +131,10 @@ def ingest_object(
 ) -> Tuple[UUID, int]:
     oid = object_id or uuid4()
 
+    # Resolve before any durable write: a request we cannot describe truthfully
+    # should not leave a persisted object behind claiming otherwise.
+    embedding_identity = _requested_embedding_identity()
+
     payload_out = dict(payload)
     payload_out.setdefault("title", text)
     payload_out.setdefault("content", text)
@@ -137,7 +174,7 @@ def ingest_object(
             "object_id": oid,
             "kind": kind,
             "source_ref": source_ref,
-            "model": _EMBED_MODEL,
+            "embedding_identity": embedding_identity,
             "trace_id": payload_out.get("trace_id"),
             "source": "ingest",
         }

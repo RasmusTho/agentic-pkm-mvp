@@ -134,13 +134,17 @@ def test_primary_fallback_selection_precedence(monkeypatch) -> None:
 
 
 def test_gemini_name_supported() -> None:
-    """'gemini' is in _SUPPORTED_EMBED_PROVIDERS so it is not normalized to 'mock'."""
+    """'gemini' is a supported embed provider so it is not normalized to 'mock'.
+
+    The set is derived from PROVIDER_REGISTRY as of #4178; before that it was a
+    hand-maintained literal named `_SUPPORTED_EMBED_PROVIDERS`.
+    """
     from app.components.embeddings.legacy import (
-        _SUPPORTED_EMBED_PROVIDERS,
         _resolve_embedding_provider_name,
+        _supported_embed_providers,
     )
 
-    assert "gemini" in _SUPPORTED_EMBED_PROVIDERS
+    assert "gemini" in _supported_embed_providers()
     assert _resolve_embedding_provider_name("gemini") == "gemini"
 
 
@@ -380,7 +384,7 @@ def test_gemini_name_not_normalized_to_mock() -> None:
     result = _resolve_embedding_provider_name("gemini")
     assert result == "gemini", (
         f"Expected 'gemini' to pass through but got {result!r} — "
-        "'gemini' must be in _SUPPORTED_EMBED_PROVIDERS"
+        "'gemini' must be a registered PROVIDER_REGISTRY adapter"
     )
 
 
@@ -423,3 +427,85 @@ def test_dim_guardrail_fires_on_ollama_registry_path(monkeypatch) -> None:
         PROVIDER_REGISTRY.clear()
         PROVIDER_REGISTRY.update(original)
         embeddings._embed_single.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Registry / validation drift (#4178)
+# ---------------------------------------------------------------------------
+
+def test_supported_embed_providers_derive_from_registry() -> None:
+    """The accepted-provider set is derived from PROVIDER_REGISTRY, not hand-listed.
+
+    `openai` and `deepseek` used to sit in a hand-maintained literal set, so they
+    passed `_resolve_embedding_provider_name` and then hard-failed at
+    `_embed_single` with `Unsupported embedding provider` (#4178). Deriving the set
+    means registering an adapter is the single act that makes a name acceptable.
+    """
+    from app.components.embeddings.legacy import (
+        _CLIENT_LEVEL_EMBED_PROVIDERS,
+        _supported_embed_providers,
+    )
+
+    assert _supported_embed_providers() == frozenset(PROVIDER_REGISTRY) | _CLIENT_LEVEL_EMBED_PROVIDERS
+
+    # The two names this issue removes must no longer be accepted.
+    assert "openai" not in _supported_embed_providers()
+    assert "deepseek" not in _supported_embed_providers()
+
+    # Registering an adapter extends the set without a second edit — this is what
+    # makes the drift unrepeatable rather than merely repaired once.
+    original = dict(PROVIDER_REGISTRY)
+    try:
+        PROVIDER_REGISTRY["acme"] = lambda text, *, model, dim, timeout: tuple(0.0 for _ in range(dim))
+        assert "acme" in _supported_embed_providers()
+    finally:
+        PROVIDER_REGISTRY.clear()
+        PROVIDER_REGISTRY.update(original)
+
+
+def test_resolved_provider_name_is_always_servable() -> None:
+    """Every name `_resolve_embedding_provider_name` returns can actually embed.
+
+    Checked against the registry's live contents rather than a copied literal, so a
+    future adapter cannot reopen the gap between "passes validation" and "can be
+    served".
+    """
+    from app.components.embeddings.legacy import (
+        _CLIENT_LEVEL_EMBED_PROVIDERS,
+        _resolve_embedding_provider_name,
+    )
+
+    candidates = [
+        None,
+        "",
+        "  ",
+        "openai",
+        "deepseek",
+        "OpenAI",
+        "anthropic",
+        "not-a-provider",
+        "llm",
+        "fake",
+        "deterministic",
+        *PROVIDER_REGISTRY,
+    ]
+
+    for candidate in candidates:
+        resolved = _resolve_embedding_provider_name(candidate)
+        servable = frozenset(PROVIDER_REGISTRY) | _CLIENT_LEVEL_EMBED_PROVIDERS
+        assert resolved in servable, (
+            f"{candidate!r} resolved to {resolved!r}, which no adapter can serve"
+        )
+
+
+def test_openai_and_deepseek_normalize_to_mock() -> None:
+    """Unservable names take the same path as any other unrecognized name.
+
+    One rule for names nothing can serve, not a special case that survives
+    validation and dies at execution instead.
+    """
+    from app.components.embeddings.legacy import _resolve_embedding_provider_name
+
+    assert _resolve_embedding_provider_name("openai") == "mock"
+    assert _resolve_embedding_provider_name("deepseek") == "mock"
+    assert _resolve_embedding_provider_name("not-a-provider") == "mock"

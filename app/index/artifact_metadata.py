@@ -17,13 +17,17 @@ INDEXABLE_TEXT_KEYS = ("content", "text", "raw_text")
 INDEXABLE_TEXT_SOURCE_KEY = "indexable_text_source"
 
 
-def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
+def embedding_identity_provenance(identity: Any) -> dict[str, Any]:
     """Project an EmbeddingIdentity to the documented W3-SPINE-01 provenance
     shape: provider/model/dim/normalize only (docs/DB_SCHEMA.md ::
     store_vector_index). Explicitly enumerated (not a raw asdict/vars dump) so
     additive identity-note fields such as ``no_prefix`` (#2984, call-site
     metadata, not a persisted provenance field) never silently widen this
-    stored contract."""
+    stored contract.
+
+    Public because emitters outside this module attach the same shape to
+    indexing events (``app/ingest/api.py``, #4178); one projector keeps the
+    stored and emitted provenance from drifting apart."""
     if identity is None:
         return {}
     if isinstance(identity, dict):
@@ -39,6 +43,12 @@ def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
         "dim": getattr(identity, "dim", None),
         "normalize": getattr(identity, "normalize", None),
     }
+
+
+# The projector shipped under this private name and is still referenced by
+# in-module call sites and tests/index/test_artifact_metadata.py. Alias, not a
+# second implementation — there is exactly one projection of this contract.
+_embedding_identity_dict = embedding_identity_provenance
 
 
 def compute_content_hash(text: str) -> str:
@@ -171,6 +181,7 @@ __all__ = [
     "compute_content_hash",
     "compute_indexed_content_hash",
     "compute_payload_content_hash",
+    "embedding_identity_provenance",
     "extract_indexable_text",
     "EMBED_PIPELINE_VERSION",
     "INDEXABLE_TEXT_KEYS",
