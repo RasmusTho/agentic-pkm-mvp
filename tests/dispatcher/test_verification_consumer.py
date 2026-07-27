@@ -1632,6 +1632,13 @@ def _merge_plan(
         context=context,
         pr=eligible_pr(body=body, head={"ref": "branch", "sha": head_sha}),
         live_closing_issues=[3603],
+        merge_readiness={
+            "contract": "verified_issue_set_merge_readiness.v1",
+            "further_commits_anticipated": False,
+            "head_sha": head_sha,
+            "required_checks_green": True,
+            "review_gate_resolved": True,
+        },
     )
 
 

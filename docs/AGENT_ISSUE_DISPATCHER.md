@@ -336,6 +336,17 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   non-closing title/message from the plan. The fetched merge commit must match the exact repository
   and SHA, remain within its response/message caps, and contain no canonical or malformed closing
   attempt; a merge commit message can never become closer authority.
+- A neutralized body's lifetime is bounded by the merge attempt that justified it. Neutralization
+  requires a head-bound `verified_issue_set_merge_readiness.v1` statement asserting that CI and the
+  review gate are green and that no further commits are anticipated on that exact head; the statement
+  is not reusable across heads, and `prepare_verified_merge` refuses to neutralize without it. When a
+  further commit changes the head while the body is still neutralized, the exact-head authority
+  receipt correctly stops resolving and `pr-contract` fails on that head, so the canonical body must
+  be restored before further repair work. `resolve_neutralized_body_restoration` detects that state
+  from the live PR plus its trusted receipts and names the durable receipt's original-body digest as
+  the only accepted restore target; it is read-only detection that grants no merge authority, does
+  not weaken the exact-head binding, never rewrites the durable receipt trail, and fails closed on
+  merged, foreign, untrusted, or conflicting evidence.
 - The authority-bound phase ledger is continuous and idempotent:
   `prepared -> merged -> reconciled -> restored`. Duplicate identical phase receipts are harmless;
   missing, stale, forged, skipped, or conflicting phases fail closed. If a crash leaves the exact

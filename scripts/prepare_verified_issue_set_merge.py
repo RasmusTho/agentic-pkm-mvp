@@ -27,6 +27,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-json", type=Path, required=True)
     parser.add_argument("--pr-json", type=Path, required=True)
     parser.add_argument("--live-closing-json", type=Path, required=True)
+    parser.add_argument(
+        "--merge-readiness-json",
+        type=Path,
+        required=True,
+        help=(
+            "head-bound verified_issue_set_merge_readiness.v1 statement that CI "
+            "and review are green and no further commits are anticipated"
+        ),
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     return parser
 
@@ -37,6 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         context=_mapping(args.context_json),
         pr=_mapping(args.pr_json),
         live_closing_issues=_json(args.live_closing_json),
+        merge_readiness=_mapping(args.merge_readiness_json),
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(

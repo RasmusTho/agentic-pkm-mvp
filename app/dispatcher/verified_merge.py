@@ -20,6 +20,7 @@ from app.dispatcher.verification_contract import (
     IssueAuthority,
     MAX_CLOSING_ISSUES,
     has_closing_issue_attempt,
+    has_neutralized_closing_marker,
     neutralize_closing_issue_references,
     resolve_issue_authority,
     resolve_neutralized_issue_authority,
@@ -30,6 +31,10 @@ VERIFIED_MERGE_AUTHORITY_CONTRACT = "verified_issue_set_merge_authority.v1"
 VERIFIED_MERGE_AUTHORITY_MARKER = "verified issue-set merge authority:"
 VERIFIED_MERGE_PHASE_CONTRACT = "verified_issue_set_merge_phase.v1"
 VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
+VERIFIED_MERGE_READINESS_CONTRACT = "verified_issue_set_merge_readiness.v1"
+NEUTRALIZED_BODY_RESTORATION_CONTRACT = (
+    "verified_issue_set_neutralized_body_restoration.v1"
+)
 _CONTEXT_CONTRACT = "verification_closer_dispatch_context.v2"
 _SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 _DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -58,6 +63,20 @@ _AUTHORITY_RECEIPT_FIELDS: Final = frozenset(
         "repository",
         "run_id",
     }
+)
+_MERGE_READINESS_FIELDS: Final = frozenset(
+    {
+        "contract",
+        "further_commits_anticipated",
+        "head_sha",
+        "required_checks_green",
+        "review_gate_resolved",
+    }
+)
+_MERGE_READINESS_ASSERTIONS: Final = (
+    ("required_checks_green", True),
+    ("review_gate_resolved", True),
+    ("further_commits_anticipated", False),
 )
 _PHASE_RECEIPT_FIELDS: Final = frozenset(
     {
@@ -273,6 +292,38 @@ def _complete_merged_identity(pr: Mapping[str, object]) -> bool:
     )
 
 
+def _assert_neutralization_precondition(
+    merge_readiness: object,
+    *,
+    head_sha: str,
+) -> None:
+    """Refuse neutralization unless this exact head is the final head.
+
+    Neutralizing a PR body converts durable closing authority into a state that
+    is only valid while one exact-head merge attempt is in flight. A neutralized
+    body that outlives its attempt deadlocks ``pr-contract`` on every later head,
+    so the caller must state, bound to this head, that CI and review are green
+    and that no further commits are anticipated.
+    """
+
+    if (
+        not isinstance(merge_readiness, Mapping)
+        or set(merge_readiness) != _MERGE_READINESS_FIELDS
+        or merge_readiness.get("contract") != VERIFIED_MERGE_READINESS_CONTRACT
+        or merge_readiness.get("head_sha") != head_sha
+        or any(
+            not isinstance(merge_readiness.get(field), bool)
+            for field, _ in _MERGE_READINESS_ASSERTIONS
+        )
+    ):
+        raise ValueError("verified merge readiness is malformed")
+    if any(
+        merge_readiness[field] is not expected
+        for field, expected in _MERGE_READINESS_ASSERTIONS
+    ):
+        raise ValueError("verified merge neutralization precondition is unmet")
+
+
 def _valid_authority_receipt(
     receipt: Mapping[str, object],
     *,
@@ -460,6 +511,251 @@ def resolve_verified_merge_authority_receipt(
         ) is None:
             return None
     return authority_receipt
+
+
+def _resolve_merge_state(pr: Mapping[str, object]) -> str:
+    """Classify a live PR snapshot as ``open``, ``merged``, or ``unknown``.
+
+    Never guess from a partial or self-contradictory snapshot. A missing or
+    unknown ``state``, or a combination such as ``state="open"`` with
+    ``merged=True``, resolves to ``unknown`` so callers fail closed instead of
+    reading an unestablished snapshot as a safe one.
+    """
+
+    state = pr.get("state")
+    merged = pr.get("merged")
+    merged_at = pr.get("merged_at")
+    if state == "open" and merged is not True and merged_at is None:
+        return "open"
+    if (
+        state == "closed"
+        and merged is True
+        and isinstance(merged_at, str)
+        and merged_at
+    ):
+        return "merged"
+    return "unknown"
+
+
+def resolve_neutralized_body_restoration(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+    expected_run_id: str | None = None,
+) -> dict[str, object] | None:
+    """Surface a neutralized PR body that outlived its own merge attempt.
+
+    A neutralized body is only valid while the exact head it was prepared for is
+    still the head being merged. When a further commit lands, the exact-head
+    authority receipt no longer resolves, yet the body keeps advertising
+    ``Verified-Closing-Issues``; ``pr-contract`` then fails deterministically on
+    every later head until the canonical body is restored.
+
+    Return the bounded restoration state for that condition, or ``None`` when it
+    does not hold or the evidence is not unambiguous. This is detection only: it
+    performs no writes, does not grant merge authority, never relaxes the
+    exact-head binding, and deliberately does not accept the pre-#4010 legacy
+    terminal-LF digest form, so an ambiguous case fails closed instead of naming
+    a restore target it cannot prove.
+    """
+
+    body = pr.get("body")
+    head = pr.get("head")
+    pr_number = pr.get("number")
+    if (
+        not isinstance(body, str)
+        or not isinstance(head, Mapping)
+        or not _positive_int(pr_number)
+    ):
+        return None
+    head_sha = head.get("sha")
+    if not isinstance(head_sha, str) or _SHA_PATTERN.fullmatch(head_sha) is None:
+        return None
+    if _resolve_merge_state(pr) != "open":
+        # A merged PR is still inside its own attempt; the ``restored`` phase of
+        # the merge sequence owns that body, not this recovery path. A snapshot
+        # that cannot be positively established never names a restore target.
+        return None
+    neutralized = resolve_neutralized_issue_authority(body)
+    if neutralized is None:
+        return None
+    if (
+        resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=repository,
+            expected_run_id=expected_run_id,
+        )
+        is not None
+    ):
+        return None
+    # Any trusted authority evidence naming the live head means a merge for this
+    # attempt may still be in flight, so an older head must never name a restore
+    # target that could race it. Scan the raw comment text rather than only
+    # well-formed receipts: a receipt with an extra key, a missing field, or two
+    # fenced blocks in one comment is exactly the evidence a structural filter
+    # would silently drop, and dropping it is what re-enables the race.
+    if any(
+        comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_AUTHORITY_MARKER in str(comment["body"])
+        and head_sha in str(comment["body"])
+        for comment in comments
+    ):
+        return None
+    stale: list[Mapping[str, object]] = []
+    for receipt, _ in _comment_receipt_entries(
+        comments, VERIFIED_MERGE_AUTHORITY_MARKER
+    ):
+        stored_head = receipt.get("head_sha")
+        if stored_head == head_sha:
+            return None
+        body_digest = receipt.get("body_sha256")
+        if (
+            set(receipt) != _AUTHORITY_RECEIPT_FIELDS
+            or receipt.get("contract") != VERIFIED_MERGE_AUTHORITY_CONTRACT
+            or receipt.get("repository") != repository
+            or receipt.get("pr_number") != pr_number
+            or receipt.get("governing_issue") != neutralized.governing_issue
+            or receipt.get("closing_issues") != list(neutralized.closing_issues)
+            or not isinstance(stored_head, str)
+            or _SHA_PATTERN.fullmatch(stored_head) is None
+            or not isinstance(receipt.get("run_id"), str)
+            or not receipt.get("run_id")
+            or (
+                expected_run_id is not None
+                and receipt.get("run_id") != expected_run_id
+            )
+            or not isinstance(body_digest, str)
+            or _DIGEST_PATTERN.fullmatch(body_digest) is None
+            or body_digest == receipt.get("neutralized_body_sha256")
+            or not _matches_stored_body_digest(
+                body, receipt.get("neutralized_body_sha256")
+            )
+        ):
+            continue
+        stale.append(receipt)
+    if not stale or len({receipt["body_sha256"] for receipt in stale}) != 1:
+        return None
+    # The restore target is load-bearing and is proven unique above. The
+    # provenance fields below describe the last matching attempt in the supplied
+    # comment order, which for the GitHub comments API is the most recent one.
+    # A restore-then-re-neutralize loop legitimately leaves several attempts
+    # matching the same target, so report the count rather than implying the
+    # named attempt is the only one.
+    authority_receipt = stale[-1]
+    return {
+        "closing_issues": list(neutralized.closing_issues),
+        "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
+        "governing_issue": neutralized.governing_issue,
+        "head_sha": head_sha,
+        "matching_attempts": len(stale),
+        "neutralized_body_sha256": authority_receipt["neutralized_body_sha256"],
+        "neutralized_head_sha": authority_receipt["head_sha"],
+        "pr_number": pr_number,
+        "reason": "neutralized-body-outlived-merge-attempt",
+        "repository": repository,
+        "restore_body_sha256": authority_receipt["body_sha256"],
+        "run_id": authority_receipt["run_id"],
+    }
+
+
+def classify_neutralized_body_state(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+    expected_run_id: str | None = None,
+) -> dict[str, object]:
+    """Separate a positively safe body state from an indeterminate one.
+
+    ``resolve_neutralized_body_restoration`` returns ``None`` both when there is
+    nothing to restore and when the body is neutralized but no restore target can
+    be proven. Those must not collapse into one "all clear" answer, so classify
+    the live body into exactly one of:
+
+    * ``no_restoration_required`` -- the body is canonical, or it is neutralized
+      on a positively merged PR, or a trusted authority receipt still covers the
+      current head, so the merge attempt that neutralized it is in flight.
+    * ``restoration_required`` -- the body outlived its attempt and the durable
+      receipt names the restore target.
+    * ``ambiguous_neutralized_body`` -- the body is neutralized but no restore
+      target can be proven, including when the live snapshot is incomplete or
+      self-contradictory. Stop and recover evidence; never continue repair work
+      on this answer.
+
+    "Canonical" is decided by :func:`has_neutralized_closing_marker`, never by
+    the strict resolver. The strict resolver also returns ``None`` for a body
+    whose marker survives but whose grammar no longer parses -- a second
+    ``Governing-Issue`` line, a duplicated marker, a deleted ``Refs`` line, a
+    lone CR -- and that body is a live stranded neutralization, not a clean one.
+    Reading it as safe would reproduce the very deadlock this module exists to
+    stop.
+    """
+
+    body = pr.get("body")
+    restoration = resolve_neutralized_body_restoration(
+        comments,
+        pr=pr,
+        repository=repository,
+        expected_run_id=expected_run_id,
+    )
+    merge_state = _resolve_merge_state(pr)
+    if restoration is not None:
+        status = "restoration_required"
+    elif not isinstance(body, str):
+        # No body to establish anything from.
+        status = "ambiguous_neutralized_body"
+    elif not has_neutralized_closing_marker(body):
+        status = "no_restoration_required"
+    elif merge_state == "merged" or (
+        merge_state == "open"
+        and resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=repository,
+            expected_run_id=expected_run_id,
+        )
+        is not None
+    ):
+        status = "no_restoration_required"
+    else:
+        status = "ambiguous_neutralized_body"
+    return {
+        "restoration": restoration,
+        "restoration_required": restoration is not None,
+        "status": status,
+    }
+
+
+def restored_body_matches_authority(
+    body: object,
+    *,
+    restoration: Mapping[str, object],
+) -> bool:
+    """Prove a candidate body is exactly the authenticated pre-neutralization body.
+
+    Restoration is a repair of the mutable body only. It never rewrites the
+    durable authority or phase receipt trail, and it is accepted only when the
+    candidate reproduces the receipt's original body digest and its governing and
+    closing identities.
+    """
+
+    if (
+        not isinstance(body, str)
+        or restoration.get("contract") != NEUTRALIZED_BODY_RESTORATION_CONTRACT
+        or not _matches_stored_body_digest(
+            body, restoration.get("restore_body_sha256")
+        )
+    ):
+        return False
+    authority = resolve_issue_authority(body)
+    return bool(
+        authority is not None
+        and authority.governing_issue == restoration.get("governing_issue")
+        and list(authority.closing_issues) == restoration.get("closing_issues")
+    )
 
 
 def resolve_post_merge_governing_issue(
@@ -740,8 +1036,15 @@ def prepare_verified_merge(
     context: Mapping[str, object],
     pr: Mapping[str, object],
     live_closing_issues: object,
+    merge_readiness: Mapping[str, object],
 ) -> dict[str, object]:
-    """Build the exact, reversible merge plan for one verified PR head."""
+    """Build the exact, reversible merge plan for one verified PR head.
+
+    ``merge_readiness`` is the caller's head-bound statement that this is the
+    final head: CI and review are green and no further commits are anticipated.
+    It is required and has no default, so neutralization cannot be reached by
+    forgetting the precondition.
+    """
     repository = context.get("repository")
     pr_number = context.get("pr_number")
     governing_issue = context.get("governing_issue")
@@ -807,6 +1110,11 @@ def prepare_verified_merge(
     )
     if observed_closing != closing:
         raise ValueError("verified merge GitHub closing links changed")
+
+    # Last gate before the body stops carrying its own closing authority: this
+    # exact head must be the final head. Everything above only proves the
+    # snapshot is internally consistent.
+    _assert_neutralization_precondition(merge_readiness, head_sha=head_sha)
 
     neutralized_body = neutralize_closing_issue_references(body, authority)
     if resolve_neutralized_issue_authority(neutralized_body) != authority:
