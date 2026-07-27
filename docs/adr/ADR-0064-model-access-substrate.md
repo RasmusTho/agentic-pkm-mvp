@@ -1,0 +1,216 @@
+State: Accepted (owner decision, 2026-07-27). Establishes credential and session resolution as part of the model abstraction and selects declared API keys as the default programmatic auth path. Changes no shipped runtime behavior by itself.
+Doc role: Decision record (ADR)
+Authority: Authoritative for model-provider credential and session resolution, the default programmatic auth path, and the single-source provider set. Extends `docs/adr/ADR-0063-shared-llm-contract-kernel.md`, which remains authoritative for the Product/Builder contract seam and the fallback vocabulary. ADR-0062 remains authoritative for Builder process/data/credential separation. `docs/LLM_ROUTING.md` remains authoritative for current Product routing.
+Owner: Architecture spine / LLM boundary
+Temporal class: Durable architecture decision; supersede through a later ADR.
+Source of truth: Evidence and option analysis are in `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md`. The credential mechanism is owned by `docs/LOCAL_SECRET_PROVISIONING/`; the provider census and egress posture by `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md`.
+
+# ADR-0064: Credential and session resolution is part of the model abstraction; declared API keys are the default programmatic auth path
+
+**Date:** 2026-07-27
+**Status:** Accepted (owner decision, 2026-07-27)
+
+## Context
+
+ADR-0063 ratified a shared neutral LLM Contract Kernel with separate Product and Builder execution
+fabrics. It explicitly forbade the kernel from owning credentials, provider sessions, or host
+processes (`ADR-0063:87-89`), and its evidence audit stated that a common credential plane "would
+require a new ADR/SBS stewardship pass. None is proposed here"
+(`docs/audits/LLM_RUNTIME_COORDINATION_2026-07-17.md:384-386`).
+
+That gap is now the binding constraint. A `start-model-inquiry` run failed with
+`final_state: provider_error`, `adapter_failure_class: command_exit_nonzero`, because
+`codex login status` over a fresh non-interactive SSH cannot reach the macOS login keychain. The
+same command inside the host's GUI-session tmux pane succeeds.
+
+Read-only mapping of repository and host on 2026-07-27 established that this is not a single
+provider's bug:
+
+- Anthropic reaches a headless caller only through a hand-written TLS proxy in the GUI login session
+  (`~/.local/lib/yggdrasil-claude-proxy/`, LaunchAgent `local.yggdrasil.claude-proxy`). No Codex
+  analogue exists. The difference between the two providers' headless behavior is entirely that one
+  received a bespoke bridge and the other did not, and neither bridge is in Git.
+- Nine model-access mechanisms exist across Product and Builder that do not share provider selection,
+  failure vocabulary, or credential resolution; twelve distinct credential paths exist across two
+  substrates that share nothing.
+- Three specifications each place model-provider credentials in another's out-of-scope: this ADR's
+  predecessor excludes credentials, `docs/LOCAL_SECRET_PROVISIONING/README.md:105` excludes "runtime
+  model-provider enablement", and `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` owns the
+  provider census but was never decomposed into Issues. No surface owns the seam.
+- The mechanisms needed already exist unfinished: the provider census is fully specified (R4-1) and
+  undelivered; the Keychain credential contract is delivered for one non-model secret
+  (`config/secrets/host_secret_contract.json`, HSP-01); `ModelTurnAdapter`
+  (`app/builderops/model_inquiry_adapters.py:72-82`) is proven against two structurally different
+  transports; `HttpModelAdapter` (`:175-278`) is fully implemented for both Anthropic and OpenAI and
+  unexercised.
+
+The owner separately stated that CKM should orchestrate development of the whole system. CKM's only
+model path today resolves through the **Product** router (`app/builderops/ckm/semantic.py:32,116-136`)
+and rejects a mock route only after Product routing may already have constructed policy-defined
+fallback candidates.
+
+## Decision
+
+**Credential and session resolution is part of the model abstraction, not infrastructure around it.**
+A provider-neutral **model access substrate** owns it, and **declared API keys are the default
+programmatic auth path**.
+
+### 1. What the substrate owns
+
+- Provider and model resolution from a provider-free declared intent, against the census (§3).
+- **Credential and session acquisition**: one contract, scoped by `(channel, consumer, provider)`,
+  returning an authenticated channel. The caller never learns which backend served it.
+- Execution transport behind one protocol. `ModelTurnAdapter` is promoted to that protocol rather
+  than a third contract being designed.
+- Failure classification in one closed vocabulary, extended with auth-specific classes
+  (`credential_unavailable`, `session_expired`) that today collapse into `command_exit_nonzero`.
+- Capability negotiation: constrained decoding, native tool calls, a system-prompt channel,
+  embedding dimension.
+- Provenance: provider, model, request id, effective identity, degraded state.
+
+### 2. What the substrate does not own
+
+Policy authority (Product policy stays Product, Builder policy stays Builder — ADR-0063 unchanged);
+the two mutable registries; the fallback *decision*; prompts, task taxonomy, receipts, and stores.
+Local credential-free model paths — TTS, STT, reranking — stay outside: they have no credential, no
+provider identity worth unifying, and a different lifecycle.
+
+### 3. Provider-free intent
+
+Callers declare capability tier, reasoning effort, determinism requirement, output schema reference,
+role-independence requirement, fallback requirement, and side-effect class. No code names a provider.
+The census resolves `capability_tier -> (provider, model)` at config time, per runtime and channel.
+
+`AGENTS.md :: Total Cost of Development` is unchanged as policy. Its two vendor ladders are already
+the same three rungs with different labels, and `AGENTS.md:142` already instructs agents to resolve a
+tier to the current generation's model id at config time. The census makes that resolvable rather
+than only readable.
+
+### 4. Declared API keys are the default programmatic auth path
+
+Every headless path — model inquiry, the verification closer, CKM, CI — resolves a declared secret
+through the Keychain contract in `docs/LOCAL_SECRET_PROVISIONING/`, extended with model-provider
+identifiers. Subscription CLI sessions remain for interactive human-driven work and **must not be a
+dependency of any headless path**.
+
+A brokered-session backend remains permitted behind the same contract, to be built only if a specific
+provider forces it. It is not built now, and the existing hand-built proxy is retired rather than
+generalized.
+
+The credential contract's existing invariants are inherited unchanged: value non-disclosure, channel
+isolation, consumer minimization, and fail-closed on a missing or malformed secret
+(`docs/LOCAL_SECRET_PROVISIONING/README.md:70-78`).
+
+### 5. One provider set
+
+`docs/settings/models/providers.yaml` is the single source for the set of providers. Code retains
+local frozensets for hot paths; a static test asserts every allowlist equals the census projection
+and fails CI naming the drifted site. Adding a provider is a census row plus a secret declaration —
+never a new bridge.
+
+### 6. Fallback and degradation
+
+ADR-0063's five fallback requirement values are reused unchanged; no new vocabulary is introduced.
+The caller declares the requirement, the owning runtime's policy selects within it, and the substrate
+never decides. The owner's only involvement is the declared egress-posture stage.
+
+One addition: **degradation must be visible.** A degraded result carries `degraded: true` and a
+reason. Silent degrade paths become defects rather than accepted behavior.
+
+### 7. Mechanism in Git, values host-local
+
+Launcher and adapter mechanism is version-controlled and installed by the repository's own installer.
+Credential values, provider sessions, and host paths stay outside Git, exactly as today.
+`config/secrets/host_secret_contract.json` is the model: contract tracked, values in Keychain.
+
+### 8. CKM sequencing — amends ADR-0063
+
+ADR-0063 `:179-180` sequences CKM's migration to happen only after a complete Builder runtime exists.
+That line was written when CKM was a peripheral consumer. **It is amended:** CKM migrates as early as
+its dependencies allow, requiring only credential resolution and the adapter contract.
+
+Through the migration window CKM continues to route Builder inference through Product policy — the
+authority leakage ADR-0063 rejected Option A to prevent. Two conditions make that tolerable and both
+must hold: CKM does not orchestrate during the window, and the leak is made visible by an
+`importlinter` rule with a single named, dated exemption. If orchestration must start first, CKM's
+migration precedes model inquiry.
+
+Whether CKM may orchestrate at all is **not decided here**. ADR-0057 locks CKM projection-only with a
+candidate lifecycle and human confirmation; orchestration exceeds that scope and requires its own
+amendment.
+
+## Options considered
+
+### A. Declared API keys as the default — selected
+
+The headless problem is removed rather than bridged. CI can reach providers for the first time. A new
+provider costs a census row. The TLS proxy and its version-pinned CLI symlink dependency are retired.
+Cost: metered API billing on top of existing subscriptions, at inquiry and orchestration volume.
+
+### B. Generalize the proxy into a brokered-session service — rejected as the default
+
+Zero marginal model cost, and it would collapse the proxy's uncommitted argv allowlist into the
+definition already in Git. But a GUI login session cannot exist in CI, so CI remains unable to reach
+any provider and the two silently-green workflows stay silently green. Every new provider needs broker
+support for its CLI's session model and stays exposed to CLI flag and version-layout churn — the
+failure class this ADR exists to end would survive, relocated rather than removed.
+
+### C. Both backends, substrate chooses — rejected as the initial build
+
+Most capable and cheapest at the margin, but two backends to build, test, and keep honest plus a
+resolution-order rule to reason about on every surprising call. Disproportionate machinery for a
+single-operator system. Option A's contract does not foreclose it: B becomes a second backend if
+needed.
+
+## Consequences
+
+- Acceptance authorizes specification and backlog decomposition, not direct implementation. Work must
+  pass through `feature-breakdown` and the Issue-first lane. No Issue becomes `agent:ready` merely
+  because this ADR is Accepted.
+- Current Product routing and Builder Model Inquiry behavior are unchanged until their own migration
+  steps. Steps 1-3 of the migration are purely additive.
+- `docs/LOCAL_SECRET_PROVISIONING/` is extended, not superseded: model-provider identifiers join the
+  contract, and its hardcoded consumer allowlist becomes data. This unblocks parent issue #3843.
+- `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` becomes a delivery target. Its R4-1
+  census is the first step. Its `capability-first` egress stage is unchanged and remains the owner's
+  ruling.
+- Metered spend becomes an observable rather than a bet: the egress ledger and budget circuit breaker
+  specified at `RUNTIME_MODEL_POSTURE.md:131,138` are prerequisites for volume growth, not follow-ups.
+- Two CI workflows that currently report green when their provider secret is absent
+  (`.github/workflows/ci-smoke.yaml:518-528`, `.github/workflows/architecture-ci.yaml:110-118`)
+  become contract violations under §6 and must be repaired as part of the census/credential work.
+- Consolidating the six Product-side abstractions is explicitly **not** authorized as a program. The
+  census test blocks new drift; existing sites migrate opportunistically.
+- Architecture tests must eventually enforce: census equality across every allowlist, credential
+  resolution through the contract only, no headless dependency on a subscription session, adapter use
+  over direct provider calls, and visible degradation.
+
+## SBS reconciliation
+
+- **Conforms:** Product and Builder remain distinct systems; ADR-0062's rule that Product Runtime owns
+  no Builder process, data, credential, or route is preserved, and host-local sessions remain the
+  privileged Builder executor's.
+- **Extends:** ADR-0063's kernel gains an adjacent, separately-owned credential and session resolution
+  contract. The kernel itself still owns no credential.
+- **Reshapes:** this is the "common credential plane" that `LLM_RUNTIME_COORDINATION_2026-07-17.md:384`
+  named as requiring a new ADR/SBS pass. CES gains stewardship of the credential contract's versioning
+  alongside the compatibility mappers.
+- **Does not reshape Product SBS:** Product CAO/EBF ownership, embedding identity, and reconciliation
+  discipline (ADR-0023/ADR-0052) are unchanged.
+- **Future reshape trigger:** a separately deployed credential service, a cloud secret manager, or
+  cross-host credential sharing would require a new decision. None is proposed here.
+
+## Owner decision receipt
+
+The owner ratified **Option A — declared API keys as the default programmatic auth path, subscription
+sessions interactive-only, brokered sessions permitted but not built** on 2026-07-27. The selected
+architectural answer is:
+
+> Credential and session resolution is part of the model abstraction. Every headless path resolves a
+> declared secret through the host secret contract; no headless path depends on an interactive
+> subscription session. The provider set is defined once in the census, callers never name a provider,
+> and the brokered-session backend remains available behind the same contract without being built.
+
+Private deliberation is intentionally not republished. This receipt ratifies the decision; the audit
+backlog remains advisory until `feature-breakdown` creates executable specifications and strictly
+valid Issues.
