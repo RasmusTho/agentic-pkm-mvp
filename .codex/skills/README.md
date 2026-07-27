@@ -72,7 +72,8 @@ Do not rely on a human remembering where BuilderOps material belongs.
 
 Shared contracts: `.codex/skills/_shared/` holds the canonical contract files that skills reference
 instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + `Verify:` rule),
-`LABEL_TAXONOMY.md` (canonical labels + `lane:governance` exception), `LIFECYCLE_TRUTH_MATRIX.md`
+`LABEL_TAXONOMY.md` (canonical labels + narrow `lane:governance` and
+`state:known-defect` exceptions), `LIFECYCLE_TRUTH_MATRIX.md`
 (optional legacy Project projection per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
 `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations), and `CI_WAIT_CONTRACT.md` (how to wait
 on CI checks — and the optional `--codex` verdict path — via REST without draining the shared API budget). A reference like
@@ -105,7 +106,10 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
 - `architecture-research`
   - deliberate evidence-based research pass over the live system: parallel subsystem explorers with `file:line`-anchored evidence-only briefs, cross-system synthesis, research-question resolution, invariant extraction with enforcement categories, then backlog handoff via `feature-breakdown` (reconcile against open epics, never duplicate); output is an advisory audit doc in `docs/audits/` plus an optional specification directory
 - `bug-to-issue`
-  - create a compliant GitHub Issue when a bug is discovered during analysis, testing, review, or runtime observation; classify Product/Runtime vs Builder System vs boundary before choosing labels, owner docs, and SBS Impact
+  - route a discovered defect to a normal bounded GitHub bug Issue or, for confirmed deferred
+    P2 review findings, to the deterministic rolling Known Defects registry; classify
+    Product/Runtime vs Builder System vs boundary before promotion chooses labels, owner docs, and
+    SBS Impact
 - `temporal-doc-governance`
   - audit and refresh time-sensitive current-state docs
 - `automation-maintenance`

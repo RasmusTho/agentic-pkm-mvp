@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -53,6 +55,125 @@ def _read_workflow() -> str:
     return (REPO_ROOT / ".github/workflows/issue-pr-governance.yml").read_text(
         encoding="utf-8"
     )
+
+
+def _js_issue_shape_errors(issue: dict[str, object]) -> list[str]:
+    workflow = _read_workflow()
+    validator = workflow.split("// issue-shape-validator:start", 1)[1].split(
+        "// issue-shape-validator:end", 1
+    )[0]
+    script = (
+        validator
+        + "\nconst issue = JSON.parse(process.argv[1]);"
+        + "\nprocess.stdout.write(JSON.stringify(validateIssueShape(issue)));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script, json.dumps(issue)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def _known_defects_registry_body() -> str:
+    helper_path = (
+        REPO_ROOT
+        / ".codex"
+        / "skills"
+        / "bug-to-issue"
+        / "scripts"
+        / "known_defects.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "known_defects_for_governance_test",
+        helper_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.render_registry_body()
+
+
+def test_issue_shape_workflow_accepts_only_exact_known_defects_container() -> None:
+    body = _known_defects_registry_body()
+    canonical = {
+        "body": body,
+        "locked": True,
+        "title": "Known Defects Registry (rolling)",
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "state:known-defect"},
+        ],
+    }
+
+    assert _js_issue_shape_errors(canonical) == []
+    assert _js_issue_shape_errors(
+        {
+            **canonical,
+            "body": body + "\nmanual suffix",
+        }
+    ) == ["Known Defects registry body must match the exact v1 container schema"]
+    assert _js_issue_shape_errors(
+        {
+            **canonical,
+            "labels": canonical["labels"] + [{"name": "agent:blocked"}],
+        }
+    ) == [
+        "Known Defects registry must carry exactly type:bug and state:known-defect"
+    ]
+    assert _js_issue_shape_errors(
+        {
+            **canonical,
+            "locked": False,
+        }
+    ) == ["Known Defects registry must remain locked"]
+    assert _js_issue_shape_errors(
+        {
+            **canonical,
+            "title": "Renamed registry",
+        }
+    ) == ["Known Defects registry title must match the exact v1 identity"]
+    assert _js_issue_shape_errors(
+        {
+            **canonical,
+            "labels": [{"name": "type:bug"}],
+        }
+    ) == [
+        "Known Defects registry must carry exactly type:bug and state:known-defect"
+    ]
+
+
+def test_issue_shape_workflow_rechecks_registry_lock_transitions_from_live_issue() -> None:
+    workflow = _read_workflow()
+
+    assert "types: [opened, edited, reopened, labeled, unlabeled, locked, unlocked, closed]" in workflow
+    assert "let { data: liveIssue } = await github.rest.issues.get" in workflow
+    assert "validateIssueShape(liveIssue)" in workflow
+    assert 'context.payload.action === "opened"' in workflow
+    assert "hasKnownDefectsIdentity" in workflow
+    assert 'issue.title === "Known Defects Registry (rolling)"' in workflow
+    assert "isUnlockedRegistryBootstrap" in workflow
+    assert "const maxLockPolls = 10" in workflow
+    assert "attempt < maxLockPolls && liveIssue.locked !== true" in workflow
+    assert "setTimeout(resolve, 1000)" in workflow
+    assert "({ data: liveIssue } = await github.rest.issues.get" in workflow
+
+
+def test_issue_shape_workflow_keeps_normal_issue_contract_strict() -> None:
+    errors = _js_issue_shape_errors(
+        {
+            "body": "# Not a task contract",
+            "labels": [{"name": "type:bug"}],
+        }
+    )
+
+    assert len(errors) == 1
+    assert errors[0].startswith("Issue is missing required sections:")
+    assert "Acceptance Criteria" in errors[0]
 
 
 def _verified_merge_body_digest(body: str) -> str:
