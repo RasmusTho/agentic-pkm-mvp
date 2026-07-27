@@ -271,8 +271,42 @@ def _review_result(issue: IssueScope, plan: DeliveryPlan) -> ReviewResult:
                 evidence_refs=("review:4200:finding-p2-1",),
             ),
         ),
-        known_defect_refs=("registry:4300:KD-AAAAAAAAAAAA",),
+        known_defect_refs=(
+            "registry:RasmusTho/agentic-pkm-mvp/issues/4300:"
+            "KD-AAAAAAAAAAAA",
+        ),
         provenance=_provenance("review-result-4165"),
+    )
+
+
+def _run_started_event(plan: DeliveryPlan) -> ReducerEvent:
+    plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    input_hash = delivery_event_input_hash(
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=0,
+        event_type="run_started",
+        subject_authority=None,
+        effect_ref=None,
+        result_ref=None,
+        exception=None,
+    )
+    return ReducerEvent(
+        event_id=delivery_event_id(input_hash),
+        input_hash=input_hash,
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=0,
+        event_type="run_started",
+        subject_authority=None,
+        effect_ref=None,
+        result_ref=None,
+        exception=None,
+        provenance=_provenance("run-started-4165"),
     )
 
 
@@ -285,11 +319,16 @@ def _recovery_effect(
         contract_id=plan.plan_id,
         content_hash=plan.content_hash,
     )
+    run_started_event = _run_started_event(plan)
     authorities = (_authority(issue),)
     input_hash = delivery_effect_input_hash(
         run_id="run-4165",
         plan_ref=plan_ref,
-        sequence=8,
+        run_started_event_ref=ContractRef(
+            schema_version=run_started_event.schema_version,
+            contract_id=run_started_event.event_id,
+            content_hash=run_started_event.content_hash,
+        ),
         effect_class="merge_pull_request",
         issue=issue,
         pull_request_number=4200,
@@ -300,6 +339,7 @@ def _recovery_effect(
         effect_id="effect-merge-4165",
         run_id="run-4165",
         plan_ref=plan_ref,
+        run_started_event=run_started_event,
         sequence=8,
         effect_class="merge_pull_request",
         issue=issue,
@@ -383,10 +423,14 @@ def _receipt(
                 review_disposition=review.disposition,
                 known_defects=(
                     KnownDefectRef(
+                        repository=issue.repository,
                         issue_number=4300,
                         defect_id="KD-AAAAAAAAAAAA",
                         severity="P2",
-                        registry_ref="registry:4300:KD-AAAAAAAAAAAA",
+                        registry_ref=(
+                            f"registry:{issue.repository}/issues/4300:"
+                            "KD-AAAAAAAAAAAA"
+                        ),
                         finding_hash=canonical_hash(review.findings[0]),
                     ),
                 ),
@@ -438,6 +482,9 @@ def _receipt(
                 action="read_live_authority",
                 authority_readbacks=(
                     RecoveryAuthorityReadback(
+                        effect_idempotency_key=(
+                            recovery_effect.idempotency_key
+                        ),
                         authority_id=(
                             f"github:{issue.repository}/pulls/4200"
                         ),
@@ -445,6 +492,7 @@ def _receipt(
                         pull_request_number=4200,
                         exact_head_sha=SHA_D,
                         observed_state="merged",
+                        observed_labels=("type:task",),
                         observed_at=TS,
                         evidence_ref="github-pr:4200:merged",
                     ),
@@ -524,11 +572,17 @@ def test_contracts_round_trip_canonically() -> None:
         provenance=_provenance("event-1"),
     )
     effect_plan_ref = event.plan_ref
+    run_started_event = _run_started_event(plan)
+    run_started_ref = ContractRef(
+        schema_version=run_started_event.schema_version,
+        contract_id=run_started_event.event_id,
+        content_hash=run_started_event.content_hash,
+    )
     effect_authorities = (_authority(issue),)
     effect_input_hash = delivery_effect_input_hash(
         run_id="run-4165",
         plan_ref=effect_plan_ref,
-        sequence=2,
+        run_started_event_ref=run_started_ref,
         effect_class="await_ci",
         issue=issue,
         pull_request_number=4200,
@@ -539,6 +593,7 @@ def test_contracts_round_trip_canonically() -> None:
         effect_id="effect-1",
         run_id="run-4165",
         plan_ref=effect_plan_ref,
+        run_started_event=run_started_event,
         sequence=2,
         effect_class="await_ci",
         issue=issue,
@@ -639,11 +694,57 @@ def test_contracts_round_trip_canonically() -> None:
             "sequence": effect.sequence,
         }
     )
-    with pytest.raises(ValueError, match="follow effect"):
+    with pytest.raises(ValueError, match="post-effect authority"):
         validate_reducer_event_evidence(
             early_effect_event,
             plan=plan,
             effect=effect,
+        )
+
+    stale_readback_effect_payload = effect.model_dump(mode="json")
+    stale_readback_effect_payload["provenance"]["created_at"] = (
+        "2026-07-27T10:00:01Z"
+    )
+    stale_readback_effect = parse_delivery_contract(
+        stale_readback_effect_payload
+    )
+    assert isinstance(stale_readback_effect, ReducerEffect)
+    stale_readback_ref = ContractRef(
+        schema_version=stale_readback_effect.schema_version,
+        contract_id=stale_readback_effect.effect_id,
+        content_hash=stale_readback_effect.content_hash,
+    )
+    stale_readback_hash = delivery_event_input_hash(
+        run_id=stale_readback_effect.run_id,
+        plan_ref=stale_readback_effect.plan_ref,
+        sequence=stale_readback_effect.sequence + 1,
+        event_type="effect_succeeded",
+        subject_authority=_authority(issue),
+        effect_ref=stale_readback_ref,
+        result_ref=None,
+        exception=None,
+    )
+    stale_readback_event = ReducerEvent(
+        event_id=delivery_event_id(stale_readback_hash),
+        input_hash=stale_readback_hash,
+        run_id=stale_readback_effect.run_id,
+        plan_ref=stale_readback_effect.plan_ref,
+        sequence=stale_readback_effect.sequence + 1,
+        event_type="effect_succeeded",
+        subject_authority=_authority(issue),
+        effect_ref=stale_readback_ref,
+        result_ref=None,
+        exception=None,
+        provenance=_provenance(
+            "stale-effect-readback",
+            created_at="2026-07-27T10:00:02Z",
+        ),
+    )
+    with pytest.raises(ValueError, match="post-effect authority"):
+        validate_reducer_event_evidence(
+            stale_readback_event,
+            plan=plan,
+            effect=stale_readback_effect,
         )
 
     invalid_event_identity = event.model_dump(mode="json")
@@ -677,8 +778,15 @@ def test_contracts_round_trip_canonically() -> None:
 
     invalid_effect = effect.model_dump(mode="json")
     invalid_effect["sequence"] += 1
-    with pytest.raises(ValidationError, match="input hash"):
-        parse_delivery_contract(invalid_effect)
+    resequenced_effect = parse_delivery_contract(invalid_effect)
+    assert isinstance(resequenced_effect, ReducerEffect)
+    assert resequenced_effect.idempotency_key == effect.idempotency_key
+    assert resequenced_effect.input_hash == effect.input_hash
+
+    zero_sequence_effect = effect.model_dump(mode="json")
+    zero_sequence_effect["sequence"] = 0
+    with pytest.raises(ValidationError):
+        parse_delivery_contract(zero_sequence_effect)
 
     invalid_effect = effect.model_dump(mode="json")
     invalid_effect["idempotency_key"] = "caller-selected-key"
@@ -691,7 +799,7 @@ def test_contracts_round_trip_canonically() -> None:
     fresh_input_hash = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        sequence=effect.sequence,
+        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
@@ -718,7 +826,7 @@ def test_contracts_round_trip_canonically() -> None:
     assert delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        sequence=effect.sequence,
+        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
@@ -727,7 +835,7 @@ def test_contracts_round_trip_canonically() -> None:
     ) == delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        sequence=effect.sequence,
+        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
@@ -742,7 +850,7 @@ def test_contracts_round_trip_canonically() -> None:
     reordered_authorities_payload["input_hash"] = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        sequence=effect.sequence,
+        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
@@ -759,6 +867,11 @@ def test_contracts_round_trip_canonically() -> None:
 
     with pytest.raises(ValidationError, match="canonical sorted order"):
         _authority(issue, labels=("type:task", "agent:ready"))
+
+    finding_payload = review.findings[0].model_dump(mode="json")
+    finding_payload["evidence_refs"] = ("review:z", "review:a")
+    with pytest.raises(ValidationError, match="canonical sorted order"):
+        ReviewFinding.model_validate(finding_payload)
 
     foreign_event_payload = event.model_dump(mode="json")
     foreign_event_subject = _authority(_issue(9999, SHA_C))
@@ -835,7 +948,7 @@ def test_contracts_round_trip_canonically() -> None:
     stale_effect_payload["input_hash"] = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        sequence=effect.sequence,
+        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
@@ -858,7 +971,7 @@ def test_contracts_round_trip_canonically() -> None:
     missing_label_effect_payload["input_hash"] = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        sequence=effect.sequence,
+        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
@@ -1300,11 +1413,15 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             action="read_live_closure_authority",
             authority_readbacks=(
                 RecoveryAuthorityReadback(
+                    effect_idempotency_key=(
+                        "builderops.delivery-effect.v1:" + SHA_B
+                    ),
                     authority_id=issue.authority_id,
                     issue=issue,
                     pull_request_number=4200,
                     exact_head_sha=SHA_D,
                     observed_state="closed",
+                    observed_labels=("type:task",),
                     observed_at="2026-07-27T10:05:00Z",
                     evidence_ref="github-issue:4165:closed",
                 ),
@@ -1392,6 +1509,61 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         "authority_id"
     ] = "arbitrary:pr-authority"
     with pytest.raises(ValidationError, match="merge authority ID"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["known_defects"][0][
+        "repository"
+    ] = "OtherOrg/other-repo"
+    payload["issue_proofs"][0]["known_defects"][0]["registry_ref"] = (
+        "registry:OtherOrg/other-repo/issues/4300:KD-AAAAAAAAAAAA"
+    )
+    with pytest.raises(ValidationError, match="proof repository"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["authority_readbacks"][0][
+        "authority_id"
+    ] = "github:RasmusTho/agentic-pkm-mvp/pulls/9999"
+    with pytest.raises(ValidationError, match="bind observed merge"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["authority_readbacks"][0][
+        "effect_idempotency_key"
+    ] = "builderops.delivery-effect.v1:" + SHA_C
+    wrong_effect_readback_receipt = parse_delivery_contract(payload)
+    assert isinstance(wrong_effect_readback_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="exact effect"):
+        validate_delivery_receipt_evidence(
+            wrong_effect_readback_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recovery_effect,),
+        )
+
+    unordered_exception_a = DeliveryException(
+        kind="execution_failed",
+        code="a-exception",
+        message="First exception.",
+        retryable=False,
+        evidence_refs=("evidence:a",),
+    )
+    unordered_exception_z = DeliveryException(
+        kind="execution_failed",
+        code="z-exception",
+        message="Second exception.",
+        retryable=False,
+        evidence_refs=("evidence:z",),
+    )
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["exceptions"] = [
+        unordered_exception_z.model_dump(mode="json"),
+        unordered_exception_a.model_dump(mode="json"),
+    ]
+    with pytest.raises(ValidationError, match="canonical sorted order"):
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
@@ -1706,6 +1878,26 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     )
     failed_worker = parse_delivery_contract(failed_worker_payload)
     assert isinstance(failed_worker, StructuredWorkerResult)
+    unordered_worker_payload = failed_worker.model_dump(mode="json")
+    unordered_worker_payload["exceptions"] = [
+        DeliveryException(
+            kind="execution_failed",
+            code="z-worker-error",
+            message="Second worker failure.",
+            retryable=False,
+            evidence_refs=("worker:z",),
+        ).model_dump(mode="json"),
+        DeliveryException(
+            kind="execution_failed",
+            code="a-worker-error",
+            message="First worker failure.",
+            retryable=False,
+            evidence_refs=("worker:a",),
+        ).model_dump(mode="json"),
+    ]
+    with pytest.raises(ValidationError, match="canonical sorted order"):
+        parse_delivery_contract(unordered_worker_payload)
+
     failed_receipt_payload = receipt.model_dump(mode="json")
     failed_receipt_payload["terminal_outcome"] = "failed"
     failed_receipt_payload["exceptions"] = [
