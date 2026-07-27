@@ -17,6 +17,7 @@ harness pattern as ``tests/workers/test_outbox_worker_consumes_ingest.py``).
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from typing import Any
 
@@ -384,6 +385,7 @@ def test_retry_events_not_swallowed(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     conn = FakeOutboxConn()
     required_db_values: list[bool] = []
     keys = _capture_worker_keys(monkeypatch, conn, required_db_values=required_db_values)
+    expects_required_db = "required_db" in inspect.signature(write_outbox_event).parameters
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "audit.jsonl"))
 
     payload = {"event_id": "orig-evt-1", "vault_path": "/v/n.md", "trace_id": "t-1"}
@@ -400,9 +402,7 @@ def test_retry_events_not_swallowed(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     assert len(keys) == 2
     assert keys[0] != keys[1]
     assert len(conn.rows) == 2
-    # The base branch retains its pre-#4064 worker call. The spy accepts the
-    # new keyword now so #4064 can be rebased without changing this harness.
-    assert required_db_values == [False, False]
+    assert required_db_values == [expects_required_db, expects_required_db]
 
     # Re-enqueue of the SAME attempt is a duplicate: same key, still 2 rows.
     assert outbox_worker._queue_transient_retry(
@@ -410,7 +410,7 @@ def test_retry_events_not_swallowed(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     )
     assert keys[2] == keys[0]
     assert len(conn.rows) == 2
-    assert required_db_values == [False, False, False]
+    assert required_db_values == [expects_required_db, expects_required_db, expects_required_db]
 
 
 def test_dead_letter_emissions_are_attempt_scoped(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
