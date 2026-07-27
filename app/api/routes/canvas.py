@@ -40,7 +40,7 @@ from app.api.routes.vault_resolution import (
     active_vault_root_or_selection_required,
     resolve_active_vault_root,
 )
-from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
+from app.reasoning.facade import ReasoningModeFacade, get_reasoning_mode_facade
 from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
 from app.panel.confirmation import _proposal_store as _panel_proposal_store
@@ -101,13 +101,13 @@ def _session_vault_root_or_picker(session: SessionLog) -> Path | JSONResponse:
     return _get_vault_root_or_picker()
 
 
-def _coauthor_facade_factory() -> ReasoningFacade:
+def _coauthor_facade_factory() -> ReasoningModeFacade:
     """Reasoning facade used by the co-authoring cognition.
 
     Indirected through a module-level function so tests can substitute a
     deterministic stub without a live LLM provider.
     """
-    return get_reasoning_facade()
+    return get_reasoning_mode_facade()
 
 
 def _intent_classifier_completion() -> CompletionFn | None:
