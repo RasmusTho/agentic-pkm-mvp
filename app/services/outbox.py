@@ -123,6 +123,25 @@ def _open_conn():
     return psycopg.connect(url, autocommit=True)
 
 
+def _outbox_db_enabled() -> bool:
+    """Return whether a self-owned outbox write may use Postgres.
+
+    ``conn_rw`` can fall back to a settings DSN even when the active store is
+    memory-backed.  A best-effort outbox emission must not trigger that fallback:
+    DNS resolution happens before a connection failure can be caught and can
+    stall a non-pg test run.  An explicit non-pg backend therefore always skips
+    a self-owned DB write, even if a stale DSN remains in the environment.
+
+    With no explicit backend, an explicit DSN is still a durability request and
+    retains the existing Postgres write path.  Callers that supply ``conn`` own
+    their transaction and bypass this gate.
+    """
+    backend = (os.environ.get("STORE_BACKEND") or "").strip().lower()
+    if backend:
+        return backend == "pg"
+    return bool(os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN"))
+
+
 def open_outbox_txn_conn():
     """Open one manual-commit canonical connection for multi-statement outbox bookkeeping.
 
@@ -440,6 +459,12 @@ def write_outbox_event(
         stamped_meta = dict(envelope.meta or {})
         stamped_meta["payload_schema"] = current_schema_ref(envelope.event_type)
         envelope = envelope.model_copy(update={"meta": stamped_meta})
+    if conn is None and not _outbox_db_enabled():
+        # Outbox emission is best effort outside an explicitly configured
+        # Postgres runtime.  ``""`` is the existing no-insert result (used for
+        # a deduplicated event), so callers do not mistake this skipped
+        # best-effort write for durable delivery (#4064).
+        return ""
     conn, close = _use_conn(conn)
     stored = envelope.model_dump_json()
     created_at = envelope.created_at or datetime.now(timezone.utc)
