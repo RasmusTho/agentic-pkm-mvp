@@ -220,7 +220,11 @@ def test_harness_selfverify_paths_include_release_channels() -> None:
 def _run_fault_injection(python: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHON"] = python
-    env.setdefault("PYTHONPATH", str(REPO_ROOT))
+    # Deliberately do NOT default PYTHONPATH to REPO_ROOT here: the script
+    # itself builds a private, sitecustomize-free PYTHONPATH default when the
+    # caller does not supply one (issue #4186). REPO_ROOT carries its own
+    # root sitecustomize.py (decision-receipt hook) that would shadow the
+    # interpreter's real one and break every third-party import.
     return subprocess.run(
         ["bash", str(FAULT_INJECTION)],
         cwd=REPO_ROOT,

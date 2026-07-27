@@ -239,6 +239,23 @@ def _install_settings_location_import_failure(
     the checked-out ``app`` package is not reliable. ``sitecustomize`` instead
     adds a narrow import hook for the exact required module while leaving every
     installed package and the successful path untouched.
+
+    This injection hook's own directory is placed first on the child's
+    ``PYTHONPATH``, which means Python's site machinery finds THIS
+    ``sitecustomize.py`` before any other -- including whichever real one the
+    interpreter would otherwise load (e.g. Homebrew's, whose only
+    load-bearing line wires up the actual third-party site-packages
+    directory via ``site.addsitedir(...)``). Left unhandled, that would
+    shadow the real hook and break every third-party import (e.g.
+    ``pydantic_settings``) in the child process -- the same class of defect
+    as putting ``REPO_ROOT`` on ``PYTHONPATH`` (issue #4186), just
+    self-inflicted by this test's own fixture instead. Since this hook is a
+    deliberate, necessary replacement of ``sitecustomize`` (there is no
+    private-directory-symlink alternative here), it must instead
+    RE-DELEGATE: locate and execute whatever real ``sitecustomize`` module
+    this interpreter would have loaded absent the injected hook directory,
+    before installing the controlled ``app.settings.locations`` import
+    failure below.
     """
     hook_dir = tmp_path / "python-hook"
     hook_dir.mkdir()
@@ -246,10 +263,30 @@ def _install_settings_location_import_failure(
     (hook_dir / "sitecustomize.py").write_text(
         """\
 import importlib.abc
+import importlib.machinery
 import importlib.util
 import os
 from pathlib import Path
 import sys
+
+# Re-delegate to the real sitecustomize this interpreter would otherwise
+# load (issue #4186): search sys.path with this hook's own directory
+# excluded, and if a real `sitecustomize` module is found elsewhere, execute
+# its source in this module's namespace so its site-packages wiring still
+# happens. A venv interpreter that ships no sitecustomize.py of its own
+# leaves this as a no-op.
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+_search_path = [p for p in sys.path if os.path.abspath(p) != _this_dir]
+_real_spec = importlib.machinery.PathFinder().find_spec(
+    "sitecustomize", path=_search_path
+)
+if (
+    _real_spec is not None
+    and _real_spec.origin
+    and os.path.abspath(_real_spec.origin) != os.path.abspath(__file__)
+):
+    _real_source = Path(_real_spec.origin).read_text(encoding="utf-8")
+    exec(compile(_real_source, _real_spec.origin, "exec"), globals())
 
 _counter = Path(os.environ["PKM_SETTINGS_LOCATION_IMPORT_COUNTER"])
 _fail_on = int(os.environ["PKM_SETTINGS_LOCATION_IMPORT_FAIL_ON"])
