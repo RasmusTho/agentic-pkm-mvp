@@ -221,7 +221,7 @@ def test_subscription_adapter_preserves_invalid_provider_fields_for_runner_valid
     assert module._response_from_text(json.dumps(response)) == response
 
 
-def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
+def test_desktop_skills_preserve_remote_macmini_launcher_contract(tmp_path: Path) -> None:
     codex = (REPO_ROOT / ".codex/skills/start-model-inquiry/SKILL.md").read_text()
     claude = (REPO_ROOT / "claude-skills/start-model-inquiry/SKILL.md").read_text()
     for skill in (codex, claude):
@@ -240,16 +240,13 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "mkdir /tmp/yggdrasil-model-inquiry.lock",
             "rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock",
             "Do not remove an existing lock",
-            "Do not register remote lock release until the launch outcome is known",
-            "Do not release the remote lock after an ambiguous launcher outcome",
             "high-reasoning profile",
         ):
             assert contract_field in skill
-        for required_boundary in (
-            "Do not run local BuilderOps, Python, Codex, or Claude commands",
-            "Do not install dependencies, run vault-init, configure adapters, or use API keys.",
-        ):
-            assert required_boundary in skill
+        assert (
+            "Do not install dependencies, run vault-init, configure adapters, or use API keys."
+            in skill
+        )
         for forbidden in (
             "scripts/start_model_inquiry.sh",
             "BUILDEROPS_VAULT_ROOT",
@@ -277,6 +274,90 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
     with zipfile.ZipFile(archive) as bundle:
         assert bundle.namelist() == ["start-model-inquiry/SKILL.md"]
         assert bundle.read(bundle.namelist()[0]).decode() == claude
+
+
+def test_codex_skill_local_route_is_identity_gated_and_fail_closed() -> None:
+    skill = (
+        REPO_ROOT / ".codex/skills/start-model-inquiry/SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+
+    route_selection = skill.index("## Route Selection")
+    lock_acquisition = skill.index("## Single-Flight Launch")
+    assert route_selection < lock_acquisition
+    for identity_contract in (
+        "/usr/bin/ssh -G Tailscale_macmini",
+        "/usr/bin/id -un",
+        'NFSHomeDirectory',
+        "require the current `$HOME` to equal it byte-for-byte",
+        "`$HOME/.ssh/known_hosts` and `$HOME/.ssh/known_hosts2`",
+        "`/usr/bin/ssh-keygen -F`",
+        "`/etc/ssh/ssh_host_*_key.pub`",
+        "Never read a private host-key file",
+        "Use the **proven-local route** only when alias expansion, principal binding, home binding, and the pinned host-key proof all succeed.",
+        "Never infer that the caller is local because",
+        "Once selected, do not switch routes during the invocation.",
+    ):
+        assert identity_contract in normalized_skill
+
+    launcher_invocations = [
+        line.strip()
+        for line in skill.splitlines()
+        if "yggdrasil-model-inquiry" in line and "--question-file" in line
+    ]
+    assert launcher_invocations == [
+        "ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'",
+        '"$HOME/.local/bin/yggdrasil-model-inquiry" --question-file /tmp/model-inquiry-question.md',
+    ]
+    lock_invocations = [
+        line.strip()
+        for line in skill.splitlines()
+        if "mkdir /tmp/yggdrasil-model-inquiry.lock" in line
+    ]
+    assert lock_invocations == [
+        "ssh -T Tailscale_macmini 'mkdir /tmp/yggdrasil-model-inquiry.lock'",
+        "/bin/mkdir /tmp/yggdrasil-model-inquiry.lock",
+    ]
+    release_invocations = [
+        line.strip()
+        for line in skill.splitlines()
+        if "rm -f /tmp/model-inquiry-question.md" in line
+        and "rmdir /tmp/yggdrasil-model-inquiry.lock" in line
+    ]
+    assert release_invocations == [
+        "ssh -T Tailscale_macmini 'rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock'",
+    ]
+    local_release = skill.split("Fixed proven-local release procedure:", 1)[1].split(
+        "The configured Mac mini owns", 1
+    )[0]
+    assert "*** Delete File: /tmp/model-inquiry-question.md" in local_release
+    assert "/bin/rmdir /tmp/yggdrasil-model-inquiry.lock" in local_release
+    assert "rm -f" not in local_release
+    for local_contract in (
+        "/bin/mkdir /tmp/yggdrasil-model-inquiry.lock",
+        '/usr/bin/install -m 0600 "$QUESTION_FILE" /tmp/model-inquiry-question.md',
+        "*** Delete File: <absolute QUESTION_FILE>",
+        "Do not use `rm`, `unlink`, a glob, or a shell cleanup wrapper for this local temporary file.",
+        "non-empty stdout whose entire contents parse as exactly one JSON object",
+        "contain non-empty string values for `inquiry_id`, `final_state`, `terminal_receipt_id`, and",
+        "| Failure after lock acquisition but before step 5 starts | Run the fixed remote release command below; report the original failure and any cleanup failure. | Run the fixed proven-local release procedure below; report the original failure and any cleanup failure. |",
+        "| Valid terminal response | Preserve the response, then run the fixed remote release command. | Preserve the response, then run the fixed proven-local release procedure. |",
+        "| Ambiguous launcher outcome after step 5 starts | Preserve the remote staging file and lock. | Preserve the local staging file and lock. |",
+        "a cleanup failure must not replace or reclassify the captured launcher outcome.",
+        "The proven-local route may invoke only the fixed subscription-authenticated host launcher.",
+    ):
+        assert local_contract in normalized_skill
+
+    for forbidden_bypass in (
+        "BUILDEROPS_VAULT_ROOT",
+        "BUILDEROPS_INQUIRY_ADAPTERS_JSON",
+        "scripts/start_model_inquiry.sh",
+        "/etc/ssh/ssh_host_ed25519_key",
+        "/etc/ssh/ssh_host_rsa_key",
+        "tailscale status --json",
+        "/bin/rm -f /tmp/model-inquiry-question.md",
+    ):
+        assert forbidden_bypass not in skill
 
 
 def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
