@@ -805,6 +805,7 @@ def test_commit_message_closing_keywords_are_forbidden() -> None:
     guidance = (
         REPO_ROOT / ".codex" / "skills" / "publish-pr" / "SKILL.md"
     ).read_text(encoding="utf-8")
+    workflow = _read_workflow()
 
     for keyword in (
         "Fix",
@@ -818,6 +819,15 @@ def test_commit_message_closing_keywords_are_forbidden() -> None:
         "Resolved",
     ):
         assert f"`{keyword}`" in guidance
+    assert "as an issue-closing reference" in guidance
+    assert "Ordinary non-target prose such as `Fix runtime env` is allowed" in guidance
+    assert "Start with imperative verb (Add, Update, Rebuild, etc.)" in guidance
+    assert "Start with imperative verb (Fix, Add, Update, Rebuild, etc.)" not in guidance
+    assert "Never include any issue-closing keyword in the commit subject or body" not in guidance
+    assert ".github/workflows/issue-pr-governance.yml :: pr-contract closing authority" in guidance
+    assert "const closingKeyword =" in workflow
+    assert "closingAttemptSeparator" in workflow
+    assert "closingAttemptTarget" in workflow
     assert "Use evidence-only `Refs #<id>`" in guidance
 
 
