@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
 import sqlite3
 import subprocess
 from dataclasses import replace
-from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from click.testing import CliRunner
 
 from app.builderops.__main__ import _root
 import app.builderops.cli as builderops_cli_module
+import app.builderops.ckm.overview_html as overview_html_module
 from app.builderops.cli import builderops
 from app.builderops.ckm import comparison as comparison_module
 from app.builderops.ckm.contracts import CkmContractError, ResultEnvelope, canonical_digest
@@ -1977,8 +1978,76 @@ def _proposal_section(rendered: str) -> str:
     return rendered.split('<section class="cockpit-proposals"', 1)[1].split("</section>", 1)[0]
 
 
+class _VisibleHtmlTextParser(HTMLParser):
+    """Collect authored text while ignoring non-visible style and script bodies."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._ignored_elements: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized in {"style", "script"}:
+            self._ignored_elements.append(normalized)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        if self._ignored_elements and normalized == self._ignored_elements[-1]:
+            self._ignored_elements.pop()
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_elements:
+            self.parts.append(data)
+
+    def close(self) -> None:
+        super().close()
+        if self._ignored_elements:
+            raise AssertionError(
+                "malformed style/script close would make the authored-text scan incomplete"
+            )
+
+
 def _visible_html_text(markup: str) -> str:
-    return unescape(re.sub(r"<[^>]+>", "", markup))
+    parser = _VisibleHtmlTextParser()
+    parser.feed(markup)
+    parser.close()
+    return "".join(parser.parts)
+
+
+def test_visible_html_text_ignores_non_visible_bodies_without_double_decoding() -> None:
+    assert (
+        _visible_html_text(
+            "<p>before</p><style>hidden-style</style   >"
+            "<script>hidden-script</script\t\n><p>after</p>"
+            "<p>&amp;lt;script&amp;gt;visible&amp;lt;/script&amp;gt;</p>"
+            "<p>&amp;lt;style&amp;gt;visible&amp;lt;/style&amp;gt;</p>"
+        )
+        == (
+            "beforeafter"
+            "&lt;script&gt;visible&lt;/script&gt;"
+            "&lt;style&gt;visible&lt;/style&gt;"
+        )
+    )
+
+
+def test_visible_html_text_handles_or_fails_closed_attribute_bearing_malformed_close() -> None:
+    markup = '<p>before</p><script>hidden</script arbitrary="x"><p>after</p>'
+    try:
+        visible = _visible_html_text(markup)
+    except AssertionError as error:
+        assert str(error) == "malformed style/script close would make the authored-text scan incomplete"
+    else:
+        assert visible == "beforeafter"
+
+
+def test_visible_html_text_fails_closed_on_unclosed_style() -> None:
+    with pytest.raises(
+        AssertionError,
+        match="malformed style/script close would make the authored-text scan incomplete",
+    ):
+        _visible_html_text("<p>before</p><style>hidden")
 
 
 def _finding_with(
@@ -2298,3 +2367,368 @@ if (!rows[0].hidden || proposals.hidden || proposals.textContent !== before) pro
     assert result.returncode == 0, result.stderr
     assert proposals.count('<pre class="proposal-draft">') == 1
     assert "proposal" not in script.lower()
+
+
+def _cockpit_print_css(rendered: str) -> str:
+    """Return the generated print block, failing if the style surface is ambiguous."""
+
+    styles = re.findall(r"<style>(.*?)</style>", rendered, re.S)
+    assert len(styles) == 1
+    print_blocks = styles[0].split("@media print {")
+    assert len(print_blocks) == 2
+    return print_blocks[1]
+
+
+def _print_rule(css: str, selector: str) -> str:
+    match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]+)\}}", css)
+    assert match is not None, f"missing print rule for {selector}"
+    return re.sub(r"\s+", "", match.group(1))
+
+
+class _CockpitPrintStructureParser(HTMLParser):
+    """Capture normalized generated-element structure without relying on CSS substrings."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.elements: list[tuple[str, dict[str, str | None]]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.elements.append((tag.lower(), {name.lower(): value for name, value in attrs}))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+
+def _cockpit_print_structure(rendered: str) -> _CockpitPrintStructureParser:
+    parser = _CockpitPrintStructureParser()
+    parser.feed(rendered)
+    parser.close()
+    return parser
+
+
+def _elements_with_class(
+    parser: _CockpitPrintStructureParser, class_name: str
+) -> list[tuple[str, dict[str, str | None]]]:
+    return [
+        (tag, attrs)
+        for tag, attrs in parser.elements
+        if class_name in (attrs.get("class") or "").split()
+    ]
+
+
+def _section_markup(rendered: str, class_name: str) -> str:
+    opening = f'<section class="{class_name}"'
+    start = rendered.index(opening)
+    return rendered[start : rendered.index("</section>", start) + len("</section>")]
+
+
+def test_cockpit_print_css_reveals_hidden_rows_and_closed_details(
+    overview_store: CkmStore,
+) -> None:
+    context = CockpitRenderContext(batch=overview_store.load_projection_batch())
+    cockpit = render_overview_html(overview_store, cockpit=context)
+    direction_a = render_overview_html(overview_store)
+    print_css = _cockpit_print_css(cockpit)
+    structure = _cockpit_print_structure(cockpit)
+    details = [attrs for tag, attrs in structure.elements if tag == "details"]
+    safety = _parse_cockpit_html_safety(cockpit)
+
+    assert "@media print" not in direction_a
+    assert "@media print" in cockpit
+    assert len(_elements_with_class(structure, "capability")) == len(context.batch.capabilities)
+    assert details
+    assert all("open" not in attrs for attrs in details)
+    assert {"capability-details", "drilldown", "citations"} <= {
+        class_name
+        for _, attrs in structure.elements
+        for class_name in (attrs.get("class") or "").split()
+    }
+    assert safety.script_count == 1
+    script = _cockpit_filter_script(cockpit)
+    assert "row.hidden" in script
+    assert "open" not in script and "print" not in script.lower()
+    assert "display:block!important;" in _print_rule(print_css, "[hidden]")
+    assert "display:block!important;" in _print_rule(
+        print_css, "details > :not(summary)"
+    )
+    assert "content-visibility:visible!important;" in _print_rule(
+        print_css, "details::details-content"
+    )
+
+
+def test_cockpit_print_hides_controls_not_semantics(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+    print_css = _cockpit_print_css(rendered)
+    structure = _cockpit_print_structure(rendered)
+
+    controls = _elements_with_class(structure, "cockpit-filter-controls")
+    assert controls == [("div", {"class": "filter-controls cockpit-filter-controls"})]
+    assert any(
+        tag == "p" and attrs.get("id") == "filter-count" for tag, attrs in structure.elements
+    )
+    assert any(tag == "noscript" for tag, _ in structure.elements)
+    assert "display:none!important;" in _print_rule(
+        print_css, ".cockpit-filter-controls,#filter-count,noscript"
+    )
+    assert "list-style:none!important;" in _print_rule(print_css, "summary")
+    glyph_rule = _print_rule(print_css, "summary::before")
+    assert "content:none!important;" in glyph_rule
+    assert "display:none!important;" in glyph_rule
+    assert 'content:""!important;' in _print_rule(print_css, "summary::marker")
+    assert "display:none!important;" in _print_rule(
+        print_css, "summary::-webkit-details-marker"
+    )
+    semantic_classes = {
+        "cockpit-trust",
+        "cockpit-hazards",
+        "cockpit-comparison",
+        "capability-tree",
+        "gaps-panel",
+        "cockpit-proposals",
+        "projection-footer",
+    }
+    rendered_classes = {
+        class_name
+        for _, attrs in structure.elements
+        for class_name in (attrs.get("class") or "").split()
+    }
+    assert semantic_classes <= rendered_classes
+    assert "Generated projection — not source of truth." in rendered
+    assert "Filtering is unavailable; all capability rows are shown." in rendered
+
+
+def test_cockpit_print_contract_covers_every_final_section(overview_store: CkmStore) -> None:
+    batch = overview_store.load_projection_batch()
+    variants = {
+        "compatible": CockpitRenderContext(batch=batch, comparison=_valid_o1b_payload()),
+        "refusal": CockpitRenderContext(batch=batch, comparison=None),
+    }
+
+    for state, context in variants.items():
+        rendered = render_overview_html(overview_store, cockpit=context)
+        print_css = _cockpit_print_css(rendered)
+        structure = _cockpit_print_structure(rendered)
+        assert len(_elements_with_class(structure, "capability-body")) == len(batch.capabilities)
+        assert len(_elements_with_class(structure, "capability-details")) == len(batch.capabilities)
+        assert len(_elements_with_class(structure, "drilldown")) == 2 * len(batch.capabilities)
+        assert _elements_with_class(structure, "citations")
+        assert _elements_with_class(structure, "evidence-list")
+        assert _elements_with_class(structure, "finding-list")
+        for edge in batch.edges_by_capability[next(iter(batch.edges_by_capability))]:
+            assert f"Basis: {edge.basis}" in rendered
+        for findings in batch.findings_by_capability.values():
+            for finding in findings:
+                assert finding.statement in rendered
+                for citation in finding.citations:
+                    assert str(citation["source_ref"]) in rendered
+        assert "Generated projection — not source of truth." in rendered
+        assert "projection-input digest:" in _section_markup(rendered, "cockpit-trust")
+        assert "Draft only — not an Issue contract" in _section_markup(
+            rendered, "cockpit-proposals"
+        )
+        assert "Candidate and confirmed evidence remain distinct." in rendered
+        assert "details > :not(summary)" in print_css
+        assert "details::details-content" in print_css
+        if state == "compatible":
+            assert 'class="comparison-result"' in rendered
+            assert "source_unavailable" not in rendered
+        else:
+            assert 'class="comparison-refusal"' in rendered
+            assert "source_unavailable" in rendered
+
+
+def test_cockpit_print_styles_preserve_text_and_section_integrity(
+    overview_store: CkmStore,
+) -> None:
+    batch = overview_store.load_projection_batch()
+    capability = next(
+        item for item in batch.capabilities if item.id in batch.findings_by_capability
+    )
+    long_identity = "CKM-IDENTITY-" + "x" * 320
+    long_metadata = "BOUNDARY-" + "m" * 320
+    long_basis = "basis-" + "b" * 320
+    long_finding = "finding-" + "f" * 320
+    long_citation = "citation-" + "c" * 320 + ".md"
+    long_watermark = "watermark-" + "w" * 320
+    long_epoch = "epoch-" + "e" * 320
+    finding = batch.findings_by_capability[capability.id][0]
+    assessment_projection = batch.assessments_by_capability[capability.id]
+    long_citations = {
+        dimension: [{"source_ref": long_citation, "lifecycle": "confirmed"}]
+        for dimension in MATURITY_DIMENSIONS
+    }
+    projection = replace(
+        batch,
+        state_identity=replace(batch.state_identity, epoch=long_epoch),
+        current_watermark_set={"fixture": long_watermark},
+        capabilities=tuple(
+            replace(item, public_id=long_identity, boundary_ref=long_metadata)
+            if item.id == capability.id
+            else item
+            for item in batch.capabilities
+        ),
+        edges_by_capability={
+            **batch.edges_by_capability,
+            capability.id: tuple(
+                replace(edge, basis=long_basis, source_ref=long_citation)
+                for edge in batch.edges_by_capability[capability.id]
+            ),
+        },
+        assessments_by_capability={
+            **batch.assessments_by_capability,
+            capability.id: replace(
+                assessment_projection,
+                assessment=replace(assessment_projection.assessment, citations=long_citations),
+            ),
+        },
+        findings_by_capability={
+            **batch.findings_by_capability,
+            capability.id: (
+                replace(
+                    finding,
+                    statement=long_finding,
+                    citations=[{"source_ref": long_citation, "lifecycle": "confirmed"}],
+                ),
+            ),
+        },
+    )
+    rendered = render_overview_html(
+        overview_store,
+        cockpit=CockpitRenderContext(batch=projection, comparison=_valid_o1b_payload()),
+    )
+    print_css = _cockpit_print_css(rendered)
+
+    trust = _section_markup(rendered, "cockpit-trust")
+    proposals = _section_markup(rendered, "cockpit-proposals")
+    footer = rendered.split('<footer class="projection-footer">', 1)[1].split("</footer>", 1)[0]
+    for value in (long_identity, long_metadata, long_basis, long_finding, long_citation):
+        assert value in rendered
+    assert long_epoch in trust and long_epoch in footer
+    assert long_watermark in trust and long_watermark in footer and long_watermark in proposals
+    assert re.search(r"projection-input digest: <code>[0-9a-f]{64}</code>", trust)
+    assert long_finding in proposals and long_citation in proposals
+    root = _print_rule(print_css, ":root")
+    assert "--bg-base:#fff;" in root and "--fg-1:#111;" in root
+    assert "background:#fff;" in _print_rule(print_css, "body")
+    assert "text-decoration:underline;" in _print_rule(print_css, "a")
+    assert "border:1pxsolid#333;" in _print_rule(
+        print_css,
+        ".projection-banner,.cockpit-trust,.cockpit-hazards,.cockpit-comparison,.subsystem-counts-card,.cockpit-filters,.gaps-panel,.cockpit-proposals,.capability,.dimension",
+    )
+    wrapping = _print_rule(
+        print_css,
+        ".tree-name,.capability-body,.meta,code,.basis,.citations,.finding-list,.evidence-list,.proposal-draft,.cockpit-trust,.cockpit-comparison,.cockpit-hazards,.cockpit-proposals,.projection-footer",
+    )
+    assert "overflow:visible;" in wrapping
+    assert "overflow-wrap:anywhere;" in wrapping
+    assert "word-break:break-word;" in wrapping
+    assert "white-space:pre-wrap;" in _print_rule(print_css, "pre,.proposal-draft")
+    assert "flex-wrap:wrap;" in _print_rule(
+        print_css,
+        ".summary-flags,.badge,.flag,.lifecycle,.capability-summary,.trust-strip,.subsystem-counts-grid",
+    )
+    assert "break-after:avoid-page;" in _print_rule(print_css, "h1,h2,h3,summary")
+    compact = _print_rule(
+        print_css,
+        ".capability-summary,.dimension-label,.mini-dimensions,.summary-flags,.trust-strip a",
+    )
+    assert "break-inside:avoid-page;" in compact
+    assert "page-break-inside:avoid;" in compact
+    splittable = _print_rule(
+        print_css,
+        ".capability,.cockpit-comparison,.cockpit-comparison > *,.proposal-draft",
+    )
+    assert "break-inside:auto;" in splittable
+    assert "page-break-inside:auto;" in splittable
+    assert '<div class="proposal-intro">' in proposals
+    orphan_rule = _print_rule(print_css, ".proposal-intro")
+    assert "break-after:avoid-page;" in orphan_rule
+    assert "page-break-after:avoid;" in orphan_rule
+    typography = _print_rule(print_css, "p,li")
+    assert "widows:3;" in typography and "orphans:3;" in typography
+
+
+def test_cockpit_answers_fixed_owner_questions_without_authority(
+    overview_store: CkmStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_now = "2026-07-27T12:00:00Z"
+    monkeypatch.setattr(overview_html_module, "utc_now", lambda: fixed_now)
+    refusal_first = tmp_path / "cockpit-refusal-first.html"
+    refusal_second = tmp_path / "cockpit-refusal-second.html"
+    assert _cockpit_cli(overview_store, refusal_first).exit_code == 0
+    assert _cockpit_cli(overview_store, refusal_second).exit_code == 0
+    _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
+    _retain_for_cockpit(overview_store, retained_at="2026-07-22T00:00:00Z")
+    compatible_first = tmp_path / "cockpit-compatible-first.html"
+    compatible_second = tmp_path / "cockpit-compatible-second.html"
+    assert _cockpit_cli(overview_store, compatible_first).exit_code == 0
+    assert _cockpit_cli(overview_store, compatible_second).exit_code == 0
+
+    artifacts = {
+        "refusal": (refusal_first, refusal_second),
+        "compatible": (compatible_first, compatible_second),
+    }
+    rendered_by_state: dict[str, str] = {}
+    for state, (first, second) in artifacts.items():
+        assert first.read_bytes() == second.read_bytes()
+        assert hashlib.sha256(first.read_bytes()).hexdigest() == hashlib.sha256(
+            second.read_bytes()
+        ).hexdigest()
+        rendered_by_state[state] = first.read_text(encoding="utf-8")
+    assert "source_unavailable" in rendered_by_state["refusal"]
+    assert 'class="comparison-refusal"' in rendered_by_state["refusal"]
+    assert 'class="comparison-result"' in rendered_by_state["compatible"]
+
+    for rendered in rendered_by_state.values():
+        for question in (
+            "Is this projection fresh and complete enough to inspect?",
+            "What should not be taken at face value?",
+            "What differs between the two newest active retained observation records",
+            "Where is evidence weakest?",
+        ):
+            assert question in rendered
+        assert "Generated projection — not source of truth." in rendered
+        assert "Draft only — not an Issue contract, priority, decision, or ready work." in rendered
+        assert "<form" not in rendered.lower()
+        assert "clipboard" not in rendered.lower()
+        assert not re.search(r"<(?:form|button|textarea)\b", rendered, re.I)
+        safety = _parse_cockpit_html_safety(rendered)
+        assert safety.script_count == 1
+        assert safety.script_sources == [] and safety.inline_handlers == []
+        source_values_removed = re.sub(
+            r'<span class="proposal-source-value">.*?</span>',
+            "",
+            rendered,
+            flags=re.S,
+        )
+        source_values_removed = re.sub(
+            r'<p class="comparison-disclaimer">.*?</p>',
+            "",
+            source_values_removed,
+            flags=re.S,
+        )
+        source_values_removed = re.sub(
+            r'<pre class="comparison-(?:result|inputs|bindings|provenance|freshness|limitations|details)">.*?</pre>',
+            "",
+            source_values_removed,
+            flags=re.S,
+        )
+        authored = _visible_html_text(source_values_removed)
+        for negating_disclaimer in (
+            "Generated projection — not source of truth.",
+            "Generated projection (BuilderOps CKM). Not source of truth.",
+            "Difference between two snapshots. Not a trend, cause, or forecast.",
+            "Draft only — not an Issue contract, priority, decision, or ready work.",
+            "Candidate and confirmed evidence remain distinct. Regenerate from the CKM store; do not edit this file as authority.",
+        ):
+            authored = authored.replace(negating_disclaimer, "")
+        assert not re.search(
+            r"\b(?:rank(?:ing)?|prioriti[sz](?:e|ed|ing)|trend|cause|forecast|authority|action|write|network|clipboard|prefill)\b",
+            authored,
+            re.I,
+        )

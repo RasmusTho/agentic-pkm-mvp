@@ -546,8 +546,8 @@ def _cockpit_proposals_markup(batch: CkmProjectionBatch) -> str:
     )
     return (
         '<section class="cockpit-proposals" aria-labelledby="proposals-heading">'
-        '<h2 id="proposals-heading">Proposal drafts</h2>'
-        f'<p class="proposal-counts">Eligible drafts: {len(drafts)} · Ineligible findings: {ineligible} · Total findings: {total}.</p>'
+        '<div class="proposal-intro"><h2 id="proposals-heading">Proposal drafts</h2>'
+        f'<p class="proposal-counts">Eligible drafts: {len(drafts)} · Ineligible findings: {ineligible} · Total findings: {total}.</p></div>'
         f"{draft_markup}</section>"
     )
 
@@ -985,7 +985,7 @@ def _cockpit_filter_markup(capability_count: int) -> str:
     return f"""<section class="cockpit-filters" aria-labelledby="filters-heading">
       <h2 id="filters-heading">Filters</h2>
       <p>Filter capability rows only; trust, hazards, comparison, gaps, proposals, and provenance remain visible.</p>
-      <div class="filter-controls">
+      <div class="filter-controls cockpit-filter-controls">
         <label for="filter-search">Search name, definition, public ID, or boundary</label>
         <input id="filter-search" name="filter-search" type="search" disabled aria-controls="capability-map">
         <label for="filter-assessment">Assessment freshness</label>
@@ -1069,6 +1069,34 @@ def _cockpit_filter_script() -> str:
 })();</script>"""
 
 
+def _cockpit_print_styles() -> str:
+    """Return the cockpit-only print contract without changing screen-state semantics."""
+
+    return """
+    @media print {
+      :root { --bg-base:#fff; --bg-surface:#fff; --bg-raised:#fff; --bg-overlay:#f4f4f4; --fg-1:#111; --fg-2:#333; --fg-3:#555; --border:#777; --border-strong:#333; --accent:#111; --agent:#111; --amber:#111; --destructive:#111; --healthy:#111; --unknown:#111; }
+      body { background:#fff; color:#111; }
+      a { color:#111; text-decoration:underline; }
+      .projection-banner,.cockpit-trust,.cockpit-hazards,.cockpit-comparison,.subsystem-counts-card,.cockpit-filters,.gaps-panel,.cockpit-proposals,.capability,.dimension { background:#fff; border:1px solid #333; }
+      [hidden] { display:block !important; }
+      details > :not(summary) { display:block !important; }
+      details::details-content { content-visibility:visible !important; }
+      .cockpit-filter-controls,#filter-count,noscript { display:none !important; }
+      summary { list-style:none !important; }
+      summary::before { content:none !important; display:none !important; }
+      summary::marker { content:"" !important; }
+      summary::-webkit-details-marker { display:none !important; }
+      .tree-name,.capability-body,.meta,code,.basis,.citations,.finding-list,.evidence-list,.proposal-draft,.cockpit-trust,.cockpit-comparison,.cockpit-hazards,.cockpit-proposals,.projection-footer { overflow:visible; overflow-wrap:anywhere; word-break:break-word; }
+      pre,.proposal-draft { white-space:pre-wrap; }
+      .summary-flags,.badge,.flag,.lifecycle,.capability-summary,.trust-strip,.subsystem-counts-grid { flex-wrap:wrap; }
+      h1,h2,h3,summary { break-after:avoid-page; page-break-after:avoid; }
+      .capability-summary,.dimension-label,.mini-dimensions,.summary-flags,.trust-strip a { break-inside:avoid-page; page-break-inside:avoid; }
+      .capability,.cockpit-comparison,.cockpit-comparison > *,.proposal-draft { break-inside:auto; page-break-inside:auto; }
+      .proposal-intro { break-after:avoid-page; page-break-after:avoid; }
+      p,li { widows:3; orphans:3; }
+    }"""
+
+
 def render_overview_html(
     store: CkmStore,
     *,
@@ -1138,6 +1166,7 @@ def render_overview_html(
     cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""
     cockpit_filters = _cockpit_filter_markup(len(forest)) if cockpit else ""
     cockpit_script = _cockpit_filter_script() if cockpit else ""
+    cockpit_print_styles = _cockpit_print_styles() if cockpit else ""
     capability_map_open = (
         '<div id="capability-map" class="capability-tree">'
         if cockpit
@@ -1175,7 +1204,7 @@ def render_overview_html(
     .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-3); text-align:center; line-height:0.55rem; }}
     .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
     .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
-    .cockpit-filters {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .filter-controls {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:0.5rem 0.75rem; align-items:end; }} .filter-controls label {{ color:var(--fg-2); }} .filter-controls input,.filter-controls select {{ min-height:2.25rem; border:1px solid var(--border-strong); border-radius:0.1875rem; background:var(--bg-raised); color:var(--fg-1); padding:0.375rem; }} .filter-controls input:focus-visible,.filter-controls select:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }} .filter-controls input:disabled,.filter-controls select:disabled {{ opacity:0.65; }}
+    .cockpit-filters {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .filter-controls {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:0.5rem 0.75rem; align-items:end; }} .filter-controls label {{ color:var(--fg-2); }} .filter-controls input,.filter-controls select {{ min-height:2.25rem; border:1px solid var(--border-strong); border-radius:0.1875rem; background:var(--bg-raised); color:var(--fg-1); padding:0.375rem; }} .filter-controls input:focus-visible,.filter-controls select:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }} .filter-controls input:disabled,.filter-controls select:disabled {{ opacity:0.65; }}{cockpit_print_styles}
     footer {{ margin-top:1.75rem; padding:1rem 0 2.25rem; border-top:1px solid var(--border); color:var(--fg-2); overflow-wrap:anywhere; }}
     @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .subsystem-counts-grid {{ grid-template-columns:1fr; }} .capability-count {{ grid-template-columns:1fr; gap:0.15rem; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
   </style>
