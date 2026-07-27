@@ -87,6 +87,7 @@ class FakeGateway:
         comment = {
             "id": self.next_comment,
             "body": body,
+            "author_association": "OWNER",
             "html_url": (
                 f"https://github.com/RasmusTho/agentic-pkm-mvp/"
                 f"issues/{issue_number}#issuecomment-{self.next_comment}"
@@ -431,6 +432,108 @@ def test_crash_after_comment_before_receipt_is_safe_to_retry() -> None:
     assert receipt["status"] == "duplicate"
     assert receipt["url"] == original["html_url"]
     assert len(gateway.comments[issue["number"]]) == 1
+
+
+def test_crash_after_create_before_lock_recovers_one_canonical_registry() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == issue["number"]
+    assert gateway.issues[issue["number"]]["locked"] is True
+    assert len(gateway.issues) == 1
+    assert len(gateway.comments[issue["number"]]) == 1
+
+
+class AmbiguousCreateGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_create_response = True
+
+    def create_registry_issue(self) -> dict[str, Any]:
+        issue = super().create_registry_issue()
+        if self.fail_create_response:
+            self.fail_create_response = False
+            raise known_defects.KnownDefectsError(
+                "GitHub REST request failed after registry creation"
+            )
+        return issue
+
+
+def test_ambiguous_create_response_converges_on_retry_without_duplicate_issue() -> None:
+    gateway = AmbiguousCreateGateway()
+    defect = _defect()
+
+    with pytest.raises(known_defects.KnownDefectsError, match="after registry creation"):
+        known_defects.intake_defect(defect, gateway)
+    receipt = known_defects.intake_defect(defect, gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 900
+    assert gateway.issues[900]["locked"] is True
+    assert len(gateway.issues) == 1
+    assert len(gateway.comments[900]) == 1
+
+
+def test_trusted_entry_written_before_lock_is_reused_after_bootstrap_recovery() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    defect = _defect()
+    original = gateway.add_comment(issue["number"], defect.render_entry())
+
+    receipt = known_defects.intake_defect(defect, gateway)
+
+    assert receipt["status"] == "duplicate"
+    assert receipt["url"] == original["html_url"]
+    assert gateway.issues[issue["number"]]["locked"] is True
+    assert len(gateway.comments[issue["number"]]) == 1
+
+
+def test_untrusted_entry_written_before_lock_fails_closed_after_recovery() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    comment = gateway.add_comment(issue["number"], _defect().render_entry())
+    comment["author_association"] = "NONE"
+
+    with pytest.raises(known_defects.KnownDefectsError, match="untrusted author"):
+        known_defects.intake_defect(_defect(), gateway)
+
+    assert gateway.issues[issue["number"]]["locked"] is True
+    assert len(gateway.issues) == 1
+
+
+def test_untrusted_promotion_written_before_lock_fails_closed_after_entry_match() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    defect = _defect()
+    gateway.add_comment(issue["number"], defect.render_entry())
+    promotion = gateway.add_comment(
+        issue["number"],
+        "\n".join(
+            (
+                known_defects.PROMOTION_MARKER_TEMPLATE.format(
+                    defect_id=defect.defect_id,
+                    issue_number=901,
+                ),
+                (
+                    f"Promotion receipt: {defect.defect_id} is now tracked for "
+                    "implementation by #901."
+                ),
+                (
+                    "The bounded bug Issue owns scope, acceptance criteria, Verify "
+                    "targets, and execution state."
+                ),
+            )
+        ),
+    )
+    promotion["author_association"] = "CONTRIBUTOR"
+
+    with pytest.raises(known_defects.KnownDefectsError, match="untrusted author"):
+        known_defects.intake_defect(defect, gateway)
+
+    assert gateway.issues[issue["number"]]["locked"] is True
 
 
 def test_closed_registry_is_read_for_duplicates_but_never_appended() -> None:

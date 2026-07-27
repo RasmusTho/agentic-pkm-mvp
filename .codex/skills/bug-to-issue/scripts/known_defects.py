@@ -56,6 +56,7 @@ NORMAL_AGENT_STATES = {
     "agent:needs-human",
 }
 PRIORITY_LABELS = {"prio:high", "prio:med", "prio:low"}
+TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 REQUIRED_ISSUE_SECTIONS = (
     "Context",
     "Scope",
@@ -386,7 +387,12 @@ def _label_names(issue: dict[str, Any]) -> set[str]:
     }
 
 
-def _validate_registry_issue(issue: dict[str, Any], *, require_open: bool) -> None:
+def _validate_registry_issue(
+    issue: dict[str, Any],
+    *,
+    require_open: bool,
+    require_locked: bool = True,
+) -> None:
     if (issue.get("body") or "") != render_registry_body():
         raise KnownDefectsError(
             f"Issue #{issue.get('number')} has a malformed Known Defects registry body"
@@ -410,7 +416,7 @@ def _validate_registry_issue(issue: dict[str, Any], *, require_open: bool) -> No
             f"Issue #{issue.get('number')} has unexpected registry label(s): "
             + ", ".join(unexpected_labels)
         )
-    if issue.get("locked") is not True:
+    if require_locked and issue.get("locked") is not True:
         raise KnownDefectsError(
             f"registry Issue #{issue.get('number')} must be locked before intake"
         )
@@ -473,6 +479,80 @@ def _promotion_from_comment(body: str) -> tuple[str, int] | None:
     return defect_id, issue_number
 
 
+def _validate_schema_comment(comment: dict[str, Any]) -> None:
+    body = comment.get("body") or ""
+    lines = body.splitlines()
+    if not lines:
+        return
+    first_line = lines[0]
+    is_entry = first_line.startswith("<!-- known-defect-entry:")
+    is_promotion = first_line.startswith("<!-- known-defect-promotion:")
+    if not is_entry and not is_promotion:
+        return
+    association = str(comment.get("author_association") or "").upper()
+    if association not in TRUSTED_AUTHOR_ASSOCIATIONS:
+        raise KnownDefectsError(
+            f"schema comment #{comment.get('id')} has untrusted author association "
+            f"{association or '<missing>'}"
+        )
+    if is_entry:
+        _entry_id_from_comment(body)
+    else:
+        _promotion_from_comment(body)
+
+
+def _registry_inventory(
+    gateway: RegistryGateway,
+    *,
+    recover_bootstrap: bool,
+) -> list[dict[str, Any]]:
+    issues = sorted(
+        gateway.list_registry_issues("all"),
+        key=lambda item: int(item["number"]),
+    )
+    for issue in issues:
+        _validate_registry_issue(
+            issue,
+            require_open=False,
+            require_locked=False,
+        )
+    open_registries = [
+        issue for issue in issues if str(issue.get("state", "")).lower() == "open"
+    ]
+    if len(open_registries) > 1:
+        numbers = ", ".join(f"#{item['number']}" for item in open_registries)
+        raise KnownDefectsError(f"multiple open registries found ({numbers})")
+    if (
+        recover_bootstrap
+        and len(open_registries) == 1
+        and open_registries[0].get("locked") is not True
+    ):
+        issue_number = int(open_registries[0]["number"])
+        gateway.lock_registry_issue(issue_number)
+        refreshed = gateway.get_issue(issue_number)
+        _validate_registry_issue(refreshed, require_open=True)
+        issues = [
+            refreshed if int(issue["number"]) == issue_number else issue
+            for issue in issues
+        ]
+    for issue in issues:
+        _validate_registry_issue(issue, require_open=False)
+    return issues
+
+
+def _inventory_comments(
+    gateway: RegistryGateway,
+    issue_number: int,
+) -> list[dict[str, Any]]:
+    comments = sorted(
+        gateway.list_comments(issue_number),
+        key=lambda item: int(item.get("id") or 0),
+    )
+    for comment in comments:
+        _validate_schema_comment(comment)
+    return comments
+
+
 def _promotion_targets(
     comments: Sequence[dict[str, Any]],
     defect_id: str,
@@ -480,6 +560,7 @@ def _promotion_targets(
     targets: set[int] = set()
     evidence: dict[int, dict[str, Any]] = {}
     for comment in comments:
+        _validate_schema_comment(comment)
         parsed = _promotion_from_comment(comment.get("body") or "")
         if parsed is None or parsed[0] != defect_id:
             continue
@@ -492,63 +573,67 @@ def _promotion_targets(
 def _find_entry(
     gateway: RegistryGateway,
     defect_id: str,
+    *,
+    recover_bootstrap: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    issues = sorted(
-        gateway.list_registry_issues("all"),
-        key=lambda item: int(item["number"]),
+    issues = _registry_inventory(
+        gateway,
+        recover_bootstrap=recover_bootstrap,
     )
-    for issue in issues:
-        _validate_registry_issue(issue, require_open=False)
     open_registries = [
         issue for issue in issues if str(issue.get("state", "")).lower() == "open"
     ]
     if len(open_registries) > 1:
         numbers = ", ".join(f"#{item['number']}" for item in open_registries)
         raise KnownDefectsError(f"multiple open registries found ({numbers})")
+    found: tuple[dict[str, Any], dict[str, Any]] | None = None
     for issue in issues:
-        for comment in sorted(
-            gateway.list_comments(int(issue["number"])),
-            key=lambda item: int(item.get("id") or 0),
-        ):
+        for comment in _inventory_comments(gateway, int(issue["number"])):
             parsed_id = _entry_id_from_comment(comment.get("body") or "")
-            if parsed_id == defect_id:
-                return issue, comment
-    return None
+            if parsed_id == defect_id and found is None:
+                found = (issue, comment)
+    return found
 
 
 def _select_registry(
     gateway: RegistryGateway,
     registry_issue: int | None,
 ) -> dict[str, Any]:
+    issues = _registry_inventory(gateway, recover_bootstrap=True)
+    open_registries = [
+        issue for issue in issues if str(issue.get("state", "")).lower() == "open"
+    ]
     if registry_issue is not None:
-        issue = gateway.get_issue(registry_issue)
-        _validate_registry_issue(issue, require_open=True)
-        return issue
-    open_registries = gateway.list_registry_issues("open")
-    for issue in open_registries:
-        _validate_registry_issue(issue, require_open=True)
-    if len(open_registries) > 1:
-        numbers = ", ".join(f"#{item['number']}" for item in open_registries)
-        raise KnownDefectsError(
-            f"multiple open registries found ({numbers}); pass --registry-issue explicitly"
-        )
+        selected = [
+            issue
+            for issue in open_registries
+            if int(issue["number"]) == registry_issue
+        ]
+        if len(selected) != 1:
+            raise KnownDefectsError(
+                f"--registry-issue #{registry_issue} is not the single open registry"
+            )
+        return selected[0]
     if open_registries:
         return open_registries[0]
     created = gateway.create_registry_issue()
     gateway.lock_registry_issue(int(created["number"]))
-    created = gateway.get_issue(int(created["number"]))
-    _validate_registry_issue(created, require_open=True)
-    # Detect a concurrent first-registry creation before appending.
-    open_registries = gateway.list_registry_issues("open")
-    for issue in open_registries:
-        _validate_registry_issue(issue, require_open=True)
+    issues = _registry_inventory(gateway, recover_bootstrap=True)
+    open_registries = [
+        issue for issue in issues if str(issue.get("state", "")).lower() == "open"
+    ]
     if len(open_registries) != 1:
         numbers = ", ".join(f"#{item['number']}" for item in open_registries)
         raise KnownDefectsError(
-            "registry creation race detected; select one registry explicitly "
-            f"from: {numbers}"
+            f"registry creation race detected; reconcile open registries: {numbers}"
         )
-    return created
+    selected = open_registries[0]
+    if int(selected["number"]) != int(created["number"]):
+        raise KnownDefectsError(
+            "registry creation response does not match the canonical open registry"
+        )
+    _inventory_comments(gateway, int(selected["number"]))
+    return selected
 
 
 def intake_defect(
@@ -558,7 +643,11 @@ def intake_defect(
     registry_issue: int | None = None,
 ) -> dict[str, Any]:
     gateway.ensure_registry_label()
-    existing = _find_entry(gateway, defect.defect_id)
+    existing = _find_entry(
+        gateway,
+        defect.defect_id,
+        recover_bootstrap=True,
+    )
     if existing is not None:
         issue, comment = existing
         return {
@@ -569,6 +658,21 @@ def intake_defect(
             "url": comment.get("html_url"),
         }
     issue = _select_registry(gateway, registry_issue)
+    existing = _find_entry(
+        gateway,
+        defect.defect_id,
+        recover_bootstrap=True,
+    )
+    if existing is not None:
+        existing_issue, comment = existing
+        return {
+            "schema": "known-defect-receipt.v1",
+            "status": "duplicate",
+            "defect_id": defect.defect_id,
+            "registry_issue": int(existing_issue["number"]),
+            "url": comment.get("html_url"),
+        }
+    _inventory_comments(gateway, int(issue["number"]))
     comment = gateway.add_comment(int(issue["number"]), defect.render_entry())
     return {
         "schema": "known-defect-receipt.v1",

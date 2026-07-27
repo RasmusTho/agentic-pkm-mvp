@@ -89,8 +89,14 @@ python3 .codex/skills/bug-to-issue/scripts/known_defects.py lookup \
 ```
 
 If multiple open registry Issues are ever found, intake fails closed instead of guessing. Reconcile
-the duplicate registry state, or pass `--registry-issue <N>` explicitly after verifying the
-canonical survivor.
+the duplicate registry state before retrying; `--registry-issue <N>` can select the already-verified
+single open registry but cannot override ambiguous registry authority.
+
+Registry creation is crash-convergent across the create/lock boundary. Intake may lock and reuse
+exactly one structurally canonical open bootstrap Issue, then rereads the Issue and all comments
+before appending. Every schema entry and promotion marker must come from a GitHub author association
+of `OWNER`, `MEMBER`, or `COLLABORATOR`; untrusted or missing associations fail closed. This prevents
+comments posted during the brief pre-lock bootstrap interval from gaining registry authority.
 
 GitHub comment creation has no compare-and-swap operation. Sequential retries are idempotent; two
 truly concurrent same-id intakes can still append identical comments after the same stale read.
