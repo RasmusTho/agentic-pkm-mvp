@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.chat.read_only_cognition import ReadOnlyChatCognition
 from app.reasoning.models import ReasoningMode, ReasoningRun
 
@@ -84,12 +86,41 @@ def test_chat_cognition_has_no_note_or_outbox_side_effects() -> None:
     assert outbox_writer.calls == 0
 
 
-def test_chat_cognition_uses_fallback_planning_when_reasoning_plan_fails() -> None:
+def test_chat_cognition_marks_planning_degraded_when_reasoning_plan_fails() -> None:
     cognition = ReadOnlyChatCognition(facade_factory=lambda: _FailingFacade())
     result = cognition.respond("Plan how to summarize this thread", trace_id="trace-chat-fallback")
-    assert result.planning["mode"] == "read_only_fallback"
+
+    # The degraded payload must be self-identifying, not a canned plan that
+    # reads like a real one.
+    assert result.planning["mode"] == "read_only_degraded"
+    assert result.planning["degraded"] is True
+    assert result.planning["degraded_reason"] == "planning_unavailable"
+    assert result.planning["provider_error"] == "mode planning not implemented"
     assert result.planning["execution_allowed"] is False
-    assert "steps" in result.planning and result.planning["steps"]
+    assert result.planning["goal"] == "Plan how to summarize this thread"
+    assert result.planning["trace_id"] == "trace-chat-fallback"
+    # No fabricated plan steps.
+    assert result.planning.get("steps") == []
+    assert result.degraded is True
+    assert "could not be produced" in result.answer.lower()
+
+
+def test_chat_cognition_reaches_real_planning_path_on_mock_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The default (non-injected) facade must now reach a real PLANNING result
+    # instead of always falling back.
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("REASONING_PROVIDER", "mock")
+    monkeypatch.delenv("CI", raising=False)
+
+    result = ReadOnlyChatCognition().respond("Help me think about X", trace_id="trace-real")
+
+    assert result.degraded is False
+    assert result.planning.get("mode") not in {"read_only_fallback", "read_only_degraded"}
+    assert result.planning.get("plan")
+    assert result.planning.get("steps")
 
 
 def test_chat_cognition_denied_detection_uses_word_boundaries() -> None:

@@ -37,6 +37,7 @@ class ReadOnlyChatResponse:
     denied_requests: list[str] = field(default_factory=list)
     side_effects_emitted: bool = False
     trace_id: str | None = None
+    degraded: bool = False
 
 
 class ReadOnlyChatCognition:
@@ -58,6 +59,8 @@ class ReadOnlyChatCognition:
         denied = self._detect_denied_requests(text)
         planning = self._plan_read_only(text, trace_id=trace_id)
 
+        degraded = bool(planning.get("degraded"))
+
         if denied:
             answer = (
                 "Read-only Chat cognition denied mutation/execution requests. "
@@ -66,6 +69,13 @@ class ReadOnlyChatCognition:
         else:
             answer = "Read-only Chat cognition generated a planning-only response."
 
+        if degraded:
+            # Surface the degradation instead of presenting a canned plan as real.
+            answer = (
+                f"{answer} A plan could not be produced: "
+                f"{planning.get('provider_error') or 'planning is unavailable'}."
+            )
+
         return ReadOnlyChatResponse(
             read_only=True,
             answer=answer,
@@ -73,6 +83,7 @@ class ReadOnlyChatCognition:
             denied_requests=denied,
             side_effects_emitted=False,
             trace_id=trace_id,
+            degraded=degraded,
         )
 
     @staticmethod
@@ -81,18 +92,23 @@ class ReadOnlyChatCognition:
         return sorted({match.group(1) for match in _DENY_PATTERN.finditer(lowered)})
 
     def _plan_read_only(self, prompt: str, *, trace_id: str | None) -> dict[str, Any]:
+        """Plan via the reasoning facade, or return a self-identifying degraded payload.
+
+        When the underlying PLANNING run fails, this surface must not substitute
+        generic steps that are indistinguishable from a model-produced plan.
+        The degraded payload carries the marker and the provider error instead.
+        """
         facade = self._facade_factory()
         run = facade.plan([], goal=prompt, trace_id=trace_id)
         if run.status == "ok" and isinstance(run.result, dict) and run.result:
             return run.result
         return {
-            "mode": "read_only_fallback",
+            "mode": "read_only_degraded",
+            "degraded": True,
+            "degraded_reason": "planning_unavailable",
+            "provider_error": run.error or "planning run returned no result",
             "goal": prompt,
-            "steps": [
-                "Clarify the request and constraints.",
-                "Identify relevant context and assumptions.",
-                "Propose a non-mutating response strategy.",
-            ],
+            "steps": [],
             "execution_allowed": False,
             "trace_id": trace_id,
         }
