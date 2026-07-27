@@ -6,7 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.components.concurrency import VersionMismatch
+from app.knowledge.multiwriter import is_conflict_artifact
+from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.panel_actions import PanelActionMapping
 import app.watcher.vault_watcher as watcher_module
 from app.watcher.vault_watcher import VaultWatcher, compute_changes, load_snapshot, run_watcher_tick, save_snapshot
@@ -272,18 +273,18 @@ def test_vault_watcher_stale_panel_write_has_no_acknowledgement_effects(
         lambda _path, events: emitted_events.extend(events),
     )
 
-    def reject_stale_write(
+    def interleave_human_write(
         path: Path,
-        expected_version: str,
         content: str,
-    ) -> None:
+        **kwargs: object,
+    ):
         note.write_text(concurrent, encoding="utf-8")
-        raise VersionMismatch(str(path))
+        return write_note_from_absolute(path, content, **kwargs)
 
     monkeypatch.setattr(
-        watcher_module._WRITE_GUARD,
-        "write_if_unchanged",
-        reject_stale_write,
+        watcher_module,
+        "write_note_from_absolute",
+        interleave_human_write,
     )
 
     summary, messages = run_watcher_tick(
@@ -302,7 +303,16 @@ def test_vault_watcher_stale_panel_write_has_no_acknowledgement_effects(
     assert persisted_ids == []
     assert emitted_events == []
     assert note.read_text(encoding="utf-8") == concurrent
-    assert any("stale write prevented" in message for message in messages)
+    assert any("stale write staged" in message for message in messages)
+    artifacts = [
+        path
+        for path in note.parent.iterdir()
+        if path != note and is_conflict_artifact(path.name)
+    ]
+    assert len(artifacts) == 1
+    staged = artifacts[0].read_text(encoding="utf-8")
+    assert "Do thing" in staged
+    assert staged != concurrent
 
 
 def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(
@@ -371,8 +381,8 @@ def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(
         lambda _path, selected: emitted_events.extend(selected),
     )
     monkeypatch.setattr(
-        watcher_module._WRITE_GUARD,
-        "write_if_unchanged",
+        watcher_module,
+        "write_note_from_absolute",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("emit-only must not write canonical Markdown")
         ),

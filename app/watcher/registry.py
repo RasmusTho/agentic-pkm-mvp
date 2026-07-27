@@ -18,10 +18,11 @@ from app.agents.panel.agent import handle_note_update
 from app.agents.panel.writeback import upsert_executed_ids
 from app.briefing.trigger import scheduled_briefing_tick
 from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
-from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_note_text_with_version
+from app.knowledge.write_ops import write_note_from_absolute
 from app.objects import resolve_canonical_object_id
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
@@ -54,7 +55,6 @@ from app.watcher.settings_delta import (
     settings_delta_state_values,
 )
 from app.watcher.state import WatcherState
-from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -63,8 +63,6 @@ DEFAULT_SCOPE_GLOB = "*.md,**/*.md"
 
 MIN_TICK_SLEEP_SECONDS = 0.05
 BRIEFING_TICK_INTERVAL_SECONDS = 15 * 60
-
-_WRITE_GUARD = OptimisticWriteGuard()
 
 logger = logging.getLogger(__name__)
 
@@ -317,15 +315,23 @@ def _write_markdown_if_changed(
     updated: str,
     *,
     expected_version: str,
+    vault_root: Path,
 ) -> bool:
     if original == updated:
         return False
-    DEFAULT_WRITE_GUARD.assert_writes_allowed("panel watcher update")
     try:
-        _WRITE_GUARD.write_if_unchanged(note_path, expected_version, updated)
+        write_note_from_absolute(
+            note_path,
+            updated,
+            vault_root=vault_root,
+            action="panel watcher update",
+            expected_version=expected_version,
+        )
         return True
-    except VersionMismatch:
-        return False
+    except KnowledgeWriteConflict as exc:
+        if exc.receipt is not None and exc.receipt.outcome == "conflict_staged":
+            return False
+        raise
 
 
 def _read_panel_note_with_retry(
@@ -419,6 +425,7 @@ def _process_panel_note(
                 markdown,
                 result.updated_markdown,
                 expected_version=expected_version,
+                vault_root=vault_root,
             )
         except Exception as exc:
             state.errors += 1

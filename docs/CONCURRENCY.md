@@ -37,7 +37,9 @@ Writes to notes or objects MUST use optimistic locking with a version token to p
   the note watcher as skipped/deferred rather than processed. Only an attached
   `conflict_staged` receipt is a known stale/deferred outcome; a receiptless or other
   `KnowledgeWriteConflict` is indeterminate and propagates as an error because the canonical write
-  may already have linearized.
+  may already have linearized. Direct watcher writeback uses the same hardened knowledge-write
+  helper as service flows; the check-then-`write_bytes` `OptimisticWriteGuard.write_if_unchanged`
+  primitive is not an atomic CAS and MUST NOT authorize rewritten vault notes.
 
 ## Event idempotency keys (MUST)
 Events MUST be idempotent across retries.

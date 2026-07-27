@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.events.schema import OutboxEvent
+from app.knowledge.multiwriter import is_conflict_artifact
+from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.panel_actions import PanelActionMapping
 from app.vault.paths import get_vault_inbox_dir_rel
 import app.watcher.registry as registry
@@ -129,11 +131,19 @@ def test_process_panel_note_stale_write_has_no_acknowledgement_effects(
         ),
     )
 
-    def reject_stale_write(*args, **kwargs) -> bool:
+    def interleave_human_write(
+        path: Path,
+        content: str,
+        **kwargs: object,
+    ):
         note_path.write_text(concurrent, encoding="utf-8")
-        return False
+        return write_note_from_absolute(path, content, **kwargs)
 
-    monkeypatch.setattr(registry, "_write_markdown_if_changed", reject_stale_write)
+    monkeypatch.setattr(
+        registry,
+        "write_note_from_absolute",
+        interleave_human_write,
+    )
     monkeypatch.setattr(
         registry,
         "upsert_executed_ids",
@@ -164,6 +174,13 @@ def test_process_panel_note_stale_write_has_no_acknowledgement_effects(
     assert persisted_ids == []
     assert emitted_events == []
     assert note_path.read_text(encoding="utf-8") == concurrent
+    artifacts = [
+        path
+        for path in note_path.parent.iterdir()
+        if path != note_path and is_conflict_artifact(path.name)
+    ]
+    assert len(artifacts) == 1
+    assert artifacts[0].read_text(encoding="utf-8") == "Prepared stale output\n"
 
 
 def test_process_panel_note_retries_transient_read_failure(tmp_path, monkeypatch):

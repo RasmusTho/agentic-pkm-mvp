@@ -16,6 +16,7 @@ def test_write_markdown_if_changed(tmp_path: Path) -> None:
         original,
         updated,
         expected_version=version,
+        vault_root=tmp_path,
     )
     assert wrote is True
     assert note.read_text(encoding="utf-8") == updated
@@ -26,6 +27,7 @@ def test_write_markdown_if_changed(tmp_path: Path) -> None:
         updated,
         updated,
         expected_version=updated_version,
+        vault_root=tmp_path,
     )
     assert wrote_again is False
     assert note.read_text(encoding="utf-8") == updated
@@ -42,6 +44,7 @@ def test_write_markdown_if_changed_uses_raw_crlf_version(tmp_path: Path) -> None
         original,
         original.replace("Body", "Updated"),
         expected_version=version,
+        vault_root=tmp_path,
     )
 
     assert wrote is True

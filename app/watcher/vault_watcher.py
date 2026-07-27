@@ -13,7 +13,7 @@ from app.agents.panel.agent import handle_note_update
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block, upsert_executed_ids
 from app.agents.panel_agent.policy import watcher_may_run_panel, watcher_panel_candidate
-from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, SystemClock, VersionMismatch
+from app.components.concurrency import DedupTaskQueue, SystemClock
 from app.ingest import vault_alpha as vault_alpha
 from app.services.companion_note import (
     find_companion_by_content_hash,
@@ -22,7 +22,9 @@ from app.services.companion_note import (
 )
 from app.events.types import INGEST_OBJECT_DELETED
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_note_text_with_version
+from app.knowledge.write_ops import write_note_from_absolute
 from app.services.outbox import insert_object_and_outbox
 from app.services.vault_sync import delete_note
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
@@ -38,7 +40,6 @@ Summary = dict[str, object]
 
 _PANEL_POLICY_ID = "panel_auto"
 _DEDUP_QUEUE = DedupTaskQueue(SystemClock(), ttl_seconds=300.0)
-_WRITE_GUARD = OptimisticWriteGuard()
 
 
 class OutboxPathError(ValueError):
@@ -707,15 +708,26 @@ def run_watcher_tick(
 
                 if panel_result.updated_markdown != current_markdown:
                     try:
-                        DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher panel write")
-                        _WRITE_GUARD.write_if_unchanged(
+                        write_note_from_absolute(
                             note_path,
-                            expected_version,
                             panel_result.updated_markdown,
+                            vault_root=vault_root,
+                            action="vault watcher panel write",
+                            expected_version=expected_version,
                         )
                         _hydrate_store_with_markdown(canonical_object_id, note_path)
-                    except VersionMismatch:
-                        messages.append(f"Warning: stale write prevented for {note_path}")
+                    except KnowledgeWriteConflict as exc:
+                        if (
+                            exc.receipt is not None
+                            and exc.receipt.outcome == "conflict_staged"
+                        ):
+                            messages.append(
+                                f"Warning: stale write staged for {note_path}"
+                            )
+                        else:
+                            messages.append(
+                                f"Warning: indeterminate panel write for {note_path}"
+                            )
                         summary["errors"] += 1
                         continue
                     except WritesBlockedError:

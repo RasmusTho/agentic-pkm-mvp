@@ -334,15 +334,27 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
         "app/services/note_uuid.py": 1,
         "app/watcher/registry.py": 1,
         "app/watcher/vault_watcher.py": 1,
-        "app/workers/outbox_worker.py": 1,
     }
 
-    assert sum(text_producers.values()) == 14
+    assert sum(text_producers.values()) == 13
     for relative_path, expected_reads in text_producers.items():
         source = (repo_root / relative_path).read_text(encoding="utf-8")
         assert source.count("read_note_text_with_version(") >= expected_reads, relative_path
         assert "expected_version = hashlib.sha256(" not in source, relative_path
         assert "expected_version = _WRITE_GUARD.compute_version(" not in source, relative_path
+
+    for watcher_path in (
+        "app/watcher/registry.py",
+        "app/watcher/vault_watcher.py",
+    ):
+        watcher_source = (repo_root / watcher_path).read_text(encoding="utf-8")
+        assert "write_if_unchanged(" not in watcher_source, watcher_path
+        assert "write_note_from_absolute(" in watcher_source, watcher_path
+
+    worker_source = (repo_root / "app/workers/outbox_worker.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def _write_markdown_if_changed(" not in worker_source
 
 
 def test_rewritten_write_with_expected_version_conflicts_when_target_was_deleted(

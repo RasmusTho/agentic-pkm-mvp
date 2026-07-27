@@ -116,7 +116,7 @@ Authority and downstream boundaries:
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 - Panel writeback uses a two-phase acknowledgement boundary. The note-update service and both
   direct watcher paths derive Markdown/events without persisting executed IDs or dispatching/
-  emitting events; after their canonical version-checked note write succeeds, they persist
+  emitting events; after their canonical version-checked hardened knowledge write succeeds, they persist
   non-empty executed IDs and then release eligible effects. A staged conflict leaves the snapshot
   and acknowledgement effects untouched, and watcher telemetry classifies it as skipped/deferred.
   Receiptless/other write conflicts propagate as errors because the canonical write may already

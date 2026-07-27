@@ -15,7 +15,7 @@ from uuid import UUID
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
-from app.components.concurrency import EventDedupStore, OptimisticWriteGuard, VersionMismatch
+from app.components.concurrency import EventDedupStore
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
 from app.events.types import (
     INGEST_OBJECT_CREATED,
@@ -66,13 +66,10 @@ from app.services.outbox import (
     write_outbox_event,
 )
 from app.vault.paths import NoVaultSelectedError, get_vault_inbox_dir_rel
-from app.write_guard import DEFAULT_WRITE_GUARD
 from app.events.models import new_event
 from scripts.yaml_roundtrip import load_frontmatter
 
 logger = logging.getLogger(__name__)
-_WRITE_GUARD = OptimisticWriteGuard()
-
 _UNKNOWN_INSTANCE = "unknown"
 OUTBOX_EVENT_DEAD_LETTERED = "outbox.event.dead_lettered"
 
@@ -950,20 +947,6 @@ def _ensure_uuid_with_backoff(note_path: Path, *, vault_root: Path) -> str:
             return ""
 
     return ""
-def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
-    if original == updated:
-        return False
-    current, expected_version = read_note_text_with_version(note_path)
-    if current != original:
-        return False
-    DEFAULT_WRITE_GUARD.assert_writes_allowed("panel worker update")
-    try:
-        _WRITE_GUARD.write_if_unchanged(note_path, expected_version, updated)
-        return True
-    except VersionMismatch:
-        return False
-
-
 def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: float = 0.25) -> str | None:
     previous_signature: tuple[float, int, str] | None = None
     for attempt in range(attempts):
