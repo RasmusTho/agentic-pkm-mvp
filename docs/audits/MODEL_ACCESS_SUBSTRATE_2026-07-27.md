@@ -379,6 +379,15 @@ reconciliation discipline (ADR-0023/0052). Product task-kind taxonomy and `Reaso
 
 ### 8.1 CKM's position in the order has moved — and the interim window must be named
 
+> **SUPERSEDED 2026-07-27 by ADR-0057 A1 and ADR-0064 §8. Do not act on this subsection.** It was
+> written while it was undecided whether CKM might orchestrate. The owner has since ruled that
+> delivery may be orchestrated from the CKM by a builder agent. Three statements below are withdrawn:
+> the interim condition "CKM does not orchestrate during the window", the conditional swap of
+> migration steps 4 and 5, and the claim that orchestration needs its own future amendment (it has
+> one). **The migration order does not swap — CKM stays at step 5.** The surviving reasoning is the
+> importlinter visibility rule, which is not yet implemented and is scheduled into step 1. Read
+> ADR-0064 §8 for the current text.
+
 ADR-0063 sequenced CKM's migration as M4 transition debt, to happen *"only after the Builder runtime
 and compatibility contract exist"* (`:179-180`). **That ordering was written when CKM was a small
 peripheral consumer, and it is now backwards.** The owner's framing makes CKM the heaviest caller in
