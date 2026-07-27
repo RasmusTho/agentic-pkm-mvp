@@ -29,6 +29,7 @@ AGENTS = REPO_ROOT / "AGENTS.md"
 PR_HOT_PATH = REPO_ROOT / "docs/development/PR_HOT_PATH.md"
 PR_ESCALATION_PATHS = REPO_ROOT / "docs/development/PR_ESCALATION_PATHS.md"
 VERIFICATION_AGENT_LOOP = REPO_ROOT / "app/dispatcher/verification_agent_loop.py"
+PR_INTEGRATION_SKILL = REPO_ROOT / ".codex/skills/pr-integration/SKILL.md"
 
 
 def _bare_repo_wide_not_pg_commands(text: str) -> list[str]:
@@ -501,6 +502,24 @@ def test_pr_workflow_uses_the_canonical_severity_dispositions() -> None:
         assert "P3 informational advice or non-defect suggestion" in surface
         assert "no valid `blocking P2`" in surface
         assert "fix if cheap" not in surface
+
+
+def test_pr_integration_legacy_shorthand_cannot_override_severity_routing() -> None:
+    integration = PR_INTEGRATION_SKILL.read_text(encoding="utf-8")
+    hot_path = " ".join(PR_HOT_PATH.read_text(encoding="utf-8").split())
+    closure_skill = " ".join(VERIFICATION_SKILL.read_text(encoding="utf-8").split())
+
+    assert "Classify the PR with the hot-path fields from `PR_HOT_PATH.md`" in integration
+    for surface in (hot_path, closure_skill):
+        assert "legacy `cheap fix`" in surface
+        assert "not" in surface and "independent" in surface and "severity" in surface
+        assert "P0/P1 blocking-repair concepts only" in surface
+        assert "do not apply to P2/P3" in surface or "does not include P2/P3" in surface
+        assert "true P2" in surface
+        assert "fixing commit" in surface
+
+    assert "never requires a fixing commit" in hot_path
+    assert "abbreviated bucket list cannot override" in hot_path
 
 
 def test_p2_dispatcher_compatibility_fails_closed_until_receipts_are_lossless() -> None:

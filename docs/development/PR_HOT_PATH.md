@@ -176,6 +176,13 @@ The protected severity floors and dispatcher receipt compatibility rule are norm
 `.codex/skills/verification-and-closure/SKILL.md :: Severity routing`. There is no valid
 `blocking P2`.
 
+Compatibility for the current `pr-integration` consumer: its legacy `cheap fix` bucket is not a
+fifth severity and does not include P2/P3. Read `cheap fix`, `review-feedback repair`, and
+`fixing commit` there as P0/P1 blocking-repair concepts only. `pr-integration` requires
+classification with this hot path first, so a true P2 follows the Issue/thread disposition above
+and never requires a fixing commit; P3 remains informational. A secondary skill's abbreviated
+bucket list cannot override this canonical routing.
+
 4. Minimal delivery receipt
 - record PR number, issue number(s), current head SHA, lane, risk, checks run, review classification, and next handoff
 - record BuilderOps routing: records/projections/receipts created, or `none` with a short reason

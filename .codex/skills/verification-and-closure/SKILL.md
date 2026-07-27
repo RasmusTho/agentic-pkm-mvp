@@ -235,6 +235,12 @@ low-convergence circuit breaker. A reviewer remains independent, current-SHA CI 
 and issue acceptance/`Verify:`, authority, verified-merge, and closure gates remain fail-closed
 regardless of finding severity.
 
+The imported `pr-integration` skill's legacy `cheap fix` shorthand is not an independent review
+severity or an exception to this routing. Per its required `PR_HOT_PATH.md` classification, read
+`cheap fix`, `review-feedback repair`, and `fixing commit` as P0/P1 blocking-repair concepts only.
+They do not apply to P2/P3. If a secondary workflow's shorthand cannot represent all four
+severities, this section and `PR_HOT_PATH.md :: Review feedback triage` govern.
+
 ##### Dispatcher receipt compatibility
 
 The current `verification_closer_receipt` / `VerificationAgentLoop` contract can durably represent
