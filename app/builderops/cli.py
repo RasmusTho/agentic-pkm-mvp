@@ -75,11 +75,11 @@ from app.builderops.epic_run_state import (
     EpicRunStateError,
     apply_epic_run_update,
     create_epic_run_state,
+    create_independent_issue_run_state,
     epic_run_state_path,
     load_epic_run_state,
     new_epic_run_state,
     new_independent_issue_run_state,
-    save_epic_run_state,
     unresolved_learning_evaluation_candidates,
     update_epic_run_state,
 )
@@ -1612,9 +1612,13 @@ def record_epic_run_state(
                 else existing_state
             )
         else:
-            state = create_epic_run_state(epic_issue_number, run_id, root=root, **updates) if epic_issue_number is not None else new_independent_issue_run_state(list(independent_issues), run_id, **updates)
-            if epic_issue_number is None:
-                save_epic_run_state(state, root=root)
+            state = (
+                create_epic_run_state(epic_issue_number, run_id, root=root, **updates)
+                if epic_issue_number is not None
+                else create_independent_issue_run_state(
+                    list(independent_issues), run_id, root=root, **updates
+                )
+            )
     except EpicRunStateError as exc:
         raise click.ClickException(str(exc)) from exc
 

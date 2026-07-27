@@ -175,6 +175,47 @@ def create_epic_run_state(
         return state
 
 
+def create_independent_issue_run_state(
+    issue_numbers: list[int],
+    run_id: str,
+    *,
+    root: Path | str | None = None,
+    **updates: Any,
+) -> dict[str, Any]:
+    """Create or idempotently load a local independent-issue run-state file.
+
+    Mirrors `create_epic_run_state`: the existence check, the run-owner check,
+    and the write all happen under `_locked_run_state`, so two concurrent
+    creates for the same absent `run_id` cannot both take the create branch and
+    silently discard the loser's scope or updates.
+
+    Deliberately has no `overwrite` escape hatch: an unguarded ownership
+    transfer would reopen the multi-writer hole this function exists to close.
+    """
+
+    path = epic_run_state_path(run_id, root=root)
+    expected_numbers = _normalize_independent_issue_numbers(list(issue_numbers))
+    with _locked_run_state(path):
+        if path.exists():
+            existing = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
+            if (
+                existing["epic_issue_number"] is not None
+                or existing.get("independent_issue_numbers", []) != expected_numbers
+            ):
+                raise EpicRunStateError(
+                    f"run_id {run_id!r} already belongs to epic "
+                    f"{existing['epic_issue_number']}"
+                )
+            if updates:
+                existing = apply_epic_run_update(existing, **updates)
+                save_epic_run_state(existing, root=root)
+            return existing
+
+        state = new_independent_issue_run_state(issue_numbers, run_id, **updates)
+        save_epic_run_state(state, root=root)
+        return state
+
+
 def load_epic_run_state(
     run_id: str,
     *,
@@ -724,6 +765,7 @@ __all__ = [
     "apply_epic_run_update",
     "assert_learning_evaluation_candidates_terminal",
     "create_epic_run_state",
+    "create_independent_issue_run_state",
     "deserialize_epic_run_state",
     "epic_run_state_path",
     "load_epic_run_state",
