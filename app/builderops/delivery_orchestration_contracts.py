@@ -257,6 +257,20 @@ class PolicyProfile(_StrictFrozenModel):
     profile_version: NonEmptyStr
     profile_hash: Sha256
     minimum_review_confidence_basis_points: ConfidenceBasisPoints
+    required_check_names: tuple[NonEmptyStr, ...]
+
+    @model_validator(mode="after")
+    def _validate_required_checks(self) -> PolicyProfile:
+        if not self.required_check_names:
+            raise ValueError("policy profile must name required delivery checks")
+        _require_unique(self.required_check_names, "required check names")
+        if self.required_check_names != tuple(
+            sorted(self.required_check_names)
+        ):
+            raise ValueError(
+                "required check names must use canonical sorted order"
+            )
+        return self
 
 
 class DeliveryBudget(_StrictFrozenModel):
@@ -895,8 +909,7 @@ class StructuredWorkerResult(CanonicalDeliveryContract):
                     "completed worker result cannot carry non-passing validation"
                 )
             if any(
-                item.exact_head_sha is not None
-                and item.exact_head_sha != self.exact_head_sha
+                item.exact_head_sha != self.exact_head_sha
                 for item in self.validations
             ):
                 raise ValueError("worker validation must bind the exact result head")
@@ -1328,6 +1341,8 @@ class RecoveryStep(_StrictFrozenModel):
     step_index: NonNegativeInt
     exception_kind: ExceptionKind
     exception_code: NonEmptyStr
+    effect_class: EffectClass
+    issue: IssueScope
     action: NonEmptyStr
     authority_readback_refs: tuple[NonEmptyStr, ...]
     outcome: Literal["reconciled", "retry_scheduled", "blocked", "failed"]
@@ -1546,6 +1561,32 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             raise ValueError(
                 "recovery evidence must use monotonic lifecycle chronology"
             )
+        proof_by_scope = {
+            proof.issue.scope_key: proof for proof in self.issue_proofs
+        }
+        for step in self.recovery_history:
+            recovery_proof = proof_by_scope.get(step.issue.scope_key)
+            if recovery_proof is None or recovery_proof.issue != step.issue:
+                raise ValueError(
+                    "recovery evidence must bind exact receipt scope"
+                )
+            if step.effect_class == "merge_pull_request":
+                if (
+                    recovery_proof.merge_identity is None
+                    or step.occurred_at
+                    < recovery_proof.merge_identity.merged_at
+                ):
+                    raise ValueError(
+                        "merge recovery evidence must follow observed merge"
+                    )
+            if step.effect_class == "close_issue":
+                if (
+                    recovery_proof.closure is None
+                    or step.occurred_at < recovery_proof.closure.closed_at
+                ):
+                    raise ValueError(
+                        "closure recovery evidence must follow observed closure"
+                    )
         return self
 
 
@@ -1578,6 +1619,13 @@ def validate_delivery_receipt_evidence(
         raise ValueError("receipt requested scope does not match initiation")
     if receipt.final_scope != plan.final_scope:
         raise ValueError("receipt final scope does not match plan")
+    if (
+        initiation.provenance.created_at > receipt.started_at
+        or plan.provenance.created_at > receipt.started_at
+    ):
+        raise ValueError(
+            "initiation and plan evidence must precede receipt lifecycle"
+        )
 
     workers = {item.result_id: item for item in worker_results}
     reviews = {item.result_id: item for item in review_results}
@@ -1643,6 +1691,14 @@ def validate_delivery_receipt_evidence(
             raise ValueError(
                 "receipt proof does not match worker run, plan, scope, PR, head, or exceptions"
             )
+        if not (
+            receipt.started_at
+            <= worker.provenance.created_at
+            <= receipt.completed_at
+        ):
+            raise ValueError(
+                "worker evidence must fall within receipt lifecycle chronology"
+            )
         if receipt.terminal_outcome == "delivered" and worker.status != "completed":
             raise ValueError("delivered receipt requires completed worker evidence")
         if review is not None:
@@ -1668,14 +1724,44 @@ def validate_delivery_receipt_evidence(
                     "receipt proof does not match review, policy, or P2 evidence"
                 )
             used_reviews.add(review.result_id)
+            if not (
+                worker.provenance.created_at
+                <= review.provenance.created_at
+                <= receipt.completed_at
+            ):
+                raise ValueError(
+                    "review evidence must follow worker within receipt chronology"
+                )
         elif proof.review_disposition is not None or proof.known_defects:
             raise ValueError("receipt proof carries review evidence without a review")
+        required_checks = set(plan.policy_profile.required_check_names)
+        passing_checks = {
+            item.check_name
+            for item in proof.check_evidence
+            if item.status == "passed"
+        }
+        if proof.merge_identity is not None:
+            if (
+                worker.status != "completed"
+                or review is None
+                or proof.review_disposition in {None, "reject"}
+                or not required_checks.issubset(passing_checks)
+                or review.provenance.created_at
+                > proof.merge_identity.merged_at
+                or worker.provenance.created_at
+                > proof.merge_identity.merged_at
+            ):
+                raise ValueError(
+                    "merge evidence requires completed worker, required checks, "
+                    "accepted review, and ordered chronology"
+                )
         proof_is_delivered = (
             worker.status == "completed"
             and proof.merge_identity is not None
             and proof.closure is not None
             and bool(proof.check_evidence)
             and all(item.status == "passed" for item in proof.check_evidence)
+            and required_checks.issubset(passing_checks)
             and proof.review_disposition not in {None, "reject"}
             and not proof.exceptions
         )

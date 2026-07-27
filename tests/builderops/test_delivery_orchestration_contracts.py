@@ -110,6 +110,7 @@ def _policy() -> PolicyProfile:
         profile_version="v1",
         profile_hash=SHA_B,
         minimum_review_confidence_basis_points=8_000,
+        required_check_names=("Unit tests (not pg)",),
     )
 
 
@@ -357,6 +358,8 @@ def _receipt(
                 step_index=0,
                 exception_kind="external_state_unknown",
                 exception_code="merge-timeout-reconciled",
+                effect_class="merge_pull_request",
+                issue=issue,
                 action="read_live_authority",
                 authority_readback_refs=("github-pr:4200:merged",),
                 outcome="reconciled",
@@ -961,6 +964,19 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["merge_identity"]["merged_at"] = (
+        "2026-07-27T10:10:00Z"
+    )
+    payload["issue_proofs"][0]["closure"]["closed_at"] = (
+        "2026-07-27T10:11:00Z"
+    )
+    payload["recovery_history"][0]["occurred_at"] = (
+        "2026-07-27T10:05:00Z"
+    )
+    with pytest.raises(ValidationError, match="follow observed merge"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["merge_identity"] = None
     with pytest.raises(ValidationError, match="requires matching merge"):
         parse_delivery_contract(payload)
@@ -993,6 +1009,8 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             step_index=1,
             exception_kind=second_recovery_exception.kind,
             exception_code=second_recovery_exception.code,
+            effect_class="close_issue",
+            issue=issue,
             action="read_live_closure_authority",
             authority_readback_refs=("github-issue:4165:closed",),
             outcome="reconciled",
@@ -1006,6 +1024,54 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     payload["issue_proofs"][0]["check_evidence"] = []
     with pytest.raises(ValidationError, match="accepted exact-head proof"):
         parse_delivery_contract(payload)
+
+    headless_worker_payload = worker.model_dump(mode="json")
+    headless_worker_payload["validations"][0]["exact_head_sha"] = None
+    with pytest.raises(ValidationError, match="exact result head"):
+        parse_delivery_contract(headless_worker_payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["check_evidence"][0]["check_name"] = (
+        "unrelated-advisory-check"
+    )
+    substituted_check_receipt = parse_delivery_contract(payload)
+    assert isinstance(substituted_check_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="required checks"):
+        validate_delivery_receipt_evidence(
+            substituted_check_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+        )
+
+    late_worker_payload = worker.model_dump(mode="json")
+    late_worker_payload["provenance"]["created_at"] = (
+        "2026-07-27T10:21:00Z"
+    )
+    late_worker = parse_delivery_contract(late_worker_payload)
+    assert isinstance(late_worker, StructuredWorkerResult)
+    late_review_payload = review.model_dump(mode="json")
+    late_review_payload["provenance"]["created_at"] = (
+        "2026-07-27T10:22:00Z"
+    )
+    late_review = parse_delivery_contract(late_review_payload)
+    assert isinstance(late_review, ReviewResult)
+    late_receipt = _receipt(
+        issue,
+        initiation,
+        plan,
+        late_worker,
+        late_review,
+    )
+    with pytest.raises(ValueError, match="worker evidence"):
+        validate_delivery_receipt_evidence(
+            late_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(late_worker,),
+            review_results=(late_review,),
+        )
 
     payload = receipt.model_dump(mode="json")
     payload["recovery_history"] = []
