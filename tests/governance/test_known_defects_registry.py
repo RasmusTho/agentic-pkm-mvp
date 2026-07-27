@@ -66,6 +66,9 @@ class FakeGateway:
     def get_issue(self, number: int) -> dict[str, Any]:
         return self.issues[number]
 
+    def refresh_registry_identities(self) -> None:
+        return None
+
     def create_registry_issue(self) -> dict[str, Any]:
         while self.next_issue in self.issues:
             self.next_issue += 1
@@ -2768,6 +2771,59 @@ def test_rest_selector_discovery_is_cached_before_label_loss(
     assert gateway.list_registry_issues("all") == [unlabeled]
     with pytest.raises(known_defects.KnownDefectsError, match="canonical label"):
         known_defects._select_registry(gateway, None)
+
+
+def test_rest_precreate_refresh_finds_late_title_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    search_reads = 0
+    unlabeled = {
+        "number": 900,
+        "title": known_defects.REGISTRY_TITLE,
+        "state": "open",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [{"name": "type:bug"}],
+    }
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        nonlocal search_reads
+        assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
+        ):
+            return []
+        if endpoint.startswith("search/issues?"):
+            search_reads += 1
+            return {
+                "incomplete_results": False,
+                "items": (
+                    []
+                    if search_reads == 1
+                    else [
+                        {
+                            "number": 900,
+                            "title": known_defects.REGISTRY_TITLE,
+                        }
+                    ]
+                ),
+            }
+        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/900":
+            return unlabeled
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="canonical label"):
+        known_defects._select_registry(gateway, None)
+
+    assert search_reads == 2
+    assert gateway._registry_identity_numbers == {900}
 
 
 def test_known_defect_label_is_canonical_and_registry_only() -> None:

@@ -287,6 +287,8 @@ class RegistryGateway(Protocol):
 
     def list_registry_issues(self, state: str) -> list[dict[str, Any]]: ...
 
+    def refresh_registry_identities(self) -> None: ...
+
     def get_issue(self, number: int) -> dict[str, Any]: ...
 
     def create_registry_issue(self) -> dict[str, Any]: ...
@@ -353,14 +355,18 @@ class GhRegistryGateway:
                 return rows
         raise KnownDefectsError(f"pagination bound exceeded for {endpoint}")
 
-    def _search_registry_identity_numbers(self) -> set[int]:
-        if self._registry_identity_numbers is not None:
+    def _search_registry_identity_numbers(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> set[int]:
+        if self._registry_identity_numbers is not None and not force_refresh:
             return set(self._registry_identity_numbers)
         query = quote(
             f'repo:{self.repo} is:issue in:title "{REGISTRY_TITLE}"',
             safe="",
         )
-        numbers: set[int] = set()
+        numbers = set(self._registry_identity_numbers or ())
         for page in range(1, 11):
             payload = self._request(
                 "GET",
@@ -394,6 +400,9 @@ class GhRegistryGateway:
                 self._registry_identity_numbers = numbers
                 return set(numbers)
         raise KnownDefectsError("pagination bound exceeded for registry identity search")
+
+    def refresh_registry_identities(self) -> None:
+        self._search_registry_identity_numbers(force_refresh=True)
 
     def ensure_registry_label(self) -> None:
         encoded = quote(REGISTRY_LABEL, safe="")
@@ -926,6 +935,7 @@ def _select_registry(
         return selected[0]
     if open_registries:
         return open_registries[0]
+    gateway.refresh_registry_identities()
     issues = _registry_inventory(gateway, recover_bootstrap=True)
     open_registries = [
         issue for issue in issues if str(issue.get("state", "")).lower() == "open"

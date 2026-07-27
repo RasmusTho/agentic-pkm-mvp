@@ -97,8 +97,9 @@ single open registry but cannot override ambiguous registry authority.
 
 Registry discovery unions the mutable `state:known-defect` selector with an exact-title GitHub Issue
 identity search. Title-discovered Issue numbers are cached only as identities and reread live when
-the selector query no longer returns them. Removing the selector label therefore becomes explicit,
-fail-closed registry drift instead of hiding committed comments or permitting duplicate authority.
+the selector query no longer returns them. The title search is refreshed monotonically at the final
+pre-create boundary. Removing the selector label therefore becomes explicit, fail-closed registry
+drift instead of hiding committed comments or permitting duplicate authority.
 
 Registry creation is crash-convergent across the create/lock boundary. Intake may lock and reuse
 exactly one structurally canonical open bootstrap Issue, then rereads the Issue and all comments
