@@ -1487,3 +1487,122 @@ def test_neutralized_body_state_never_reports_ambiguity_as_safe() -> None:
         "restoration_required": False,
         "status": "no_restoration_required",
     }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        pytest.param({}, "restoration_required", id="positively-open"),
+        pytest.param(
+            {
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-07-27T08:18:08Z",
+            },
+            "no_restoration_required",
+            id="positively-merged",
+        ),
+        pytest.param({"state": None}, "ambiguous_neutralized_body", id="no-state"),
+        pytest.param(
+            {"state": "unknown"}, "ambiguous_neutralized_body", id="unknown-state"
+        ),
+        pytest.param(
+            {"state": "open", "merged": True},
+            "ambiguous_neutralized_body",
+            id="open-but-merged",
+        ),
+        pytest.param(
+            {"state": "closed", "merged": True, "merged_at": None},
+            "ambiguous_neutralized_body",
+            id="merged-without-timestamp",
+        ),
+        pytest.param(
+            {"state": "closed"}, "ambiguous_neutralized_body", id="closed-unmerged"
+        ),
+    ],
+)
+def test_incomplete_or_contradictory_snapshots_are_never_reported_safe(
+    overrides: dict[str, object], expected: str
+) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    pr = {
+        **_pr(str(plan["neutralized_body"])),
+        "head": {"sha": NEXT_HEAD},
+        **overrides,
+    }
+    if overrides.get("state") is None and "state" in overrides:
+        del pr["state"]
+
+    result = classify_neutralized_body_state(
+        comments, pr=pr, repository=REPOSITORY
+    )
+
+    assert result["status"] == expected
+    if expected != "restoration_required":
+        assert result["restoration"] is None
+        assert (
+            resolve_neutralized_body_restoration(
+                comments, pr=pr, repository=REPOSITORY
+            )
+            is None
+        )
+
+
+def test_conflicting_current_head_authority_never_falls_back_to_a_stale_head() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    stale_receipt = plan["authority_receipt"]
+    assert isinstance(stale_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    head_b_pr = {
+        **_pr(str(plan["neutralized_body"])),
+        "head": {"sha": NEXT_HEAD},
+    }
+
+    # Baseline: the stale head alone names a restore target.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_b_pr, repository=REPOSITORY
+        )
+        is not None
+    )
+
+    # Two conflicting trusted receipts for the live head. The exact-head resolver
+    # correctly refuses to pick one, so a merge for this attempt may still be in
+    # flight and restoration must not race it.
+    current_a = {**stale_receipt, "head_sha": NEXT_HEAD}
+    current_b = {**current_a, "run_id": "vrun-other"}
+    conflicted = [
+        *comments,
+        _authority_comment(current_a),
+        _authority_comment(current_b),
+    ]
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            conflicted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            conflicted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        classify_neutralized_body_state(
+            conflicted, pr=head_b_pr, repository=REPOSITORY
+        )["status"]
+        == "ambiguous_neutralized_body"
+    )

@@ -512,6 +512,30 @@ def resolve_verified_merge_authority_receipt(
     return authority_receipt
 
 
+def _resolve_merge_state(pr: Mapping[str, object]) -> str:
+    """Classify a live PR snapshot as ``open``, ``merged``, or ``unknown``.
+
+    Never guess from a partial or self-contradictory snapshot. A missing or
+    unknown ``state``, or a combination such as ``state="open"`` with
+    ``merged=True``, resolves to ``unknown`` so callers fail closed instead of
+    reading an unestablished snapshot as a safe one.
+    """
+
+    state = pr.get("state")
+    merged = pr.get("merged")
+    merged_at = pr.get("merged_at")
+    if state == "open" and merged is not True and merged_at is None:
+        return "open"
+    if (
+        state == "closed"
+        and merged is True
+        and isinstance(merged_at, str)
+        and merged_at
+    ):
+        return "merged"
+    return "unknown"
+
+
 def resolve_neutralized_body_restoration(
     comments: Sequence[Mapping[str, object]],
     *,
@@ -547,13 +571,10 @@ def resolve_neutralized_body_restoration(
     head_sha = head.get("sha")
     if not isinstance(head_sha, str) or _SHA_PATTERN.fullmatch(head_sha) is None:
         return None
-    if (
-        pr.get("state") != "open"
-        or pr.get("merged") is True
-        or pr.get("merged_at") is not None
-    ):
+    if _resolve_merge_state(pr) != "open":
         # A merged PR is still inside its own attempt; the ``restored`` phase of
-        # the merge sequence owns that body, not this recovery path.
+        # the merge sequence owns that body, not this recovery path. A snapshot
+        # that cannot be positively established never names a restore target.
         return None
     neutralized = resolve_neutralized_issue_authority(body)
     if neutralized is None:
@@ -579,11 +600,19 @@ def resolve_neutralized_body_restoration(
             or receipt.get("contract") != VERIFIED_MERGE_AUTHORITY_CONTRACT
             or receipt.get("repository") != repository
             or receipt.get("pr_number") != pr_number
-            or receipt.get("governing_issue") != neutralized.governing_issue
+        ):
+            continue
+        if stored_head == head_sha:
+            # Trusted evidence for the live head exists, yet the resolver above
+            # could not resolve it to one identity. A merge for this attempt may
+            # still be in flight, so never fall back to an older head and name a
+            # restore target that could race it.
+            return None
+        if (
+            receipt.get("governing_issue") != neutralized.governing_issue
             or receipt.get("closing_issues") != list(neutralized.closing_issues)
             or not isinstance(stored_head, str)
             or _SHA_PATTERN.fullmatch(stored_head) is None
-            or stored_head == head_sha
             or not isinstance(receipt.get("run_id"), str)
             or not receipt.get("run_id")
             or (
@@ -626,13 +655,10 @@ def carries_live_neutralized_body(pr: Mapping[str, object]) -> bool:
     must stop repair work rather than read as "nothing to do".
     """
 
-    if (
-        pr.get("state") != "open"
-        or pr.get("merged") is True
-        or pr.get("merged_at") is not None
-    ):
-        return False
-    return resolve_neutralized_issue_authority(pr.get("body")) is not None
+    return (
+        _resolve_merge_state(pr) == "open"
+        and resolve_neutralized_issue_authority(pr.get("body")) is not None
+    )
 
 
 def classify_neutralized_body_state(
@@ -649,14 +675,15 @@ def classify_neutralized_body_state(
     be proven. Those must not collapse into one "all clear" answer, so classify
     the live body into exactly one of:
 
-    * ``no_restoration_required`` -- the body is canonical or already merged, or a
-      trusted authority receipt still covers the current head, so the merge
-      attempt that neutralized it is in flight.
+    * ``no_restoration_required`` -- the body is canonical, or it is neutralized
+      on a positively merged PR, or a trusted authority receipt still covers the
+      current head, so the merge attempt that neutralized it is in flight.
     * ``restoration_required`` -- the body outlived its attempt and the durable
       receipt names the restore target.
-    * ``ambiguous_neutralized_body`` -- the body is neutralized on an open PR with
-      no receipt for the current head and no provable restore target. Stop and
-      recover evidence; never continue repair work on this answer.
+    * ``ambiguous_neutralized_body`` -- the body is neutralized but no restore
+      target can be proven, including when the live snapshot is incomplete or
+      self-contradictory. Stop and recover evidence; never continue repair work
+      on this answer.
     """
 
     restoration = resolve_neutralized_body_restoration(
@@ -665,10 +692,16 @@ def classify_neutralized_body_state(
         repository=repository,
         expected_run_id=expected_run_id,
     )
+    merge_state = _resolve_merge_state(pr)
     if restoration is not None:
         status = "restoration_required"
-    elif not carries_live_neutralized_body(pr) or (
-        resolve_verified_merge_authority_receipt(
+    elif resolve_neutralized_issue_authority(pr.get("body")) is None:
+        # A canonical body cannot be a stranded neutralization, whatever the
+        # rest of the snapshot says.
+        status = "no_restoration_required"
+    elif merge_state == "merged" or (
+        merge_state == "open"
+        and resolve_verified_merge_authority_receipt(
             comments,
             pr=pr,
             repository=repository,
