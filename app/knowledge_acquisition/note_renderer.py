@@ -100,6 +100,7 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _WIKILINK_RE = re.compile(r"!?\[\[([^\]\n|]*)(?:\|([^\]\n]*))?\]\]")
 _OBSIDIAN_EMBED_RE = re.compile(r"!\[\[[^\n]*?\]\]")
+_ESCAPED_EMBED_SENTINEL = "\uFFF0"
 _IGNORED_INLINE_MARKERS = frozenset(r"[]*_`~\\")
 _APOSTROPHE_CHARACTERS = frozenset({"'", "’", "‘", "ʼ"})
 _CONTRACTION_EXPANSIONS: Mapping[str, tuple[str, ...]] = {
@@ -416,8 +417,27 @@ def _walk_markdown_tokens(tokens: Sequence[Token]) -> Sequence[Token]:
 
 
 def _assert_no_active_obsidian_embeds(value: str, *, surface: str) -> None:
-    if _OBSIDIAN_EMBED_RE.search(value) is not None:
-        raise NoteRenderError(f"active Obsidian embeds are not allowed in {surface}")
+    masked = _mask_escaped_obsidian_embed_openers(value)
+    for token in _walk_markdown_tokens(_MARKDOWN.parse(masked)):
+        if token.type not in {"text", "html_inline"}:
+            continue
+        if _OBSIDIAN_EMBED_RE.search(token.content) is not None:
+            raise NoteRenderError(f"active Obsidian embeds are not allowed in {surface}")
+
+
+def _mask_escaped_obsidian_embed_openers(value: str) -> str:
+    masked = list(value)
+    for index in range(len(value) - 2):
+        if not value.startswith("![[", index):
+            continue
+        backslash_count = 0
+        cursor = index - 1
+        while cursor >= 0 and value[cursor] == "\\":
+            backslash_count += 1
+            cursor -= 1
+        if backslash_count % 2 == 1:
+            masked[index] = _ESCAPED_EMBED_SENTINEL
+    return "".join(masked)
 
 
 def _assert_no_bidi_controls(value: str, *, surface: str) -> None:

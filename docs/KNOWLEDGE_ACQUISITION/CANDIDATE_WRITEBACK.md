@@ -45,9 +45,10 @@ pipeline ends here; triage is human territory.
 - Removes well-formed Obsidian `%%...%%` comments from generated titles/content before both linting
   and materialization, so hidden spans can neither split visible authority text nor cause invisible
   false positives. Unterminated comments and comment delimiters inside Markdown code fail closed as
-  ambiguous. Active Obsidian `![[...]]` embeds also fail closed because they can transclude content
-  that the local renderer did not validate; ordinary non-embed wikilinks retain their visible-label
-  semantics.
+  ambiguous. Active Obsidian `![[...]]` embeds outside code also fail closed because they can
+  transclude content that the local renderer did not validate. Backslash-escaped embed literals and
+  embed syntax inside inline/fenced code remain inert and renderable; ordinary non-embed wikilinks
+  retain their visible-label semantics.
 - Constrains registered module titles to one line, rejects reserved or owner-attributing visible
   title text, escapes raw HTML in all title/evidence fields, and flattens evidence fields to one
   line. Source-controlled title, URL, and lineage values therefore cannot create raw-HTML or

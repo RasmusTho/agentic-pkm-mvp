@@ -378,6 +378,15 @@ def test_renderer_rejects_active_obsidian_embeds() -> None:
     for title, content in (
         ("Summary", "![[Unchecked owner note]]"),
         ("![[Unchecked owner note]]", "Safe prose."),
+        (
+            "Summary",
+            "`![[Literal code example]]` followed by ![[Unchecked owner note]].",
+        ),
+        (
+            "Summary",
+            r"\![[Escaped literal]] followed by ![[Unchecked owner note]].",
+        ),
+        ("Summary", r"Even escape parity: \\![[Unchecked owner note]]."),
     ):
         with pytest.raises(NoteRenderError, match="Obsidian embeds"):
             render_review_required_note(
@@ -405,3 +414,25 @@ def test_renderer_rejects_active_obsidian_embeds() -> None:
     )
 
     assert "![[Hidden unchecked note]]" not in rendered
+
+
+def test_renderer_preserves_inert_obsidian_embed_syntax() -> None:
+    for content in (
+        r"Escaped literal: \![[Safe note]].",
+        r"Odd escape parity: \\\![[Safe note]].",
+        "Inline code: `![[Safe note]]`.",
+        "Fenced code:\n```markdown\n![[Safe note]]\n```",
+    ):
+        rendered = render_review_required_note(
+            frontmatter={"artifact_class": "youtube_source_note"},
+            proposal_sections=(
+                ProposalSection(
+                    module_id="summary",
+                    title="Summary",
+                    content=content,
+                ),
+            ),
+            evidence=(("Content identity", "sha256:test"),),
+        )
+
+        assert "![[Safe note]]" in rendered
