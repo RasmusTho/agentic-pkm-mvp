@@ -114,6 +114,7 @@ def _emit_db_event(event_type: str, payload: dict, trace_id: str | None) -> None
     write_outbox_event(
         event,
         idempotency_key=derive_idempotency_key(event_type, source_id, payload_fingerprint(payload)),
+        required_db=True,
     )
 
 

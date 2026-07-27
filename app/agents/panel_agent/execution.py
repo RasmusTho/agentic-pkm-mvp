@@ -100,6 +100,7 @@ def run_panel_note_execution(
                     source_id or outbox_event.event_id,
                     payload_fingerprint(outbox_event.payload, exclude=("trace_id",)),
                 ),
+                required_db=True,
             )
     # Thread the caller's already-resolved vault (the watcher/outbox-worker path
     # resolves it through its own canonical resolver) into the runtime so writeback
