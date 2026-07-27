@@ -399,6 +399,83 @@ def run_reasoning(
             status="ok" if ok else "failed",
             error=None if ok else "ranking has no reasons" if ranking else "no ranking produced",
         )
+    if mode == ReasoningMode.PLANNING:
+        goal = (question or "").strip()
+        if not goal:
+            return ReasoningRun(
+                mode=mode,
+                trace_id=trace_id,
+                object_uuids=list(object_ids),
+                status="failed",
+                error="goal is required for planning mode",
+                result={"plan": "", "steps": []},
+            )
+        context_lines: List[str] = []
+        for oid in object_ids:
+            text, _ = _load_object_text(oid)
+            if text:
+                context_lines.append(f"- {oid}: {_simple_preview(text, 180)}")
+        backend = _reasoning_backend()
+        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
+        provider = "mock" if provider in {"", "fake"} else provider
+        if backend == "mock" or provider == "mock":
+            result = {
+                "plan": f"MOCK_PLAN: {goal}",
+                "steps": [
+                    "Clarify the goal and its constraints.",
+                    "Identify the relevant context and assumptions.",
+                    "Outline the concrete steps that reach the goal.",
+                ],
+            }
+            return ReasoningRun(
+                mode=mode,
+                trace_id=trace_id,
+                object_uuids=list(object_ids),
+                result=result,
+                status="ok",
+            )
+        user_lines = [f"Goal: {goal}"]
+        if context_lines:
+            user_lines.append("")
+            user_lines.append("Context:")
+            user_lines.extend(context_lines)
+        sys_prompt = system_prompt or (
+            "You are a planning assistant. Return JSON with plan (str) and steps (list of str)."
+        )
+        try:
+            raw = _call_chat(
+                task_kind="plan",
+                pack={"system": sys_prompt, "user": "\n".join(user_lines)},
+                agent=agent_name,
+                kind=kind_name,
+                trace_id=trace_id,
+            )
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("planning output was not a JSON object")
+            plan_text = str(data.get("plan") or "").strip()
+            raw_steps = data.get("steps") or []
+            # Keep the documented {"plan": str, "steps": list[str]} contract even
+            # when the model returns a scalar or a list of non-strings.
+            steps = [str(step) for step in raw_steps] if isinstance(raw_steps, list) else []
+        except Exception as exc:
+            return ReasoningRun(
+                mode=mode,
+                trace_id=trace_id,
+                object_uuids=list(object_ids),
+                status="failed",
+                error=str(exc),
+                result={"plan": "", "steps": []},
+            )
+        ok = bool(plan_text or steps)
+        return ReasoningRun(
+            mode=mode,
+            trace_id=trace_id,
+            object_uuids=list(object_ids),
+            result={"plan": plan_text, "steps": steps},
+            status="ok" if ok else "failed",
+            error=None if ok else "empty planning result",
+        )
     if mode == ReasoningMode.ASK_ANSWER:
         backend = _reasoning_backend()
         provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
