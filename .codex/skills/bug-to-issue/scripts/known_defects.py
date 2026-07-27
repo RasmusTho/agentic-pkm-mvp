@@ -404,12 +404,14 @@ class GhRegistryGateway:
 
     def refresh_registry_identities(self) -> None:
         previous: set[int] | None = None
+        observed: set[int] = set()
         for _attempt in range(REGISTRY_DISCOVERY_MAX_PASSES):
             discovered = self._authoritative_registry_identity_pass()
+            observed.update(discovered)
             if previous is not None and discovered == previous:
                 if self._registry_identity_numbers is None:
                     self._registry_identity_numbers = set()
-                self._registry_identity_numbers.update(discovered)
+                self._registry_identity_numbers.update(observed)
                 return
             previous = discovered
         raise KnownDefectsError(

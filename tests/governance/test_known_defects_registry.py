@@ -2966,6 +2966,61 @@ def test_authoritative_identity_nonconvergence_fails_without_cache(
     assert gateway._registry_identity_numbers is None
 
 
+def test_precreate_convergence_never_forgets_observed_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    canonical = {
+        "number": 4200,
+        "title": known_defects.REGISTRY_TITLE,
+        "state": "open",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": known_defects.REGISTRY_LABEL},
+        ],
+    }
+    drifted = {
+        **canonical,
+        "title": "Renamed after discovery",
+        "body": "Ordinary Issue body",
+        "labels": [{"name": "type:bug"}],
+    }
+    passes = 0
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        nonlocal passes
+        assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
+        ):
+            return []
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+            )
+            and "&sort=updated&direction=asc" in endpoint
+        ):
+            passes += 1
+            return [canonical] if passes == 1 else []
+        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/4200":
+            return drifted
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="registry title"):
+        known_defects._select_registry(gateway, None)
+
+    assert passes == 3
+    assert gateway._registry_identity_numbers == {4200}
+
+
 def test_rest_public_lookup_enumerates_hidden_prior_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3058,6 +3113,10 @@ def test_known_defect_label_is_canonical_and_registry_only() -> None:
     assert (
         registry_contract["authoritative_max_passes"]
         == known_defects.REGISTRY_DISCOVERY_MAX_PASSES
+    )
+    assert (
+        registry_contract["authoritative_identity_cache"]
+        == "monotonic_issue_numbers"
     )
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"

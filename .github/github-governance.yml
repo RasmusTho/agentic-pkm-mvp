@@ -19,6 +19,7 @@ issues:
       authoritative_discovery_since: "2026-07-27T00:00:00Z"
       authoritative_consecutive_scans: 2
       authoritative_max_passes: 4
+      authoritative_identity_cache: monotonic_issue_numbers
       exact_labels:
         - type:bug
         - state:known-defect

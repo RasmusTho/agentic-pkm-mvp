@@ -100,8 +100,9 @@ Issues updated since `2026-07-27T00:00:00Z`, the feature's rollout day, and exha
 pagination to its natural end. Every legitimate registry is created or converted after that bound,
 so the contractual `since` filter excludes only pre-feature history; no Issue-number ordering is
 inferred. Traversal uses ascending update order and commits no cache until two complete scans return
-the same identity set; four non-converging passes fail closed. Any candidate found by selector label,
-canonical title, or canonical body marker is then cached by immutable Issue number and reread live
+the same identity set; four non-converging passes fail closed. The local union of every identity
+observed across those passes is monotonic, so later surface drift cannot erase an Issue number. Any
+candidate found by selector label, canonical title, or canonical body marker is then reread live
 during the command. The final pre-create and final pre-reservation boundaries repeat that
 enumeration. Repeated inventories within the command also query the mutable
 `state:known-defect` selector, but selector state alone never authorizes creation or all-generation
