@@ -188,6 +188,7 @@ Use this lane only when:
   - `tests/architecture/test_pr_hot_path_governance.py`
   - `tests/governance/test_codex_agents_contract.py`
   - `tests/governance/test_issue_pr_governance.py`
+  - `tests/governance/test_known_defects_registry.py`
   - `tests/ops/test_project_status_reconcile.py`
   - `tests/ops/test_review_before_ci_gate.py`
   - `tests/ops/test_host_global_lease.py`

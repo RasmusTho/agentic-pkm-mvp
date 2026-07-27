@@ -25,10 +25,13 @@ labels:
     - agent:ready
     - agent:blocked
     - agent:needs-human
+  state:
+    - state:known-defect
   interpretation:
     agent:ready: strictly validated queue-eligible work; Project Status is optional projection
     agent:blocked: blocked by dependency or setup; normally non-active backlog work
     agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
+    state:known-defect: rolling confirmed-defect registry container; Backlog, no agent-state label, never pickup-eligible
 project:
   name: Agent Delivery Control Plane
   type: github-project-v2
@@ -137,6 +140,7 @@ pull_requests:
       - scripts/await_pr_checks.sh
       - tests/ops/test_git_hygiene.py
       - tests/ops/test_project_status_reconcile.py
+      - tests/governance/test_known_defects_registry.py
 rules:
   pr_must_reference_issue_for_implementation: true
   docs_authoring_prs_may_skip_issue_reference: true

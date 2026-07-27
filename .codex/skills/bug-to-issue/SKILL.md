@@ -1,16 +1,115 @@
 ---
 name: bug-to-issue
-description: "Create a GitHub Issue whenever a bug is discovered during analysis, testing, review, or runtime observation. Use when a builder agent identifies a defect, regression, crash, or contract mismatch and needs to open a compliant issue in the target repo with correct labels, body sections, and ready/needs-human status."
+description: "Route confirmed bugs to a bounded GitHub Issue or the deterministic deferred Known Defects registry, with canonical evidence, labels, contracts, and promotion links."
 ---
 
 # Bug To Issue
 
 ## Overview
 
-Turn any discovered bug into a compliant GitHub Issue that matches the repo's contract shape and labels. Default to creating issues in the current repo unless the user specifies a different one.
-This is the hot-path defect intake lane, not the cold-path maintenance lane.
+Turn a discovered bug into either:
 
-## Workflow
+- a normal bounded GitHub `type:bug` Issue that is ready for implementation routing; or
+- one uniquely identified entry in the rolling GitHub Known Defects registry when an ordinary
+  confirmed P2/P3 review finding is intentionally deferred.
+
+Default to the current repo unless the user specifies another one. This is defect intake, not the
+cold-path maintenance lane. GitHub remains the canonical backlog surface; never maintain a parallel
+hand-edited Markdown defect backlog.
+
+## Classify before writing
+
+Choose exactly one path:
+
+1. **Confirmed and implementation-bound now, or P0/P1:** create/update a normal bounded bug Issue
+   using the workflow below. High-impact defects are never parked in the deferred registry.
+2. **Confirmed P2/P3 review defect, intentionally deferred:** use the deterministic Known Defects
+   registry intake. This avoids one expanded implementation Issue per observation while preserving
+   durable evidence and promotion triggers.
+3. **Maintainability suggestion:** leave it as review feedback or route it through the appropriate
+   maintenance/learning workflow. It is not a defect and must not enter the registry.
+4. **Unproven observation:** gather reproduction evidence or keep it in the source review. Do not
+   label speculation as a known defect.
+
+The classification decision may require engineering judgment, but appending, deduplicating, and
+looking up a confirmed registry entry do not require an LLM coordinator.
+
+## Deferred Known Defects registry
+
+The rolling registry is one open Issue carrying `type:bug` and `state:known-defect`. It is a
+container for schema-marked comments, not an implementation contract, and must never carry
+`agent:ready`. `state:known-defect` is defined centrally in
+`.codex/skills/_shared/LABEL_TAXONOMY.md`.
+
+Use the stdlib-only REST helper:
+
+```bash
+python3 .codex/skills/bug-to-issue/scripts/known_defects.py intake \
+  --classification confirmed-defect \
+  --severity P2 \
+  --source-pr <PR> \
+  --source-sha <FULL_40_CHARACTER_SHA> \
+  --review-url <PR_OR_REVIEW_THREAD_URL> \
+  --symptom "<reproducible symptom>" \
+  --evidence "<concrete review or reproduction evidence>" \
+  --impact "<who or what is affected>" \
+  --workaround "<known workaround or 'none known'>" \
+  --trigger "<explicit re-evaluation or promotion trigger>"
+```
+
+The helper:
+
+- rejects maintainability and unproven classifications without GitHub mutation;
+- sends P0/P1 defects back to the normal bug-Issue path;
+- derives `KD-<12 uppercase hex>` deterministically from source identity and normalized symptom;
+- accepts `--defect-key <stable-key>` when later source SHAs or evidence wording should deduplicate
+  to the same defect;
+- finds or creates the single rolling registry Issue;
+- detects the exact defect marker across existing registries before appending;
+- posts one compact JSON `known-defect-receipt.v1` with `created`, `duplicate`, `excluded`, or
+  `promotion_required` status.
+
+Every entry records:
+
+- defect id;
+- source PR, exact SHA, and PR/review link;
+- reproducible symptom and concrete evidence;
+- impact and P2/P3 severity;
+- workaround, including `none known` when truthful;
+- an explicit re-evaluation/promotion trigger.
+
+Lookup is deterministic and read-only:
+
+```bash
+python3 .codex/skills/bug-to-issue/scripts/known_defects.py lookup \
+  --defect-id KD-<12_HEX>
+```
+
+If multiple open registry Issues are ever found, intake fails closed instead of guessing. Reconcile
+the duplicate registry state, or pass `--registry-issue <N>` explicitly after verifying the
+canonical survivor.
+
+### Promotion
+
+Promote an entry when it is selected for implementation or its impact, repetition, or failed
+workaround satisfies the recorded trigger:
+
+1. Create/update a normal bounded `type:bug` Issue using the canonical workflow below.
+2. Give that Issue exactly one priority and one truthful normal agent state. A promoted Issue is not
+   `state:known-defect`.
+3. Link the registry entry after the normal Issue has the canonical sections, ACs, and `Verify:`
+   targets:
+
+```bash
+python3 .codex/skills/bug-to-issue/scripts/known_defects.py promote \
+  --defect-id KD-<12_HEX> \
+  --issue <BUG_ISSUE_NUMBER>
+```
+
+The link operation is idempotent and emits a compact promotion receipt. The promoted Issue owns
+implementation scope and closure; the registry entry remains durable source evidence.
+
+## Normal bounded bug-Issue workflow
 
 1. Resolve repo:
    - If repo specified, use it.
@@ -36,6 +135,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.
    - Add `agent:ready` only if the scope is bounded, testable, and unblocked.
    - Otherwise add `agent:needs-human` or `agent:blocked`.
+   - Never carry `state:known-defect` onto the normal implementation Issue.
 5. Optional Project projection:
    - Project add/status operations are cold-path repair only; do not require ProjectV2 for Issue creation or `agent:ready`.
 6. Output receipt: issue number, labels set, and whether it was created or updated.

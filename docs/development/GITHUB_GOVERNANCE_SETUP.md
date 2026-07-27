@@ -26,6 +26,11 @@ Keep only these labels for the delivery control plane taxonomy:
 - `agent:ready`
 - `agent:blocked`
 - `agent:needs-human`
+- `state:known-defect`
+
+`state:known-defect` is a narrow registry-container exception, not an agent execution state. The
+rolling Known Defects Issue uses it without any `agent:*` label; normal implementation Issues never
+use it.
 
 ## Project contract
 
@@ -48,6 +53,8 @@ Agent-label meanings:
 - `agent:blocked`: blocked by dependency waiting, including parent validation hubs waiting on child slices; normally pair with a non-active status such as `Backlog`
 - `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with a non-active status such as `Backlog`
 - open implementation Issues should normally carry exactly one truthful agent-state label
+- `state:known-defect`: one rolling registry Issue for confirmed deferred P2/P3 entries; keep it in
+  `Backlog`, without an agent-state label, and never treat it as pickup-eligible
 
 Interpretation rule:
 - GitHub Project `Status` is an optional legacy projection of lifecycle state, not a pickup gate or source of truth.
@@ -81,6 +88,8 @@ Lifecycle guardrails:
 - merged or otherwise closed terminal PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
 - parent feature issues are validation hubs, not direct pickup issues; while child slices remain outstanding they normally live in `Backlog` with `agent:blocked`
 - use `agent:needs-human` only when the blocker is a named human decision, tradeoff, missing input, or authority question
+- the `state:known-defect` registry is not an implementation Issue; promotion creates a separate
+  canonical `type:bug` Issue and links it back to the registry entry
 
 Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
@@ -174,6 +183,7 @@ Approved governance surfaces:
 - `scripts/await_pr_checks.sh`
 - `tests/ops/test_git_hygiene.py`
 - `tests/ops/test_project_status_reconcile.py`
+- `tests/governance/test_known_defects_registry.py`
 
 Rules:
 
