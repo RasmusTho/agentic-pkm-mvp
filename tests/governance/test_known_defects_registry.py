@@ -88,6 +88,7 @@ class FakeGateway:
     def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
         comment = {
             "id": self.next_comment,
+            "created_at": f"2026-07-27T00:00:{self.next_comment:02d}Z",
             "body": body,
             "author_association": "OWNER",
             "html_url": (
@@ -660,29 +661,25 @@ def test_promotion_rejects_labels_outside_the_canonical_issue_axes(
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 
-def test_registry_rejects_missing_type_bug_any_agent_state_and_unlocked_history() -> None:
-    for mutation, expected in (
-        (
-            lambda issue: issue.update(
-                labels=[{"name": known_defects.REGISTRY_LABEL}]
-            ),
-            "type:bug",
-        ),
-        (
-            lambda issue: issue["labels"].append({"name": "agent:blocked"}),
-            "must carry no agent state",
-        ),
-        (
-            lambda issue: issue.update(locked=False),
-            "must be locked",
-        ),
+def test_registry_reads_require_identity_but_survive_later_state_drift() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    issue["labels"] = [{"name": known_defects.REGISTRY_LABEL}]
+    with pytest.raises(known_defects.KnownDefectsError, match="readable registry"):
+        known_defects.lookup_defect("KD-000000000000", gateway)
+
+    for mutation in (
+        lambda candidate: candidate["labels"].append({"name": "agent:blocked"}),
+        lambda candidate: candidate.update(locked=False),
     ):
         gateway = FakeGateway()
         issue = gateway.create_registry_issue()
         gateway.lock_registry_issue(issue["number"])
         mutation(issue)
-        with pytest.raises(known_defects.KnownDefectsError, match=expected):
-            known_defects.lookup_defect("KD-000000000000", gateway)
+        assert known_defects.lookup_defect("KD-000000000000", gateway)[
+            "status"
+        ] == "not_found"
 
 
 def test_marker_injection_in_manual_comment_is_not_registry_authority() -> None:
@@ -711,6 +708,17 @@ def test_malformed_first_line_schema_marker_fails_closed() -> None:
 
     with pytest.raises(known_defects.KnownDefectsError, match="entry marker"):
         known_defects.lookup_defect("KD-000000000000", gateway)
+
+
+def test_schema_comment_requires_stable_creation_authority() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    comment = gateway.add_comment(issue["number"], _defect().render_entry())
+    del comment["created_at"]
+
+    with pytest.raises(known_defects.KnownDefectsError, match="creation authority"):
+        known_defects.lookup_defect(_defect().defect_id, gateway)
 
 
 @pytest.mark.parametrize(
@@ -757,7 +765,7 @@ def test_noncanonical_promotion_issue_number_fails_closed(issue_text: str) -> No
                 f"Promotion receipt: {defect_id} is now tracked for implementation "
                 f"by #{issue_text}."
             ),
-            f"Validated target authority: sha256:{'0' * 64}.",
+            f"Validated target snapshot: sha256:{'0' * 64}.",
             (
                 "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
                 "and execution state."
@@ -791,8 +799,9 @@ def test_entry_in_first_of_two_open_registries_does_not_bypass_ambiguity() -> No
 
     with pytest.raises(known_defects.KnownDefectsError, match="multiple open registries"):
         known_defects.intake_defect(defect, gateway)
-    with pytest.raises(known_defects.KnownDefectsError, match="multiple open registries"):
-        known_defects.lookup_defect(defect.defect_id, gateway)
+    assert known_defects.lookup_defect(defect.defect_id, gateway)[
+        "status"
+    ] == "deferred"
 
 
 def test_later_malformed_registry_candidate_is_not_skipped_after_entry_match() -> None:
@@ -806,28 +815,33 @@ def test_later_malformed_registry_candidate_is_not_skipped_after_entry_match() -
     second["state"] = "closed"
     second["body"] = "not a registry"
 
-    with pytest.raises(known_defects.KnownDefectsError, match="malformed"):
+    with pytest.raises(known_defects.KnownDefectsError, match="readable registry"):
         known_defects.lookup_defect(defect.defect_id, gateway)
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "prefix\n" + known_defects.render_registry_body(),
-        known_defects.render_registry_body() + "\nsuffix",
-        "manual text " + known_defects.REGISTRY_MARKER,
-    ],
-)
-def test_registry_body_marker_must_be_exact_first_line_schema(
-    body: str,
-) -> None:
+@pytest.mark.parametrize("body", [
+    "prefix\n" + known_defects.render_registry_body(),
+    "manual text " + known_defects.REGISTRY_MARKER,
+])
+def test_registry_read_identity_requires_marker_on_first_line(body: str) -> None:
     gateway = FakeGateway()
     issue = gateway.create_registry_issue()
     gateway.lock_registry_issue(issue["number"])
     issue["body"] = body
 
-    with pytest.raises(known_defects.KnownDefectsError, match="malformed"):
+    with pytest.raises(known_defects.KnownDefectsError, match="readable registry"):
         known_defects.lookup_defect("KD-000000000000", gateway)
+
+
+def test_registry_read_survives_later_body_suffix_drift() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    issue["body"] = known_defects.render_registry_body() + "\nsuffix"
+
+    assert known_defects.lookup_defect("KD-000000000000", gateway)[
+        "status"
+    ] == "not_found"
 
 
 def test_crash_after_comment_before_receipt_is_safe_to_retry() -> None:
@@ -933,7 +947,7 @@ def test_untrusted_promotion_written_before_lock_fails_closed_after_entry_match(
                     f"Promotion receipt: {defect.defect_id} is now tracked for "
                     "implementation by #901."
                 ),
-                f"Validated target authority: sha256:{'0' * 64}.",
+                f"Validated target snapshot: sha256:{'0' * 64}.",
                 (
                     "The bounded bug Issue owns scope, acceptance criteria, Verify "
                     "targets, and execution state."
@@ -1198,18 +1212,20 @@ class ConcurrentEntryFinalDuringAmbiguousPatchGateway(FakeGateway):
         return super().update_comment(comment_id, body)
 
 
-def test_ambiguous_entry_patch_cannot_adopt_another_comment_id() -> None:
+def test_ambiguous_entry_patch_keeps_earliest_reservation_canonical() -> None:
     gateway = ConcurrentEntryFinalDuringAmbiguousPatchGateway()
     defect = _defect()
 
     with pytest.raises(known_defects.KnownDefectsError, match="ambiguous entry"):
         known_defects.intake_defect(defect, gateway)
+    duplicate = known_defects.intake_defect(defect, gateway)
 
-    receipt = known_defects.intake_defect(defect, gateway)
-
-    assert receipt["status"] == "duplicate"
-    assert len(gateway.comments[900]) == 1
+    assert duplicate["status"] == "duplicate"
+    assert len(gateway.comments[900]) == 2
     assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+    assert known_defects.lookup_defect(defect.defect_id, gateway)["url"].endswith(
+        "issuecomment-1"
+    )
 
 
 class RegistryCloseDuringEntryFinalizeGateway(FakeGateway):
@@ -1218,7 +1234,6 @@ class RegistryCloseDuringEntryFinalizeGateway(FakeGateway):
         self.closed_once = False
 
     def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
-        updated = super().update_comment(comment_id, body)
         if (
             not self.closed_once
             and body.startswith("<!-- known-defect-entry:")
@@ -1226,18 +1241,22 @@ class RegistryCloseDuringEntryFinalizeGateway(FakeGateway):
         ):
             self.issues[900]["state"] = "closed"
             self.closed_once = True
-        return updated
+        return super().update_comment(comment_id, body)
 
 
-def test_registry_close_ordered_after_entry_commit_is_later_drift() -> None:
+def test_registry_close_before_entry_finalize_preserves_reserved_entry() -> None:
     gateway = RegistryCloseDuringEntryFinalizeGateway()
+    defect = _defect()
 
-    receipt = known_defects.intake_defect(_defect(), gateway)
+    receipt = known_defects.intake_defect(defect, gateway)
 
     assert receipt["status"] == "created"
     assert receipt["registry_issue"] == 900
     assert len(gateway.comments[900]) == 1
     assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+    assert known_defects.lookup_defect(defect.defect_id, gateway)[
+        "status"
+    ] == "deferred"
 
 
 class SecondRegistryDuringFinalizeGateway(FakeGateway):
@@ -1247,7 +1266,6 @@ class SecondRegistryDuringFinalizeGateway(FakeGateway):
         self.inject_once = True
 
     def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
-        updated = super().update_comment(comment_id, body)
         if (
             self.inject_once
             and body.startswith(f"<!-- known-defect-{self.marker_type}:")
@@ -1256,16 +1274,20 @@ class SecondRegistryDuringFinalizeGateway(FakeGateway):
             self.inject_once = False
             registry = super().create_registry_issue()
             super().lock_registry_issue(int(registry["number"]))
-        return updated
+        return super().update_comment(comment_id, body)
 
 
-def test_second_registry_ordered_after_entry_commit_is_detected_on_next_read() -> None:
+def test_second_registry_before_entry_finalize_cannot_hide_reserved_entry() -> None:
     gateway = SecondRegistryDuringFinalizeGateway("entry")
+    defect = _defect()
 
-    receipt = known_defects.intake_defect(_defect(), gateway)
+    receipt = known_defects.intake_defect(defect, gateway)
 
     assert receipt["status"] == "created"
     assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+    assert known_defects.lookup_defect(defect.defect_id, gateway)[
+        "status"
+    ] == "deferred"
     assert len(
         [
             issue
@@ -1284,7 +1306,6 @@ class RegistryDriftDuringEntryFinalizeGateway(FakeGateway):
         self.transitioned = False
 
     def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
-        updated = super().update_comment(comment_id, body)
         if (
             not self.transitioned
             and body.startswith("<!-- known-defect-entry:")
@@ -1297,14 +1318,14 @@ class RegistryDriftDuringEntryFinalizeGateway(FakeGateway):
             elif self.transition == "label":
                 self.issues[900]["labels"].append({"name": "agent:blocked"})
             self.transitioned = True
-        return updated
+        return super().update_comment(comment_id, body)
 
 
 @pytest.mark.parametrize(
     "transition",
     ["unlock", "body", "label"],
 )
-def test_registry_drift_ordered_after_entry_commit_does_not_revoke_commit(
+def test_registry_drift_before_entry_finalize_does_not_hide_reservation(
     transition: str,
 ) -> None:
     gateway = RegistryDriftDuringEntryFinalizeGateway(transition)
@@ -1314,6 +1335,9 @@ def test_registry_drift_ordered_after_entry_commit_does_not_revoke_commit(
     assert receipt["status"] == "created"
     assert len(gateway.comments[900]) == 1
     assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+    assert known_defects.lookup_defect(_defect().defect_id, gateway)[
+        "status"
+    ] == "deferred"
 
 
 class EntryRevocationWithoutDeleteGateway(
@@ -1512,7 +1536,7 @@ class ConflictingPromotionGateway(FakeGateway):
                             f"Promotion receipt: {defect_id} is now tracked for "
                             "implementation by #902."
                         ),
-                        f"Validated target authority: sha256:{authority_sha256}.",
+                        f"Validated target snapshot: sha256:{authority_sha256}.",
                         (
                             "The bounded bug Issue owns scope, acceptance criteria, "
                             "Verify targets, and execution state."
@@ -1523,7 +1547,7 @@ class ConflictingPromotionGateway(FakeGateway):
         return comment
 
 
-def test_precommit_scan_adopts_one_existing_promotion_and_drops_pending() -> None:
+def test_earliest_promotion_reservation_wins_a_concurrent_conflict() -> None:
     gateway = ConflictingPromotionGateway()
     defect = _defect()
     intake = known_defects.intake_defect(defect, gateway)
@@ -1543,12 +1567,12 @@ def test_precommit_scan_adopts_one_existing_promotion_and_drops_pending() -> Non
         "number": 902,
     }
 
-    with pytest.raises(known_defects.KnownDefectsError, match="already linked"):
-        known_defects.promote_defect(defect.defect_id, 901, gateway)
+    promoted = known_defects.promote_defect(defect.defect_id, 901, gateway)
 
+    assert promoted["status"] == "promoted"
     receipt = known_defects.lookup_defect(defect.defect_id, gateway)
     assert receipt["status"] == "promoted"
-    assert receipt["promotion_issue"] == 902
+    assert receipt["promotion_issue"] == 901
     assert receipt["registry_issue"] == intake["registry_issue"]
 
 
@@ -1559,7 +1583,6 @@ class PromotionTargetRaceGateway(FakeGateway):
         self.transitioned = False
 
     def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
-        comment = super().add_comment(issue_number, body)
         if (
             body.startswith("<!-- known-defect-promotion:")
             and not self.transitioned
@@ -1581,11 +1604,11 @@ class PromotionTargetRaceGateway(FakeGateway):
                     {"name": "prio:med"},
                 ]
             self.transitioned = True
-        return comment
+        return super().add_comment(issue_number, body)
 
 
 @pytest.mark.parametrize("transition", ["body", "label"])
-def test_first_promotion_compensates_target_authority_drift(
+def test_promotion_receipt_is_an_immutable_validation_snapshot(
     transition: str,
 ) -> None:
     gateway = PromotionTargetRaceGateway(transition)
@@ -1603,10 +1626,39 @@ def test_first_promotion_compensates_target_authority_drift(
         ],
     }
 
-    with pytest.raises(known_defects.KnownDefectsError, match="authority drifted"):
-        known_defects.promote_defect(defect.defect_id, 901, gateway)
+    receipt = known_defects.promote_defect(defect.defect_id, 901, gateway)
 
-    assert len(gateway.comments[intake["registry_issue"]]) == 1
+    assert receipt["status"] == "promoted"
+    assert len(gateway.comments[intake["registry_issue"]]) == 2
+    assert known_defects.lookup_defect(defect.defect_id, gateway)[
+        "promotion_issue"
+    ] == 901
+
+
+def test_promotion_snapshot_digest_binds_lifecycle_and_agent_state() -> None:
+    issue = {
+        "title": "bug: bind snapshot authority",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+    baseline = known_defects._promotion_target_authority_sha256(issue)
+    claimed = {
+        **issue,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:blocked"},
+        ],
+    }
+    closed = {**issue, "state": "closed"}
+
+    assert known_defects._promotion_target_authority_sha256(claimed) != baseline
+    assert known_defects._promotion_target_authority_sha256(closed) != baseline
 
 
 @pytest.mark.parametrize("transition", ["closed", "claimed"])
@@ -1668,9 +1720,9 @@ def test_existing_promotion_read_failure_preserves_committed_authority() -> None
     committed_marker = gateway.comments[900][-1]["body"]
     gateway.fail_target_read_once = True
 
-    with pytest.raises(known_defects.KnownDefectsError, match="indeterminate"):
-        known_defects.promote_defect(defect.defect_id, 901, gateway)
+    duplicate = known_defects.promote_defect(defect.defect_id, 901, gateway)
 
+    assert duplicate["status"] == "promotion_duplicate"
     assert gateway.comments[900][-1]["body"] == committed_marker
     assert known_defects.lookup_defect(defect.defect_id, gateway)[
         "status"
@@ -1760,7 +1812,6 @@ class CrossRegistryConflictDuringFinalPatchGateway(FakeGateway):
         self.inject_once = True
 
     def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
-        updated = super().update_comment(comment_id, body)
         if (
             self.inject_once
             and body.startswith("<!-- known-defect-promotion:")
@@ -1784,7 +1835,7 @@ class CrossRegistryConflictDuringFinalPatchGateway(FakeGateway):
                         f"Promotion receipt: {defect_id} is now tracked for "
                         "implementation by #903."
                     ),
-                    f"Validated target authority: sha256:{authority_sha256}.",
+                    f"Validated target snapshot: sha256:{authority_sha256}.",
                     (
                         "The bounded bug Issue owns scope, acceptance criteria, "
                         "Verify targets, and execution state."
@@ -1792,10 +1843,10 @@ class CrossRegistryConflictDuringFinalPatchGateway(FakeGateway):
                 )
             )
             super().add_comment(900, conflict_body)
-        return updated
+        return super().update_comment(comment_id, body)
 
 
-def test_cross_registry_write_ordered_after_promotion_commit_is_later_conflict() -> None:
+def test_cross_registry_conflict_cannot_preempt_earlier_reservation() -> None:
     gateway = CrossRegistryConflictDuringFinalPatchGateway()
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
@@ -1817,8 +1868,8 @@ def test_cross_registry_write_ordered_after_promotion_commit_is_later_conflict()
 
     assert receipt["status"] == "promoted"
     lookup = known_defects.lookup_defect(defect.defect_id, gateway)
-    assert lookup["status"] == "promotion_conflict"
-    assert lookup["promotion_issues"] == [902, 903]
+    assert lookup["status"] == "promoted"
+    assert lookup["promotion_issue"] == 902
 
 
 class PromotionPostWriteReadFailureGateway(FakeGateway):
@@ -1841,7 +1892,7 @@ class PromotionPostWriteReadFailureGateway(FakeGateway):
         return super().get_issue(number)
 
 
-def test_indeterminate_promotion_post_write_read_compensates_marker() -> None:
+def test_promotion_reservation_needs_no_post_write_target_read() -> None:
     gateway = PromotionPostWriteReadFailureGateway()
     defect = _defect()
     intake = known_defects.intake_defect(defect, gateway)
@@ -1857,10 +1908,10 @@ def test_indeterminate_promotion_post_write_read_compensates_marker() -> None:
         ],
     }
 
-    with pytest.raises(known_defects.KnownDefectsError, match="indeterminate"):
-        known_defects.promote_defect(defect.defect_id, 901, gateway)
+    receipt = known_defects.promote_defect(defect.defect_id, 901, gateway)
 
-    assert len(gateway.comments[intake["registry_issue"]]) == 1
+    assert receipt["status"] == "promoted"
+    assert len(gateway.comments[intake["registry_issue"]]) == 2
 
 
 class AmbiguousPromotionCreateGateway(FakeGateway):
@@ -1881,7 +1932,7 @@ class AmbiguousPromotionCreateGateway(FakeGateway):
         return comment
 
 
-def test_ambiguous_promotion_create_response_compensates_closed_registry() -> None:
+def test_ambiguous_promotion_reservation_survives_later_registry_close() -> None:
     gateway = AmbiguousPromotionCreateGateway()
     defect = _defect()
     intake = known_defects.intake_defect(defect, gateway)
@@ -1897,14 +1948,11 @@ def test_ambiguous_promotion_create_response_compensates_closed_registry() -> No
         ],
     }
 
-    with pytest.raises(known_defects.KnownDefectsError, match="expected one open"):
-        known_defects.promote_defect(defect.defect_id, 901, gateway)
-
-    assert len(gateway.comments[intake["registry_issue"]]) == 1
     promoted = known_defects.promote_defect(defect.defect_id, 901, gateway)
 
     assert promoted["status"] == "promoted"
-    assert promoted["registry_issue"] == 902
+    assert promoted["registry_issue"] == intake["registry_issue"]
+    assert "phase=final" in gateway.comments[900][-1]["body"].splitlines()[0]
 
 
 def test_ambiguous_promotion_create_response_completes_from_open_inventory() -> None:
@@ -1959,7 +2007,7 @@ class CrossGenerationFinalDuringAmbiguousPromotionCreateGateway(FakeGateway):
                         f"Promotion receipt: {defect_id} is now tracked for "
                         "implementation by #903."
                     ),
-                    f"Validated target authority: sha256:{authority_sha256}.",
+                    f"Validated target snapshot: sha256:{authority_sha256}.",
                     (
                         "The bounded bug Issue owns scope, acceptance criteria, "
                         "Verify targets, and execution state."
@@ -1973,7 +2021,7 @@ class CrossGenerationFinalDuringAmbiguousPromotionCreateGateway(FakeGateway):
         return comment
 
 
-def test_ambiguous_promotion_create_scans_closed_registry_generations() -> None:
+def test_ambiguous_promotion_uses_earliest_cross_generation_reservation() -> None:
     gateway = CrossGenerationFinalDuringAmbiguousPromotionCreateGateway()
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
@@ -1993,12 +2041,12 @@ def test_ambiguous_promotion_create_scans_closed_registry_generations() -> None:
     gateway.issues[902] = {"number": 902, **target}
     gateway.issues[903] = {"number": 903, **target}
 
-    with pytest.raises(known_defects.KnownDefectsError, match="conflicting authority"):
-        known_defects.promote_defect(defect.defect_id, 902, gateway)
+    promoted = known_defects.promote_defect(defect.defect_id, 902, gateway)
 
+    assert promoted["status"] == "promoted"
     assert known_defects.lookup_defect(defect.defect_id, gateway)[
         "promotion_issue"
-    ] == 903
+    ] == 902
     assert not any(
         "phase=pending" in item["body"].splitlines()[0]
         for item in gateway.comments[901]
@@ -2130,7 +2178,7 @@ class ConcurrentPromotionFinalDuringAmbiguousPatchGateway(FakeGateway):
         return super().update_comment(comment_id, body)
 
 
-def test_ambiguous_promotion_patch_cannot_adopt_another_comment_id() -> None:
+def test_ambiguous_promotion_patch_keeps_earliest_reservation_canonical() -> None:
     gateway = ConcurrentPromotionFinalDuringAmbiguousPatchGateway()
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
@@ -2157,8 +2205,12 @@ def test_ambiguous_promotion_patch_cannot_adopt_another_comment_id() -> None:
         for item in gateway.comments[900]
         if item["body"].startswith("<!-- known-defect-promotion:")
     ]
-    assert len(promotion_comments) == 1
+    assert len(promotion_comments) == 2
     assert "phase=final" in promotion_comments[0]["body"].splitlines()[0]
+    assert known_defects._single_committed_promotion(
+        gateway,
+        defect.defect_id,
+    )[3]["id"] == promotion_comments[0]["id"]
 
 
 class AuthorityDriftDuringPromotionFinalizeGateway(FakeGateway):
@@ -2168,7 +2220,6 @@ class AuthorityDriftDuringPromotionFinalizeGateway(FakeGateway):
         self.transitioned = False
 
     def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
-        updated = super().update_comment(comment_id, body)
         if (
             not self.transitioned
             and body.startswith("<!-- known-defect-promotion:")
@@ -2179,14 +2230,14 @@ class AuthorityDriftDuringPromotionFinalizeGateway(FakeGateway):
             elif self.transition == "registry_close":
                 self.issues[900]["state"] = "closed"
             self.transitioned = True
-        return updated
+        return super().update_comment(comment_id, body)
 
 
 @pytest.mark.parametrize(
     "transition",
     ["target_body", "registry_close"],
 )
-def test_authority_drift_ordered_after_promotion_commit_is_later_drift(
+def test_target_or_registry_drift_before_finalize_cannot_rewrite_snapshot(
     transition: str,
 ) -> None:
     gateway = AuthorityDriftDuringPromotionFinalizeGateway(transition)
@@ -2210,10 +2261,7 @@ def test_authority_drift_ordered_after_promotion_commit_is_later_drift(
     assert len(gateway.comments[intake["registry_issue"]]) == 2
     assert "phase=final" in gateway.comments[900][-1]["body"].splitlines()[0]
     lookup = known_defects.lookup_defect(defect.defect_id, gateway)
-    if transition == "target_body":
-        assert lookup["status"] == "promotion_authority_drift"
-    else:
-        assert lookup["status"] == "promoted"
+    assert lookup["status"] == "promoted"
 
 
 def test_second_registry_ordered_after_promotion_commit_is_later_drift() -> None:
@@ -2301,7 +2349,7 @@ def test_promotion_commit_has_no_post_finalize_authority_read() -> None:
     assert "phase=final" in gateway.comments[900][-1]["body"].splitlines()[0]
 
 
-def test_duplicate_final_promotion_markers_remain_a_conflict_after_drift() -> None:
+def test_later_duplicate_promotion_markers_cannot_preempt_canonical_link() -> None:
     gateway = FakeGateway()
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
@@ -2320,15 +2368,13 @@ def test_duplicate_final_promotion_markers_remain_a_conflict_after_drift() -> No
     promotion = gateway.comments[900][-1]
     gateway.add_comment(900, promotion["body"])
 
-    gateway.issues[901]["body"] += "\n\nTemporary authority drift."
-    with pytest.raises(known_defects.KnownDefectsError, match="conflicting promotion"):
-        known_defects.promote_defect(defect.defect_id, 901, gateway)
-
-    gateway.issues[901]["body"] = _canonical_bug_body()
+    gateway.issues[901]["body"] += "\n\nLater implementation detail."
+    duplicate = known_defects.promote_defect(defect.defect_id, 901, gateway)
     receipt = known_defects.lookup_defect(defect.defect_id, gateway)
 
-    assert receipt["status"] == "promotion_conflict"
-    assert receipt["promotion_issues"] == [901]
+    assert duplicate["status"] == "promotion_duplicate"
+    assert receipt["status"] == "promoted"
+    assert receipt["promotion_issue"] == 901
 
 
 def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:

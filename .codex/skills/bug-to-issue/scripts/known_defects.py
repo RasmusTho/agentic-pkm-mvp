@@ -54,6 +54,9 @@ PROMOTION_MARKER_RE = re.compile(
     r"authority_sha256=([0-9a-f]{64}) phase=(pending|final) -->"
 )
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+COMMENT_CREATED_AT_RE = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+)
 REPO_PATH_RE = re.compile(
     r"^(?:\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)"
     r"(?:/[A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]+$"
@@ -584,7 +587,7 @@ def _promotion_from_comment(body: str) -> tuple[str, int, str, str] | None:
         "and execution state."
     )
     expected_digest = (
-        f"Validated target authority: sha256:{authority_sha256}."
+        f"Validated target snapshot: sha256:{authority_sha256}."
     )
     if (
         len(lines) != 4
@@ -614,16 +617,29 @@ def _validate_schema_comment(comment: dict[str, Any]) -> None:
             f"schema comment #{comment.get('id')} has untrusted author association "
             f"{association or '<missing>'}"
         )
+    _comment_reservation_order(comment)
     if is_entry:
         _entry_marker_from_comment(body)
     else:
         _promotion_from_comment(body)
 
 
+def _comment_reservation_order(comment: dict[str, Any]) -> tuple[str, int]:
+    created_at = str(comment.get("created_at") or "")
+    comment_id = int(comment.get("id") or 0)
+    if COMMENT_CREATED_AT_RE.fullmatch(created_at) is None or comment_id <= 0:
+        raise KnownDefectsError(
+            f"schema comment #{comment_id or '<missing>'} lacks canonical "
+            "creation authority"
+        )
+    return created_at, comment_id
+
+
 def _registry_inventory(
     gateway: RegistryGateway,
     *,
     recover_bootstrap: bool,
+    allow_multiple_open: bool = False,
 ) -> list[dict[str, Any]]:
     issues = sorted(
         gateway.list_registry_issues("all"),
@@ -638,7 +654,7 @@ def _registry_inventory(
     open_registries = [
         issue for issue in issues if str(issue.get("state", "")).lower() == "open"
     ]
-    if len(open_registries) > 1:
+    if len(open_registries) > 1 and not allow_multiple_open:
         numbers = ", ".join(f"#{item['number']}" for item in open_registries)
         raise KnownDefectsError(f"multiple open registries found ({numbers})")
     if (
@@ -672,6 +688,27 @@ def _inventory_comments(
     return comments
 
 
+def _registry_candidates_for_read(
+    gateway: RegistryGateway,
+) -> list[dict[str, Any]]:
+    issues = sorted(
+        gateway.list_registry_issues("all"),
+        key=lambda item: int(item["number"]),
+    )
+    for issue in issues:
+        labels = _label_names(issue)
+        body = issue.get("body") or ""
+        if (
+            REGISTRY_LABEL not in labels
+            or "type:bug" not in labels
+            or not body.startswith(f"{REGISTRY_MARKER}\n")
+        ):
+            raise KnownDefectsError(
+                f"Issue #{issue.get('number')} is not a readable registry container"
+            )
+    return issues
+
+
 def _require_expected_single_open_registry(
     gateway: RegistryGateway,
     expected_issue_number: int,
@@ -700,10 +737,16 @@ def _registry_comment_locations(
     recover_bootstrap: bool,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     locations: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for issue in _registry_inventory(
-        gateway,
-        recover_bootstrap=recover_bootstrap,
-    ):
+    issues = (
+        _registry_inventory(
+            gateway,
+            recover_bootstrap=True,
+            allow_multiple_open=True,
+        )
+        if recover_bootstrap
+        else _registry_candidates_for_read(gateway)
+    )
+    for issue in issues:
         locations.extend(
             (issue, comment)
             for comment in _inventory_comments(gateway, int(issue["number"]))
@@ -711,73 +754,64 @@ def _registry_comment_locations(
     return locations
 
 
-def _promotion_targets(
-    comments: Sequence[dict[str, Any]],
+def _canonical_promotion_reservation(
+    gateway: RegistryGateway,
     defect_id: str,
-) -> tuple[
-    set[int],
-    dict[int, dict[str, Any]],
-    dict[int, set[str]],
-    dict[int, int],
-]:
-    targets: set[int] = set()
-    evidence: dict[int, dict[str, Any]] = {}
-    authority_digests: dict[int, set[str]] = {}
-    authority_counts: dict[int, int] = {}
-    for comment in comments:
-        _validate_schema_comment(comment)
+) -> tuple[int, str, str, int, dict[str, Any]] | None:
+    locations = _registry_comment_locations(
+        gateway,
+        recover_bootstrap=False,
+    )
+    reservations: list[
+        tuple[int, int, int, str, str, dict[str, Any]]
+    ] = []
+    for registry, comment in locations:
         parsed = _promotion_from_comment(comment.get("body") or "")
-        if parsed is None or parsed[0] != defect_id or parsed[3] != "final":
+        if parsed is None or parsed[0] != defect_id:
             continue
-        issue_number = parsed[1]
-        authority_sha256 = parsed[2]
-        targets.add(issue_number)
-        evidence.setdefault(issue_number, comment)
-        authority_digests.setdefault(issue_number, set()).add(authority_sha256)
-        authority_counts[issue_number] = authority_counts.get(issue_number, 0) + 1
-    return targets, evidence, authority_digests, authority_counts
+        reservations.append(
+            (
+                int(comment.get("id") or 0),
+                int(registry["number"]),
+                parsed[1],
+                parsed[2],
+                parsed[3],
+                comment,
+            )
+        )
+    if not reservations:
+        return None
+    reservations.sort(
+        key=lambda item: _comment_reservation_order(item[5])
+    )
+    (
+        _comment_id,
+        registry_number,
+        issue_number,
+        authority_sha256,
+        phase,
+        evidence_comment,
+    ) = reservations[0]
+    return (
+        issue_number,
+        authority_sha256,
+        phase,
+        registry_number,
+        evidence_comment,
+    )
 
 
 def _single_committed_promotion(
     gateway: RegistryGateway,
     defect_id: str,
 ) -> tuple[int, str, int, dict[str, Any]] | None:
-    locations = _registry_comment_locations(
-        gateway,
-        recover_bootstrap=False,
-    )
-    comments = [comment for _registry, comment in locations]
-    targets, evidence, authority_digests, authority_counts = _promotion_targets(
-        comments,
-        defect_id,
-    )
-    if (
-        len(targets) > 1
-        or any(len(digests) != 1 for digests in authority_digests.values())
-        or any(count != 1 for count in authority_counts.values())
-    ):
-        rendered = ", ".join(f"#{number}" for number in sorted(targets))
-        raise KnownDefectsError(
-            f"{defect_id} has conflicting promotion authority: "
-            f"{rendered or '<malformed>'}"
-        )
-    if not targets:
+    reservation = _canonical_promotion_reservation(gateway, defect_id)
+    if reservation is None or reservation[2] != "final":
         return None
-    issue_number = next(iter(targets))
-    authority_sha256 = next(iter(authority_digests[issue_number]))
-    evidence_comment = evidence[issue_number]
-    evidence_id = int(evidence_comment.get("id") or 0)
-    registry_number = next(
-        int(registry["number"])
-        for registry, comment in locations
-        if int(comment.get("id") or 0) == evidence_id
+    issue_number, authority_sha256, _phase, registry_number, comment = (
+        reservation
     )
-    return (
-        issue_number,
-        authority_sha256,
-        registry_number,
-        evidence_comment,
-    )
+    return issue_number, authority_sha256, registry_number, comment
 
 
 def _find_entry(
@@ -786,23 +820,29 @@ def _find_entry(
     *,
     recover_bootstrap: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    issues = _registry_inventory(
-        gateway,
-        recover_bootstrap=recover_bootstrap,
+    issues = (
+        _registry_inventory(
+            gateway,
+            recover_bootstrap=True,
+            allow_multiple_open=True,
+        )
+        if recover_bootstrap
+        else _registry_candidates_for_read(gateway)
     )
-    open_registries = [
-        issue for issue in issues if str(issue.get("state", "")).lower() == "open"
-    ]
-    if len(open_registries) > 1:
-        numbers = ", ".join(f"#{item['number']}" for item in open_registries)
-        raise KnownDefectsError(f"multiple open registries found ({numbers})")
-    found: tuple[dict[str, Any], dict[str, Any]] | None = None
+    found: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for issue in issues:
         for comment in _inventory_comments(gateway, int(issue["number"])):
-            parsed_id = _entry_id_from_comment(comment.get("body") or "")
-            if parsed_id == defect_id and found is None:
-                found = (issue, comment)
-    return found
+            parsed = _entry_marker_from_comment(comment.get("body") or "")
+            if parsed is not None and parsed[0] == defect_id:
+                found.append((issue, comment))
+    if not found:
+        return None
+    found.sort(key=lambda item: _comment_reservation_order(item[1]))
+    canonical = found[0]
+    parsed = _entry_marker_from_comment(canonical[1].get("body") or "")
+    if parsed is None or parsed[1] != "final":
+        return None
+    return canonical
 
 
 def _select_registry(
@@ -898,15 +938,6 @@ def _entry_comments(
     return matches
 
 
-def _delete_comments(
-    gateway: RegistryGateway,
-    issue_number: int,
-    comments: Sequence[dict[str, Any]],
-) -> None:
-    for comment in comments:
-        _compensate_comment(gateway, issue_number, comment)
-
-
 def _finalize_pending_entry(
     gateway: RegistryGateway,
     issue: dict[str, Any],
@@ -923,8 +954,8 @@ def _finalize_pending_entry(
     if parsed is None or parsed[1] != "pending":
         raise KnownDefectsError("entry finalization requires a pending schema comment")
     final_body = pending_body.replace(" phase=pending -->", " phase=final -->", 1)
-    # This exact PATCH is the commit point. Keep every authority check before it;
-    # a post-commit compensation protocol cannot be made atomic with GitHub REST.
+    # This PATCH commits the already-ordered reservation. It has no cross-Issue
+    # predicate: the trusted reservation id, not a stale multi-resource read, wins.
     try:
         gateway.update_comment(comment_id, final_body)
     except KnownDefectsError:
@@ -950,9 +981,9 @@ def _finalize_pending_entry(
         for item in final_comments
         if int(item.get("id") or 0) == comment_id
     ]
-    if len(final_comments) != 1 or len(exact_final) != 1:
+    if len(exact_final) != 1:
         raise KnownDefectsError(
-            f"entry finalization conflict for {parsed[0]}"
+            f"entry finalization failed for {parsed[0]}"
         )
     return exact_final[0]
 
@@ -973,8 +1004,6 @@ def _reconcile_pending_entries(
                 phase="pending",
             )
         )
-    if not pending:
-        return None
     final_entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for issue in issues:
         final_entries.extend(
@@ -986,11 +1015,6 @@ def _reconcile_pending_entries(
                 phase="final",
             )
         )
-    if final_entries:
-        final_entries.sort(key=lambda item: int(item[1].get("id") or 0))
-        for issue, comment in pending:
-            _compensate_comment(gateway, int(issue["number"]), comment)
-        return final_entries[0]
     open_pending = [
         item
         for item in pending
@@ -999,12 +1023,24 @@ def _reconcile_pending_entries(
     closed_pending = [item for item in pending if item not in open_pending]
     for issue, comment in closed_pending:
         _compensate_comment(gateway, int(issue["number"]), comment)
-    if not open_pending:
+    reservations = final_entries + open_pending
+    if not reservations:
         return None
-    open_pending.sort(key=lambda item: int(item[1].get("id") or 0))
-    canonical_issue, canonical_comment = open_pending[0]
-    for issue, comment in open_pending[1:]:
+    reservations.sort(key=lambda item: _comment_reservation_order(item[1]))
+    canonical_issue, canonical_comment = reservations[0]
+    canonical_marker = _entry_marker_from_comment(
+        canonical_comment.get("body") or ""
+    )
+    if canonical_marker is None:
+        raise KnownDefectsError("canonical entry reservation became malformed")
+    for issue, comment in open_pending:
+        if int(comment.get("id") or 0) == int(
+            canonical_comment.get("id") or 0
+        ):
+            continue
         _compensate_comment(gateway, int(issue["number"]), comment)
+    if canonical_marker[1] == "final":
+        return canonical_issue, canonical_comment
     canonical_issue_number = int(canonical_issue["number"])
     _require_expected_single_open_registry(
         gateway,
@@ -1204,46 +1240,8 @@ def lookup_defect(
             "defect_id": defect_id,
         }
     issue, comment = found
-    promotion_locations = _registry_comment_locations(
-        gateway,
-        recover_bootstrap=False,
-    )
-    targets, _evidence, authority_digests, authority_counts = _promotion_targets(
-        [comment for _registry, comment in promotion_locations],
-        defect_id,
-    )
-    digest_conflict = any(
-        len(digests) != 1 for digests in authority_digests.values()
-    )
-    duplicate_authority = any(count != 1 for count in authority_counts.values())
-    if len(targets) > 1 or digest_conflict or duplicate_authority:
-        return {
-            "schema": "known-defect-receipt.v1",
-            "status": "promotion_conflict",
-            "defect_id": defect_id,
-            "registry_issue": int(issue["number"]),
-            "promotion_issues": sorted(targets),
-            "promotion_issue": None,
-            "url": comment.get("html_url"),
-        }
-    promotion_issue = next(iter(targets), None)
-    if promotion_issue is not None:
-        authority_sha256 = next(iter(authority_digests[promotion_issue]))
-        try:
-            _validate_promoted_target_snapshot(
-                gateway.get_issue(promotion_issue),
-                authority_sha256,
-            )
-        except KnownDefectsError:
-            return {
-                "schema": "known-defect-receipt.v1",
-                "status": "promotion_authority_drift",
-                "defect_id": defect_id,
-                "registry_issue": int(issue["number"]),
-                "promotion_issue": None,
-                "promotion_issues": [promotion_issue],
-                "url": comment.get("html_url"),
-            }
+    promotion = _single_committed_promotion(gateway, defect_id)
+    promotion_issue = promotion[0] if promotion is not None else None
     return {
         "schema": "known-defect-receipt.v1",
         "status": "promoted" if promotion_issue is not None else "deferred",
@@ -1509,8 +1507,11 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
 def _promotion_target_authority_sha256(issue: dict[str, Any]) -> str:
     labels = _label_names(issue)
     priority = next(iter(labels & PRIORITY_LABELS), "")
+    agent_state = next(iter(labels & NORMAL_AGENT_STATES), "")
     payload = {
+        "agent_state": agent_state,
         "body": issue.get("body") or "",
+        "issue_state": str(issue.get("state") or "").lower(),
         "lanes": sorted(labels & ALLOWED_LANE_LABELS),
         "priority": priority,
         "title": issue.get("title") or "",
@@ -1519,29 +1520,6 @@ def _promotion_target_authority_sha256(issue: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-
-
-def _validate_promoted_target_snapshot(
-    issue: dict[str, Any],
-    authority_sha256: str,
-) -> None:
-    state = str(issue.get("state", "")).lower()
-    if state not in {"open", "closed"}:
-        raise KnownDefectsError("promoted target has invalid lifecycle state")
-    labels = _label_names(issue)
-    type_labels = {label for label in labels if label.startswith("type:")}
-    priorities = {label for label in labels if label.startswith("prio:")}
-    agent_states = {label for label in labels if label.startswith("agent:")}
-    lane_labels = labels & ALLOWED_LANE_LABELS
-    if type_labels != {"type:bug"} or len(priorities) != 1 or not priorities <= PRIORITY_LABELS:
-        raise KnownDefectsError("promoted target type or priority authority drifted")
-    if len(agent_states) > 1 or not agent_states <= NORMAL_AGENT_STATES:
-        raise KnownDefectsError("promoted target agent state is noncanonical")
-    allowed_labels = {"type:bug"} | priorities | agent_states | lane_labels
-    if labels != allowed_labels:
-        raise KnownDefectsError("promoted target label authority drifted")
-    if _promotion_target_authority_sha256(issue) != authority_sha256:
-        raise KnownDefectsError("promoted target contract authority drifted")
 
 
 def _promotion_comments(
@@ -1584,8 +1562,8 @@ def _finalize_pending_promotion(
             "promotion finalization requires the exact pending authority"
         )
     final_body = pending_body.replace(" phase=pending -->", " phase=final -->", 1)
-    # This exact PATCH is the commit point. Keep every authority check before it;
-    # a post-commit compensation protocol cannot be made atomic with GitHub REST.
+    # This PATCH commits the already-ordered validation snapshot. It has no
+    # cross-Issue predicate: the trusted reservation id determines authority.
     try:
         gateway.update_comment(comment_id, final_body)
     except KnownDefectsError:
@@ -1624,69 +1602,40 @@ def _finalize_pending_promotion(
 
 def _reconcile_pending_promotions(
     gateway: RegistryGateway,
-    registry: dict[str, Any],
     defect_id: str,
 ) -> tuple[int, str, int, dict[str, Any]] | None:
-    registry_number = int(registry["number"])
-    pending = _promotion_comments(
-        gateway,
-        registry_number,
-        defect_id,
-        phase="pending",
-    )
-    if not pending:
+    reservation = _canonical_promotion_reservation(gateway, defect_id)
+    if reservation is None:
         return None
-    authorities = {
-        parsed[1:3]
-        for comment in pending
+    (
+        issue_number,
+        authority_sha256,
+        phase,
+        registry_number,
+        canonical,
+    ) = reservation
+    locations = _registry_comment_locations(
+        gateway,
+        recover_bootstrap=False,
+    )
+    for candidate, comment in locations:
+        parsed = _promotion_from_comment(comment.get("body") or "")
         if (
-            parsed := _promotion_from_comment(comment.get("body") or "")
-        ) is not None
-    }
-    if len(authorities) != 1:
-        raise KnownDefectsError(
-            f"{defect_id} has conflicting pending promotion authority"
-        )
-    issue_number, authority_sha256 = next(iter(authorities))
-    try:
-        committed = _single_committed_promotion(gateway, defect_id)
-    except KnownDefectsError:
-        _delete_comments(gateway, registry_number, pending)
-        raise
-    if committed is not None:
-        committed_issue, committed_digest, committed_registry, final_comment = (
-            committed
-        )
-        try:
-            target = gateway.get_issue(committed_issue)
-            _validate_promoted_target_snapshot(target, committed_digest)
-        except KnownDefectsError:
-            _delete_comments(gateway, registry_number, pending)
-            raise
-        _delete_comments(gateway, registry_number, pending)
+            parsed is None
+            or parsed[0] != defect_id
+            or parsed[3] != "pending"
+            or int(comment.get("id") or 0)
+            == int(canonical.get("id") or 0)
+        ):
+            continue
+        _compensate_comment(gateway, int(candidate["number"]), comment)
+    if phase == "final":
         return (
-            committed_issue,
-            committed_digest,
-            committed_registry,
-            final_comment,
+            issue_number,
+            authority_sha256,
+            registry_number,
+            canonical,
         )
-    try:
-        _require_expected_single_open_registry(gateway, registry_number)
-        target = gateway.get_issue(issue_number)
-        _validate_promoted_target_snapshot(target, authority_sha256)
-    except KnownDefectsError:
-        _delete_comments(gateway, registry_number, pending)
-        raise
-    pending.sort(key=lambda item: int(item.get("id") or 0))
-    canonical = pending[0]
-    _delete_comments(gateway, registry_number, pending[1:])
-    committed = _single_committed_promotion(gateway, defect_id)
-    if committed is not None:
-        _compensate_comment(gateway, registry_number, canonical)
-        return committed
-    _require_expected_single_open_registry(gateway, registry_number)
-    target = gateway.get_issue(issue_number)
-    _validate_promoted_target_snapshot(target, authority_sha256)
     finalized = _finalize_pending_promotion(
         gateway,
         registry_number,
@@ -1709,89 +1658,23 @@ def promote_defect(
     if found is None:
         raise KnownDefectsError(f"known defect {defect_id} was not found")
     entry_registry, _entry_comment = found
-    registries = _registry_inventory(gateway, recover_bootstrap=True)
-    initial_locations = _registry_comment_locations(
+    existing = _reconcile_pending_promotions(
         gateway,
-        recover_bootstrap=False,
-    )
-    initial_comments = [comment for _candidate, comment in initial_locations]
-    initial_targets, _initial_evidence, initial_digests, initial_counts = (
-        _promotion_targets(initial_comments, defect_id)
-    )
-    initial_conflict = (
-        len(initial_targets) > 1
-        or any(len(digests) != 1 for digests in initial_digests.values())
-        or any(count != 1 for count in initial_counts.values())
-    )
-    if initial_conflict:
-        raise KnownDefectsError(
-            f"{defect_id} has conflicting promotion authority: "
-            + ", ".join(f"#{number}" for number in sorted(initial_targets))
-        )
-    if initial_targets:
-        for candidate in registries:
-            candidate_number = int(candidate["number"])
-            pending = _promotion_comments(
-                gateway,
-                candidate_number,
-                defect_id,
-                phase="pending",
-            )
-            _delete_comments(gateway, candidate_number, pending)
-    else:
-        for candidate in registries:
-            candidate_number = int(candidate["number"])
-            pending = _promotion_comments(
-                gateway,
-                candidate_number,
-                defect_id,
-                phase="pending",
-            )
-            if not pending:
-                continue
-            if str(candidate.get("state", "")).lower() == "open":
-                _reconcile_pending_promotions(gateway, candidate, defect_id)
-            else:
-                _delete_comments(gateway, candidate_number, pending)
-    promotion_locations = _registry_comment_locations(
-        gateway,
-        recover_bootstrap=False,
-    )
-    promotion_comments = [comment for _registry, comment in promotion_locations]
-    comment_registries = {
-        int(comment.get("id") or 0): int(candidate["number"])
-        for candidate, comment in promotion_locations
-    }
-    targets, evidence, authority_digests, authority_counts = _promotion_targets(
-        promotion_comments,
         defect_id,
     )
-    digest_conflict = any(
-        len(digests) != 1 for digests in authority_digests.values()
-    )
-    duplicate_authority = any(count != 1 for count in authority_counts.values())
-    if len(targets) > 1 or digest_conflict or duplicate_authority:
-        raise KnownDefectsError(
-            f"{defect_id} has conflicting promotion authority: "
-            + ", ".join(f"#{number}" for number in sorted(targets))
-        )
-    if targets:
-        existing_target = next(iter(targets))
+    if existing is not None:
+        (
+            existing_target,
+            _authority_sha256,
+            existing_registry,
+            evidence_comment,
+        ) = existing
         if existing_target == issue_number:
-            authority_sha256 = next(iter(authority_digests[existing_target]))
-            existing_issue = gateway.get_issue(existing_target)
-            _validate_promoted_target_snapshot(
-                existing_issue,
-                authority_sha256,
-            )
-            evidence_comment = evidence[issue_number]
             return {
                 "schema": "known-defect-receipt.v1",
                 "status": "promotion_duplicate",
                 "defect_id": defect_id,
-                "registry_issue": comment_registries[
-                    int(evidence_comment.get("id") or 0)
-                ],
+                "registry_issue": existing_registry,
                 "promotion_issue": issue_number,
                 "url": evidence_comment.get("html_url"),
             }
@@ -1802,8 +1685,10 @@ def promote_defect(
         registry = entry_registry
     else:
         registry = _select_registry(gateway, None)
-    live_registry = gateway.get_issue(int(registry["number"]))
-    _validate_registry_issue(live_registry, require_open=True)
+    _require_expected_single_open_registry(
+        gateway,
+        int(registry["number"]),
+    )
     target = gateway.get_issue(issue_number)
     _validate_promotion_issue(target)
     authority_sha256 = _promotion_target_authority_sha256(target)
@@ -1819,74 +1704,52 @@ def promote_defect(
             marker,
             f"Promotion receipt: {defect_id} is now tracked for implementation by "
             f"#{issue_number}.",
-            f"Validated target authority: sha256:{authority_sha256}.",
+            f"Validated target snapshot: sha256:{authority_sha256}.",
             "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
             "and execution state.",
         )
     )
+    comment: dict[str, Any] | None = None
     try:
         comment = gateway.add_comment(registry_number, promotion_body)
     except KnownDefectsError:
         reconciled = _reconcile_pending_promotions(
             gateway,
-            registry,
             defect_id,
         )
         if reconciled is None:
             raise
-        (
-            reconciled_issue,
-            reconciled_digest,
-            reconciled_registry,
-            canonical_comment,
-        ) = reconciled
-        if (
-            reconciled_issue != issue_number
-            or reconciled_digest != authority_sha256
-        ):
+    else:
+        reconciled = _reconcile_pending_promotions(
+            gateway,
+            defect_id,
+        )
+        if reconciled is None:
             raise KnownDefectsError(
-                f"ambiguous promotion response exposed conflicting authority for "
-                f"{defect_id}"
+                f"promotion reservation disappeared for {defect_id}"
             )
-        return {
-            "schema": "known-defect-receipt.v1",
-            "status": "promoted",
-            "defect_id": defect_id,
-            "registry_issue": reconciled_registry,
-            "promotion_issue": issue_number,
-            "url": canonical_comment.get("html_url"),
-        }
-    try:
-        post_registry = gateway.get_issue(registry_number)
-        _validate_registry_issue(post_registry, require_open=True)
-        post_target = gateway.get_issue(issue_number)
-        _validate_promoted_target_snapshot(post_target, authority_sha256)
-    except KnownDefectsError:
-        _compensate_comment(gateway, int(registry["number"]), comment)
-        raise
-    committed = _single_committed_promotion(gateway, defect_id)
-    if committed is not None:
-        _compensate_comment(gateway, registry_number, comment)
-        return promote_defect(defect_id, issue_number, gateway)
-    _require_expected_single_open_registry(
-        gateway,
-        registry_number,
-    )
-    final_target = gateway.get_issue(issue_number)
-    _validate_promoted_target_snapshot(final_target, authority_sha256)
-    canonical_comment = _finalize_pending_promotion(
-        gateway,
-        registry_number,
-        comment,
-        defect_id,
-        issue_number,
-        authority_sha256,
+    (
+        reconciled_issue,
+        reconciled_digest,
+        reconciled_registry,
+        canonical_comment,
+    ) = reconciled
+    if (
+        reconciled_issue != issue_number
+        or reconciled_digest != authority_sha256
+    ):
+        raise KnownDefectsError(
+            f"{defect_id} is already linked to promotion Issue "
+            f"#{reconciled_issue}"
+        )
+    created = comment is None or int(canonical_comment.get("id") or 0) == int(
+        comment.get("id") or 0
     )
     return {
         "schema": "known-defect-receipt.v1",
-        "status": "promoted",
+        "status": "promoted" if created else "promotion_duplicate",
         "defect_id": defect_id,
-        "registry_issue": int(registry["number"]),
+        "registry_issue": reconciled_registry,
         "promotion_issue": issue_number,
         "url": canonical_comment.get("html_url"),
     }

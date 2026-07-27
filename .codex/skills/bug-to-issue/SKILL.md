@@ -112,14 +112,17 @@ registry closes before commit, intake compensates any just-created pending comme
 bounded retry against a new open registry. If the body, labels, or lock state drift before commit,
 intake removes its just-created pending comment and fails closed for explicit reconciliation. An
 ambiguous comment-create response is immediately reconciled from live Issue/comment inventories.
-New entry comments begin with `phase=pending`, which is never registry authority. The helper proves
-the full registry inventory immediately before changing that exact comment to `phase=final`; this
-single PATCH is the linearization point and the last fallible authority mutation. A failed response
-is resolved by reading the exact comment id: an applied final marker is a committed idempotent
-result, while an unapplied pending marker remains non-authoritative for retry. Because GitHub offers
-no compare-and-swap transaction across Issues and comments, events ordered after the final PATCH are
-subsequent registry drift and are handled by lookup/governance, not by a fallible compensating write
-that could leave ambiguous authority.
+New entry comments begin with `phase=pending`, which is not visible defect authority but is a durable
+reservation. GitHub's immutable comment creation time, with stable numeric comment id as the
+tie-breaker, orders all trusted reservations for the defect across registry generations. The
+earliest eligible reservation is canonical and later duplicates cannot preempt it. Finalization
+changes that exact reservation to `phase=final`. An applied final marker is a committed idempotent
+result, while an unapplied pending marker remains available for deterministic retry or compensation.
+Intake starts a reservation only while exactly one canonical open registry exists. Closure or
+competing-registry creation after the reservation does not rewrite the accepted history; lookup can
+still read the canonical entry while later registry drift independently blocks new intake. This
+avoids pretending that GitHub REST provides an atomic transaction across Issue lifecycle and comment
+writes.
 
 ### Promotion
 
@@ -138,23 +141,22 @@ python3 .codex/skills/bug-to-issue/scripts/known_defects.py promote \
   --issue <BUG_ISSUE_NUMBER>
 ```
 
-The link operation is idempotent and emits a compact promotion receipt. A post-write read detects
-concurrent conflicting promotion targets; lookup then returns `promotion_conflict` with no canonical
-target, and further promotion fails closed until a collaborator reconciles the marker comments.
-Multiple final promotion markers are conflicting authority even when they repeat the same target and
-digest; they are never collapsed into one link.
-Each marker binds the target number to a SHA-256 digest of its validated title, body, type, and
-priority authority. The helper rereads both registry and target after writing: contract/body/label
-drift or an indeterminate read compensates the marker and fails closed, while normal claim or
-closure transitions may change only lifecycle state and the canonical agent label. Same-target
-retries revalidate the digest before returning the existing receipt. Ambiguous marker creation is
-resolved from the full all-generation comment inventory before any success receipt. Promotion
-comments likewise move from non-authoritative `phase=pending` to `phase=final` only after the single
-open registry, every registry generation, and target authority validate. The exact final PATCH is
-the promotion linearization point and no compensating authority mutation follows it. An ambiguous
-PATCH response is accepted only when the same comment id contains the expected final marker; an
-unapplied pending comment remains non-authoritative for retry. Stale closed-registry pending markers
-are compensated.
+The link operation is idempotent and emits a compact promotion receipt. Each pending promotion
+comment is a trusted immutable validation snapshot: it binds the target number to a SHA-256 digest
+of the target's validated title, body, lifecycle, type, priority, agent state, and allowed lane
+authority. Immutable comment creation time plus stable comment id orders promotion reservations
+across every registry generation. The earliest reservation is canonical; later same-target
+duplicates or conflicting targets are non-authoritative and cannot preempt the link. Reconciliation
+finalizes the canonical reservation and may remove later pending reservations. Ambiguous create or
+PATCH responses are resolved from the full all-generation inventory, so retry converges without an
+LLM or a hand-edited backlog.
+
+The digest records the helper's validated snapshot immediately before reservation; it is not a
+continuing lock on the implementation Issue. The promoted Issue owns subsequent body, claim, review,
+and lifecycle changes. Same-target retries return the existing snapshot receipt without rereading
+mutable target authority. This avoids false transactional claims across two GitHub Issues while
+still proving that the snapshot came from a canonical bug contract, ACs, `Verify:` targets, and
+truthful labels.
 The promoted Issue owns implementation scope and closure; the registry entry remains durable source
 evidence. If the entry's registry has since closed, the helper writes and discovers promotion
 authority across the current open registry instead of reopening history or duplicating the entry.
