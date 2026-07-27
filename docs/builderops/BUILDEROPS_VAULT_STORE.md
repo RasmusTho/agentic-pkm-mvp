@@ -84,7 +84,9 @@ Override mechanisms:
 
 - `BUILDEROPS_STATE_DIR` sets the BuilderOps state directory. The default database name remains
   `builderops.sqlite3`.
-- `BUILDEROPS_DB_PATH` sets the exact SQLite database path.
+- `BUILDEROPS_DB_PATH` sets the exact SQLite database path. When both are set, `BUILDEROPS_DB_PATH`
+  selects the database and `BUILDEROPS_STATE_DIR` only sets the state directory; the state directory
+  does not redirect an explicit database path.
 - CLI commands generally accept `--db-path` for an explicit one-command override, which is the
   preferred test path. The `cutover-evidence generate` producer is the exception: it rejects this
   override because it can produce evidence only for the implicit host-stable store.
@@ -201,8 +203,11 @@ following holds on the host:
 
 Set the override where every shell inherits it (for example `~/.zshenv`), so interactive shells,
 agent tool shells, and CLI sessions resolve the same store regardless of which checkout or worktree
-they start from. Record the choice in a host-local operator note; that note is host state, not repo
-authority. Worked example: the primary development laptop was consolidated onto the explicit
+they start from. The value must be absolute (`~` expansion is applied, but a relative value is not
+resolved against any stable base): a relative `BUILDEROPS_STATE_DIR` or `BUILDEROPS_DB_PATH` is
+interpreted against each process working directory and silently produces a separate database per
+worktree, which is the exact failure this posture exists to prevent. Record the choice in a
+host-local operator note; that note is host state, not repo authority. Worked example: the primary development laptop was consolidated onto the explicit
 `BUILDEROPS_STATE_DIR` posture on 2026-07-27, with the reasoning kept host-locally in
 `~/.local/state/builderops/HOST_POSTURE.md` on that machine.
 
@@ -223,8 +228,11 @@ the implicit path. On a host with no host-stable store yet, the receipt route is
 override-first — the override is a prerequisite of the receipt, not an alternative to it:
 
 ```bash
-# 1. Pin the store explicitly. The value must equal the default state directory, because that is
-#    the only target the producer will inspect.
+# 1. Pin the store explicitly at the default state directory, because that is the only target the
+#    producer will inspect. Clear any inherited BUILDEROPS_DB_PATH first: an exact database path
+#    takes precedence over the state directory when both are set, so leaving it in place would
+#    write step 2 into the old database while the producer inspects the still-empty target.
+unset BUILDEROPS_DB_PATH
 export BUILDEROPS_STATE_DIR="$HOME/.local/state/builderops"
 
 # 2. Initialize the target and give it at least one record. An initialized but record-free
