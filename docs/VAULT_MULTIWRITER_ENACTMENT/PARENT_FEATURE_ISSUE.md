@@ -1,8 +1,8 @@
-State: VMW-01..03 are delivered and VMW-04 reconciliation is prepared in issue #3453 / PR #4148. GitHub feature parent #3132 remains the lifecycle authority for terminal acceptance and closure after the final child merges.
+State: Implemented through VMW-01..04 by issue #3453 / PR #4148. GitHub feature parent #3132 remains the lifecycle authority for terminal acceptance and closure; its terminal receipt is a governed post-merge effect and is not claimed by this document.
 
 # Parent Feature Issue
 
-GitHub issue #3132 is the validation hub for this capability. VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126 delivered the bounded runtime slices; VMW-04 #3453 / PR #4148 prepares reconciliation of their current-base evidence and the invariant registry. After that final child merges, the terminal parent receipt must preserve the one unresolved progressive-enhancement risk: remaining versionless rewritten writers do not opt into expected-version protection until their #3570 migration slices land.
+GitHub issue #3132 is the validation hub for this capability. VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126 delivered the bounded runtime slices; VMW-04 #3453 / PR #4148 reconciles their current-base evidence and the invariant registry. The terminal parent receipt is a separate closure-time effect and must preserve the one unresolved progressive-enhancement risk: remaining versionless rewritten writers do not opt into expected-version protection until their #3570 migration slices land.
 
 ## Owner-doc writeback
 

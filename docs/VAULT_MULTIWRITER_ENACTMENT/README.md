@@ -1,4 +1,4 @@
-State: VMW-01..03 are delivered and VMW-04 reconciliation is prepared in issue #3453 / PR #4148. GitHub parent #3132 remains the lifecycle authority for terminal validation and closure after the final child merges.
+State: Implemented through VMW-01..04 by issue #3453 / PR #4148. GitHub parent #3132 remains the lifecycle authority for terminal validation and closure; its terminal receipt is a governed post-merge effect and is not claimed by this document.
 
 # Vault Multiwriter Enactment
 
@@ -8,7 +8,7 @@ This capability enacts ADR-0055's local-file safety posture without changing its
 
 1. [WRITE_RECEIPT_PROVENANCE](WRITE_RECEIPT_PROVENANCE.md) (VMW-01, delivered by #3450 / PR #3457)
 2. [REWRITTEN_NOTE_CONFLICT_STAGING](REWRITTEN_NOTE_CONFLICT_STAGING.md) (VMW-02, delivered by #3451 / PR #4133) and [ICLOUD_CONFLICT_QUARANTINE](ICLOUD_CONFLICT_QUARANTINE.md) (VMW-03, delivered by #3452 / PR #4126)
-3. [RECONCILE_AND_CLOSE_MULTIWRITER_ENACTMENT](RECONCILE_AND_CLOSE_MULTIWRITER_ENACTMENT.md) (VMW-04, delivery candidate #3453 / PR #4148)
+3. [RECONCILE_AND_CLOSE_MULTIWRITER_ENACTMENT](RECONCILE_AND_CLOSE_MULTIWRITER_ENACTMENT.md) (VMW-04, delivered by #3453 / PR #4148)
 
 ## Cross-Task Invariants / Interaction Safety
 

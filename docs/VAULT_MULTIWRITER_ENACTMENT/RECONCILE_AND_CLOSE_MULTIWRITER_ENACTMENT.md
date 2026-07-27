@@ -11,7 +11,7 @@ can_parallelize_with: []
 
 # Reconcile and Close Multiwriter Enactment
 
-State: Delivery candidate in issue #3453 / PR #4148 after VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126; the terminal parent receipt is a governed post-merge effect.
+State: Implemented by issue #3453 / PR #4148 after VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126; the terminal parent receipt is a governed post-merge effect and is not claimed by this document.
 
 ## Purpose
 
