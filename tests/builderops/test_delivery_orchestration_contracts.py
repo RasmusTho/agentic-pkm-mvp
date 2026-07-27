@@ -35,9 +35,13 @@ from app.builderops.delivery_orchestration_contracts import (
     StructuredWorkerResult,
     TcdMetrics,
     ValidationEvidence,
+    canonical_hash,
     delivery_initiation_approval_hash,
     parse_delivery_contract,
+    validate_delivery_plan_evidence,
     validate_delivery_receipt_evidence,
+    validate_reducer_effect_evidence,
+    validate_reducer_event_evidence,
 )
 
 SHA_A = "a" * 64
@@ -98,6 +102,7 @@ def _policy() -> PolicyProfile:
         profile_id="delivery-low-risk",
         profile_version="v1",
         profile_hash=SHA_B,
+        minimum_review_confidence_basis_points=8_000,
     )
 
 
@@ -122,6 +127,7 @@ def _initiation(issue: IssueScope) -> DeliveryInitiation:
     policy_profile = _policy()
     budget = _budget()
     source_authorities = (_authority(issue),)
+    provenance = _provenance("initiation-4165")
     return DeliveryInitiation(
         initiation_id="init-4165",
         requested_scope=requested_scope,
@@ -137,13 +143,14 @@ def _initiation(issue: IssueScope) -> DeliveryInitiation:
                 policy_profile=policy_profile,
                 budget=budget,
                 source_authorities=source_authorities,
+                provenance=provenance,
             ),
             source_refs=(_source("RasmusTho/agentic-pkm-mvp#4165", SHA_C),),
         ),
         policy_profile=policy_profile,
         budget=budget,
         source_authorities=source_authorities,
-        provenance=_provenance("initiation-4165"),
+        provenance=provenance,
     )
 
 
@@ -229,7 +236,6 @@ def _review_result(issue: IssueScope, plan: DeliveryPlan) -> ReviewResult:
         exact_head_sha=SHA_D,
         disposition="accept_with_risk",
         confidence_basis_points=9_500,
-        minimum_confidence_basis_points=8_000,
         findings=(
             ReviewFinding(
                 finding_id="finding-p2-1",
@@ -306,7 +312,7 @@ def _receipt(
                         issue_number=4300,
                         severity="P2",
                         registry_ref="known-defect:4300",
-                        finding_hash=SHA_A,
+                        finding_hash=canonical_hash(review.findings[0]),
                     ),
                 ),
                 exceptions=(),
@@ -429,6 +435,17 @@ def test_contracts_round_trip_canonically() -> None:
         reordered = dict(reversed(list(json.loads(canonical).items())))
         assert parse_delivery_contract(reordered).canonical_bytes() == canonical
 
+    assert validate_delivery_plan_evidence(plan, initiation=initiation) is plan
+    assert validate_reducer_effect_evidence(effect, plan=plan) is effect
+    assert (
+        validate_reducer_event_evidence(
+            event,
+            plan=plan,
+            worker_result=worker,
+        )
+        is event
+    )
+
     duplicate_key_json = initiation.canonical_json().replace(
         f'"schema_version":"{initiation.schema_version}"',
         (
@@ -451,6 +468,19 @@ def test_contracts_round_trip_canonically() -> None:
     invalid_effect["exact_head_sha"] = None
     with pytest.raises(ValidationError, match="pull request and exact head"):
         parse_delivery_contract(invalid_effect)
+
+    foreign_event_payload = event.model_dump(mode="json")
+    foreign_event_payload["subject_authority"] = _authority(
+        _issue(9999, SHA_C)
+    ).model_dump(mode="json")
+    foreign_event = parse_delivery_contract(foreign_event_payload)
+    assert isinstance(foreign_event, ReducerEvent)
+    with pytest.raises(ValueError, match="subject contradicts"):
+        validate_reducer_event_evidence(
+            foreign_event,
+            plan=plan,
+            worker_result=worker,
+        )
 
     invalid_timestamp = initiation.model_dump(mode="json")
     invalid_timestamp["provenance"]["created_at"] = "2026-99-99T99:99:99Z"
@@ -487,6 +517,11 @@ def test_initiation_is_evidence_not_execution_authority() -> None:
     with pytest.raises(ValidationError, match="exact canonical initiation payload"):
         parse_delivery_contract(payload)
 
+    payload = initiation.model_dump(mode="json")
+    payload["provenance"]["correlation_id"] = "unapproved-provenance"
+    with pytest.raises(ValidationError, match="exact canonical initiation payload"):
+        parse_delivery_contract(payload)
+
 
 def test_plan_binds_scope_and_expected_authority() -> None:
     issue = _issue(4165, SHA_A)
@@ -507,6 +542,7 @@ def test_plan_binds_scope_and_expected_authority() -> None:
         "close_issue",
         "record_delivery_receipt",
     )
+    assert validate_delivery_plan_evidence(plan, initiation=initiation) is plan
 
     payload = plan.model_dump(mode="json")
     payload["input_authorities"] = []
@@ -539,6 +575,32 @@ def test_plan_binds_scope_and_expected_authority() -> None:
     )
     with pytest.raises(ValidationError, match="max_parallel_workers"):
         parse_delivery_contract(payload)
+
+    payload = plan.model_dump(mode="json")
+    substituted_issue = _issue(4165, SHA_C)
+    payload["dependency_waves"][0]["issues"][0] = substituted_issue.model_dump(
+        mode="json"
+    )
+    payload["expected_states"][0]["issue"] = substituted_issue.model_dump(mode="json")
+    payload["expected_states"][0]["expected_contract_hash"] = SHA_C
+    with pytest.raises(ValidationError, match="exact final-scope authority"):
+        parse_delivery_contract(payload)
+
+    payload = plan.model_dump(mode="json")
+    foreign_issue = _issue(4166, SHA_C)
+    payload["input_authorities"] = [
+        _authority(foreign_issue).model_dump(mode="json")
+    ]
+    payload["final_scope"] = [foreign_issue.model_dump(mode="json")]
+    payload["dependency_waves"][0]["issues"] = [
+        foreign_issue.model_dump(mode="json")
+    ]
+    payload["expected_states"][0]["issue"] = foreign_issue.model_dump(mode="json")
+    payload["expected_states"][0]["expected_contract_hash"] = SHA_C
+    foreign_plan = parse_delivery_contract(payload)
+    assert isinstance(foreign_plan, DeliveryPlan)
+    with pytest.raises(ValueError, match="approved scope"):
+        validate_delivery_plan_evidence(foreign_plan, initiation=initiation)
 
 
 def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
@@ -589,6 +651,11 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     with pytest.raises(ValidationError, match="reconciled recovery"):
         parse_delivery_contract(payload)
 
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["exception_kind"] = "execution_failed"
+    with pytest.raises(ValidationError, match="typed receipt exceptions"):
+        parse_delivery_contract(payload)
+
     payload = review.model_dump(mode="json")
     payload["confidence_basis_points"] = 0
     with pytest.raises(ValidationError, match="low-confidence"):
@@ -598,6 +665,76 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     payload["known_defect_refs"] = []
     with pytest.raises(ValidationError, match="known-defect refs"):
         parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["known_defects"][0]["finding_hash"] = SHA_C
+    unbound_defect_receipt = parse_delivery_contract(payload)
+    assert isinstance(unbound_defect_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="P2 evidence"):
+        validate_delivery_receipt_evidence(
+            unbound_defect_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+        )
+
+    worker_exception = DeliveryException(
+        kind="execution_failed",
+        code="worker-failed",
+        message="Worker failed before producing a pull request.",
+        retryable=False,
+        evidence_refs=("worker:failed",),
+    )
+    failed_worker_payload = worker.model_dump(mode="json")
+    failed_worker_payload.update(
+        {
+            "status": "failed",
+            "exact_head_sha": None,
+            "pull_request_number": None,
+            "validations": [],
+            "exceptions": [worker_exception.model_dump(mode="json")],
+        }
+    )
+    failed_worker = parse_delivery_contract(failed_worker_payload)
+    assert isinstance(failed_worker, StructuredWorkerResult)
+    failed_receipt_payload = receipt.model_dump(mode="json")
+    failed_receipt_payload["terminal_outcome"] = "failed"
+    failed_receipt_payload["exceptions"] = [
+        worker_exception.model_dump(mode="json")
+    ]
+    failed_receipt_payload["recovery_history"] = []
+    failed_receipt_payload["tcd_metrics"]["known_p2_dispositions"] = 0
+    failed_proof = failed_receipt_payload["issue_proofs"][0]
+    failed_proof.update(
+        {
+            "worker_result_ref": ContractRef(
+                schema_version=failed_worker.schema_version,
+                contract_id=failed_worker.result_id,
+                content_hash=failed_worker.content_hash,
+            ).model_dump(mode="json"),
+            "review_result_ref": None,
+            "exact_head_sha": None,
+            "merge_identity": None,
+            "check_evidence": [],
+            "review_disposition": None,
+            "known_defects": [],
+            "exceptions": [worker_exception.model_dump(mode="json")],
+            "closure": None,
+        }
+    )
+    failed_receipt = parse_delivery_contract(failed_receipt_payload)
+    assert isinstance(failed_receipt, DeliveryReceipt)
+    assert (
+        validate_delivery_receipt_evidence(
+            failed_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(failed_worker,),
+            review_results=(),
+        )
+        is failed_receipt
+    )
 
     mismatched_plan_payload = plan.model_dump(mode="json")
     mismatched_plan_payload["plan_id"] = "other-plan"
