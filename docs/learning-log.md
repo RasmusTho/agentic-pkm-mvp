@@ -213,3 +213,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The issue named `tests/heimdal/test_candidate_projection.py` as AC2 verification, but that file is absent on current `origin/main` and in git history.
 **Upstream artifact:** `.codex/skills/_shared/ISSUE_CONTRACT.md` — require ready-issue validation to resolve each named `Verify:` path before applying `agent:ready`.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
+
+## 2026-07-27 — #4110 (visible authority rendering)
+**Source:** issue-to-code final Sol/xhigh convergence review
+**Diverged:** The plan covered Markdown and HTML structural spoofing, but accepted authority rendering also required an explicit Unicode default-ignorable and bidi-output policy plus contracted owner-authority phrase forms.
+**Upstream artifact:** `docs/YOUTUBE_SOURCE_NOTE_V2/COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE.md :: Acceptance Criteria` — add Unicode/bidi and contracted-language cases to the visible-authority convergence matrix before implementation reaches expensive verification.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
