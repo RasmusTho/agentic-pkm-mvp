@@ -114,8 +114,9 @@ is immediately reconciled from live Issue/comment inventories. New entry comment
 the helper update the marker to `phase=final`, then reread registry authority once more before
 returning success. A failed or ambiguous create/update can therefore leave only a non-authoritative
 pending comment for the next retry to finalize or compensate. Closure or authority drift across the
-final PATCH compensates the new final comment; only an open canonical registry completes the
-receipt.
+final PATCH moves the new final comment to non-authoritative `phase=revoked`; only an open canonical
+registry completes the receipt. Revoked tombstones are ignored by lookup and are never eligible for
+retry finalization.
 
 ### Promotion
 
@@ -147,11 +148,12 @@ retries revalidate the digest before returning the existing receipt. Ambiguous m
 resolved from the full comment inventory before any success receipt. Promotion comments likewise
 move from non-authoritative `phase=pending` to `phase=final` only after both registry and target
 authority validate. The helper rereads both authorities after the final PATCH before returning
-success, so drift across that boundary compensates the new final marker. Failed or ambiguous
-transport responses cannot turn an unverified pending comment into promotion authority. Stale
-closed-registry pending markers are compensated.
+success, so drift across that boundary revokes the new final marker. Failed or ambiguous transport
+responses cannot turn an unverified pending comment into promotion authority. Stale closed-registry
+pending markers are compensated.
 The promoted Issue owns implementation scope and closure; the registry entry remains durable source
-evidence.
+evidence. If the entry's registry has since closed, the helper writes and discovers promotion
+authority across the current open registry instead of reopening history or duplicating the entry.
 
 ## Normal bounded bug-Issue workflow
 

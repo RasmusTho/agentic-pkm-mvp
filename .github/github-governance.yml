@@ -37,11 +37,14 @@ labels:
     - agent:needs-human
   state:
     - state:known-defect
+  lane:
+    - lane:governance
   interpretation:
     agent:ready: strictly validated queue-eligible work; Project Status is optional projection
     agent:blocked: blocked by dependency or setup; normally non-active backlog work
     agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
     state:known-defect: rolling confirmed-defect registry container; Backlog, no agent-state label, never pickup-eligible
+    lane:governance: narrow additive label for governance-lane Issues and PRs
 project:
   name: Agent Delivery Control Plane
   type: github-project-v2
