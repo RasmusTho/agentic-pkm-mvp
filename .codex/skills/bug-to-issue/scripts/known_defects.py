@@ -47,7 +47,7 @@ ENTRY_MARKER_RE = re.compile(
     r"<!-- known-defect-entry:v1 id=(KD-[0-9A-F]{12}) -->"
 )
 PROMOTION_MARKER_RE = re.compile(
-    r"<!-- known-defect-promotion:v1 id=(KD-[0-9A-F]{12}) issue=(\d+) -->"
+    r"<!-- known-defect-promotion:v1 id=(KD-[0-9A-F]{12}) issue=([1-9][0-9]*) -->"
 )
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 NORMAL_AGENT_STATES = {
@@ -434,20 +434,60 @@ def _entry_id_from_comment(body: str) -> str | None:
     defect_id = marker.group(1)
     if len(lines) != 10 or lines[1] != f"### {defect_id}" or lines[2] != "":
         raise KnownDefectsError(f"malformed known-defect entry shape for {defect_id}")
-    required_prefixes = (
-        "- State: deferred; not an implementation contract",
-        "- Source: PR #",
-        "- Reproducible symptom:",
-        "- Evidence:",
-        "- Impact/severity:",
-        "- Workaround:",
-        "- Re-evaluation/promotion trigger:",
+    if lines[3] != "- State: deferred; not an implementation contract":
+        raise KnownDefectsError(
+            f"malformed known-defect entry {defect_id}: invalid state"
+        )
+    source = re.fullmatch(
+        (
+            r"- Source: PR #([1-9][0-9]*) @ `([0-9a-f]{40})` "
+            r"\(\[review evidence\]\((https://github\.com/[^()\s]+)\)\)"
+        ),
+        lines[4],
     )
-    for line, prefix in zip(lines[3:], required_prefixes, strict=True):
+    if source is None:
+        raise KnownDefectsError(
+            f"malformed known-defect entry {defect_id}: invalid source"
+        )
+    source_pr = int(source.group(1))
+    review_url = urlparse(source.group(3))
+    review_path = review_url.path.casefold()
+    if (
+        review_url.scheme != "https"
+        or review_url.netloc.casefold() != "github.com"
+        or re.fullmatch(
+            rf"/[^/]+/[^/]+/pull/{source_pr}(?:/.*)?",
+            review_path,
+        )
+        is None
+    ):
+        raise KnownDefectsError(
+            f"malformed known-defect entry {defect_id}: review URL does not match PR"
+        )
+    value_fields = (
+        (lines[5], "- Reproducible symptom: ", "symptom"),
+        (lines[6], "- Evidence: ", "evidence"),
+        (lines[8], "- Workaround: ", "workaround"),
+        (lines[9], "- Re-evaluation/promotion trigger: ", "trigger"),
+    )
+    for line, prefix, field in value_fields:
         if not line.startswith(prefix):
             raise KnownDefectsError(
-                f"malformed known-defect entry {defect_id}: expected one {prefix!r}"
+                f"malformed known-defect entry {defect_id}: invalid {field}"
             )
+        value = line.removeprefix(prefix)
+        if not value or value != " ".join(value.split()):
+            raise KnownDefectsError(
+                f"malformed known-defect entry {defect_id}: invalid {field}"
+            )
+    impact = re.fullmatch(r"- Impact/severity: (P2|P3) — (.+)", lines[7])
+    if (
+        impact is None
+        or impact.group(2) != " ".join(impact.group(2).split())
+    ):
+        raise KnownDefectsError(
+            f"malformed known-defect entry {defect_id}: invalid impact/severity"
+        )
     return defect_id
 
 

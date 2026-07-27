@@ -400,6 +400,60 @@ def test_malformed_first_line_schema_marker_fails_closed() -> None:
         known_defects.lookup_defect("KD-000000000000", gateway)
 
 
+@pytest.mark.parametrize(
+    ("line_index", "replacement", "expected"),
+    [
+        (4, "- Source: PR #0 @ `" + "a" * 40 + "` ([review evidence](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4321))", "source"),
+        (4, "- Source: PR #4321 @ `abc` ([review evidence](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4321))", "source"),
+        (4, "- Source: PR #4321 @ `" + "a" * 40 + "` ([review evidence](https://github.com/RasmusTho/agentic-pkm-mvp/pull/9999))", "review URL"),
+        (5, "- Reproducible symptom: ", "symptom"),
+        (6, "- Evidence: ", "evidence"),
+        (7, "- Impact/severity: P1 — invalid", "impact/severity"),
+        (7, "- Impact/severity: P2 — ", "impact/severity"),
+        (8, "- Workaround: ", "workaround"),
+        (9, "- Re-evaluation/promotion trigger: ", "trigger"),
+    ],
+)
+def test_prefix_complete_but_invalid_entry_fields_fail_closed(
+    line_index: int,
+    replacement: str,
+    expected: str,
+) -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    lines = _defect().render_entry().splitlines()
+    lines[line_index] = replacement
+    gateway.add_comment(issue["number"], "\n".join(lines))
+
+    with pytest.raises(known_defects.KnownDefectsError, match=expected):
+        known_defects.lookup_defect(_defect().defect_id, gateway)
+
+
+@pytest.mark.parametrize("issue_text", ["0", "001"])
+def test_noncanonical_promotion_issue_number_fails_closed(issue_text: str) -> None:
+    defect_id = "KD-000000000000"
+    body = "\n".join(
+        (
+            (
+                "<!-- known-defect-promotion:v1 "
+                f"id={defect_id} issue={issue_text} -->"
+            ),
+            (
+                f"Promotion receipt: {defect_id} is now tracked for implementation "
+                f"by #{issue_text}."
+            ),
+            (
+                "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
+                "and execution state."
+            ),
+        )
+    )
+
+    with pytest.raises(known_defects.KnownDefectsError, match="promotion marker"):
+        known_defects._promotion_from_comment(body)
+
+
 def test_multiple_open_registries_fail_closed() -> None:
     gateway = FakeGateway()
     first = gateway.create_registry_issue()
