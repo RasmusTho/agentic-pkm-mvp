@@ -18,7 +18,11 @@ from typing import Any
 from jsonschema import ValidationError
 
 from app.db.db import conn_rw
-from app.standing_questions.question_store import QUESTION_DIRECTORY, parse_question_note
+from app.standing_questions.question_store import (
+    QUESTION_DIRECTORY,
+    parse_question_note,
+    parse_rfc3339_datetime,
+)
 from app.vault.manager import iter_vault_markdown_files
 
 STANDING_QUESTIONS_TABLE = "standing_questions"
@@ -80,6 +84,31 @@ def iter_question_notes(vault_root: Path | str) -> list[tuple[str, dict[str, Any
     return notes
 
 
+def _postgres_timestamptz_value(value: str | None) -> str | None:
+    """Adapt a schema-valid RFC 3339 value to PostgreSQL's timestamp grammar.
+
+    The vault remains canonical and retains ``value`` byte-for-byte. PostgreSQL 16
+    rejects valid RFC 3339 offsets at and above 16 hours and does not accept year
+    ``0000`` directly, so the query-only projection receives an equivalent UTC
+    instant, with astronomical year zero rendered as PostgreSQL ``0001 BC``.
+    """
+    if value is None:
+        return None
+    timestamp = parse_rfc3339_datetime(value)
+    if timestamp is None:
+        raise ValueError(f"projection received an invalid RFC 3339 timestamp: {value!r}")
+    year, month, day, hour, minute = timestamp.utc_date_and_minute()
+    era = ""
+    if year <= 0:
+        year = 1 - year
+        era = " BC"
+    return (
+        f"{year:04d}-{month:02d}-{day:02d} "
+        f"{hour:02d}:{minute:02d}:{timestamp.second:02d}"
+        f"{timestamp.fraction}+00{era}"
+    )
+
+
 def _replace_projection_rows(notes: list[tuple[str, dict[str, Any]]]) -> None:
     """Replace every derived row from vault-canonical Question notes in one transaction.
 
@@ -104,13 +133,13 @@ def _replace_projection_rows(notes: list[tuple[str, dict[str, Any]]]) -> None:
                         note["scope"],
                         note["text"],
                         note["status"],
-                        note["created_at"],
+                        _postgres_timestamptz_value(note["created_at"]),
                         note["registered_via"],
                         note.get("standing_answer_ref"),
                         note.get("candidate_answer_ref"),
                         json.dumps(note["evidence"]),
-                        note.get("last_matched_at"),
-                        note.get("last_refreshed_at"),
+                        _postgres_timestamptz_value(note.get("last_matched_at")),
+                        _postgres_timestamptz_value(note.get("last_refreshed_at")),
                         source_path,
                     ),
                 )

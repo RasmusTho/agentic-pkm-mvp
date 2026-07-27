@@ -8,6 +8,7 @@ import pytest
 
 from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
+    _postgres_timestamptz_value,
     iter_question_notes,
     rebuild_standing_questions_projection,
 )
@@ -68,6 +69,34 @@ def test_iter_question_notes_ignores_non_question_markdown(tmp_path: Path) -> No
 
     notes = iter_question_notes(vault)
     assert [source for source, _ in notes] == [f"questions/{note['question_id']}.md"]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (None, None),
+        ("2026-07-11T10:00:00Z", "2026-07-11 10:00:00+00"),
+        ("1937-01-01T12:00:27.87+00:20", "1937-01-01 11:40:27.87+00"),
+        ("2026-07-11T10:00:00+23:59", "2026-07-10 10:01:00+00"),
+        ("2026-07-11T10:00:00-23:59", "2026-07-12 09:59:00+00"),
+        ("0000-02-29T00:00:00Z", "0001-02-29 00:00:00+00 BC"),
+        ("0000-01-01T00:00:00+23:59", "0002-12-31 00:01:00+00 BC"),
+        ("9999-12-31T23:59:59-23:59", "10000-01-01 23:58:59+00"),
+        ("2016-12-31T23:59:60Z", "2016-12-31 23:59:60+00"),
+        ("1990-12-31T15:59:60-08:00", "1990-12-31 23:59:60+00"),
+        ("2017-01-01T00:59:60+01:00", "2016-12-31 23:59:60+00"),
+    ],
+)
+def test_postgres_timestamp_adapter_preserves_rfc3339_instant(
+    source: str | None,
+    expected: str | None,
+) -> None:
+    assert _postgres_timestamptz_value(source) == expected
+
+
+def test_postgres_timestamp_adapter_fails_loud_for_unvalidated_input() -> None:
+    with pytest.raises(ValueError, match="invalid RFC 3339 timestamp"):
+        _postgres_timestamptz_value("not-a-timestamp")
 
 
 @pytest.fixture
@@ -152,6 +181,112 @@ def test_rebuild_reports_and_survives_a_malformed_note(scratch_db: str, tmp_path
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         rows = conn.execute("SELECT question_id FROM standing_questions").fetchall()
     assert [r[0] for r in rows] == [note["question_id"]]
+
+
+@pytest.mark.pg
+def test_projection_adapts_rfc3339_edges_for_postgres(
+    scratch_db: str,
+    tmp_path: Path,
+) -> None:
+    """Schema-valid vault timestamps must never become late projection failures."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    created_at_cases = {
+        "year-zero": ("0000-02-29T00:00:00Z", "0001-02-29 00:00:00.000000 BC"),
+        "positive-extreme": (
+            "2026-07-11T10:00:00+23:59",
+            "2026-07-10 10:01:00.000000 AD",
+        ),
+        "negative-extreme": (
+            "2026-07-11T10:00:00-23:59",
+            "2026-07-12 09:59:00.000000 AD",
+        ),
+        "leap-second": (
+            "2016-12-31T23:59:60Z",
+            "2017-01-01 00:00:00.000000 AD",
+        ),
+        "ordinary": ("2026-07-11T10:00:00Z", "2026-07-11 10:00:00.000000 AD"),
+    }
+    expected_created_at: dict[str, str] = {}
+    for label, (source, expected) in created_at_cases.items():
+        note, _receipt = store.create_question(
+            text=label,
+            scope="work",
+            registered_via="explicit",
+            created_at=source,
+        )
+        expected_created_at[note["question_id"]] = expected
+        assert store.read_question(note["question_id"])["created_at"] == source
+
+    system_note, _receipt = store.create_question(
+        text="system timestamp fields",
+        scope="work",
+        registered_via="explicit",
+        created_at="2026-07-11T10:00:00Z",
+    )
+    evidence_timestamp = "2026-07-11T10:00:00+23:59"
+    system_note, _receipt = store.update_system_fields(
+        system_note["question_id"],
+        {
+            "evidence": [
+                {
+                    "artifact_ref": "note:abc",
+                    "source_stream": "vault.activity",
+                    "matched_at": evidence_timestamp,
+                    "confidence_class": "high",
+                    "provenance_ref": "receipt:abc",
+                    "quoted_span": "evidence",
+                }
+            ],
+            "last_matched_at": "0000-02-29T00:00:00Z",
+            "last_refreshed_at": "2026-07-11T10:00:00-23:59",
+        },
+    )
+
+    summary = rebuild_standing_questions_projection(vault)
+
+    assert summary.inserted == len(created_at_cases) + 1
+    expected_created_at[system_note["question_id"]] = "2026-07-11 10:00:00.000000 AD"
+    with psycopg.connect(scratch_db, autocommit=True) as conn:
+        created_rows = conn.execute(
+            """
+            SELECT
+                question_id,
+                to_char(
+                    created_at AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD HH24:MI:SS.US BC'
+                )
+            FROM standing_questions
+            """
+        ).fetchall()
+        system_row = conn.execute(
+            """
+            SELECT
+                to_char(
+                    last_matched_at AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD HH24:MI:SS.US BC'
+                ),
+                to_char(
+                    last_refreshed_at AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD HH24:MI:SS.US BC'
+                ),
+                evidence
+            FROM standing_questions
+            WHERE question_id = %s
+            """,
+            (system_note["question_id"],),
+        ).fetchone()
+
+    assert dict(created_rows) == expected_created_at
+    assert system_row is not None
+    assert system_row[0] == "0001-02-29 00:00:00.000000 BC"
+    assert system_row[1] == "2026-07-12 09:59:00.000000 AD"
+    assert system_row[2][0]["matched_at"] == evidence_timestamp
+    persisted_system_note = store.read_question(system_note["question_id"])
+    assert persisted_system_note["last_matched_at"] == "0000-02-29T00:00:00Z"
+    assert persisted_system_note["last_refreshed_at"] == "2026-07-11T10:00:00-23:59"
+    assert persisted_system_note["evidence"][0]["matched_at"] == evidence_timestamp
 
 
 @pytest.mark.pg

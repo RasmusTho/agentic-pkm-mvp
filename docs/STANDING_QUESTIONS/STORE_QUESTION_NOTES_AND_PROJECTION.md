@@ -51,7 +51,12 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
 4. **Projection**: a rebuildable PG `standing_questions` projection (Alembic migration, forward-only,
    following the `decisions`/`episodes` projection precedent at `app/jobs/decisions_projection.py`) —
    vault notes are the SoR; the projection exists for query (open-question list, evidence-trail
-   lookups, pending-candidate lookups) and must fully rebuild from vault (DRI discipline).
+   lookups, pending-candidate lookups) and must fully rebuild from vault (DRI discipline). At this
+   boundary only, the projector converts the three values bound to Postgres `TIMESTAMPTZ` columns
+   (`created_at`, `last_matched_at`, `last_refreshed_at`) to equivalent UTC literals that Postgres
+   accepts, including its `BC` notation for RFC 3339 year `0000`. The vault's canonical RFC 3339
+   strings remain unchanged; `evidence[].matched_at` remains unchanged inside JSON rather than being
+   adapted as a database timestamp.
 5. **Id minting**: `question_id = sq-<uuid>`, distinct namespace from `ep-*` (episodes) and any other
    entity id space in the vault — the store rejects a caller-supplied id that does not match the
    `sq-` prefix.

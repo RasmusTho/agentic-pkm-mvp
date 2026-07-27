@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -34,7 +34,7 @@ _QUESTION_ID_RE = re.compile(r"^sq-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
 _RFC3339_DATETIME_RE = re.compile(
     r"^(?P<year>[0-9]{4})-(?P<month>0[1-9]|1[0-2])-(?P<day>[0-9]{2})"
     r"[Tt](?P<hour>[01][0-9]|2[0-3]):(?P<minute>[0-5][0-9]):"
-    r"(?P<second>[0-5][0-9]|60)(?:\.[0-9]+)?"
+    r"(?P<second>[0-5][0-9]|60)(?P<fraction>\.[0-9]+)?"
     r"(?P<timezone>[Zz]|(?P<offset_sign>[+-])"
     r"(?P<offset_hour>[01][0-9]|2[0-3]):(?P<offset_minute>[0-5][0-9]))$",
     re.ASCII,
@@ -42,6 +42,35 @@ _RFC3339_DATETIME_RE = re.compile(
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "question-note.schema.json"
 _LOGGER = logging.getLogger(__name__)
 _QUESTION_NOTE_FORMAT_CHECKER = FormatChecker()
+
+
+@dataclass(frozen=True)
+class Rfc3339DateTime:
+    """Parsed components shared by validation and projection adaptation."""
+
+    year: int
+    month: int
+    day: int
+    hour: int
+    minute: int
+    second: int
+    fraction: str
+    offset_minutes: int
+
+    def utc_date_and_minute(self) -> tuple[int, int, int, int, int]:
+        """Return the offset-adjusted UTC calendar date, hour, and minute."""
+        utc_minute, minute = divmod(
+            self.hour * 60 + self.minute - self.offset_minutes,
+            60,
+        )
+        day_delta, hour = divmod(utc_minute, 24)
+        year, month, day = _shift_gregorian_date(
+            self.year,
+            self.month,
+            self.day,
+            day_delta,
+        )
+        return year, month, day, hour, minute
 
 
 def _is_gregorian_leap_year(year: int) -> bool:
@@ -56,8 +85,10 @@ def _days_in_gregorian_month(year: int, month: int) -> int:
 
 def _shift_gregorian_date(
     year: int, month: int, day: int, day_delta: int
-) -> tuple[int, int, int] | None:
-    """Shift a four-digit RFC 3339 date by at most one day."""
+) -> tuple[int, int, int]:
+    """Shift a proleptic Gregorian date by at most one day."""
+    if day_delta not in {-1, 0, 1}:
+        raise ValueError("RFC 3339 offset adjustment cannot exceed one day")
     if day_delta == 0:
         return year, month, day
     if day_delta == -1:
@@ -66,51 +97,57 @@ def _shift_gregorian_date(
         if month > 1:
             previous_month = month - 1
             return year, previous_month, _days_in_gregorian_month(year, previous_month)
-        if year == 0:
-            return None
         return year - 1, 12, 31
     if day < _days_in_gregorian_month(year, month):
         return year, month, day + 1
     if month < 12:
         return year, month + 1, 1
-    if year == 9999:
-        return None
     return year + 1, 1, 1
 
 
-def _is_rfc3339_leap_second(match: re.Match[str]) -> bool:
+def _is_rfc3339_leap_second(timestamp: Rfc3339DateTime) -> bool:
     """Check whether a local ``:60`` maps to an RFC 3339 UTC leap-second point."""
-    timezone_text = match.group("timezone")
+    _utc_year, utc_month, utc_day, utc_hour, utc_minute = timestamp.utc_date_and_minute()
+    return (
+        (utc_month, utc_day) in {(6, 30), (12, 31)}
+        and (utc_hour, utc_minute) == (23, 59)
+    )
+
+
+def parse_rfc3339_datetime(value: str) -> Rfc3339DateTime | None:
+    """Return validated RFC 3339 components, or ``None`` for an invalid value."""
+    match = _RFC3339_DATETIME_RE.fullmatch(value)
+    if match is None:
+        return None
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    day = int(match.group("day"))
+    # RFC 3339 uses a four-digit proleptic Gregorian year and includes 0000.
+    # datetime.strptime() rejects that boundary, so validate the calendar directly.
+    if not 1 <= day <= _days_in_gregorian_month(year, month):
+        return None
     offset_minutes = 0
-    if timezone_text not in {"Z", "z"}:
+    if match.group("timezone") not in {"Z", "z"}:
         offset_minutes = int(match.group("offset_hour")) * 60 + int(
             match.group("offset_minute")
         )
         if match.group("offset_sign") == "-":
             offset_minutes = -offset_minutes
-
-    utc_minute = int(match.group("hour")) * 60 + int(match.group("minute")) - offset_minutes
-    day_delta = 0
-    if utc_minute < 0:
-        utc_minute += 24 * 60
-        day_delta = -1
-    elif utc_minute >= 24 * 60:
-        utc_minute -= 24 * 60
-        day_delta = 1
-
-    utc_date = _shift_gregorian_date(
-        int(match.group("year")),
-        int(match.group("month")),
-        int(match.group("day")),
-        day_delta,
+    timestamp = Rfc3339DateTime(
+        year=year,
+        month=month,
+        day=day,
+        hour=int(match.group("hour")),
+        minute=int(match.group("minute")),
+        second=int(match.group("second")),
+        fraction=match.group("fraction") or "",
+        offset_minutes=offset_minutes,
     )
-    if utc_date is None:
-        return False
-    _utc_year, utc_month, utc_day = utc_date
-    return (
-        (utc_month, utc_day) in {(6, 30), (12, 31)}
-        and divmod(utc_minute, 60) == (23, 59)
-    )
+    # A format checker validates legal leap-second positions. Whether a producer
+    # may emit a particular announced leap second is a separate clock policy.
+    if timestamp.second == 60 and not _is_rfc3339_leap_second(timestamp):
+        return None
+    return timestamp
 
 
 @_QUESTION_NOTE_FORMAT_CHECKER.checks("date-time")
@@ -119,19 +156,7 @@ def _is_rfc3339_datetime(value: object) -> bool:
     if not isinstance(value, str):
         # JSON Schema's format assertion only applies after the type keyword.
         return True
-    match = _RFC3339_DATETIME_RE.fullmatch(value)
-    if match is None:
-        return False
-    year = int(match.group("year"))
-    month = int(match.group("month"))
-    day = int(match.group("day"))
-    # RFC 3339 uses a four-digit proleptic Gregorian year and includes 0000.
-    # datetime.strptime() rejects that boundary, so validate the calendar directly.
-    if not 1 <= day <= _days_in_gregorian_month(year, month):
-        return False
-    # A format checker validates legal leap-second positions. Whether a producer
-    # may emit a particular announced leap second is a separate clock policy.
-    return match.group("second") != "60" or _is_rfc3339_leap_second(match)
+    return parse_rfc3339_datetime(value) is not None
 
 
 class HumanOwnedFieldMutationError(ValueError):
@@ -274,9 +299,11 @@ __all__ = [
     "HumanOwnedFieldMutationError",
     "QUESTION_DIRECTORY",
     "QuestionStore",
+    "Rfc3339DateTime",
     "WRITE_ACTION",
     "mint_question_id",
     "parse_question_note",
+    "parse_rfc3339_datetime",
     "question_note_path",
     "serialize_question_note",
     "validate_question_note",
