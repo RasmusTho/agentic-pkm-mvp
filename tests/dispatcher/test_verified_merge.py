@@ -11,14 +11,17 @@ import pytest
 
 from app.dispatcher.verification_contract import IssueAuthority, MAX_CLOSING_ISSUES
 from app.dispatcher.verified_merge import (
+    NEUTRALIZED_BODY_RESTORATION_CONTRACT,
     VERIFIED_MERGE_AUTHORITY_CONTRACT,
     build_verified_merge_phase,
     plan_post_merge_reconciliation,
     prepare_verified_merge,
+    resolve_neutralized_body_restoration,
     resolve_post_merge_governing_issue,
     resolve_post_merge_issue_authority,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
+    restored_body_matches_authority,
 )
 
 
@@ -47,6 +50,16 @@ def _context() -> dict[str, object]:
                 }
             ],
         },
+    }
+
+
+def _readiness(head_sha: str = HEAD) -> dict[str, object]:
+    return {
+        "contract": "verified_issue_set_merge_readiness.v1",
+        "further_commits_anticipated": False,
+        "head_sha": head_sha,
+        "required_checks_green": True,
+        "review_gate_resolved": True,
     }
 
 
@@ -93,6 +106,7 @@ def test_prepare_verified_merge_neutralizes_closers_and_preserves_authority() ->
             {"number": 3823, "repository": REPOSITORY},
             {"number": 3820, "repository": REPOSITORY},
         ],
+        merge_readiness=_readiness(),
     )
 
     assert "Fixes #3820" not in plan["neutralized_body"]
@@ -123,10 +137,16 @@ def test_verified_merge_body_digest_canonicalizes_terminal_newline() -> None:
     without_terminal_lf = with_terminal_lf[:-1]
 
     with_lf_plan = prepare_verified_merge(
-        context=_context(), pr=_pr(with_terminal_lf), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(with_terminal_lf),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     without_lf_plan = prepare_verified_merge(
-        context=_context(), pr=_pr(without_terminal_lf), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(without_terminal_lf),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
 
     assert (
@@ -141,7 +161,10 @@ def test_verified_merge_body_digest_canonicalizes_terminal_newline() -> None:
 
 def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -161,7 +184,10 @@ def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> No
 
 def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -176,7 +202,10 @@ def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() 
 
 def _legacy_authority_fixture() -> tuple[dict[str, object], dict[str, object], str, str]:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = copy.deepcopy(plan["authority_receipt"])
     assert isinstance(authority, dict)
@@ -377,7 +406,10 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
 def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() -> None:
     original = _body() + "\n"
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(original), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(original),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -436,6 +468,7 @@ def test_prepare_verified_merge_fails_closed_on_mutable_authority_races(
             context=context,
             pr=pr,
             live_closing_issues=closing,
+            merge_readiness=_readiness(),
         )
 
 
@@ -457,6 +490,7 @@ def test_prepare_verified_merge_rejects_noncanonical_closure_attempts(
             context=_context(),
             pr=_pr(_body() + suffix),
             live_closing_issues=[3820, 3823],
+            merge_readiness=_readiness(),
         )
 
 
@@ -472,6 +506,7 @@ def test_prepare_verified_merge_keeps_ten_issue_limit() -> None:
         context=context,
         pr=_pr(body),
         live_closing_issues=closing,
+        merge_readiness=_readiness(),
     )
     assert plan["authority_receipt"]["closing_issues"] == closing
 
@@ -483,6 +518,7 @@ def test_prepare_verified_merge_keeps_ten_issue_limit() -> None:
             context=over_limit,
             pr=_pr(body + "\nFixes #5000"),
             live_closing_issues=[*closing, 5000],
+            merge_readiness=_readiness(),
         )
 
 
@@ -490,35 +526,52 @@ def test_prepare_verified_merge_cli_uses_production_planner(tmp_path: Path) -> N
     context_path = tmp_path / "context.json"
     pr_path = tmp_path / "pr.json"
     closing_path = tmp_path / "closing.json"
+    readiness_path = tmp_path / "readiness.json"
     output_path = tmp_path / "plan.json"
     context_path.write_text(json.dumps(_context()), encoding="utf-8")
     pr_path.write_text(json.dumps(_pr()), encoding="utf-8")
     closing_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
+    readiness_path.write_text(json.dumps(_readiness()), encoding="utf-8")
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "scripts.prepare_verified_issue_set_merge",
-            "--context-json",
-            str(context_path),
-            "--pr-json",
-            str(pr_path),
-            "--live-closing-json",
-            str(closing_path),
-            "--output-json",
-            str(output_path),
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    def _run(readiness: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.prepare_verified_issue_set_merge",
+                "--context-json",
+                str(context_path),
+                "--pr-json",
+                str(pr_path),
+                "--live-closing-json",
+                str(closing_path),
+                "--merge-readiness-json",
+                str(readiness),
+                "--output-json",
+                str(output_path),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    completed = _run(readiness_path)
 
     assert completed.returncode == 0, completed.stderr
     plan = json.loads(output_path.read_text(encoding="utf-8"))
     assert plan["authority_receipt"]["closing_issues"] == [3820, 3823]
     assert "Refs #3820" in plan["neutralized_body"]
+
+    unmet_path = tmp_path / "unmet-readiness.json"
+    unmet = _readiness()
+    unmet["further_commits_anticipated"] = True
+    unmet_path.write_text(json.dumps(unmet), encoding="utf-8")
+
+    refused = _run(unmet_path)
+
+    assert refused.returncode != 0
+    assert "neutralization precondition is unmet" in refused.stderr
 
 
 def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comments() -> None:
@@ -526,6 +579,7 @@ def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comment
         context=_context(),
         pr=_pr(),
         live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     original_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
     neutral_pr = _pr(str(plan["neutralized_body"]))
@@ -629,6 +683,7 @@ def test_authority_receipt_requires_exact_live_supporting_body_authority(
         context=_context(),
         pr=_pr(),
         live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     receipt = copy.deepcopy(plan["authority_receipt"])
     assert isinstance(receipt, dict)
@@ -651,7 +706,10 @@ def test_authority_receipt_requires_exact_live_supporting_body_authority(
 
 def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -722,7 +780,10 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
 
 def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -751,7 +812,10 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
 
 def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -799,7 +863,10 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
 
 def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -873,6 +940,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         context=raced_context,
         pr=_pr(str(raced_pr["body"])),
         live_closing_issues=[4999],
+        merge_readiness=_readiness(),
     )
     body_matching_conflict_comment = _trusted_comment(
         str(body_matching_conflict["authority_receipt_comment"])
@@ -917,7 +985,10 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
 
 def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     merged_pr = {
         **_pr(str(plan["original_body"])),
@@ -996,3 +1067,329 @@ def test_post_merge_reconciliation_requires_complete_issue_evidence() -> None:
                 {"number": 3820, "state": "closed", "closed_by_pull_requests": [3822]}
             ],
         )
+
+
+NEXT_HEAD = "b" * 40
+
+
+def _authority_comment(receipt: dict[str, object]) -> dict[str, object]:
+    payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    return _trusted_comment(
+        "verified issue-set merge authority:\n```json\n" + payload + "\n```"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "unmet"),
+    [
+        ("further_commits_anticipated", True),
+        ("required_checks_green", False),
+        ("review_gate_resolved", False),
+    ],
+)
+def test_neutralization_is_refused_until_the_head_is_final(
+    field: str, unmet: bool
+) -> None:
+    readiness = _readiness()
+    readiness[field] = unmet
+
+    with pytest.raises(ValueError, match="neutralization precondition is unmet"):
+        prepare_verified_merge(
+            context=_context(),
+            pr=_pr(),
+            live_closing_issues=[3820, 3823],
+            merge_readiness=readiness,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda readiness: readiness.update(head_sha=NEXT_HEAD),
+            id="readiness-bound-to-another-head",
+        ),
+        pytest.param(
+            lambda readiness: readiness.update(contract="unknown.v1"),
+            id="unknown-contract",
+        ),
+        pytest.param(
+            lambda readiness: readiness.update(further_commits_anticipated="false"),
+            id="non-boolean-assertion",
+        ),
+        pytest.param(
+            lambda readiness: readiness.pop("review_gate_resolved"),
+            id="missing-assertion",
+        ),
+        pytest.param(
+            lambda readiness: readiness.update(merged_by="agent"),
+            id="unknown-field",
+        ),
+    ],
+)
+def test_neutralization_readiness_fails_closed_on_malformed_statements(
+    mutate,
+) -> None:
+    readiness = _readiness()
+    mutate(readiness)
+
+    with pytest.raises(ValueError, match="readiness is malformed"):
+        prepare_verified_merge(
+            context=_context(),
+            pr=_pr(),
+            live_closing_issues=[3820, 3823],
+            merge_readiness=readiness,
+        )
+
+
+def test_neutralized_body_outliving_its_head_is_surfaced_as_restorable() -> None:
+    """Reproduce PR #4021: neutralize at head A, then push head B.
+
+    There, the body stayed neutralized across six later heads for about seven
+    hours because nothing detected that it had outlived the merge attempt that
+    justified it, so `pr-contract` failed deterministically on every head.
+    """
+
+    original_body = _body()
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(original_body),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority_receipt = plan["authority_receipt"]
+    assert isinstance(authority_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    neutralized_body = str(plan["neutralized_body"])
+    head_a_pr = _pr(neutralized_body)
+
+    # Inside the merge attempt the receipt covers the live head; nothing to restore.
+    assert (
+        resolve_verified_merge_authority_receipt(
+            comments, pr=head_a_pr, repository=REPOSITORY
+        )
+        == authority_receipt
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_a_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+    # A further commit lands. The exact-head binding is unchanged, so the
+    # receipt stops resolving while the body still advertises neutralization.
+    head_b_pr = {**head_a_pr, "head": {"sha": NEXT_HEAD}}
+    assert (
+        resolve_verified_merge_authority_receipt(
+            comments, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+    restoration = resolve_neutralized_body_restoration(
+        comments, pr=head_b_pr, repository=REPOSITORY
+    )
+    assert restoration == {
+        "closing_issues": [3820, 3823],
+        "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
+        "governing_issue": 3821,
+        "head_sha": NEXT_HEAD,
+        "neutralized_body_sha256": authority_receipt["neutralized_body_sha256"],
+        "neutralized_head_sha": HEAD,
+        "pr_number": 3822,
+        "reason": "neutralized-body-outlived-merge-attempt",
+        "repository": REPOSITORY,
+        "restore_body_sha256": authority_receipt["body_sha256"],
+        "run_id": "vrun-authority",
+    }
+
+    # Only the authenticated original body is an accepted restoration, and the
+    # durable authority trail stays untouched evidence.
+    assert restored_body_matches_authority(original_body, restoration=restoration)
+    assert not restored_body_matches_authority(
+        neutralized_body, restoration=restoration
+    )
+    assert not restored_body_matches_authority(
+        original_body.replace("Refs #3900", "Refs #3901"), restoration=restoration
+    )
+    assert comments == [_trusted_comment(str(plan["authority_receipt_comment"]))]
+
+    # A restored-then-reneutralized body still resumes normally on the new head.
+    restored_pr = {**head_b_pr, "body": original_body}
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=restored_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    next_plan = prepare_verified_merge(
+        context={**_context(), "head_sha": NEXT_HEAD},
+        pr=restored_pr,
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(NEXT_HEAD),
+    )
+    next_comments = [
+        *comments,
+        _trusted_comment(str(next_plan["authority_receipt_comment"])),
+    ]
+    reneutralized_pr = {**restored_pr, "body": str(next_plan["neutralized_body"])}
+    assert (
+        resolve_verified_merge_authority_receipt(
+            next_comments, pr=reneutralized_pr, repository=REPOSITORY
+        )
+        == next_plan["authority_receipt"]
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            next_comments, pr=reneutralized_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+
+def test_neutralized_body_restoration_cli_uses_production_resolver(
+    tmp_path: Path,
+) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    pr_path = tmp_path / "pr.json"
+    comments_path = tmp_path / "comments.json"
+    output_path = tmp_path / "restoration.json"
+    comments_path.write_text(
+        json.dumps([_trusted_comment(str(plan["authority_receipt_comment"]))]),
+        encoding="utf-8",
+    )
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.resolve_neutralized_body_restoration",
+                "--pr-json",
+                str(pr_path),
+                "--comments-json",
+                str(comments_path),
+                "--repository",
+                REPOSITORY,
+                "--output-json",
+                str(output_path),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    pr_path.write_text(
+        json.dumps(_pr(str(plan["neutralized_body"]))), encoding="utf-8"
+    )
+    inside_attempt = _run()
+
+    assert inside_attempt.returncode == 0, inside_attempt.stderr
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "restoration": None,
+        "restoration_required": False,
+    }
+
+    pr_path.write_text(
+        json.dumps(
+            {
+                **_pr(str(plan["neutralized_body"])),
+                "head": {"sha": NEXT_HEAD},
+            }
+        ),
+        encoding="utf-8",
+    )
+    outlived = _run()
+
+    assert outlived.returncode == 2, outlived.stderr
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["restoration_required"] is True
+    assert payload["restoration"]["neutralized_head_sha"] == HEAD
+    assert payload["restoration"]["head_sha"] == NEXT_HEAD
+
+
+def test_neutralized_body_restoration_fails_closed_without_unambiguous_evidence() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority_receipt = plan["authority_receipt"]
+    assert isinstance(authority_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    head_b_pr = {**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}}
+
+    # No receipt at all: the restore target cannot be proven.
+    assert (
+        resolve_neutralized_body_restoration([], pr=head_b_pr, repository=REPOSITORY)
+        is None
+    )
+
+    # Untrusted authorship never names a restore target.
+    untrusted = [{**comments[0], "author_association": "NONE"}]
+    assert (
+        resolve_neutralized_body_restoration(
+            untrusted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+    # A canonical body is not a restorable state.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments,
+            pr={**head_b_pr, "body": _body()},
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+    # A merged PR stays owned by the `restored` phase of its own attempt.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments,
+            pr={
+                **head_b_pr,
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-07-27T08:18:08Z",
+            },
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+    # Foreign repository, foreign run, and conflicting restore targets fail closed.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_b_pr, repository="RasmusTho/other"
+        )
+        is None
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            comments,
+            pr=head_b_pr,
+            repository=REPOSITORY,
+            expected_run_id="vrun-other",
+        )
+        is None
+    )
+    conflicting = dict(authority_receipt)
+    conflicting["body_sha256"] = "c" * 64
+    assert (
+        resolve_neutralized_body_restoration(
+            [*comments, _authority_comment(conflicting)],
+            pr=head_b_pr,
+            repository=REPOSITORY,
+        )
+        is None
+    )

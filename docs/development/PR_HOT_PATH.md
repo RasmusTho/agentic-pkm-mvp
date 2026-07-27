@@ -292,6 +292,10 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
   truth, and resumes a crashed post-merge sequence idempotently without resetting attempts or the
   2+2 repair budget. Explicit expected-issue closes require a null closer plus the delivery actor/time
   fence; automatic closes require the exact target PR/repository/merge SHA
+- a neutralized PR body may not outlive its merge attempt: neutralization requires a head-bound
+  readiness statement that CI and review are green and no further commits are anticipated, and a head
+  change while the body is still neutralized requires restoring the canonical body before further
+  repair work
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

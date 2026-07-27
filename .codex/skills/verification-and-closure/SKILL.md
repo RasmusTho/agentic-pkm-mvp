@@ -390,7 +390,15 @@ same exact head back to the ordinary verified-merge sequence below.
 2. run `scripts/prepare_verified_issue_set_merge.py` against those snapshots; require its
    `verified_issue_set_merge_authority.v1` receipt and neutralized body, then post that exact
    machine-readable authority receipt on the PR from an authenticated repository collaborator before
-   changing the body so the original authority remains durable and auditable
+   changing the body so the original authority remains durable and auditable.
+   **Neutralization precondition — this exact head must be the final head.** A neutralized body is
+   only valid while the attempt it was prepared for is in flight, so the planner requires a
+   head-bound `verified_issue_set_merge_readiness.v1` statement through `--merge-readiness-json`
+   whose `head_sha` equals this exact head, with `required_checks_green: true`,
+   `review_gate_resolved: true`, and `further_commits_anticipated: false`. Do not neutralize while
+   any repair, rebase, base-branch update, review-feedback fix, or other commit is still expected;
+   finish those commits first and restart at step 1 on the new head. A readiness statement is never
+   reusable across heads, and the planner refuses neutralization when the precondition is unmet
 3. replace the live PR body with the plan's neutralized body, which converts every authenticated
    closer to evidence-only `Refs`; immediately re-read the PR and fail closed unless the head and
    neutralized body matches the plan under the terminal-LF-only canonical digest contract above, the
@@ -412,7 +420,8 @@ same exact head back to the ordinary verified-merge sequence below.
 5. merge through the exact-head REST endpoint using the verified SHA and only the plan's fixed
    non-closing commit title/message. Never use GitHub-synthesized or caller-supplied free-form merge
    text. A body/head/closing-link change before this request is a hard stop; never restore closers and
-   retry around a failed gate
+   retry around a failed gate. A hard stop ends this merge attempt, so apply
+   `Restoring a neutralized body after a head change` below before any further repair work
 6. verify merge success and re-fetch the merge commit to prove its title/message contains no
    canonical or malformed closing attempt, then post the authority-bound `merged` phase receipt
 7. on resume, recover either authenticated interruption window without restarting accounting. If the
@@ -468,6 +477,40 @@ same exact head back to the ordinary verified-merge sequence below.
 17. assert each required `post-merge owner-doc check: PR #<PR>;` receipt exists before emitting a delivery
     receipt; watchdog or pending reminders are not closure receipts. [owner-doc-receipt-gate]
 18. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
+
+### Restoring a neutralized body after a head change
+
+A neutralized body's lifetime is bounded by the one merge attempt that justified it. It is never a
+durable PR state, so it must not outlive its exact head.
+
+Whenever a new head is observed on a PR whose body is still neutralized — a repair commit, a rebase,
+a base-branch update, an abandoned attempt, or a resumed session — restore the canonical body before
+any further repair, verification, or re-merge work. Leaving it neutralized fails `pr-contract`
+deterministically on that head and on every head after it, because the exact-head authority receipt
+no longer covers the live head. That happened on PR #4021, where one neutralized body survived six
+later heads for about seven hours.
+
+Detect the state instead of relying on noticing it per head:
+
+```bash
+python3 scripts/resolve_neutralized_body_restoration.py \
+  --pr-json <pr.json> --comments-json <comments.json> --repository <owner/repo>
+```
+
+It is read-only and exits `2` when the live body is neutralized while no authority receipt covers the
+current head, naming the durable receipt's `restore_body_sha256` as the only accepted restore target.
+
+Rules for the restore:
+
+- restore the exact authenticated pre-neutralization body; prove it with
+  `restored_body_matches_authority` against that receipt digest and its governing/closing identities
+  before writing, and fail closed rather than hand-editing a body the receipt cannot authenticate
+- never rewrite, delete, or re-post the durable authority and phase receipt trail; it is historical
+  evidence of the abandoned attempt, and restoration repairs only the mutable body
+- never restore while a merge request for that head may still be in flight — resolve the attempt
+  through step 7 first, so a restore cannot race a merge or grant authority
+- resume normally afterwards: once the new head is final again, step 2 re-derives a fresh head-bound
+  readiness statement, authority receipt, and neutralized body on that head
 
 ## When Not to Merge
 
