@@ -170,15 +170,21 @@ needed.
 - Current Product routing and Builder Model Inquiry behavior are unchanged until their own migration
   steps. Steps 1-3 of the migration are purely additive.
 - `docs/LOCAL_SECRET_PROVISIONING/` is extended, not superseded: model-provider identifiers join the
-  contract, and its hardcoded consumer allowlist becomes data. This unblocks parent issue #3843.
+  contract, and its hardcoded consumer allowlist becomes data. Both HSP children are already
+  delivered (#3845/PR #3888 and #3846/PR #4008), so this extends a shipped mechanism rather than
+  waiting on one. It neither depends on nor closes parent issue #3843, which remains open for a
+  redacted dev-deploy receipt and the `docs/SECURITY.md` promotion; the model-provider identifiers
+  do, however, change what that promotion must say.
 - `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` becomes a delivery target. Its R4-1
   census is the first step. Its `capability-first` egress stage is unchanged and remains the owner's
   ruling.
 - Metered spend becomes an observable rather than a bet: the egress ledger and budget circuit breaker
   specified at `RUNTIME_MODEL_POSTURE.md:131,138` are prerequisites for volume growth, not follow-ups.
-- Two CI workflows that currently report green when their provider secret is absent
-  (`.github/workflows/ci-smoke.yaml:518-528`, `.github/workflows/architecture-ci.yaml:110-118`)
-  become contract violations under §6 and must be repaired as part of the census/credential work.
+- Two CI provider paths become contract violations under §6 and must be repaired as part of the
+  credential work. `.github/workflows/ci-smoke.yaml:518-528` reports green when its provider secret
+  is absent. `.github/workflows/architecture-ci.yaml:108-117` is worse: that workflow is
+  `workflow_dispatch`-only, so its gate never runs automatically at all, and the step writes a
+  credential into `$GITHUB_ENV`. "Repaired" means fail-closed or removed — never green-on-absent.
 - Consolidating the six Product-side abstractions is explicitly **not** authorized as a program. The
   census test blocks new drift; existing sites migrate opportunistically.
 - Architecture tests must eventually enforce: census equality across every allowlist, credential

@@ -1,4 +1,4 @@
-State: Specification directory (design + bounded slices). Advisory until child issues are delivered. Defines the shared host/deploy secret boundary for the local-first posture; it does not claim a new runtime subsystem or a shipped secret manager.
+State: Specification directory (design + bounded slices). Both child tasks are delivered (HSP-01 via #3845/PR #3888; HSP-02 via #3846/PR #4008, merged 2026-07-20); parent #3843 remains open only for the redacted dev-deploy validation receipt and the `docs/SECURITY.md` promotion described under `Validation and acceptance`. Defines the shared host/deploy secret boundary for the local-first posture; it does not claim a new runtime subsystem or a shipped secret manager.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the proposed local secret-provisioning design. Subordinate to `docs/SECURITY.md` for the security baseline, `docs/ENVIRONMENTS.md` for channel isolation, and the product owner documents of consumers it provisions.
 Owner: Architecture / operations
@@ -62,7 +62,7 @@ environment variable.
 | Order | Task | ID | Prerequisite | Outcome |
 | --- | --- | --- | --- | --- |
 | 1 | [Define host secret contract](DEFINE_HOST_SECRET_CONTRACT.md) | HSP-01 | — | delivered by [#3845](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3845) / PR #3888: names, consumer allowlist, Keychain access and redaction contract |
-| 2 | [Deliver runtime secret bootstrap](DELIVER_RUNTIME_SECRET_BOOTSTRAP.md) | HSP-02 | HSP-01 | bootstrap, channel integration and fail-closed/redaction tests |
+| 2 | [Deliver runtime secret bootstrap](DELIVER_RUNTIME_SECRET_BOOTSTRAP.md) | HSP-02 | HSP-01 | delivered by [#3846](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3846) / PR #4008 (merged 2026-07-20): bootstrap, channel integration and fail-closed/redaction tests |
 | Evidence | Delivered [#3830](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3830) | — | completed 2026-07-16 | redacted dev Keychain provisioning and healthy capture-watch receipt; it is not a child or dependency |
 
 ## Cross-task invariants

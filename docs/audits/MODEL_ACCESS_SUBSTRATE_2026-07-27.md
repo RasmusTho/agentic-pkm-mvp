@@ -1,4 +1,4 @@
-State: Advisory design position, 2026-07-27. Evidence baseline: worktree `claude/reverent-kilby-ffb5fb` off `origin/main` at `ae37a7a49`, plus read-only inspection of the configured inquiry host. No implementation, no Issue, no PR is authorized by this document. It requests exactly one owner ruling (§7).
+State: Advisory design position, 2026-07-27. Evidence baseline: worktree `claude/reverent-kilby-ffb5fb` off `origin/main` at `ae37a7a49`, plus read-only inspection of the configured inquiry host. No implementation, no Issue, no PR is authorized by this document. It requests exactly one owner ruling (§7). Corrected 2026-07-27 after ratification: this document originally stated that HSP-02 was open. It was delivered on 2026-07-20 (#3846 / PR #4008); the error was inherited from a stale task-order row in `docs/LOCAL_SECRET_PROVISIONING/README.md`, corrected in the same change. Migration step 2 therefore extends a shipped mechanism and is independent of open parent #3843.
 Doc role: Reference (architecture design position — pre-ADR)
 Authority: Evidence-based analysis and a recommendation only. `docs/adr/ADR-0063-shared-llm-contract-kernel.md` remains authoritative for the Product/Builder contract seam; `docs/LLM_ROUTING.md` for current Product routing; ADR-0062 for Builder credential/process separation; `docs/LOCAL_SECRET_PROVISIONING/` for the host secret boundary. Owner docs win on disagreement.
 Owner: Architecture spine / LLM boundary
@@ -69,7 +69,7 @@ explicitly **out of scope**.
 | Spec | Owns | Explicitly excludes |
 |---|---|---|
 | ADR-0063 (Accepted) | contract kernel, fallback vocabulary, mappers | credentials, provider sessions, host processes (`:87-89`) |
-| LOCAL_SECRET_PROVISIONING (HSP-01 delivered, HSP-02 open, parent `agent:blocked`) | Keychain substrate, channel isolation, fail-closed | runtime model-provider enablement (`:105`) |
+| LOCAL_SECRET_PROVISIONING (both children delivered; parent #3843 open for a receipt only) | Keychain substrate, channel isolation, fail-closed | runtime model-provider enablement (`:105`) |
 | RUNTIME_MODEL_POSTURE (0 % delivered) | provider census, Anthropic provider, graduated egress posture | — but was never decomposed into Issues |
 
 Model credentials fall between all three. Nobody owns the seam. That is the actual defect.
@@ -225,7 +225,7 @@ One contract, four bindings, no new machinery:
 
 | Surface | Binding | Notes |
 |---|---|---|
-| Laptop (dev) | Keychain via `host_secret_contract.json`, channel `dev` | Mechanism already delivered (HSP-01). Needs the model-provider identifiers added and `host_secret_contract.py:17-19`'s hardcoded allowlist made data |
+| Laptop (dev) | Keychain via `host_secret_contract.json`, channel `dev` | Mechanism already delivered end to end (HSP-01 contract + HSP-02 bootstrap). Needs the model-provider identifiers added and `host_secret_contract.py:17-19`'s hardcoded allowlist made data |
 | Inquiry host | Same contract, channels `test`/`prod`, plus the **brokered session** backend for subscription paths | The proxy generalized: one local service, N providers, in Git, values still host-only |
 | dev/test/prod channels | The contract's `channel` dimension — already isolated and tested (INV-HSP-2) | No new isolation model |
 | CI | Declared secret backend only, via GitHub Actions secrets, resolved through the same contract | Subscription sessions are **structurally impossible** in CI. This is not a limitation to engineer around; it is the reason §7 exists |
@@ -366,7 +366,7 @@ mergeable.
 | # | Step | Touches | Exit |
 |---|---|---|---|
 | 1 | **Provider census** — `docs/settings/models/providers.yaml` + the static equality test across every allowlist site | new file, one test | `tests/settings/test_provider_census.py` green; `router.py:42`, `legacy.py:21`, `PROVIDER_REGISTRY`, health probes and docs all equal the census. R4-1, already specified |
-| 2 | **Credential contract extension** — model-provider identifiers in `host_secret_contract.json`; `host_secret_contract.py:17-19`'s hardcoded allowlist becomes data; HSP-02 bootstrap lands | `app/ops/**`, `config/secrets/` | Existing INV-HSP-1/2/3 tests extended to a model secret. Unblocks #3843 |
+| 2 | **Credential contract extension** — model-provider identifiers in `host_secret_contract.json`; `host_secret_contract.py:17-19`'s hardcoded allowlist becomes data | `app/ops/**`, `config/secrets/` | Existing INV-HSP-1/2/3 tests extended to a model secret. Extends the delivered HSP-01/HSP-02 mechanism; independent of open parent #3843 |
 | 3 | **Adapter contract promotion** — `ModelTurnAdapter` moves into the neutral kernel; auth-specific failure classes added | `app/builderops/model_inquiry_adapters.py` and kernel | Existing `tests/builderops/test_model_inquiry_adapters.py` green through the new location |
 | 4 | **First beneficiary: model inquiry** — `BUILDEROPS_INQUIRY_ADAPTERS_JSON` resolves through the credential contract | host config + launcher | A model inquiry completes over a fresh non-interactive SSH. This is the reported failure, fixed as a consequence rather than a patch |
 | 5 | **CKM** — replace `FabricSemanticAssociator` with a Builder-side adapter | `app/builderops/ckm/semantic.py` | `tests/builderops/ckm/test_semantic.py` green plus a negative test that Product fallback cannot execute the Builder task. ADR-0063 M4 |
@@ -439,7 +439,7 @@ recurring incident classes.
 the authority boundary.
 
 **The thing that makes this cheaper than it looks:** almost none of it is new design. The census is
-specified (R4-1). The credential mechanism is delivered (HSP-01). The adapter protocol is
+specified (R4-1). The credential mechanism is delivered end to end (HSP-01 and HSP-02). The adapter protocol is
 implemented and proven on two transports. The fallback vocabulary is ratified (ADR-0063). What is
 missing is that no Issue was ever created for any of it.
 
@@ -482,7 +482,7 @@ Not in scope; recorded so they are not rediscovered.
 | D1 | `read_only_cognition.plan()` fallback is **always** taken — it calls `run_reasoning(PLANNING, …)`, which has no PLANNING branch and always hits "mode planning not implemented". That surface has only ever emitted a canned 3-step plan | `app/chat/read_only_cognition.py:86-98`; `app/reasoning/provider.py:186-476` |
 | D2 | Ingest stamps `openai/text-embedding-3-large` on every `index.embedding.requested` event — a model no adapter can serve | `app/ingest/api.py:14,140` |
 | D3 | The OpenAI chat path silently discards the JSON Schema, downgrading to `{"type":"json_object"}`; the Ollama path honors it. Constrained decoding is provider-asymmetric at a seam that presents as uniform | `app/services/llm.py:282-290` |
-| D4 | Two workflows report green when their provider secret is absent | `ci-smoke.yaml:518-528`; `architecture-ci.yaml:110-118` |
+| D4 | `panel-llm-e2e` reports green when its provider secret is absent (`ci-smoke.yaml:518-528`). The `architecture-ci.yaml:110-118` Codex gate is worse than a silent skip: that whole workflow is `workflow_dispatch`-only by its own header note, so the gate never runs automatically at all — and the step writes a credential into `$GITHUB_ENV` | `ci-smoke.yaml:518-528`; `.github/workflows/architecture-ci.yaml:1-12,108-117` |
 | D5 | `config/agents.yaml` declares `merge.model: gpt-5.4` / `hygiene.model: gpt-5.4`. **No code reads it**; the name is a false friend for builder model config | `config/agents.yaml:6,15` |
 | D6 | `_SUPPORTED_EMBED_PROVIDERS` accepts `openai`/`deepseek`, but `PROVIDER_REGISTRY` has no adapter for either → runtime `ValueError` | `app/components/embeddings/legacy.py:21`; `app/llm/embeddings.py:377,394` |
 | D7 | `app/components/embeddings/base.py:11-24` documents OpenAI/Anthropic/Local implementations that do not exist and is unused by the runtime path | `app/components/embeddings/base.py` |
@@ -499,7 +499,7 @@ Not in scope; recorded so they are not rediscovered.
 | ADR-0062 | **Conforms.** Host-local model/subscription sessions remain the privileged Builder executor's (`:164-168`); the broker does not distribute credentials to laptops or Product Runtime. |
 | ADR-0057 (CKM projection-only) | **Unchanged here.** CKM-as-orchestrator needs a separate amendment; this document treats CKM only as a consumer. |
 | ADR-0023 / ADR-0052 (embedding egress) | **Untouched.** Embedding identity and reconciliation stay Product-owned; embeddings map to `fallback_compatible_identity`. |
-| `docs/LOCAL_SECRET_PROVISIONING/` | **Extended.** Same mechanism, model-provider identifiers added; unblocks #3843. |
+| `docs/LOCAL_SECRET_PROVISIONING/` | **Extended.** Same mechanism, model-provider identifiers added. Both children are delivered, so this extends shipped code; it neither depends on nor closes open parent #3843. |
 | `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` | **Delivery target.** R4-1 census becomes step 1. Its `capability-first` stage is the owner's egress ruling, unchanged. |
 | `AGENTS.md :: Total Cost of Development` | **Unchanged as policy.** The census makes it resolvable instead of only readable. |
 
