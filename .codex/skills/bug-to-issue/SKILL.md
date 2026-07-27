@@ -10,8 +10,8 @@ description: "Route confirmed bugs to a bounded GitHub Issue or the deterministi
 Turn a discovered bug into either:
 
 - a normal bounded GitHub `type:bug` Issue that is ready for implementation routing; or
-- one uniquely identified entry in the rolling GitHub Known Defects registry when an ordinary
-  confirmed P2/P3 review finding is intentionally deferred.
+- one uniquely identified entry in the rolling GitHub Known Defects registry when a confirmed P2
+  review defect is intentionally deferred.
 
 Default to the current repo unless the user specifies another one. This is defect intake, not the
 cold-path maintenance lane. GitHub remains the canonical backlog surface; never maintain a parallel
@@ -23,13 +23,16 @@ Choose exactly one path:
 
 1. **Confirmed and implementation-bound now, or P0/P1:** create/update a normal bounded bug Issue
    using the workflow below. High-impact defects are never parked in the deferred registry.
-2. **Confirmed P2/P3 review defect, intentionally deferred:** use the deterministic Known Defects
+2. **Confirmed P2 review defect, intentionally deferred:** use the deterministic Known Defects
    registry intake. This avoids one expanded implementation Issue per observation while preserving
    durable evidence and promotion triggers.
 3. **Maintainability suggestion:** leave it as review feedback or route it through the appropriate
    maintenance/learning workflow. It is not a defect and must not enter the registry.
 4. **Unproven observation:** gather reproduction evidence or keep it in the source review. Do not
    label speculation as a known defect.
+
+P3 is informational/non-defect under the canonical review-severity contract and follows path 3,
+not registry intake.
 
 The classification decision may require engineering judgment, but appending, deduplicating, and
 looking up a confirmed registry entry do not require an LLM coordinator.
@@ -77,7 +80,7 @@ Every entry records:
 - defect id;
 - source PR, exact SHA, and PR/review link;
 - reproducible symptom and concrete evidence;
-- impact and P2/P3 severity;
+- impact and P2 severity;
 - workaround, including `none known` when truthful;
 - an explicit re-evaluation/promotion trigger.
 

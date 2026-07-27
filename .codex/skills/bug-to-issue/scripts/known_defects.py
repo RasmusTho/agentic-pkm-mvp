@@ -186,9 +186,9 @@ class KnownDefect:
             raise KnownDefectsError("source_pr must be positive")
         if not SHA_RE.fullmatch(source_sha):
             raise KnownDefectsError("source_sha must be the full 40-character commit SHA")
-        if severity not in {"P2", "P3"}:
+        if severity != "P2":
             raise KnownDefectsError(
-                "the deferred registry accepts only ordinary confirmed P2/P3 defects"
+                "the deferred registry accepts only confirmed deferred P2 defects"
             )
         parsed = urlparse(review_url)
         expected_path = f"/{repo}/pull/{source_pr}"
@@ -436,7 +436,7 @@ def render_registry_body() -> str:
             "# Known Defects Registry",
             "",
             "This rolling Issue is the canonical low-overhead registry for confirmed "
-            "deferred P2/P3 defects.",
+            "deferred P2 defects.",
             "",
             "- Each schema-marked comment is one defect entry.",
             "- This Issue is locked, carries no `agent:*` state, is not an "
@@ -548,7 +548,7 @@ def _entry_marker_from_comment(body: str) -> tuple[str, str] | None:
             raise KnownDefectsError(
                 f"malformed known-defect entry {defect_id}: invalid {field}"
             )
-    impact = re.fullmatch(r"- Impact/severity: (P2|P3) — (.+)", lines[7])
+    impact = re.fullmatch(r"- Impact/severity: (P2) — (.+)", lines[7])
     if (
         impact is None
         or impact.group(2) != " ".join(impact.group(2).split())
@@ -670,6 +670,28 @@ def _inventory_comments(
     for comment in comments:
         _validate_schema_comment(comment)
     return comments
+
+
+def _require_expected_single_open_registry(
+    gateway: RegistryGateway,
+    expected_issue_number: int,
+) -> dict[str, Any]:
+    issues = _registry_inventory(gateway, recover_bootstrap=False)
+    open_registries = [
+        issue for issue in issues if str(issue.get("state", "")).lower() == "open"
+    ]
+    if len(open_registries) != 1:
+        rendered = ", ".join(f"#{issue['number']}" for issue in open_registries)
+        raise KnownDefectsError(
+            f"expected one open registry, found: {rendered or '<none>'}"
+        )
+    selected = open_registries[0]
+    if int(selected["number"]) != expected_issue_number:
+        raise KnownDefectsError(
+            f"registry authority moved from #{expected_issue_number} "
+            f"to #{selected['number']}"
+        )
+    return selected
 
 
 def _registry_comment_locations(
@@ -1010,8 +1032,10 @@ def _reconcile_pending_entries(
     )
     canonical_issue_number = int(canonical_issue["number"])
     try:
-        final_issue = gateway.get_issue(canonical_issue_number)
-        _validate_registry_issue(final_issue, require_open=True)
+        _require_expected_single_open_registry(
+            gateway,
+            canonical_issue_number,
+        )
     except KnownDefectsError:
         _revoke_final_comment(
             gateway,
@@ -1147,9 +1171,16 @@ def _intake_defect(
     finalized = _finalize_pending_entry(gateway, issue, comment)
     post_finalize_issue: dict[str, Any] | None = None
     try:
-        post_finalize_issue = gateway.get_issue(int(issue["number"]))
-        _validate_registry_issue(post_finalize_issue, require_open=True)
+        post_finalize_issue = _require_expected_single_open_registry(
+            gateway,
+            int(issue["number"]),
+        )
     except KnownDefectsError:
+        if post_finalize_issue is None:
+            try:
+                post_finalize_issue = gateway.get_issue(int(issue["number"]))
+            except KnownDefectsError:
+                pass
         _revoke_final_comment(gateway, int(issue["number"]), finalized)
         if (
             post_finalize_issue is not None
@@ -1688,8 +1719,10 @@ def _reconcile_pending_promotions(
         authority_sha256,
     )
     try:
-        final_registry = gateway.get_issue(registry_number)
-        _validate_registry_issue(final_registry, require_open=True)
+        _require_expected_single_open_registry(
+            gateway,
+            registry_number,
+        )
         final_target = gateway.get_issue(issue_number)
         _validate_promoted_target_snapshot(final_target, authority_sha256)
     except KnownDefectsError:
@@ -1710,20 +1743,49 @@ def promote_defect(
         raise KnownDefectsError(f"known defect {defect_id} was not found")
     entry_registry, _entry_comment = found
     registries = _registry_inventory(gateway, recover_bootstrap=True)
-    for candidate in registries:
-        candidate_number = int(candidate["number"])
-        pending = _promotion_comments(
-            gateway,
-            candidate_number,
-            defect_id,
-            phase="pending",
+    initial_locations = _registry_comment_locations(
+        gateway,
+        recover_bootstrap=False,
+    )
+    initial_comments = [comment for _candidate, comment in initial_locations]
+    initial_targets, _initial_evidence, initial_digests, initial_counts = (
+        _promotion_targets(initial_comments, defect_id)
+    )
+    initial_conflict = (
+        len(initial_targets) > 1
+        or any(len(digests) != 1 for digests in initial_digests.values())
+        or any(count != 1 for count in initial_counts.values())
+    )
+    if initial_conflict:
+        raise KnownDefectsError(
+            f"{defect_id} has conflicting promotion authority: "
+            + ", ".join(f"#{number}" for number in sorted(initial_targets))
         )
-        if not pending:
-            continue
-        if str(candidate.get("state", "")).lower() == "open":
-            _reconcile_pending_promotions(gateway, candidate, defect_id)
-        else:
+    if initial_targets:
+        for candidate in registries:
+            candidate_number = int(candidate["number"])
+            pending = _promotion_comments(
+                gateway,
+                candidate_number,
+                defect_id,
+                phase="pending",
+            )
             _delete_comments(gateway, candidate_number, pending)
+    else:
+        for candidate in registries:
+            candidate_number = int(candidate["number"])
+            pending = _promotion_comments(
+                gateway,
+                candidate_number,
+                defect_id,
+                phase="pending",
+            )
+            if not pending:
+                continue
+            if str(candidate.get("state", "")).lower() == "open":
+                _reconcile_pending_promotions(gateway, candidate, defect_id)
+            else:
+                _delete_comments(gateway, candidate_number, pending)
     promotion_locations = _registry_comment_locations(
         gateway,
         recover_bootstrap=False,
@@ -1861,15 +1923,21 @@ def promote_defect(
         authority_sha256,
     )
     try:
-        final_registry = gateway.get_issue(registry_number)
-        _validate_registry_issue(final_registry, require_open=True)
+        _require_expected_single_open_registry(
+            gateway,
+            registry_number,
+        )
         final_target = gateway.get_issue(issue_number)
         _validate_promoted_target_snapshot(final_target, authority_sha256)
     except KnownDefectsError:
         _revoke_final_comment(gateway, registry_number, canonical_comment)
         raise
+    terminal_locations = _registry_comment_locations(
+        gateway,
+        recover_bootstrap=False,
+    )
     targets, _evidence, authority_digests, authority_counts = _promotion_targets(
-        gateway.list_comments(int(registry["number"])),
+        [comment for _candidate, comment in terminal_locations],
         defect_id,
     )
     if (
@@ -1955,6 +2023,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "schema": "known-defect-receipt.v1",
                     "status": "promotion_required",
                     "reason": f"severity:{args.severity}",
+                }
+            elif args.severity == "P3":
+                receipt = {
+                    "schema": "known-defect-receipt.v1",
+                    "status": "excluded",
+                    "reason": "severity:P3_non_defect",
                 }
             else:
                 defect = KnownDefect.validated(

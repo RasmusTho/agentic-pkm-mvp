@@ -18,7 +18,7 @@ own copies.
 | `agent:ready` | bounded, testable, unblocked, and strictly validated — safe for agent pickup without requiring Project Status |
 | `agent:blocked` | dependency unresolved, including parent validation hubs waiting on child slices |
 | `agent:needs-human` | requires a named human decision, tradeoff, missing input, or authority question |
-| `state:known-defect` | rolling registry Issue containing confirmed deferred P2/P3 defect entries; never an implementation pickup label |
+| `state:known-defect` | rolling registry Issue containing confirmed deferred P2 defect entries; never an implementation pickup label |
 
 Rules:
 

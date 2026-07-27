@@ -59,7 +59,7 @@ jobs:
                   "<!-- known-defects-registry:v1 -->",
                   "# Known Defects Registry",
                   "",
-                  "This rolling Issue is the canonical low-overhead registry for confirmed deferred P2/P3 defects.",
+                  "This rolling Issue is the canonical low-overhead registry for confirmed deferred P2 defects.",
                   "",
                   "- Each schema-marked comment is one defect entry.",
                   "- This Issue is locked, carries no `agent:*` state, is not an implementation contract, and must never receive `agent:ready`.",

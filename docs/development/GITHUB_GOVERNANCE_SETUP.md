@@ -60,7 +60,7 @@ Agent-label meanings:
 - `agent:blocked`: blocked by dependency waiting, including parent validation hubs waiting on child slices; normally pair with a non-active status such as `Backlog`
 - `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with a non-active status such as `Backlog`
 - open implementation Issues should normally carry exactly one truthful agent-state label
-- `state:known-defect`: one locked rolling registry Issue for confirmed deferred P2/P3 entries;
+- `state:known-defect`: one locked rolling registry Issue for confirmed deferred P2 entries;
   keep it in `Backlog`, with `type:bug`, without an agent-state label, and never treat it as
   pickup-eligible
 
