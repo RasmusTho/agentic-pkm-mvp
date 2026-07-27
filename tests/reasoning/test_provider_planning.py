@@ -51,9 +51,12 @@ def test_planning_mode_returns_structured_plan_on_mock_backend(
     assert "not implemented" not in (run.error or "")
 
 
-def test_planning_mode_includes_object_context_on_mock_backend(
+def test_planning_mode_carries_object_uuids_on_mock_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The mock branch does not consume object text; it must still report the
+    # object identities it was given. Prompt-level context is asserted on the
+    # real backend path in test_planning_mode_sends_object_context_to_backend.
     _mock_env(monkeypatch)
     reset_store_backends()
     store = get_object_store()
@@ -64,6 +67,92 @@ def test_planning_mode_includes_object_context_on_mock_backend(
 
     assert run.status == "ok"
     assert run.object_uuids == [str(object_id)]
+
+
+def test_planning_mode_sends_object_context_to_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _llm_env(monkeypatch)
+    reset_store_backends()
+    store = get_object_store()
+    object_id = uuid4()
+    store.put(
+        object_id,
+        kind="note",
+        source_ref="p.md",
+        payload={"text": "Rollout depends on the migration landing first"},
+    )
+
+    captured: list[dict[str, object]] = []
+
+    def _fake_call_chat(**kwargs: object) -> str:
+        captured.append(kwargs)
+        return json.dumps({"plan": "p", "steps": ["s"]})
+
+    monkeypatch.setattr(provider_module, "_call_chat", _fake_call_chat)
+
+    run = run_reasoning(ReasoningMode.PLANNING, [str(object_id)], question="Plan the rollout")
+
+    assert run.status == "ok"
+    pack = captured[0]["pack"]
+    assert isinstance(pack, dict)
+    user_prompt = pack["user"]
+    assert "Context:" in user_prompt
+    assert str(object_id) in user_prompt
+    assert "migration landing first" in user_prompt
+
+
+def test_planning_mode_rejects_non_object_json_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Valid JSON that is not an object must fail closed, not raise
+    # AttributeError out of run_reasoning.
+    _llm_env(monkeypatch)
+    reset_store_backends()
+
+    for payload in ('["a", "b"]', '"just a string"', "42"):
+
+        def _fake_call_chat(_payload: str = payload, **_kwargs: object) -> str:
+            return _payload
+
+        monkeypatch.setattr(provider_module, "_call_chat", _fake_call_chat)
+
+        run = run_reasoning(ReasoningMode.PLANNING, [], question="Ship the thing")
+
+        assert run.status == "failed", payload
+        assert run.error
+        assert run.result == {"plan": "", "steps": []}
+
+
+def test_planning_mode_normalizes_steps_to_a_list_of_strings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _llm_env(monkeypatch)
+    reset_store_backends()
+
+    monkeypatch.setattr(
+        provider_module,
+        "_call_chat",
+        lambda **_k: json.dumps({"plan": "do it", "steps": [1, {"a": 2}]}),
+    )
+
+    run = run_reasoning(ReasoningMode.PLANNING, [], question="Ship the thing")
+
+    assert run.status == "ok"
+    assert run.result["steps"] == ["1", "{'a': 2}"]
+
+    # A scalar `steps` must not leak through as a non-list.
+    monkeypatch.setattr(
+        provider_module,
+        "_call_chat",
+        lambda **_k: json.dumps({"plan": "do it", "steps": "not a list"}),
+    )
+
+    run = run_reasoning(ReasoningMode.PLANNING, [], question="Ship the thing")
+
+    assert run.status == "ok"
+    assert run.result["steps"] == []
+    assert run.result["plan"] == "do it"
 
 
 def test_planning_mode_does_not_call_backend_when_provider_is_unconfigured(

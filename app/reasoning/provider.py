@@ -451,6 +451,13 @@ def run_reasoning(
                 trace_id=trace_id,
             )
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("planning output was not a JSON object")
+            plan_text = str(data.get("plan") or "").strip()
+            raw_steps = data.get("steps") or []
+            # Keep the documented {"plan": str, "steps": list[str]} contract even
+            # when the model returns a scalar or a list of non-strings.
+            steps = [str(step) for step in raw_steps] if isinstance(raw_steps, list) else []
         except Exception as exc:
             return ReasoningRun(
                 mode=mode,
@@ -460,8 +467,6 @@ def run_reasoning(
                 error=str(exc),
                 result={"plan": "", "steps": []},
             )
-        plan_text = str(data.get("plan") or "").strip()
-        steps = data.get("steps") or []
         ok = bool(plan_text or steps)
         return ReasoningRun(
             mode=mode,
