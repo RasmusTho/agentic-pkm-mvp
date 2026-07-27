@@ -203,6 +203,20 @@ class IssueScope(_StrictFrozenModel):
 class ScopeExclusion(_StrictFrozenModel):
     scope_key: NonEmptyStr
     reason: NonEmptyStr
+    omitted_issue: IssueScope | None = None
+
+    @model_validator(mode="after")
+    def _validate_scope_identity(self) -> ScopeExclusion:
+        if self.omitted_issue is not None:
+            expected_key = (
+                f"{self.omitted_issue.repository.casefold()}"
+                f"#{self.omitted_issue.issue_number}"
+            )
+            if self.scope_key != expected_key:
+                raise ValueError(
+                    "issue exclusion must bind its canonical omitted-Issue identity"
+                )
+        return self
 
 
 class AuthoritySnapshot(_StrictFrozenModel):
@@ -216,7 +230,26 @@ class AuthoritySnapshot(_StrictFrozenModel):
     @model_validator(mode="after")
     def _validate_labels(self) -> AuthoritySnapshot:
         _require_unique(self.observed_labels, "authority snapshot labels")
+        if self.observed_labels != tuple(sorted(self.observed_labels)):
+            raise ValueError(
+                "authority snapshot labels must use canonical sorted order"
+            )
         return self
+
+
+def _same_authority_state(
+    left: AuthoritySnapshot,
+    right: AuthoritySnapshot,
+) -> bool:
+    """Compare authority semantics while allowing a fresh observation timestamp."""
+
+    return (
+        left.authority_type == right.authority_type
+        and left.authority_id == right.authority_id
+        and left.content_hash == right.content_hash
+        and left.observed_state == right.observed_state
+        and left.observed_labels == right.observed_labels
+    )
 
 
 class PolicyProfile(_StrictFrozenModel):
@@ -392,6 +425,10 @@ class ExpectedAuthorityState(_StrictFrozenModel):
     def _validate_state(self) -> ExpectedAuthorityState:
         _require_unique(self.required_labels, "required labels")
         _require_unique(self.forbidden_labels, "forbidden labels")
+        if self.required_labels != tuple(sorted(self.required_labels)):
+            raise ValueError("required labels must use canonical sorted order")
+        if self.forbidden_labels != tuple(sorted(self.forbidden_labels)):
+            raise ValueError("forbidden labels must use canonical sorted order")
         overlap = set(self.required_labels) & set(self.forbidden_labels)
         if overlap:
             raise ValueError(
@@ -527,14 +564,50 @@ def validate_delivery_plan_evidence(
     ):
         raise ValueError("plan final scope must be an exact subset of approved scope")
     final_scope_keys = {item.scope_key for item in plan.final_scope}
+    final_scope_refs = {
+        f"{item.repository.casefold()}#{item.issue_number}"
+        for item in plan.final_scope
+    }
     missing_scope_refs = {
         f"{item.repository.casefold()}#{item.issue_number}"
         for item in initiation.requested_scope
         if item.scope_key not in final_scope_keys
     }
-    exclusion_refs = {item.scope_key.casefold() for item in plan.exclusions}
-    if not missing_scope_refs.issubset(exclusion_refs):
-        raise ValueError("plan exclusions must explain every omitted approved issue")
+    approved_scope_refs = {
+        f"{item.repository.casefold()}#{item.issue_number}"
+        for item in initiation.requested_scope
+    }
+    folded_exclusion_refs = tuple(
+        item.scope_key.casefold() for item in plan.exclusions
+    )
+    if len(folded_exclusion_refs) != len(set(folded_exclusion_refs)):
+        raise ValueError("plan exclusions must use unique canonical identities")
+    issue_exclusions: dict[str, IssueScope] = {}
+    for exclusion in plan.exclusions:
+        folded_ref = exclusion.scope_key.casefold()
+        omitted_issue = exclusion.omitted_issue
+        if omitted_issue is None:
+            if folded_ref in approved_scope_refs:
+                raise ValueError(
+                    "plan issue exclusions require typed omitted-Issue identity"
+                )
+            continue
+        if folded_ref not in approved_scope_refs:
+            raise ValueError(
+                "plan issue exclusion is outside approved initiation scope"
+            )
+        if approved_scope[omitted_issue.scope_key] != omitted_issue:
+            raise ValueError(
+                "plan issue exclusion must preserve exact approved authority"
+            )
+        issue_exclusions[folded_ref] = omitted_issue
+    issue_exclusion_refs = set(issue_exclusions)
+    if final_scope_refs.intersection(issue_exclusion_refs):
+        raise ValueError("plan final scope and issue exclusions must be disjoint")
+    if issue_exclusion_refs != missing_scope_refs:
+        raise ValueError(
+            "plan issue exclusions must explain every omitted approved issue exactly"
+        )
     if not set(initiation.exclusions).issubset(set(plan.exclusions)):
         raise ValueError("plan must preserve initiation exclusions")
     if plan.policy_profile != initiation.policy_profile:
@@ -672,6 +745,12 @@ def delivery_effect_input_hash(
     )
 
 
+def delivery_effect_idempotency_key(input_hash: str) -> str:
+    """Derive the sole idempotency identity from a validated semantic input hash."""
+
+    return f"builderops.delivery-effect.v1:{input_hash}"
+
+
 class ReducerEffect(CanonicalDeliveryContract):
     contract_family: ClassVar[str] = "reducer"
     schema_version: Literal[
@@ -740,6 +819,12 @@ class ReducerEffect(CanonicalDeliveryContract):
         )
         if self.input_hash != expected_input_hash:
             raise ValueError("reducer effect input hash must bind exact semantic input")
+        if self.idempotency_key != delivery_effect_idempotency_key(
+            expected_input_hash
+        ):
+            raise ValueError(
+                "reducer effect idempotency key must derive from semantic input"
+            )
         return self
 
 
@@ -935,17 +1020,25 @@ def validate_reducer_effect_evidence(
         for authority in effect.expected_authorities
         if authority.authority_id == effect.issue.authority_id
     )
+    planned_authorities = tuple(
+        authority
+        for authority in plan.input_authorities
+        if authority.authority_id == effect.issue.authority_id
+    )
     if (
         expected_state is None
         or len(matching_authorities) != 1
-        or matching_authorities[0].content_hash
-        != expected_state.expected_contract_hash
-        or matching_authorities[0].observed_state != expected_state.issue_state
-        or not set(expected_state.required_labels).issubset(
-            matching_authorities[0].observed_labels
+        or len(planned_authorities) != 1
+        or not _same_authority_state(
+            matching_authorities[0],
+            planned_authorities[0],
         )
-        or set(expected_state.forbidden_labels).intersection(
-            matching_authorities[0].observed_labels
+        or any(
+            not any(
+                _same_authority_state(authority, planned)
+                for planned in plan.input_authorities
+            )
+            for authority in effect.expected_authorities
         )
     ):
         raise ValueError("reducer effect lacks the plan's expected live authority")
@@ -1036,9 +1129,22 @@ def validate_reducer_event_evidence(
         )
         if planned_issue is None or expected_state is None:
             raise ValueError("authority-change event is outside exact plan scope")
+        planned_authority = next(
+            (
+                item
+                for item in plan.input_authorities
+                if item.authority_id == planned_issue.authority_id
+                and item.content_hash == planned_issue.contract_hash
+            ),
+            None,
+        )
+        if planned_authority is None:
+            raise ValueError("authority-change event lacks planned authority")
         if (
-            event.subject_authority.content_hash == planned_issue.contract_hash
-            and event.subject_authority.observed_state == expected_state.issue_state
+            _same_authority_state(
+                event.subject_authority,
+                planned_authority,
+            )
         ):
             raise ValueError("authority-change event must carry changed authority")
 
@@ -1056,10 +1162,19 @@ def validate_reducer_event_evidence(
                 "reducer event references evidence outside exact plan scope"
             )
         subject = event.subject_authority
+        planned_authority = next(
+            (
+                item
+                for item in plan.input_authorities
+                if item.authority_id == referenced_issue.authority_id
+                and item.content_hash == referenced_issue.contract_hash
+            ),
+            None,
+        )
         if (
             subject is None
-            or subject.authority_id != referenced_issue.authority_id
-            or subject.content_hash != referenced_issue.contract_hash
+            or planned_authority is None
+            or not _same_authority_state(subject, planned_authority)
         ):
             raise ValueError(
                 "reducer event subject contradicts referenced evidence"
@@ -1104,6 +1219,13 @@ class MergeIdentity(_StrictFrozenModel):
 
 
 class ClosureEvidence(_StrictFrozenModel):
+    repository: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+        ),
+    ]
     issue_number: PositiveInt
     pull_request_number: PositiveInt
     exact_head_sha: GitSha
@@ -1150,6 +1272,8 @@ class IssueDeliveryProof(_StrictFrozenModel):
         if self.closure is not None and self.closure.issue_number != self.issue.issue_number:
             raise ValueError("closure evidence must bind the proof issue")
         if self.closure is not None:
+            if self.closure.repository.casefold() != self.issue.repository.casefold():
+                raise ValueError("closure evidence must bind the proof repository")
             if self.exact_head_sha != self.closure.exact_head_sha:
                 raise ValueError("closure evidence must bind the exact head")
             if (
@@ -1282,6 +1406,12 @@ class DeliveryReceipt(CanonicalDeliveryContract):
         exception_codes = tuple(item.code for item in self.exceptions)
         exception_by_code = {item.code: item for item in self.exceptions}
         recovery_codes = tuple(item.exception_code for item in self.recovery_history)
+        proof_exception_items = tuple(
+            item
+            for proof in self.issue_proofs
+            for item in proof.exceptions
+        )
+        proof_exceptions = {item.code: item for item in proof_exception_items}
         if (
             len(exception_codes) != len(set(exception_codes))
             or len(recovery_codes) != len(set(recovery_codes))
@@ -1300,10 +1430,6 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             and proof.review_disposition not in {None, "reject"}
             and all(check.status == "passed" for check in proof.check_evidence)
             and not proof.exceptions
-            and (
-                proof.review_disposition != "accept_with_risk"
-                or bool(proof.known_defects)
-            )
             for proof in self.issue_proofs
         )
         if self.terminal_outcome == "delivered":
@@ -1336,6 +1462,21 @@ class DeliveryReceipt(CanonicalDeliveryContract):
                 raise ValueError(
                     "blocked, failed, or cancelled outcome cannot carry delivered proof"
                 )
+        recovery_only_exceptions = tuple(
+            exception_by_code[code]
+            for code in recovery_codes
+            if code not in proof_exceptions
+        )
+        expected_receipt_exceptions = (
+            proof_exception_items + recovery_only_exceptions
+        )
+        if (
+            len(proof_exception_items) != len(proof_exceptions)
+            or self.exceptions != expected_receipt_exceptions
+        ):
+            raise ValueError(
+                "receipt exceptions must exactly project proof and recovery evidence"
+            )
         known_defect_count = sum(
             len(proof.known_defects) for proof in self.issue_proofs
         )
@@ -1425,7 +1566,17 @@ def validate_delivery_receipt_evidence(
             or worker.issue != proof.issue
             or worker.exact_head_sha != proof.exact_head_sha
             or worker.pull_request_number != pull_request_number
-            or not set(worker.exceptions).issubset(set(proof.exceptions))
+            or worker.exceptions != proof.exceptions
+            or (
+                proof.closure is not None
+                and (
+                    proof.closure.repository.casefold()
+                    != proof.issue.repository.casefold()
+                    or proof.closure.pull_request_number
+                    != pull_request_number
+                    or proof.closure.exact_head_sha != proof.exact_head_sha
+                )
+            )
         ):
             raise ValueError(
                 "receipt proof does not match worker run, plan, scope, PR, head, or exceptions"
