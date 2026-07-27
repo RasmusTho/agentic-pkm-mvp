@@ -2720,6 +2720,56 @@ def test_rest_registry_discovery_retains_unlabeled_title_identity(
     assert sum(endpoint.startswith("search/issues?") for endpoint in requests) == 1
 
 
+def test_rest_selector_discovery_is_cached_before_label_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    label_present = True
+    labeled = {
+        "number": 900,
+        "title": known_defects.REGISTRY_TITLE,
+        "state": "open",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": known_defects.REGISTRY_LABEL},
+        ],
+    }
+    unlabeled = {
+        **labeled,
+        "labels": [{"name": "type:bug"}],
+    }
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
+        ):
+            return [labeled] if label_present else []
+        if endpoint.startswith("search/issues?"):
+            return {
+                "incomplete_results": False,
+                "items": [],
+            }
+        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/900":
+            return unlabeled
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    assert gateway.list_registry_issues("all") == [labeled]
+    assert gateway._registry_identity_numbers == {900}
+    label_present = False
+    assert gateway.list_registry_issues("all") == [unlabeled]
+    with pytest.raises(known_defects.KnownDefectsError, match="canonical label"):
+        known_defects._select_registry(gateway, None)
+
+
 def test_known_defect_label_is_canonical_and_registry_only() -> None:
     taxonomy = (
         REPO_ROOT / ".codex" / "skills" / "_shared" / "LABEL_TAXONOMY.md"

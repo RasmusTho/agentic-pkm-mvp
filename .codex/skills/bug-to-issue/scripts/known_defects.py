@@ -431,7 +431,11 @@ class GhRegistryGateway:
             for issue in labeled_issues
             if "pull_request" not in issue
         }
-        for number in self._search_registry_identity_numbers():
+        self._search_registry_identity_numbers()
+        if self._registry_identity_numbers is None:
+            raise KnownDefectsError("registry identity cache failed to initialize")
+        self._registry_identity_numbers.update(issues_by_number)
+        for number in self._registry_identity_numbers:
             if number not in issues_by_number:
                 issues_by_number[number] = self.get_issue(number)
         return [
@@ -920,6 +924,12 @@ def _select_registry(
                 f"--registry-issue #{registry_issue} is not the single open registry"
             )
         return selected[0]
+    if open_registries:
+        return open_registries[0]
+    issues = _registry_inventory(gateway, recover_bootstrap=True)
+    open_registries = [
+        issue for issue in issues if str(issue.get("state", "")).lower() == "open"
+    ]
     if open_registries:
         return open_registries[0]
     created = gateway.create_registry_issue()
