@@ -381,9 +381,21 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             for value in candidate.get("dependencies", candidate.get("depends_on", []))
         ],
         "dependencies_satisfied": bool(candidate.get("dependencies_satisfied", False)),
-        "strict_ready": bool(candidate.get("strict_ready", True)),
-        "authority_ambiguous": bool(candidate.get("authority_ambiguous", False)),
-        "has_migration": bool(candidate.get("has_migration", False)),
+        "strict_ready": _normalize_optional_bool(candidate.get("strict_ready"), "strict_ready"),
+        "dependencies_known": _normalize_optional_bool(
+            candidate.get("dependencies_known"), "dependencies_known"
+        ),
+        "authority_ambiguous": _normalize_optional_bool(
+            candidate.get("authority_ambiguous"), "authority_ambiguous"
+        ),
+        "has_migration": _normalize_optional_bool(
+            candidate.get("has_migration"), "has_migration"
+        ),
+        "contract_surfaces": set(
+            _normalize_string_list(
+                candidate.get("contract_surfaces", []), "contract_surfaces"
+            )
+        ),
         "likely_touched_files": set(
             _normalize_string_list(
                 candidate.get("likely_touched_files", []),
@@ -468,20 +480,25 @@ def _validate_independent_fast_lane_admission(
     candidates: list[dict[str, Any]], *, independent_issue_numbers: list[int]
 ) -> None:
     by_number = {candidate["issue_number"]: candidate for candidate in candidates}
-    if set(by_number) != set(independent_issue_numbers):
+    if (
+        len(candidates) != len(independent_issue_numbers)
+        or len(by_number) != len(candidates)
+        or set(by_number) != set(independent_issue_numbers)
+    ):
         raise EpicDispatchError(
             "independent issue set must match candidates exactly"
         )
     for candidate in candidates:
-        if not candidate["strict_ready"] or candidate["state"] != "OPEN" or "agent:ready" not in candidate["labels"]:
+        if candidate["strict_ready"] is not True or candidate["state"] != "OPEN" or "agent:ready" not in candidate["labels"]:
             raise EpicDispatchError(f"issue {candidate['issue_number']} is not strictly ready")
-        if candidate["dependencies"]:
+        if candidate["dependencies_known"] is not True or candidate["dependencies"]:
             raise EpicDispatchError(f"issue {candidate['issue_number']} has dependencies")
-        if candidate["authority_ambiguous"]:
+        if candidate["authority_ambiguous"] is not False:
             raise EpicDispatchError(f"issue {candidate['issue_number']} has authority ambiguity")
-        if candidate["has_migration"]:
+        if candidate["has_migration"] is not False:
             raise EpicDispatchError(f"issue {candidate['issue_number']} includes a migration")
     touched: set[str] = set()
+    contracts: set[str] = set()
     for candidate in candidates:
         overlap = touched.intersection(candidate["likely_touched_files"])
         if overlap:
@@ -489,6 +506,12 @@ def _validate_independent_fast_lane_admission(
                 f"independent issue set has likely shared mutation surface: {sorted(overlap)}"
             )
         touched.update(candidate["likely_touched_files"])
+        contract_overlap = contracts.intersection(candidate["contract_surfaces"])
+        if contract_overlap:
+            raise EpicDispatchError(
+                f"independent issue set has contract overlap: {sorted(contract_overlap)}"
+            )
+        contracts.update(candidate["contract_surfaces"])
 
 
 def _normalize_runtime_targets(values: Iterable[str]) -> list[str]:
@@ -510,6 +533,14 @@ def _normalize_string(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise EpicDispatchError(f"{field} must be a non-empty string")
     return value.strip()
+
+
+def _normalize_optional_bool(value: Any, field: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise EpicDispatchError(f"{field} must be a boolean when supplied")
+    return value
 
 
 def _normalize_optional_string(value: Any) -> str | None:

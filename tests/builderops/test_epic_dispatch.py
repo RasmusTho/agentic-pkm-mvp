@@ -47,6 +47,11 @@ def _candidate(
         "owner_doc_writeback_required": owner_doc_writeback_required,
         "dependencies": dependencies or [],
         "dependencies_satisfied": dependencies_satisfied,
+        "dependencies_known": True,
+        "strict_ready": True,
+        "authority_ambiguous": False,
+        "has_migration": False,
+        "contract_surfaces": [],
         "source_anchors": ["#3229"],
         "known_constraints": ["worker self-claims through issue-to-code"],
         "validation": ["pytest -q tests/builderops/test_epic_dispatch.py"],
@@ -337,6 +342,29 @@ def test_fast_lane_rejects_non_independent_or_over_budget_sets() -> None:
         assert "must not exceed 2" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected pilot cap rejection")
+
+    missing_fact = _candidate(5203, risk="high")
+    missing_fact.pop("strict_ready")
+    duplicate = [_candidate(5204, risk="high"), _candidate(5204, risk="high")]
+    contract_overlap = [
+        dict(_candidate(5205, risk="high"), contract_surfaces=["contract/a"]),
+        dict(_candidate(5206, risk="high"), contract_surfaces=["contract/a"]),
+    ]
+    for candidates, scope, expected in (
+        ([missing_fact], [5203], "strictly ready"),
+        (duplicate, [5204], "match candidates exactly"),
+        (contract_overlap, [5205, 5206], "contract overlap"),
+    ):
+        try:
+            build_dispatch_plan(
+                independent_issue_numbers=scope,
+                run_id="independent-fail-closed",
+                candidates=candidates,
+            )
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"expected {expected} rejection")
 
 
 def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
