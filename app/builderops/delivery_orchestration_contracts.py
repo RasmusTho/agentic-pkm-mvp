@@ -1203,6 +1203,21 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError(
                 "only known-defect effects require an exact defect target"
             )
+        if (
+            self.effect_class == "record_known_defect"
+            and self.known_defect_registry_ref is not None
+            and re.fullmatch(
+                (
+                    rf"registry:{re.escape(self.issue.repository)}/issues/"
+                    r"[1-9][0-9]*:KD-[0-9A-F]{12}"
+                ),
+                self.known_defect_registry_ref,
+            )
+            is None
+        ):
+            raise ValueError(
+                "known-defect target must use canonical repository registry identity"
+            )
         expected_input_hash = delivery_effect_input_hash(
             run_id=self.run_id,
             plan_ref=self.plan_ref,
@@ -1494,6 +1509,29 @@ def validate_reducer_effect_evidence(
         worker_results=worker_results,
         review_results=review_results,
     )
+    causal_pr_and_head: tuple[int | None, str | None] | None = None
+    if causal_effect is not None:
+        causal_pr_and_head = (
+            causal_effect.pull_request_number,
+            causal_effect.exact_head_sha,
+        )
+    elif causal_worker is not None:
+        causal_pr_and_head = (
+            causal_worker.pull_request_number,
+            causal_worker.exact_head_sha,
+        )
+    elif causal_review is not None:
+        causal_pr_and_head = (
+            causal_review.pull_request_number,
+            causal_review.exact_head_sha,
+        )
+    if causal_pr_and_head is not None and causal_pr_and_head != (
+        effect.pull_request_number,
+        effect.exact_head_sha,
+    ):
+        raise ValueError(
+            "reducer effect PR and head must match its causal evidence"
+        )
     if effect.provenance.created_at < plan.provenance.created_at:
         raise ValueError("reducer effect must follow plan provenance")
     if (
@@ -2681,6 +2719,18 @@ def validate_delivery_receipt_evidence(
             recovery_effect = effects[
                 recovery_step.effect_ref.contract_id
             ]
+            if recovery_step.effect_class == "record_known_defect" and (
+                review is None
+                or recovery_effect.known_defect_finding_hash
+                not in {
+                    canonical_hash(item)
+                    for item in review.findings
+                    if item.severity == "P2"
+                }
+            ):
+                raise ValueError(
+                    "known-defect recovery target must bind an exact P2 finding"
+                )
             if recovery_step.outcome != "reconciled":
                 continue
             if recovery_step.effect_class == "record_known_defect":
@@ -2815,10 +2865,26 @@ def validate_delivery_receipt_evidence(
             "receipt terminal outcome contradicts resolved issue proofs"
         )
     checked_proofs = sum(bool(proof.check_evidence) for proof in receipt.issue_proofs)
+    evidenced_human_interventions = sum(
+        actor.actor_type == "human"
+        for actor in (
+            receipt.provenance.created_by,
+            *(item.provenance.created_by for item in worker_results),
+            *(item.provenance.created_by for item in review_results),
+            *(item.provenance.created_by for item in reducer_effects),
+            *(
+                proof.merge_identity.merged_by
+                for proof in receipt.issue_proofs
+                if proof.merge_identity is not None
+            ),
+        )
+    )
     if (
         receipt.tcd_metrics.worker_starts < len(worker_results)
         or receipt.tcd_metrics.review_rounds < len(review_results)
         or receipt.tcd_metrics.ci_wait_cycles < checked_proofs
+        or receipt.tcd_metrics.human_interventions
+        < evidenced_human_interventions
         or receipt.tcd_metrics.deterministic_transitions
         < len(receipt.issue_proofs) + len(receipt.recovery_history)
     ):

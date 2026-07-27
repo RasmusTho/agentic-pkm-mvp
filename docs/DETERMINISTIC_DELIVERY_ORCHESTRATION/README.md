@@ -120,9 +120,9 @@ envelope but no transport or storage shape becomes contract authority.
 - **INV-DDO-6 — effects are idempotent and fenced.** Every external effect has a stable identity,
   expected-state guard, read-before-write check, durable worker/run correlation, and reconciliation
   path. Duplicate delivery events produce one logical effect. Every non-start causal event must
-  resolve its referenced effect or structured result before it can authorize a later effect; a
-  known-defect write additionally binds the exact registry reference and finding hash so distinct
-  P2 dispositions cannot collapse into one effect identity.
+  resolve its referenced effect or structured result, including the same PR and exact head, before
+  it can authorize a later effect; a known-defect write additionally binds the exact registry
+  reference and finding hash so distinct P2 dispositions cannot collapse into one effect identity.
 - **INV-DDO-7 — exact-head evidence.** CI, review, merge eligibility, and closure evidence bind the
   exact current PR head. New commits invalidate prior evidence.
 - **INV-DDO-8 — severity routing is fail-closed.** P0/P1, protected risk, false-green evidence,
@@ -222,6 +222,9 @@ Every pilot receipt records:
 - known P2 dispositions;
 - escaped P0/P1 defects or false-green evidence; and
 - total lead time from approved plan to terminal receipt.
+
+Evidence-derived minima fail closed: an explicitly human-authored worker, review, recovery effect,
+receipt, or merge cannot coexist with a lower `human_interventions` count.
 
 Targets:
 
