@@ -23,11 +23,13 @@ from typing import Any
 import pytest
 
 from app.events.types import INGEST_VAULT_CHANGED
+from app import stores as stores_module
 from app.services import outbox as outbox_service
 from app.services.outbox import write_outbox_event
 from app import objects as object_store_module
 from app.objects import ObjectStore
 from app.workers import outbox_worker
+from app.write_guard import DEFAULT_WRITE_GUARD
 
 pytestmark = pytest.mark.not_pg
 
@@ -122,8 +124,14 @@ class FakeOutboxConn:
 @pytest.fixture()
 def fake_conn(monkeypatch: pytest.MonkeyPatch) -> FakeOutboxConn:
     conn = FakeOutboxConn()
-    # Route every outbox DB call through the single in-memory connection.
+    # Route every outbox DB call through the single in-memory connection.  This
+    # is an integration-equivalent Postgres outbox fixture, so it must select
+    # the durable outbox path rather than memory-mode's intentional no-op.
+    monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setattr(outbox_service, "_open_conn", lambda: conn)
+    # This worker harness models only the outbox as Postgres; its domain-store
+    # and vector assertions remain intentionally in-memory.
+    monkeypatch.setattr(stores_module, "_resolve_backend", lambda: "memory")
     return conn
 
 
@@ -149,6 +157,9 @@ def _stub_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(indexer_module, "get_embedding_identity", lambda: _Identity())
     monkeypatch.setattr(indexer_module, "get_vector_index", lambda: _VectorIndex())
+    # The fake outbox intentionally selects its Postgres path, but this worker
+    # test is not an integration test of the separate runtime-health guard.
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "running", "reason": "test"})
 
 
 @pytest.fixture(autouse=True)
@@ -343,10 +354,6 @@ def test_transient_failures_do_not_dead_letter_legitimate_event(
     monkeypatch.setenv("WORKER_MAX_DISPATCH_ATTEMPTS", "3")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
-    # Memory backend is explicit-only since KERNEL-03 (#2765); this test wants
-    # a no-DB unit environment, which now requires the explicit opt-in.
-    monkeypatch.setenv("STORE_BACKEND", "memory")
-
     row_id = _enqueue_ingest(note_path, trace_id="trace-transient")
     assert row_id
 
