@@ -99,6 +99,7 @@ _RESERVED_SECTION_HEADINGS = (
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _WIKILINK_RE = re.compile(r"!?\[\[([^\]\n|]*)(?:\|([^\]\n]*))?\]\]")
+_OBSIDIAN_EMBED_RE = re.compile(r"!\[\[[^\n]*?\]\]")
 _IGNORED_INLINE_MARKERS = frozenset(r"[]*_`~\\")
 _APOSTROPHE_CHARACTERS = frozenset({"'", "’", "‘", "ʼ"})
 _CONTRACTION_EXPANSIONS: Mapping[str, tuple[str, ...]] = {
@@ -152,7 +153,10 @@ def render_review_required_note(
                 f"proposal content must be text for module {section.module_id!r}"
             )
         _assert_no_bidi_controls(section.content, surface="proposal content")
-        content = section.content.strip()
+        content = _normalize_generated_markdown(
+            section.content,
+            surface="proposal content",
+        ).strip()
         if not content:
             continue
         module_id = section.module_id.strip()
@@ -163,7 +167,10 @@ def render_review_required_note(
                 f"duplicate proposal module_id is not allowed: {module_id!r}"
             )
         _assert_no_bidi_controls(section.title, surface="proposal title")
-        title = section.title.strip()
+        title = _normalize_generated_markdown(
+            section.title,
+            surface="proposal title",
+        ).strip()
         if not title:
             raise NoteRenderError(
                 f"proposal title must be non-blank for module {section.module_id!r}"
@@ -227,6 +234,7 @@ artifact; this source note remains provenance._
 """
     rendered = f"---\n{yaml_block}\n---\n{body}"
     _assert_no_bidi_controls(rendered, surface="rendered output")
+    _assert_no_active_obsidian_embeds(rendered, surface="rendered output")
     return rendered
 
 
@@ -317,6 +325,8 @@ def _analyze_visible_markdown(
 
 
 def _prepare_markdown_projection(value: str) -> str:
+    value = _strip_obsidian_comments(value)
+    _assert_no_active_obsidian_embeds(value, surface="lint projection")
     prepared = _WIKILINK_RE.sub(
         lambda match: match.group(2) if match.group(2) is not None else match.group(1),
         value,
@@ -369,6 +379,45 @@ def _normalize_plain_text(value: str) -> NormalizedTokens:
     for token in token_text.split():
         expanded.extend(_CONTRACTION_EXPANSIONS.get(token, (token,)))
     return tuple(expanded)
+
+
+def _normalize_generated_markdown(value: str, *, surface: str) -> str:
+    normalized = _strip_obsidian_comments(value)
+    _assert_no_active_obsidian_embeds(normalized, surface=surface)
+    return normalized
+
+
+def _strip_obsidian_comments(value: str) -> str:
+    if "%%" not in value:
+        return value
+
+    _assert_obsidian_comment_delimiters_outside_code(value)
+    parts = value.split("%%")
+    if len(parts) % 2 == 0:
+        raise NoteRenderError("unterminated Obsidian comment is not allowed")
+    return "".join(parts[::2])
+
+
+def _assert_obsidian_comment_delimiters_outside_code(value: str) -> None:
+    for token in _walk_markdown_tokens(_MARKDOWN.parse(value)):
+        if token.type in {"code_inline", "code_block", "fence"} and "%%" in token.content:
+            raise NoteRenderError(
+                "Obsidian comment delimiters inside Markdown code are ambiguous"
+            )
+
+
+def _walk_markdown_tokens(tokens: Sequence[Token]) -> Sequence[Token]:
+    walked: list[Token] = []
+    for token in tokens:
+        walked.append(token)
+        if token.children:
+            walked.extend(_walk_markdown_tokens(token.children))
+    return tuple(walked)
+
+
+def _assert_no_active_obsidian_embeds(value: str, *, surface: str) -> None:
+    if _OBSIDIAN_EMBED_RE.search(value) is not None:
+        raise NoteRenderError(f"active Obsidian embeds are not allowed in {surface}")
 
 
 def _assert_no_bidi_controls(value: str, *, surface: str) -> None:

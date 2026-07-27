@@ -42,6 +42,12 @@ pipeline ends here; triage is human territory.
   closed on frontmatter, proposal titles/content, evidence, and the final rendered artifact.
   Legitimate RTL prose and benign joiners such as emoji ZWJ remain renderable; Unicode confusable
   detection and semantic paraphrase classification are outside this exact declared lint.
+- Removes well-formed Obsidian `%%...%%` comments from generated titles/content before both linting
+  and materialization, so hidden spans can neither split visible authority text nor cause invisible
+  false positives. Unterminated comments and comment delimiters inside Markdown code fail closed as
+  ambiguous. Active Obsidian `![[...]]` embeds also fail closed because they can transclude content
+  that the local renderer did not validate; ordinary non-embed wikilinks retain their visible-label
+  semantics.
 - Constrains registered module titles to one line, rejects reserved or owner-attributing visible
   title text, escapes raw HTML in all title/evidence fields, and flattens evidence fields to one
   line. Source-controlled title, URL, and lineage values therefore cannot create raw-HTML or

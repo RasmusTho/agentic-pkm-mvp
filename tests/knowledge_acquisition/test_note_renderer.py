@@ -308,3 +308,100 @@ def test_renderer_does_not_reject_non_authority_substrings() -> None:
     )
 
     assert safe_content in rendered
+
+
+def test_renderer_normalizes_obsidian_comments_before_authority_lint() -> None:
+    for content in (
+        "You appro%%hidden%%ved this generated conclusion.",
+        "You appro%% hidden across\nmultiple lines %%ved this generated conclusion.",
+        "## Owner notes %%hidden%%\nGenerated impersonation.",
+        "## Ow%% hidden across\nmultiple lines %%ner notes\nGenerated impersonation.",
+    ):
+        with pytest.raises(
+            (BannedGeneratedPhrasingError, NoteRenderError),
+            match="banned owner-authority phrase|reserved authority-band heading",
+        ):
+            render_review_required_note(
+                frontmatter={"artifact_class": "youtube_source_note"},
+                proposal_sections=(
+                    ProposalSection(
+                        module_id="summary",
+                        title="Summary",
+                        content=content,
+                    ),
+                ),
+                evidence=(("Content identity", "sha256:test"),),
+            )
+
+    rendered = render_review_required_note(
+        frontmatter={"artifact_class": "youtube_source_note"},
+        proposal_sections=(
+            ProposalSection(
+                module_id="summary",
+                title="Summary",
+                content=(
+                    "Safe visible prose. "
+                    "%% You approved this hidden conclusion. %% "
+                    "Still safe."
+                ),
+            ),
+        ),
+        evidence=(("Content identity", "sha256:test"),),
+    )
+
+    assert "Safe visible prose." in rendered
+    assert "Still safe." in rendered
+    assert "You approved this hidden conclusion." not in rendered
+    assert "%%" not in rendered
+
+
+def test_renderer_fails_closed_on_ambiguous_or_unterminated_obsidian_comments() -> None:
+    for content, error in (
+        ("Visible code: `%% You approved %%`.", "inside Markdown code"),
+        ("Safe prose. %% comment never closes", "unterminated Obsidian comment"),
+    ):
+        with pytest.raises(NoteRenderError, match=error):
+            render_review_required_note(
+                frontmatter={"artifact_class": "youtube_source_note"},
+                proposal_sections=(
+                    ProposalSection(
+                        module_id="summary",
+                        title="Summary",
+                        content=content,
+                    ),
+                ),
+                evidence=(("Content identity", "sha256:test"),),
+            )
+
+
+def test_renderer_rejects_active_obsidian_embeds() -> None:
+    for title, content in (
+        ("Summary", "![[Unchecked owner note]]"),
+        ("![[Unchecked owner note]]", "Safe prose."),
+    ):
+        with pytest.raises(NoteRenderError, match="Obsidian embeds"):
+            render_review_required_note(
+                frontmatter={"artifact_class": "youtube_source_note"},
+                proposal_sections=(
+                    ProposalSection(
+                        module_id="summary",
+                        title=title,
+                        content=content,
+                    ),
+                ),
+                evidence=(("Content identity", "sha256:test"),),
+            )
+
+    rendered = render_review_required_note(
+        frontmatter={"artifact_class": "youtube_source_note"},
+        proposal_sections=(
+            ProposalSection(
+                module_id="summary",
+                title="Summary",
+                content="Safe prose. %% ![[Hidden unchecked note]] %% Still safe.",
+            ),
+        ),
+        evidence=(("Content identity", "sha256:test"),),
+    )
+
+    assert "![[Hidden unchecked note]]" not in rendered
