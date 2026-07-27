@@ -88,6 +88,13 @@ coordination:
 | CKM bridge | Draft, preview, authenticated initiation handoff, and receipt projection | Delivery execution or static cockpit mutation | Operator overview and initiation |
 | TCD/acceptance harness | Baseline, pilot metrics, fault tests, and capability acceptance | Runtime scheduling | Evidence and rollout |
 
+The durable carrier for `DeliveryInitiation.v1` remains intentionally undecided. Builder System
+governance owns that later semantic/governance gate. Revisit it only after the compiler, reducer,
+BuilderOps reconciliation binding, and CKM bridge have supplied evidence that either the live
+`PromotionIntent` semantics are sufficient or a distinct record has a lower total contract and
+migration cost. Until then, canonical initiation bytes may be transported by a bounded approval
+envelope but no transport or storage shape becomes contract authority.
+
 ## Deterministic, agentic, and owner decisions
 
 | Decision | Owner |
