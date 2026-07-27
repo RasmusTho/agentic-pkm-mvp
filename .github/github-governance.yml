@@ -15,6 +15,7 @@ issues:
   special_containers:
     known_defects_registry:
       selector_label: state:known-defect
+      canonical_title: "Known Defects Registry (rolling)"
       exact_labels:
         - type:bug
         - state:known-defect

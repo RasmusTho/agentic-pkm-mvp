@@ -10,6 +10,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER_PATH = (
@@ -2891,6 +2892,15 @@ def test_known_defect_label_is_canonical_and_registry_only() -> None:
     assert "must never carry `agent:ready`" in taxonomy
     assert "normal bounded `type:bug` Issue" in skill
     assert "locked_required: true" in governance
+    governance_contract = yaml.safe_load(governance)
+    registry_contract = governance_contract["issues"]["special_containers"][
+        "known_defects_registry"
+    ]
+    assert registry_contract["canonical_title"] == known_defects.REGISTRY_TITLE
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
+    ).read_text(encoding="utf-8")
+    assert known_defects.REGISTRY_TITLE in workflow
 
 
 def test_governance_lane_label_is_declared_on_every_authoritative_surface() -> None:
