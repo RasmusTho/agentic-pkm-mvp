@@ -1,5 +1,4 @@
 ## Change Lane
-- [ ] Implementation lane
 - [ ] Docs authoring lane
 - [ ] Governance lane
 
@@ -45,42 +44,10 @@ Resolve to exactly one (`docs/architecture/SBS_OPERATING_MODEL.md` §9). A comme
 -
 -
 
-## Implementation Scope Check
-- [ ] Change stays within the linked Issue scope.
-- [ ] Constraints from the linked Issue were followed.
-- [ ] Acceptance Criteria from the linked Issue are satisfied.
-- [ ] Docs were updated in the same change when behavior/contracts changed.
-- [ ] Owner docs and roadmap/plan wording were updated when this PR turns a tracked backlog item into shipped reality.
-
-## Docs Authoring Check
-- [ ] This PR only changes approved docs-authoring surfaces.
-- [ ] No code, runtime behavior, contracts, or shipped reality changed.
-- [ ] This PR prepares or clarifies authoritative docs/specification and may later feed `docs-to-issue` extraction.
-
-## Governance Lane Check
-- [ ] This PR only changes approved governance surfaces.
-- [ ] The change is limited to repo governance, agent workflow, or lightweight enforcement.
-- [ ] No product/runtime implementation or shipped feature behavior changed.
-
-## Validation
-Implementation lane:
-- [ ] `ruff check app tests`
-- [ ] If files under `app/` or `tests/` changed, lint output from `ruff check app tests` is included below or a tooling limitation is stated.
-- [ ] `mypy app`
-- [ ] Governing `Verify:` targets and affected-subsystem tests passed
-- [ ] If the contract or cross-system blast radius requires the repo-wide non-PG suite, it ran through `scripts/run_with_host_lease.py`; otherwise the focused-scope rationale is recorded below
-
-Docs authoring lane:
-- [ ] Docs/governance checks run as appropriate for the touched surfaces
-- [ ] Any validation gaps or tooling limitations are stated explicitly
-
-Governance lane:
-- [ ] Governance checks run as appropriate for the touched surfaces
-- [ ] Any validation gaps or tooling limitations are stated explicitly
-
 ## BuilderOps Routing
 - Records/projections/receipts: <ids or "none">
 - Reason: <why no BuilderOps material was created, or what was routed>
 
 ## Notes
 - State any residual risks, follow-ups, or assumptions.
+- Escalate to the repo-wide non-PG suite only through `scripts/run_with_host_lease.py --resource pytest-not-pg ...`; see `docs/development/DEV_WORKFLOW.md :: Validation baseline`.

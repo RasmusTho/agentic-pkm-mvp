@@ -24,13 +24,6 @@
     "boundary_risk": "low"
   },
   "owner_doc_resolution": "updated",
-  "validation": [
-    "pytest -q tests/scripts/test_pr_body_generator.py tests/governance/test_issue_pr_governance.py",
-    "ruff check scripts tests/scripts/test_pr_body_generator.py",
-    "python3 scripts/docs_guard.py",
-    "python3 -m py_compile scripts/pr_body_generator.py",
-    "git diff --check"
-  ],
   "builderops_records": "#3275 dispatcher claim lease-a3e06b41 and PR-body generator output",
   "builderops_reason": "Issue-backed Builder System governance slice with PR contract helper output.",
   "notes": "Generated body remains editable before PR creation."
