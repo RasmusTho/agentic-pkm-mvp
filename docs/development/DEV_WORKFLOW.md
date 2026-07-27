@@ -321,7 +321,11 @@ Enforcement surfaces:
   with the lifecycle lock held through that one command. Before Git removal it durably records a
   generation-bound `removal_pending` transition. Successful removal durably retires the exact
   generation before branch deletion; restart reconciliation completes only a pending transition
-  and never infers removal from an ordinary missing lifecycle record. Broad `git worktree prune`
+  and never infers removal from an ordinary missing lifecycle record. Branch deletion after a
+  removal revalidates both the `worktree:<path>` and the `branch:<branch>` lease identity
+  immediately before the irreversible delete and fails closed if either is claimed. The removal
+  tombstone keeps the path→branch association, so a later cleanup run still binds the branch to its
+  former worktree path and preserves it while that path lease is active. Broad `git worktree prune`
   remains report-only. The current checkout is always skipped.
 - Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.

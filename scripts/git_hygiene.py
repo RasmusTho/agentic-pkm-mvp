@@ -396,6 +396,67 @@ def _branch_has_active_lease(branch: str, active_resources: set[str]) -> bool:
     return f"branch:{branch}" in active_resources
 
 
+def _canonical_path_key(path: str) -> str:
+    return str(Path(path).expanduser().resolve(strict=False))
+
+
+def _path_identities(path: str | None) -> set[str]:
+    """Both spellings of a worktree path, so lease matching is not spelling-bound."""
+    if not path:
+        return set()
+    return {path, _canonical_path_key(path)}
+
+
+def _leased_worktree_paths(active_resources: set[str]) -> set[str]:
+    paths: set[str] = set()
+    for resource in active_resources:
+        if not resource.startswith("worktree:"):
+            continue
+        paths |= _path_identities(resource.removeprefix("worktree:"))
+    return paths
+
+
+def _worktree_path_has_active_lease(path: str, active_resources: set[str]) -> bool:
+    return bool(_path_identities(path) & _leased_worktree_paths(active_resources))
+
+
+def _lifecycle_worktree_paths_for_branch(
+    branch: str | None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> set[str]:
+    """Every worktree path a lifecycle record binds to ``branch``.
+
+    Records survive the checkout they describe: removal only tombstones them
+    (``status == "removed"``), it never drops the path/branch pair. That durable
+    association is what lets a later cleanup run — after the checkout is gone and
+    the branch looks like an ordinary local branch — still recognise a
+    ``worktree:<path>`` lease as authority over the branch that path held.
+    """
+    if not branch or lifecycle_records is None:
+        return set()
+    paths: set[str] = set()
+    for key, record in lifecycle_records.items():
+        if not isinstance(record, Mapping) or record.get("branch") != branch:
+            continue
+        paths |= _path_identities(key)
+        recorded_path = record.get("path")
+        if isinstance(recorded_path, str):
+            paths |= _path_identities(recorded_path)
+    return paths
+
+
+def _branch_has_worktree_path_lease(
+    branch: str,
+    active_resources: set[str],
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> bool:
+    """True when an active lease holds a worktree path bound to ``branch``."""
+    return bool(
+        _lifecycle_worktree_paths_for_branch(branch, lifecycle_records)
+        & _leased_worktree_paths(active_resources)
+    )
+
+
 def _branch_has_lifecycle_preservation(
     branch: str,
     lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
@@ -508,7 +569,7 @@ def _worktree_reclaim_reason(
     # evidence, not stale metadata: never make it a removal candidate.
     if locked:
         return "locked_worktree", None
-    if f"worktree:{path}" in active_resources or _branch_has_active_lease(
+    if _worktree_path_has_active_lease(path, active_resources) or _branch_has_active_lease(
         branch, active_resources
     ):
         return "active_lease", None
@@ -557,6 +618,11 @@ def _local_branch_skip_reason(
         return "protected_branch"
     if _branch_has_active_lease(branch, active_resources):
         return "active_lease"
+    # A branch whose worktree the janitor already removed still belongs to the
+    # holder of that path lease: the removal tombstone keeps the path->branch
+    # association so the restart cannot reclassify it as an ordinary branch.
+    if _branch_has_worktree_path_lease(branch, active_resources, lifecycle_records):
+        return "active_worktree_path_lease"
     if _branch_has_lifecycle_preservation(branch, lifecycle_records):
         return "lifecycle_registration"
     pr = _pr_state(branch, pr_states)
@@ -593,6 +659,8 @@ def _remote_branch_skip_reason(
         return "protected_branch", False
     if _branch_has_active_lease(branch, active_resources):
         return "active_lease", False
+    if _branch_has_worktree_path_lease(branch, active_resources, lifecycle_records):
+        return "active_worktree_path_lease", False
     if _branch_has_lifecycle_preservation(branch, lifecycle_records):
         return "lifecycle_registration", False
     if branch in checked_out:
@@ -709,9 +777,9 @@ def build_janitor_plan(
         if not path:
             continue
         is_root = Path(path).resolve() == Path(current_worktree).resolve()
-        leased = f"worktree:{path}" in active_resources or _branch_has_active_lease(
-            branch, active_resources
-        )
+        leased = _worktree_path_has_active_lease(
+            path, active_resources
+        ) or _branch_has_active_lease(branch, active_resources)
         locked = "locked" in worktree
         # A missing worktree is an orphan (its metadata is pruned, not reclaimed)
         # — but the root is never missing, and active leases or locks still win
@@ -1029,17 +1097,28 @@ def janitor_apply(
         path: str | None = None,
         branch: str | None = None,
     ) -> bool:
+        """Fail closed unless BOTH identities are still free of an active lease.
+
+        The guarded paths are the explicit target path plus every worktree path a
+        lifecycle record binds to ``branch`` — including the tombstone of a path
+        this run has just removed. A `worktree:<path>` lease claimed after the
+        checkout disappeared therefore still blocks the branch deletion.
+        """
         refreshed = reload_active_leases()
         if refreshed is None:
             return True
         _, resources = refreshed
+        guarded_paths = _path_identities(path) | _lifecycle_worktree_paths_for_branch(
+            branch, lifecycle_records
+        )
         conflicts = {
             resource
-            for resource in (
-                f"worktree:{path}" if path else None,
-                f"branch:{branch}" if branch else None,
+            for resource in resources
+            if (
+                resource.startswith("worktree:")
+                and _path_identities(resource.removeprefix("worktree:")) & guarded_paths
             )
-            if resource is not None and resource in resources
+            or (branch and resource == f"branch:{branch}")
         }
         if conflicts:
             errors.append(
@@ -1127,7 +1206,13 @@ def janitor_apply(
                 "ok": False,
             }
         if len(errors) == remove_errors_before:
-            if authority_changed_for(branch=worktree.get("branch")):
+            # Revalidate the worktree path as well as the branch: the checkout is
+            # gone, but its path identity is exactly what a new owner leases, and
+            # the deletion below is irreversible for merged_pr/closed_pr proofs.
+            if authority_changed_for(
+                path=worktree.get("path"),
+                branch=worktree.get("branch"),
+            ):
                 return {
                     **plan,
                     "mode": "apply",
