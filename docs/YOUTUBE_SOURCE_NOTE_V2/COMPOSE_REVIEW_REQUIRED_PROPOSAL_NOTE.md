@@ -9,6 +9,8 @@ depends_on: [FIX_CANDIDATE_TRUTH_SURFACES.md]
 can_parallelize_with: []
 ---
 
+State: Implemented. Delivered by PR #4142 (issue #4110, 2026-07-27).
+
 # Compose Review-Required Proposal Note
 
 ## Purpose
