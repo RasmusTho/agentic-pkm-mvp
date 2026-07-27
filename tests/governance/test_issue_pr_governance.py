@@ -136,8 +136,12 @@ def test_issue_shape_workflow_rechecks_registry_lock_transitions_from_live_issue
     workflow = _read_workflow()
 
     assert "types: [opened, edited, reopened, labeled, unlabeled, locked, unlocked, closed]" in workflow
-    assert "const { data: liveIssue } = await github.rest.issues.get" in workflow
+    assert "let { data: liveIssue } = await github.rest.issues.get" in workflow
     assert "validateIssueShape(liveIssue)" in workflow
+    assert 'context.payload.action === "opened"' in workflow
+    assert "isUnlockedRegistryBootstrap" in workflow
+    assert "setTimeout(resolve, 3000)" in workflow
+    assert "({ data: liveIssue } = await github.rest.issues.get" in workflow
 
 
 def test_issue_shape_workflow_keeps_normal_issue_contract_strict() -> None:

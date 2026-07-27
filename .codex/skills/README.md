@@ -107,7 +107,7 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
   - deliberate evidence-based research pass over the live system: parallel subsystem explorers with `file:line`-anchored evidence-only briefs, cross-system synthesis, research-question resolution, invariant extraction with enforcement categories, then backlog handoff via `feature-breakdown` (reconcile against open epics, never duplicate); output is an advisory audit doc in `docs/audits/` plus an optional specification directory
 - `bug-to-issue`
   - route a discovered defect to a normal bounded GitHub bug Issue or, for confirmed deferred
-    P2/P3 review findings, to the deterministic rolling Known Defects registry; classify
+    P2 review findings, to the deterministic rolling Known Defects registry; classify
     Product/Runtime vs Builder System vs boundary before promotion chooses labels, owner docs, and
     SBS Impact
 - `temporal-doc-governance`

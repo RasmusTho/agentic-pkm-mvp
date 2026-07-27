@@ -108,18 +108,18 @@ canonical. Registry reconciliation may remove later identical comments; it must 
 second implementation Issue from them.
 
 Intake rereads the selected registry immediately before and after comment creation. If a canonical
-registry closes at either boundary, intake compensates any just-created comment and makes one
-bounded retry against a new open registry. If the body, labels, or lock state drift, intake removes
-its just-created comment and fails closed for explicit reconciliation. This keeps closure races from
-silently appending durable entries to stale registry authority. An ambiguous comment-create response
-is immediately reconciled from live Issue/comment inventories. New entry comments begin with
-`phase=pending`, which is never registry authority; only after the live registry is revalidated does
-the helper update the marker to `phase=final`, then reread registry authority once more before
-returning success. A failed or ambiguous create/update can therefore leave only a non-authoritative
-pending comment for the next retry to finalize or compensate. Closure or authority drift across the
-final PATCH moves the new final comment to non-authoritative `phase=revoked`; only an open canonical
-registry completes the receipt. Revoked tombstones are ignored by lookup and are never eligible for
-retry finalization.
+registry closes before commit, intake compensates any just-created pending comment and makes one
+bounded retry against a new open registry. If the body, labels, or lock state drift before commit,
+intake removes its just-created pending comment and fails closed for explicit reconciliation. An
+ambiguous comment-create response is immediately reconciled from live Issue/comment inventories.
+New entry comments begin with `phase=pending`, which is never registry authority. The helper proves
+the full registry inventory immediately before changing that exact comment to `phase=final`; this
+single PATCH is the linearization point and the last fallible authority mutation. A failed response
+is resolved by reading the exact comment id: an applied final marker is a committed idempotent
+result, while an unapplied pending marker remains non-authoritative for retry. Because GitHub offers
+no compare-and-swap transaction across Issues and comments, events ordered after the final PATCH are
+subsequent registry drift and are handled by lookup/governance, not by a fallible compensating write
+that could leave ambiguous authority.
 
 ### Promotion
 
@@ -148,12 +148,13 @@ priority authority. The helper rereads both registry and target after writing: c
 drift or an indeterminate read compensates the marker and fails closed, while normal claim or
 closure transitions may change only lifecycle state and the canonical agent label. Same-target
 retries revalidate the digest before returning the existing receipt. Ambiguous marker creation is
-resolved from the full comment inventory before any success receipt. Promotion comments likewise
-move from non-authoritative `phase=pending` to `phase=final` only after both registry and target
-authority validate. The helper rereads both authorities after the final PATCH before returning
-success, so drift across that boundary revokes the new final marker. Failed or ambiguous transport
-responses cannot turn an unverified pending comment into promotion authority. Stale closed-registry
-pending markers are compensated.
+resolved from the full all-generation comment inventory before any success receipt. Promotion
+comments likewise move from non-authoritative `phase=pending` to `phase=final` only after the single
+open registry, every registry generation, and target authority validate. The exact final PATCH is
+the promotion linearization point and no compensating authority mutation follows it. An ambiguous
+PATCH response is accepted only when the same comment id contains the expected final marker; an
+unapplied pending comment remains non-authoritative for retry. Stale closed-registry pending markers
+are compensated.
 The promoted Issue owns implementation scope and closure; the registry entry remains durable source
 evidence. If the entry's registry has since closed, the helper writes and discovers promotion
 authority across the current open registry instead of reopening history or duplicating the entry.

@@ -104,11 +104,26 @@ jobs:
                 : [];
             };
             // issue-shape-validator:end
-            const { data: liveIssue } = await github.rest.issues.get({
+            let { data: liveIssue } = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
             });
+            const isUnlockedRegistryBootstrap =
+              context.payload.action === "opened"
+              && liveIssue.locked !== true
+              && (liveIssue.labels || []).some(label =>
+                (typeof label === "string" ? label : label.name)
+                  === "state:known-defect"
+              );
+            if (isUnlockedRegistryBootstrap) {
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              ({ data: liveIssue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+              }));
+            }
             const errors = validateIssueShape(liveIssue);
             if (errors.length) {
               core.setFailed(errors.join("; "));
