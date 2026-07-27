@@ -579,11 +579,11 @@ None.
 
 ## YSNV2-04 — task: persist anchored transcript and extractions
 
-Labels: `type:task`, `prio:high`, `agent:blocked` (YSNV2-03; D5 resolved)
+Labels: `type:task`, `prio:high`, `agent:blocked` (YSNV2-03 delivered; D5 resolved; atomic governed HKA create-if-absent blocked by #4132)
 
 ## Context
 
-Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS`. V1 extraction results are process-local; v2 needs durable evidence lineage without note overwrite. TCD hint: Sol/xhigh — persistence, provenance, replay, partial failure, and non-destructive authority semantics have high defect cost.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS`. V1 extraction results are process-local; v2 needs durable evidence lineage without note overwrite. Pre-implementation reconciliation proved that D5 proposal companions require the canonical atomic governed KnowledgePort create-if-absent boundary tracked by #4132; #4111 remains blocked until that boundary is delivered. TCD hint: Sol/xhigh — persistence, provenance, replay, partial failure, and non-destructive authority semantics have high defect cost.
 
 ## Scope
 
@@ -616,6 +616,7 @@ Persist anchors/extractions and implement declared required/optional materializa
 ## Constraints
 
 - Each re-extraction must create a new versioned proposal companion; neither the candidate nor human-authored content may be overwritten.
+- Reuse the canonical atomic governed KnowledgePort create-if-absent boundary once #4132 delivers it; do not duplicate it or use a check-then-write substitute in this slice.
 
 ## Acceptance Criteria
 

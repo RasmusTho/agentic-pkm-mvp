@@ -27,6 +27,11 @@ Each segment receives a stable time-derived anchor and an extraction manifest re
 
 Evidence cannot be checked, upgraded, or independently rerun when it exists only in process memory. Persistence without lineage or non-destructive upgrade behavior would be worse than the current limitation.
 
+## Preconditions
+
+- YSNV2-03 is delivered.
+- The canonical atomic governed KnowledgePort create-if-absent boundary tracked by #4132 must be delivered before this slice can write D5 versioned proposal companions. Reusing that boundary is required; this slice must not add a second HKA creation mechanism or fall back to check-then-write.
+
 ## Acceptance Criteria
 
 - [ ] Persisted transcript/extraction artifacts preserve content identity, stage/version, extractor/model lineage, and resolvable segment anchors across restart.
@@ -52,8 +57,9 @@ Vault bundle layout, portable transcript projection, and synthesis/claims.
 ## Related Docs
 
 - `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Lineage and replay`
+- `docs/KNOWLEDGE_ACQUISITION/CANDIDATE_WRITEBACK.md :: Out of Scope`
 - `docs/architecture/metadata-bundle.md :: Required rules`
 
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:high`, `agent:blocked` pending YSNV2-03; D5 is resolved. SBS class: Product/Runtime. Recommended capability: Sol/xhigh; persistence, provenance, replay, and non-destructive authority semantics have high defect cost.
+Live Issue #4111 is `type:task`, `prio:high`, `agent:blocked`. YSNV2-03 and D5 are resolved, but the atomic governed HKA create-if-absent prerequisite remains blocked in #4132. SBS class: Product/Runtime. Recommended capability after that prerequisite merges: Sol/xhigh; persistence, provenance, replay, and non-destructive authority semantics have high defect cost.
