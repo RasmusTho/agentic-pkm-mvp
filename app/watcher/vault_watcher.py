@@ -531,7 +531,7 @@ def run_watcher_tick(
         if (
             watcher_panel_candidate(frontmatter, raw_markdown)
             and watcher_may_run_panel(frontmatter)
-            and watcher_panel_writeback_allowed(rel_path)
+            and watcher_panel_writeback_allowed(rel_path, vault_root=vault_root)
         ):
             policy_allowed_paths.append(path)
         else:
@@ -618,6 +618,12 @@ def run_watcher_tick(
         store = ObjectStore()
         for note_path in policy_allowed_paths:
             rel_path = note_path.relative_to(vault_root)
+            if not watcher_panel_writeback_allowed(rel_path, vault_root=vault_root):
+                summary["panel_skipped_policy"] += 1
+                messages.append(
+                    f"Watcher policy denies non-canonical writeback for {rel_path}"
+                )
+                continue
             try:
                 current_markdown, expected_version = read_note_text_with_version(
                     note_path
@@ -715,6 +721,15 @@ def run_watcher_tick(
                     continue
 
                 if panel_result.updated_markdown != current_markdown:
+                    if not watcher_panel_writeback_allowed(
+                        rel_path,
+                        vault_root=vault_root,
+                    ):
+                        messages.append(
+                            f"Warning: panel write path changed for {note_path}"
+                        )
+                        summary["errors"] += 1
+                        continue
                     try:
                         write_note_from_absolute(
                             note_path,

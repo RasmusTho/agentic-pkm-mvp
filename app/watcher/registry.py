@@ -323,6 +323,12 @@ def _write_markdown_if_changed(
     if original == updated:
         return False
     try:
+        rel_path = note_path.relative_to(vault_root)
+    except ValueError:
+        return False
+    if not watcher_panel_writeback_allowed(rel_path, vault_root=vault_root):
+        return False
+    try:
         write_note_from_absolute(
             note_path,
             updated,
@@ -386,7 +392,7 @@ def _process_panel_note(
         str(rel_path),
         str(note_path),
     )
-    if not watcher_panel_writeback_allowed(rel_path):
+    if not watcher_panel_writeback_allowed(rel_path, vault_root=vault_root):
         logger.info(
             "panel note skipped non-rewritten class relative_path=%s note_path=%s",
             str(rel_path),
@@ -1151,7 +1157,7 @@ def _panel_emit_allowed(
     panel_auto_exec_enabled: bool,
     state: WatcherState,
 ) -> bool:
-    if not watcher_panel_writeback_allowed(rel_path):
+    if not watcher_panel_writeback_allowed(rel_path, vault_root=cfg.vault_path):
         summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
         return False
     candidate, ok = _panel_candidate_for_path(cfg.vault_path / rel_path)

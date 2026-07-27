@@ -339,9 +339,12 @@ def test_vault_watcher_create_once_source_interleaving_has_no_mutation_or_acknow
     emitted_events: list[object] = []
     real_class_policy = watcher_module.watcher_panel_writeback_allowed
 
-    def interleave_before_class_boundary(relative_path: Path) -> bool:
+    def interleave_before_class_boundary(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
         note.write_text(concurrent, encoding="utf-8")
-        return real_class_policy(relative_path)
+        return real_class_policy(relative_path, **kwargs)
 
     monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
     monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
@@ -400,6 +403,103 @@ def test_vault_watcher_create_once_source_interleaving_has_no_mutation_or_acknow
     assert note.read_text(encoding="utf-8") == concurrent
     assert not any(is_conflict_artifact(path.name) for path in note.parent.iterdir())
     assert any("Watcher policy denies auto-run" in message for message in messages)
+
+
+def test_vault_watcher_symlinked_source_interleaving_has_no_mutation_or_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    target = vault / "Sources" / "panel-source.md"
+    target.parent.mkdir(parents=True)
+    original = (
+        "---\n"
+        "uuid: source-panel\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n"
+    )
+    target.write_text(original, encoding="utf-8")
+    alias = vault / "Notes" / "source-alias.md"
+    alias.parent.mkdir()
+    alias.symlink_to(Path("..") / "Sources" / target.name)
+    snapshot_path = vault / ".state.json"
+    save_snapshot(
+        snapshot_path,
+        {"Sources/panel-source.md": target.stat().st_mtime},
+    )
+    concurrent = "Concurrent human source snapshot\n"
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = watcher_module.watcher_panel_writeback_allowed
+
+    def interleave_before_class_boundary(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        if relative_path == Path("Notes/source-alias.md"):
+            target.write_text(concurrent, encoding="utf-8")
+        return real_class_policy(relative_path, **kwargs)
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "watcher_panel_writeback_allowed",
+        interleave_before_class_boundary,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("symlinked source must not enter panel preparation")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "write_note_from_absolute",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("symlinked source must not reach the write seam")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["panel_candidates"] == 0
+    assert summary["panel_skipped_policy"] == 1
+    assert summary["applied_actions"] == 0
+    assert summary["errors"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert target.read_text(encoding="utf-8") == concurrent
+    assert alias.read_text(encoding="utf-8") == concurrent
+    assert not any(is_conflict_artifact(path.name) for path in target.parent.iterdir())
 
 
 def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(

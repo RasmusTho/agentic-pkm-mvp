@@ -63,6 +63,31 @@ def test_runtime_note_classes_accept_settings_resolved_capture_and_sources_paths
     )
 
 
+def test_expected_version_write_rejects_create_once_note_before_mutation(
+    tmp_path: Path,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Sources/panel-source.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"concurrent human source")
+    stale_version = hashlib.sha256(b"observed source").hexdigest()
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="expected-version write requires a rewritten note class",
+    ):
+        adapter.write_note(
+            locator,
+            "stale watcher proposal",
+            expected_version=stale_version,
+            writer_identity="watcher",
+        )
+
+    assert target.read_bytes() == b"concurrent human source"
+    assert list(target.parent.iterdir()) == [target]
+
+
 def test_rewritten_write_uses_atomic_replace_at_filesystem_seam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

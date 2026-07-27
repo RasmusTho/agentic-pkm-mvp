@@ -323,14 +323,20 @@ class FsVaultAdapter:
         note_class = self._classify(locator.path, WriteOperation.WRITE)
         effective_writer_identity = writer_identity or "mimer.runtime"
         written_at = datetime.now(UTC)
+        if expected_version is not None and note_class is not NoteClass.REWRITTEN:
+            raise KnowledgeWriteConflict(
+                "expected-version write requires a rewritten note class; "
+                f"{locator.path} is {note_class.value}"
+            )
         # Opt-in optimistic concurrency (VMW-01 enactment-gap model; owner decision
         # 2026-07-13). Enforcement applies ONLY when the caller opts in by passing
         # ``expected_version``: a versionless write is performed normally so legacy
         # writers are never broken during progressive migration (#3570) -- the
         # structured outcome is still recorded on the receipt's ``note_class``. When a
-        # caller DOES pass ``expected_version``, a REWRITTEN note whose current bytes no
-        # longer match preserves the caller's proposed bytes as a provenance-bearing
-        # sibling conflict artifact and returns a legible staged-conflict outcome.
+        # caller DOES pass ``expected_version``, a non-REWRITTEN class fails closed
+        # before mutation; a REWRITTEN note whose current bytes no longer match
+        # preserves the caller's proposed bytes as a provenance-bearing sibling
+        # conflict artifact and returns a legible staged-conflict outcome.
         # Races after this initial comparison retain the hardened atomic exchange,
         # rollback, displaced-inode, and fail-closed behavior.
         if expected_version is not None and note_class is NoteClass.REWRITTEN:

@@ -200,9 +200,12 @@ def test_process_panel_note_create_once_source_interleaving_has_no_mutation_or_a
     emitted_events: list[object] = []
     real_class_policy = registry.watcher_panel_writeback_allowed
 
-    def interleave_before_class_boundary(relative_path: Path) -> bool:
+    def interleave_before_class_boundary(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
         note_path.write_text(concurrent, encoding="utf-8")
-        return real_class_policy(relative_path)
+        return real_class_policy(relative_path, **kwargs)
 
     monkeypatch.setattr(
         registry,

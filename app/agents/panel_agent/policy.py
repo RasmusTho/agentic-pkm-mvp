@@ -132,16 +132,26 @@ def watcher_may_run_panel(frontmatter: Mapping[str, Any]) -> bool:
 def watcher_panel_writeback_allowed(
     relative_path: Path | str,
     *,
+    vault_root: Path | str,
     sources_root_rel: Path | str = "Sources",
 ) -> bool:
-    """Limit mutation-capable watcher runs to rewritten note classes."""
+    """Limit mutation-capable watcher runs to canonical rewritten note paths."""
 
     path = Path(relative_path)
     if path.is_absolute() or ".." in path.parts:
         return False
+    try:
+        root = Path(vault_root).expanduser().resolve(strict=True)
+        lexical_path = root / path
+        resolved_path = lexical_path.resolve(strict=True)
+        canonical_relative = resolved_path.relative_to(root)
+    except (OSError, ValueError):
+        return False
+    if resolved_path != lexical_path:
+        return False
     return (
         classify_note(
-            path.as_posix(),
+            canonical_relative.as_posix(),
             WriteOperation.WRITE,
             sources_root_rel=Path(sources_root_rel).as_posix(),
         )
