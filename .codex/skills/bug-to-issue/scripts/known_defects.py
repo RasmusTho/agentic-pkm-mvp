@@ -37,20 +37,36 @@ REGISTRY_LABEL_DESCRIPTION = (
     "Rolling registry of confirmed deferred defects; never eligible for agent pickup"
 )
 REGISTRY_MARKER = "<!-- known-defects-registry:v1 -->"
-ENTRY_MARKER_TEMPLATE = "<!-- known-defect-entry:v1 id={defect_id} -->"
+ENTRY_MARKER_TEMPLATE = (
+    "<!-- known-defect-entry:v1 id={defect_id} phase={phase} -->"
+)
 PROMOTION_MARKER_TEMPLATE = (
     "<!-- known-defect-promotion:v1 id={defect_id} issue={issue_number} "
-    "authority_sha256={authority_sha256} -->"
+    "authority_sha256={authority_sha256} phase={phase} -->"
 )
 ENTRY_ID_RE = re.compile(r"^KD-[0-9A-F]{12}$")
 ENTRY_MARKER_RE = re.compile(
-    r"<!-- known-defect-entry:v1 id=(KD-[0-9A-F]{12}) -->"
+    r"<!-- known-defect-entry:v1 id=(KD-[0-9A-F]{12}) phase=(pending|final) -->"
 )
 PROMOTION_MARKER_RE = re.compile(
     r"<!-- known-defect-promotion:v1 id=(KD-[0-9A-F]{12}) issue=([1-9][0-9]*) "
-    r"authority_sha256=([0-9a-f]{64}) -->"
+    r"authority_sha256=([0-9a-f]{64}) phase=(pending|final) -->"
 )
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+REPO_PATH_RE = re.compile(
+    r"^(?:\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)"
+    r"(?:/[A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]+$"
+)
+VAGUE_AUTHORITY_TOKENS = {
+    "anchor",
+    "heading",
+    "later",
+    "path",
+    "section",
+    "tbd",
+    "todo",
+    "unknown",
+}
 NORMAL_AGENT_STATES = {
     "agent:ready",
     "agent:blocked",
@@ -226,10 +242,15 @@ class KnownDefect:
         ).hexdigest()
         return f"KD-{digest[:12].upper()}"
 
-    def render_entry(self) -> str:
+    def render_entry(self, *, phase: str = "final") -> str:
+        if phase not in {"pending", "final"}:
+            raise KnownDefectsError("entry phase must be pending or final")
         return "\n".join(
             (
-                ENTRY_MARKER_TEMPLATE.format(defect_id=self.defect_id),
+                ENTRY_MARKER_TEMPLATE.format(
+                    defect_id=self.defect_id,
+                    phase=phase,
+                ),
                 f"### {self.defect_id}",
                 "",
                 "- State: deferred; not an implementation contract",
@@ -262,6 +283,8 @@ class RegistryGateway(Protocol):
     def add_comment(self, issue_number: int, body: str) -> dict[str, Any]: ...
 
     def delete_comment(self, comment_id: int) -> None: ...
+
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]: ...
 
 
 class GhRegistryGateway:
@@ -387,6 +410,13 @@ class GhRegistryGateway:
             f"repos/{self.repo}/issues/comments/{comment_id}",
         )
 
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        return self._request(
+            "PATCH",
+            f"repos/{self.repo}/issues/comments/{comment_id}",
+            {"body": body},
+        )
+
 
 def render_registry_body() -> str:
     return "\n".join(
@@ -451,14 +481,14 @@ def _validate_registry_issue(
         raise KnownDefectsError(f"registry Issue #{issue.get('number')} is not open")
 
 
-def _entry_id_from_comment(body: str) -> str | None:
+def _entry_marker_from_comment(body: str) -> tuple[str, str] | None:
     lines = body.splitlines()
     if not lines or not lines[0].startswith("<!-- known-defect-entry:"):
         return None
     marker = ENTRY_MARKER_RE.fullmatch(lines[0])
     if marker is None:
         raise KnownDefectsError("malformed known-defect entry marker")
-    defect_id = marker.group(1)
+    defect_id, phase = marker.groups()
     if len(lines) != 10 or lines[1] != f"### {defect_id}" or lines[2] != "":
         raise KnownDefectsError(f"malformed known-defect entry shape for {defect_id}")
     if lines[3] != "- State: deferred; not an implementation contract":
@@ -515,17 +545,24 @@ def _entry_id_from_comment(body: str) -> str | None:
         raise KnownDefectsError(
             f"malformed known-defect entry {defect_id}: invalid impact/severity"
         )
-    return defect_id
+    return defect_id, phase
 
 
-def _promotion_from_comment(body: str) -> tuple[str, int, str] | None:
+def _entry_id_from_comment(body: str) -> str | None:
+    parsed = _entry_marker_from_comment(body)
+    if parsed is None or parsed[1] != "final":
+        return None
+    return parsed[0]
+
+
+def _promotion_from_comment(body: str) -> tuple[str, int, str, str] | None:
     lines = body.splitlines()
     if not lines or not lines[0].startswith("<!-- known-defect-promotion:"):
         return None
     marker = PROMOTION_MARKER_RE.fullmatch(lines[0])
     if marker is None:
         raise KnownDefectsError("malformed known-defect promotion marker")
-    defect_id, issue_number_text, authority_sha256 = marker.groups()
+    defect_id, issue_number_text, authority_sha256, phase = marker.groups()
     issue_number = int(issue_number_text)
     expected_receipt = (
         f"Promotion receipt: {defect_id} is now tracked for implementation by "
@@ -547,7 +584,7 @@ def _promotion_from_comment(body: str) -> tuple[str, int, str] | None:
         raise KnownDefectsError(
             f"malformed known-defect promotion shape for {defect_id}"
         )
-    return defect_id, issue_number, authority_sha256
+    return defect_id, issue_number, authority_sha256, phase
 
 
 def _validate_schema_comment(comment: dict[str, Any]) -> None:
@@ -567,7 +604,7 @@ def _validate_schema_comment(comment: dict[str, Any]) -> None:
             f"{association or '<missing>'}"
         )
     if is_entry:
-        _entry_id_from_comment(body)
+        _entry_marker_from_comment(body)
     else:
         _promotion_from_comment(body)
 
@@ -631,21 +668,24 @@ def _promotion_targets(
     set[int],
     dict[int, dict[str, Any]],
     dict[int, set[str]],
+    dict[int, int],
 ]:
     targets: set[int] = set()
     evidence: dict[int, dict[str, Any]] = {}
     authority_digests: dict[int, set[str]] = {}
+    authority_counts: dict[int, int] = {}
     for comment in comments:
         _validate_schema_comment(comment)
         parsed = _promotion_from_comment(comment.get("body") or "")
-        if parsed is None or parsed[0] != defect_id:
+        if parsed is None or parsed[0] != defect_id or parsed[3] != "final":
             continue
         issue_number = parsed[1]
         authority_sha256 = parsed[2]
         targets.add(issue_number)
         evidence.setdefault(issue_number, comment)
         authority_digests.setdefault(issue_number, set()).add(authority_sha256)
-    return targets, evidence, authority_digests
+        authority_counts[issue_number] = authority_counts.get(issue_number, 0) + 1
+    return targets, evidence, authority_digests, authority_counts
 
 
 def _find_entry(
@@ -747,12 +787,17 @@ def _entry_comments(
     gateway: RegistryGateway,
     issue_number: int,
     defect_id: str,
+    *,
+    phase: str | None = None,
 ) -> list[dict[str, Any]]:
-    return [
-        comment
-        for comment in _inventory_comments(gateway, issue_number)
-        if _entry_id_from_comment(comment.get("body") or "") == defect_id
-    ]
+    matches = []
+    for comment in _inventory_comments(gateway, issue_number):
+        parsed = _entry_marker_from_comment(comment.get("body") or "")
+        if parsed is None or parsed[0] != defect_id:
+            continue
+        if phase is None or parsed[1] == phase:
+            matches.append(comment)
+    return matches
 
 
 def _delete_comments(
@@ -762,6 +807,83 @@ def _delete_comments(
 ) -> None:
     for comment in comments:
         _compensate_comment(gateway, issue_number, comment)
+
+
+def _finalize_pending_entry(
+    gateway: RegistryGateway,
+    issue: dict[str, Any],
+    comment: dict[str, Any],
+) -> dict[str, Any]:
+    issue_number = int(issue["number"])
+    fresh_issue = gateway.get_issue(issue_number)
+    _validate_registry_issue(fresh_issue, require_open=True)
+    pending_body = comment.get("body") or ""
+    parsed = _entry_marker_from_comment(pending_body)
+    if parsed is None or parsed[1] != "pending":
+        raise KnownDefectsError("entry finalization requires a pending schema comment")
+    final_body = pending_body.replace(" phase=pending -->", " phase=final -->", 1)
+    try:
+        gateway.update_comment(int(comment["id"]), final_body)
+    except KnownDefectsError:
+        final_comments = _entry_comments(
+            gateway,
+            issue_number,
+            parsed[0],
+            phase="final",
+        )
+        if not final_comments:
+            raise
+    final_comments = _entry_comments(
+        gateway,
+        issue_number,
+        parsed[0],
+        phase="final",
+    )
+    if len(final_comments) != 1:
+        raise KnownDefectsError(
+            f"entry finalization conflict for {parsed[0]}"
+        )
+    return final_comments[0]
+
+
+def _reconcile_pending_entries(
+    gateway: RegistryGateway,
+    defect_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    issues = _registry_inventory(gateway, recover_bootstrap=True)
+    pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for issue in issues:
+        pending.extend(
+            (issue, comment)
+            for comment in _entry_comments(
+                gateway,
+                int(issue["number"]),
+                defect_id,
+                phase="pending",
+            )
+        )
+    if not pending:
+        return None
+    open_pending = [
+        item
+        for item in pending
+        if str(item[0].get("state", "")).lower() == "open"
+    ]
+    closed_pending = [item for item in pending if item not in open_pending]
+    for issue, comment in closed_pending:
+        _compensate_comment(gateway, int(issue["number"]), comment)
+    if not open_pending:
+        return None
+    open_pending.sort(key=lambda item: int(item[1].get("id") or 0))
+    canonical_issue, canonical_comment = open_pending[0]
+    for issue, comment in open_pending[1:]:
+        _compensate_comment(gateway, int(issue["number"]), comment)
+    finalized = _finalize_pending_entry(
+        gateway,
+        canonical_issue,
+        canonical_comment,
+    )
+    return canonical_issue, finalized
 
 
 def _intake_defect(
@@ -786,6 +908,16 @@ def _intake_defect(
             "registry_issue": int(issue["number"]),
             "url": comment.get("html_url"),
         }
+    reconciled = _reconcile_pending_entries(gateway, defect.defect_id)
+    if reconciled is not None:
+        issue, comment = reconciled
+        return {
+            "schema": "known-defect-receipt.v1",
+            "status": "duplicate",
+            "defect_id": defect.defect_id,
+            "registry_issue": int(issue["number"]),
+            "url": comment.get("html_url"),
+        }
     issue = _select_registry(gateway, registry_issue)
     existing = _find_entry(
         gateway,
@@ -799,6 +931,16 @@ def _intake_defect(
             "status": "duplicate",
             "defect_id": defect.defect_id,
             "registry_issue": int(existing_issue["number"]),
+            "url": comment.get("html_url"),
+        }
+    reconciled = _reconcile_pending_entries(gateway, defect.defect_id)
+    if reconciled is not None:
+        pending_issue, comment = reconciled
+        return {
+            "schema": "known-defect-receipt.v1",
+            "status": "duplicate",
+            "defect_id": defect.defect_id,
+            "registry_issue": int(pending_issue["number"]),
             "url": comment.get("html_url"),
         }
     _inventory_comments(gateway, int(issue["number"]))
@@ -819,44 +961,34 @@ def _intake_defect(
             )
         raise
     try:
-        comment = gateway.add_comment(int(issue["number"]), defect.render_entry())
+        comment = gateway.add_comment(
+            int(issue["number"]),
+            defect.render_entry(phase="pending"),
+        )
     except KnownDefectsError:
-        issue_number = int(issue["number"])
-        current_issue = gateway.get_issue(issue_number)
-        matching_comments = _entry_comments(
-            gateway,
-            issue_number,
-            defect.defect_id,
-        )
-        if not matching_comments:
-            raise
-        try:
-            _validate_registry_issue(current_issue, require_open=True)
-        except KnownDefectsError:
-            _delete_comments(gateway, issue_number, matching_comments)
-            if (
-                registry_issue is None
-                and allow_lifecycle_retry
-                and _closed_canonical_registry(current_issue)
-            ):
-                return _intake_defect(
-                    defect,
-                    gateway,
-                    registry_issue=None,
-                    allow_lifecycle_retry=False,
-                )
-            raise
-        canonical_comment = min(
-            matching_comments,
-            key=lambda item: int(item.get("id") or 0),
-        )
-        return {
-            "schema": "known-defect-receipt.v1",
-            "status": "created",
-            "defect_id": defect.defect_id,
-            "registry_issue": issue_number,
-            "url": canonical_comment.get("html_url"),
-        }
+        reconciled = _reconcile_pending_entries(gateway, defect.defect_id)
+        if reconciled is not None:
+            reconciled_issue, canonical_comment = reconciled
+            return {
+                "schema": "known-defect-receipt.v1",
+                "status": "created",
+                "defect_id": defect.defect_id,
+                "registry_issue": int(reconciled_issue["number"]),
+                "url": canonical_comment.get("html_url"),
+            }
+        current_issue = gateway.get_issue(int(issue["number"]))
+        if (
+            registry_issue is None
+            and allow_lifecycle_retry
+            and _closed_canonical_registry(current_issue)
+        ):
+            return _intake_defect(
+                defect,
+                gateway,
+                registry_issue=None,
+                allow_lifecycle_retry=False,
+            )
+        raise
     post_write_issue: dict[str, Any] | None = None
     try:
         post_write_issue = gateway.get_issue(int(issue["number"]))
@@ -876,12 +1008,13 @@ def _intake_defect(
                 allow_lifecycle_retry=False,
             )
         raise
+    finalized = _finalize_pending_entry(gateway, issue, comment)
     return {
         "schema": "known-defect-receipt.v1",
         "status": "created",
         "defect_id": defect.defect_id,
         "registry_issue": int(issue["number"]),
-        "url": comment.get("html_url"),
+        "url": finalized.get("html_url"),
     }
 
 
@@ -913,14 +1046,15 @@ def lookup_defect(
             "defect_id": defect_id,
         }
     issue, comment = found
-    targets, _evidence, authority_digests = _promotion_targets(
+    targets, _evidence, authority_digests, authority_counts = _promotion_targets(
         gateway.list_comments(int(issue["number"])),
         defect_id,
     )
     digest_conflict = any(
         len(digests) != 1 for digests in authority_digests.values()
     )
-    if len(targets) > 1 or digest_conflict:
+    duplicate_authority = any(count != 1 for count in authority_counts.values())
+    if len(targets) > 1 or digest_conflict or duplicate_authority:
         return {
             "schema": "known-defect-receipt.v1",
             "status": "promotion_conflict",
@@ -993,6 +1127,30 @@ def _has_concrete_section_content(value: str) -> bool:
     return False
 
 
+def _is_durable_repo_path(value: str) -> bool:
+    path = value.strip()
+    return (
+        REPO_PATH_RE.fullmatch(path) is not None
+        and re.search(r"<[^>]+>", path) is None
+        and not any(
+            (
+                segment.casefold() in VAGUE_AUTHORITY_TOKENS
+                or Path(segment).stem.casefold() in VAGUE_AUTHORITY_TOKENS
+            )
+            for segment in Path(path).parts
+        )
+    )
+
+
+def _is_durable_anchor(value: str) -> bool:
+    anchor = " ".join(value.split())
+    return (
+        bool(anchor)
+        and re.search(r"<[^>]+>", anchor) is None
+        and anchor.casefold() not in VAGUE_AUTHORITY_TOKENS
+    )
+
+
 def _acceptance_items(section: str) -> list[str]:
     starts = list(
         re.finditer(r"(?m)^\s*[-*]\s+\[[ xX]\]\s+.+$", section)
@@ -1015,17 +1173,27 @@ def _has_resolvable_verify_target(item: str) -> bool:
             target,
         ):
             return True
-        if re.fullmatch(
-            r"doc writeback at `(?:docs|\.codex)/[^`]+ :: [^`]+`",
+        doc_writeback = re.fullmatch(
+            r"doc writeback at `((?:docs|\.codex)/[^`]+) :: ([^`]+)`",
             raw_target,
             re.IGNORECASE,
-        ) and re.search(r"<[^>]+>", raw_target) is None:
+        )
+        if (
+            doc_writeback is not None
+            and _is_durable_repo_path(doc_writeback.group(1))
+            and _is_durable_anchor(doc_writeback.group(2))
+        ):
             return True
-        if re.fullmatch(
-            r"roadmap diff:\s+`docs/[^`]+ :: [^`]+`",
+        roadmap_diff = re.fullmatch(
+            r"roadmap diff:\s+`(docs/[^`]+) :: ([^`]+)`",
             target,
             re.IGNORECASE,
-        ) and re.search(r"<[^>]+>", target) is None:
+        )
+        if (
+            roadmap_diff is not None
+            and _is_durable_repo_path(roadmap_diff.group(1))
+            and _is_durable_anchor(roadmap_diff.group(2))
+        ):
             return True
         if re.fullmatch(
             r"runtime receipt:\s+[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.v[1-9][0-9]*",
@@ -1109,7 +1277,8 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
     if (
         not source_anchors
         or any(
-            re.search(r"<[^>]+>", path + anchor)
+            not _is_durable_repo_path(path)
+            or not _is_durable_anchor(anchor)
             for path, anchor in source_anchors
         )
     ):
@@ -1122,7 +1291,7 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
     )
     if (
         not source_docs
-        or any(re.search(r"<[^>]+>", path) for path in source_docs)
+        or any(not _is_durable_repo_path(path) for path in source_docs)
     ):
         raise KnownDefectsError(
             "promotion target Source Docs must name a durable repo path"
@@ -1204,6 +1373,119 @@ def _validate_promoted_target_snapshot(
         raise KnownDefectsError("promoted target contract authority drifted")
 
 
+def _promotion_comments(
+    gateway: RegistryGateway,
+    registry_number: int,
+    defect_id: str,
+    *,
+    phase: str,
+    issue_number: int | None = None,
+    authority_sha256: str | None = None,
+) -> list[dict[str, Any]]:
+    matches = []
+    for comment in _inventory_comments(gateway, registry_number):
+        parsed = _promotion_from_comment(comment.get("body") or "")
+        if parsed is None or parsed[0] != defect_id or parsed[3] != phase:
+            continue
+        if issue_number is not None and parsed[1] != issue_number:
+            continue
+        if authority_sha256 is not None and parsed[2] != authority_sha256:
+            continue
+        matches.append(comment)
+    return matches
+
+
+def _finalize_pending_promotion(
+    gateway: RegistryGateway,
+    registry_number: int,
+    comment: dict[str, Any],
+    defect_id: str,
+    issue_number: int,
+    authority_sha256: str,
+) -> dict[str, Any]:
+    pending_body = comment.get("body") or ""
+    expected = (defect_id, issue_number, authority_sha256, "pending")
+    if _promotion_from_comment(pending_body) != expected:
+        raise KnownDefectsError(
+            "promotion finalization requires the exact pending authority"
+        )
+    final_body = pending_body.replace(" phase=pending -->", " phase=final -->", 1)
+    try:
+        gateway.update_comment(int(comment["id"]), final_body)
+    except KnownDefectsError:
+        final_comments = _promotion_comments(
+            gateway,
+            registry_number,
+            defect_id,
+            phase="final",
+            issue_number=issue_number,
+            authority_sha256=authority_sha256,
+        )
+        if not final_comments:
+            raise
+    final_comments = _promotion_comments(
+        gateway,
+        registry_number,
+        defect_id,
+        phase="final",
+        issue_number=issue_number,
+        authority_sha256=authority_sha256,
+    )
+    if not final_comments:
+        raise KnownDefectsError(
+            f"promotion finalization failed for {defect_id}"
+        )
+    return min(final_comments, key=lambda item: int(item.get("id") or 0))
+
+
+def _reconcile_pending_promotions(
+    gateway: RegistryGateway,
+    registry: dict[str, Any],
+    defect_id: str,
+) -> tuple[int, str, dict[str, Any]] | None:
+    registry_number = int(registry["number"])
+    pending = _promotion_comments(
+        gateway,
+        registry_number,
+        defect_id,
+        phase="pending",
+    )
+    if not pending:
+        return None
+    authorities = {
+        parsed[1:3]
+        for comment in pending
+        if (
+            parsed := _promotion_from_comment(comment.get("body") or "")
+        ) is not None
+    }
+    if len(authorities) != 1:
+        raise KnownDefectsError(
+            f"{defect_id} has conflicting pending promotion authority"
+        )
+    issue_number, authority_sha256 = next(iter(authorities))
+    try:
+        live_registry = gateway.get_issue(registry_number)
+        _validate_registry_issue(live_registry, require_open=True)
+        target = gateway.get_issue(issue_number)
+        _validate_promoted_target_snapshot(target, authority_sha256)
+    except KnownDefectsError:
+        _delete_comments(gateway, registry_number, pending)
+        raise
+    pending.sort(key=lambda item: int(item.get("id") or 0))
+    canonical = pending[0]
+    _delete_comments(gateway, registry_number, pending[1:])
+    finalized = _finalize_pending_promotion(
+        gateway,
+        registry_number,
+        canonical,
+        defect_id,
+        issue_number,
+        authority_sha256,
+    )
+    return issue_number, authority_sha256, finalized
+
+
 def promote_defect(
     defect_id: str,
     issue_number: int,
@@ -1215,14 +1497,16 @@ def promote_defect(
     if found is None:
         raise KnownDefectsError(f"known defect {defect_id} was not found")
     registry, _entry_comment = found
-    targets, evidence, authority_digests = _promotion_targets(
+    _reconcile_pending_promotions(gateway, registry, defect_id)
+    targets, evidence, authority_digests, authority_counts = _promotion_targets(
         gateway.list_comments(int(registry["number"])),
         defect_id,
     )
     digest_conflict = any(
         len(digests) != 1 for digests in authority_digests.values()
     )
-    if len(targets) > 1 or digest_conflict:
+    duplicate_authority = any(count != 1 for count in authority_counts.values())
+    if len(targets) > 1 or digest_conflict or duplicate_authority:
         raise KnownDefectsError(
             f"{defect_id} has conflicting promotion authority: "
             + ", ".join(f"#{number}" for number in sorted(targets))
@@ -1237,10 +1521,18 @@ def promote_defect(
                     authority_sha256,
                 )
             except KnownDefectsError:
-                _compensate_comment(
+                matching_final = _promotion_comments(
                     gateway,
                     int(registry["number"]),
-                    evidence[existing_target],
+                    defect_id,
+                    phase="final",
+                    issue_number=existing_target,
+                    authority_sha256=authority_sha256,
+                )
+                _delete_comments(
+                    gateway,
+                    int(registry["number"]),
+                    matching_final,
                 )
                 raise
             return {
@@ -1263,6 +1555,7 @@ def promote_defect(
         defect_id=defect_id,
         issue_number=issue_number,
         authority_sha256=authority_sha256,
+        phase="pending",
     )
     registry_number = int(registry["number"])
     promotion_body = "\n".join(
@@ -1278,36 +1571,22 @@ def promote_defect(
     try:
         comment = gateway.add_comment(registry_number, promotion_body)
     except KnownDefectsError:
-        comments = _inventory_comments(gateway, registry_number)
-        targets, evidence, authority_digests = _promotion_targets(
-            comments,
+        reconciled = _reconcile_pending_promotions(
+            gateway,
+            registry,
             defect_id,
         )
-        exact_comments = [
-            item
-            for item in comments
-            if _promotion_from_comment(item.get("body") or "")
-            == (defect_id, issue_number, authority_sha256)
-        ]
-        if not exact_comments:
+        if reconciled is None:
             raise
+        reconciled_issue, reconciled_digest, canonical_comment = reconciled
         if (
-            targets != {issue_number}
-            or authority_digests.get(issue_number) != {authority_sha256}
+            reconciled_issue != issue_number
+            or reconciled_digest != authority_sha256
         ):
             raise KnownDefectsError(
                 f"ambiguous promotion response exposed conflicting authority for "
                 f"{defect_id}"
             )
-        try:
-            post_registry = gateway.get_issue(registry_number)
-            _validate_registry_issue(post_registry, require_open=True)
-            post_target = gateway.get_issue(issue_number)
-            _validate_promoted_target_snapshot(post_target, authority_sha256)
-        except KnownDefectsError:
-            _delete_comments(gateway, registry_number, exact_comments)
-            raise
-        canonical_comment = evidence[issue_number]
         return {
             "schema": "known-defect-receipt.v1",
             "status": "promoted",
@@ -1324,13 +1603,22 @@ def promote_defect(
     except KnownDefectsError:
         _compensate_comment(gateway, int(registry["number"]), comment)
         raise
-    targets, _evidence, authority_digests = _promotion_targets(
+    canonical_comment = _finalize_pending_promotion(
+        gateway,
+        registry_number,
+        comment,
+        defect_id,
+        issue_number,
+        authority_sha256,
+    )
+    targets, _evidence, authority_digests, authority_counts = _promotion_targets(
         gateway.list_comments(int(registry["number"])),
         defect_id,
     )
     if (
         targets != {issue_number}
         or authority_digests.get(issue_number) != {authority_sha256}
+        or authority_counts.get(issue_number) != 1
     ):
         rendered_targets = ", ".join(f"#{number}" for number in sorted(targets))
         raise KnownDefectsError(
@@ -1342,7 +1630,7 @@ def promote_defect(
         "defect_id": defect_id,
         "registry_issue": int(registry["number"]),
         "promotion_issue": issue_number,
-        "url": comment.get("html_url"),
+        "url": canonical_comment.get("html_url"),
     }
 
 

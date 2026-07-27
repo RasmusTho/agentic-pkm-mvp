@@ -109,8 +109,12 @@ registry closes at either boundary, intake compensates any just-created comment 
 bounded retry against a new open registry. If the body, labels, or lock state drift, intake removes
 its just-created comment and fails closed for explicit reconciliation. This keeps closure races from
 silently appending durable entries to stale registry authority. An ambiguous comment-create response
-is immediately reconciled from live Issue/comment inventories: an open canonical registry completes
-the receipt, while closure or authority drift compensates the matching comment before retry/failure.
+is immediately reconciled from live Issue/comment inventories. New entry comments begin with
+`phase=pending`, which is never registry authority; only after the live registry is revalidated does
+the helper update the marker to `phase=final`. A failed or ambiguous create/update can therefore
+leave only a non-authoritative pending comment for the next retry to finalize or compensate. An open
+canonical registry completes the receipt, while closure or authority drift compensates the pending
+comment before retry/failure.
 
 ### Promotion
 
@@ -132,13 +136,17 @@ python3 .codex/skills/bug-to-issue/scripts/known_defects.py promote \
 The link operation is idempotent and emits a compact promotion receipt. A post-write read detects
 concurrent conflicting promotion targets; lookup then returns `promotion_conflict` with no canonical
 target, and further promotion fails closed until a collaborator reconciles the marker comments.
+Multiple final promotion markers are conflicting authority even when they repeat the same target and
+digest; they are never collapsed into one link.
 Each marker binds the target number to a SHA-256 digest of its validated title, body, type, and
 priority authority. The helper rereads both registry and target after writing: contract/body/label
 drift or an indeterminate read compensates the marker and fails closed, while normal claim or
 closure transitions may change only lifecycle state and the canonical agent label. Same-target
 retries revalidate the digest before returning the existing receipt. Ambiguous marker creation is
-resolved from the full comment inventory before any success receipt; stale closed-registry markers
-are compensated.
+resolved from the full comment inventory before any success receipt. Promotion comments likewise
+move from non-authoritative `phase=pending` to `phase=final` only after both registry and target
+authority validate; failed or ambiguous transport responses cannot turn an unverified pending
+comment into promotion authority. Stale closed-registry pending markers are compensated.
 The promoted Issue owns implementation scope and closure; the registry entry remains durable source
 evidence.
 

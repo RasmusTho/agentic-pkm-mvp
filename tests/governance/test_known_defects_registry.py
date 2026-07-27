@@ -105,6 +105,14 @@ class FakeGateway:
                 if int(comment["id"]) != comment_id
             ]
 
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        for issue_comments in self.comments.values():
+            for comment in issue_comments:
+                if int(comment["id"]) == comment_id:
+                    comment["body"] = body
+                    return comment
+        raise KeyError(comment_id)
+
 
 def _defect(**overrides: Any) -> Any:
     values = {
@@ -203,7 +211,10 @@ def test_entry_records_every_required_field() -> None:
 
     entry = defect.render_entry()
 
-    assert known_defects.ENTRY_MARKER_TEMPLATE.format(defect_id=defect.defect_id) in entry
+    assert known_defects.ENTRY_MARKER_TEMPLATE.format(
+        defect_id=defect.defect_id,
+        phase="final",
+    ) in entry
     for field in (
         "Source: PR #4321",
         "Reproducible symptom:",
@@ -608,7 +619,7 @@ def test_malformed_first_line_schema_marker_fails_closed() -> None:
         "<!-- known-defect-entry:v1 id=KD-000000000000 -->\nnot the schema",
     )
 
-    with pytest.raises(known_defects.KnownDefectsError, match="entry shape"):
+    with pytest.raises(known_defects.KnownDefectsError, match="entry marker"):
         known_defects.lookup_defect("KD-000000000000", gateway)
 
 
@@ -650,7 +661,7 @@ def test_noncanonical_promotion_issue_number_fails_closed(issue_text: str) -> No
             (
                 "<!-- known-defect-promotion:v1 "
                 f"id={defect_id} issue={issue_text} "
-                f"authority_sha256={'0' * 64} -->"
+                f"authority_sha256={'0' * 64} phase=final -->"
             ),
             (
                 f"Promotion receipt: {defect_id} is now tracked for implementation "
@@ -826,6 +837,7 @@ def test_untrusted_promotion_written_before_lock_fails_closed_after_entry_match(
                     defect_id=defect.defect_id,
                     issue_number=901,
                     authority_sha256="0" * 64,
+                    phase="final",
                 ),
                 (
                     f"Promotion receipt: {defect.defect_id} is now tracked for "
@@ -1003,6 +1015,48 @@ def test_ambiguous_entry_create_response_completes_from_open_inventory() -> None
     assert len(gateway.comments[900]) == 1
 
 
+class EntryFinalizeFailureGateway(FakeGateway):
+    def __init__(self, *, apply_before_failure: bool) -> None:
+        super().__init__()
+        self.apply_before_failure = apply_before_failure
+        self.fail_once = True
+
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        if self.fail_once:
+            self.fail_once = False
+            if self.apply_before_failure:
+                super().update_comment(comment_id, body)
+            raise known_defects.KnownDefectsError(
+                "ambiguous entry comment-update response"
+            )
+        return super().update_comment(comment_id, body)
+
+
+def test_ambiguous_entry_finalize_response_recovers_applied_final_comment() -> None:
+    gateway = EntryFinalizeFailureGateway(apply_before_failure=True)
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+
+
+def test_failed_entry_finalize_leaves_nonauthoritative_pending_for_retry() -> None:
+    gateway = EntryFinalizeFailureGateway(apply_before_failure=False)
+    defect = _defect()
+
+    with pytest.raises(known_defects.KnownDefectsError, match="ambiguous entry"):
+        known_defects.intake_defect(defect, gateway)
+
+    assert "phase=pending" in gateway.comments[900][0]["body"].splitlines()[0]
+    assert known_defects.lookup_defect(defect.defect_id, gateway)["status"] == "not_found"
+
+    receipt = known_defects.intake_defect(defect, gateway)
+
+    assert receipt["status"] == "duplicate"
+    assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+
+
 def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     gateway = FakeGateway()
     defect = _defect()
@@ -1074,6 +1128,7 @@ class ConflictingPromotionGateway(FakeGateway):
                             defect_id=defect_id,
                             issue_number=902,
                             authority_sha256=authority_sha256,
+                            phase="final",
                         ),
                         (
                             f"Promotion receipt: {defect_id} is now tracked for "
@@ -1306,6 +1361,98 @@ def test_ambiguous_promotion_create_response_completes_from_open_inventory() -> 
     assert duplicate["status"] == "promotion_duplicate"
 
 
+class PromotionFinalizeFailureGateway(FakeGateway):
+    def __init__(self, *, apply_before_failure: bool) -> None:
+        super().__init__()
+        self.apply_before_failure = apply_before_failure
+        self.fail_promotion_update_once = True
+
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        if (
+            self.fail_promotion_update_once
+            and body.startswith("<!-- known-defect-promotion:")
+        ):
+            self.fail_promotion_update_once = False
+            if self.apply_before_failure:
+                super().update_comment(comment_id, body)
+            raise known_defects.KnownDefectsError(
+                "ambiguous promotion comment-update response"
+            )
+        return super().update_comment(comment_id, body)
+
+
+@pytest.mark.parametrize("apply_before_failure", [False, True])
+def test_ambiguous_promotion_finalize_is_retry_safe(
+    apply_before_failure: bool,
+) -> None:
+    gateway = PromotionFinalizeFailureGateway(
+        apply_before_failure=apply_before_failure
+    )
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: make promotion finalization retry safe",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    if apply_before_failure:
+        promoted = known_defects.promote_defect(defect.defect_id, 901, gateway)
+        assert promoted["status"] == "promoted"
+    else:
+        with pytest.raises(
+            known_defects.KnownDefectsError,
+            match="ambiguous promotion",
+        ):
+            known_defects.promote_defect(defect.defect_id, 901, gateway)
+        marker = gateway.comments[900][-1]["body"].splitlines()[0]
+        assert "phase=pending" in marker
+        assert known_defects.lookup_defect(defect.defect_id, gateway)[
+            "status"
+        ] == "deferred"
+
+    duplicate = known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert duplicate["status"] == "promotion_duplicate"
+    assert "phase=final" in gateway.comments[900][-1]["body"].splitlines()[0]
+
+
+def test_duplicate_final_promotion_markers_remain_a_conflict_after_drift() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject duplicate promotion authority",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+    known_defects.promote_defect(defect.defect_id, 901, gateway)
+    promotion = gateway.comments[900][-1]
+    gateway.add_comment(900, promotion["body"])
+
+    gateway.issues[901]["body"] += "\n\nTemporary authority drift."
+    with pytest.raises(known_defects.KnownDefectsError, match="conflicting promotion"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    gateway.issues[901]["body"] = _canonical_bug_body()
+    receipt = known_defects.lookup_defect(defect.defect_id, gateway)
+
+    assert receipt["status"] == "promotion_conflict"
+    assert receipt["promotion_issues"] == [901]
+
+
 def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:
     gateway = FakeGateway()
     defect = _defect()
@@ -1338,6 +1485,55 @@ def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:
     }
 
     with pytest.raises(known_defects.KnownDefectsError, match="Source Anchors"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        (
+            "- `.codex/skills/bug-to-issue/SKILL.md :: Promotion`",
+            "- `TBD :: later`",
+            "Source Anchors",
+        ),
+        (
+            "- `.codex/skills/_shared/ISSUE_CONTRACT.md`",
+            "- `later`",
+            "Source Docs",
+        ),
+        (
+            "Verify: `tests/x.py::test_x`",
+            "Verify: doc writeback at `docs/later :: later`",
+            "resolvable Verify",
+        ),
+        (
+            "Verify: `tests/x.py::test_x`",
+            "Verify: runtime receipt: later",
+            "resolvable Verify",
+        ),
+    ],
+)
+def test_promotion_rejects_vague_authority_shapes(
+    old: str,
+    new: str,
+    expected: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject vague promotion authority",
+        "state": "open",
+        "body": _canonical_bug_body().replace(old, new),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match=expected):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 
