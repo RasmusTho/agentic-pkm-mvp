@@ -17,6 +17,7 @@ from app.builderops.epic_run_state import (
     assert_learning_evaluation_candidates_terminal,
     apply_epic_run_update,
     create_epic_run_state,
+    new_independent_issue_run_state,
     deserialize_epic_run_state,
     epic_run_state_path,
     load_epic_run_state,
@@ -736,3 +737,14 @@ def test_cli_rejects_epic_mismatch_before_writing(tmp_path: Path) -> None:
     assert "already belongs to epic 3229" in result.output
     state = load_epic_run_state("run-owned-by-3229", root=tmp_path)
     assert state["child_queue"] == [{"issue_number": 3247, "state": "queued"}]
+
+
+def test_fast_lane_state_never_becomes_delivery_authority(tmp_path: Path) -> None:
+    state = new_independent_issue_run_state([4164, 4165], "fast-lane-state")
+    assert state["epic_issue_number"] is None
+    assert state["independent_issue_numbers"] == [4164, 4165]
+    assert "parent_closure" not in state
+    assert "github_mutations" not in state
+
+    create_epic_run_state(3229, "separate-epic", root=tmp_path)
+    assert epic_run_state_path("separate-epic", root=tmp_path).exists()

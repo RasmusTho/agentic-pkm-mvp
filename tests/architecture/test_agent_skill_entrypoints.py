@@ -93,6 +93,15 @@ def test_subagent_role_governance_is_discoverable() -> None:
     assert "skills remain" in agents_text.lower()
 
 
+def test_independent_fast_lane_has_no_routine_worker_coordination() -> None:
+    skill = _read(".codex/skills/deliver-issue-set/SKILL.md")
+    runner = _read("companion-ui/prompts/codex/deliver-epic-autonomous-runner.md")
+    for surface in (skill, runner):
+        assert "Routine worker-to-worker coordination is prohibited" in surface or "Workers do not message one another routinely" in surface
+        assert "typed coordinator exception" in surface
+        assert "two workers" in surface
+
+
 def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed() -> None:
     skill = _read(".codex/skills/start-model-inquiry/SKILL.md")
     normalized_skill = " ".join(skill.split())

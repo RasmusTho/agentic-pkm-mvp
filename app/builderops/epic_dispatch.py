@@ -9,6 +9,7 @@ from app.builderops.epic_run_state import validate_run_id
 
 SCHEMA_VERSION = 1
 DEFAULT_MAX_PARALLEL = 2
+FAST_LANE_MAX_PARALLEL = 2
 VALID_PATHS = {"inline", "script", "subagent", "skip"}
 
 HANDOFF_RECEIPT_SCHEMA: dict[str, Any] = {
@@ -37,7 +38,8 @@ class EpicDispatchError(ValueError):
 
 def build_dispatch_plan(
     *,
-    epic_issue_number: int,
+    epic_issue_number: int | None = None,
+    independent_issue_numbers: Iterable[int] = (),
     run_id: str,
     candidates: Iterable[Mapping[str, Any]],
     max_parallel: int = DEFAULT_MAX_PARALLEL,
@@ -54,8 +56,24 @@ def build_dispatch_plan(
     """
 
     normalized_run_id = validate_run_id(run_id)
-    normalized_epic = _normalize_positive_int(epic_issue_number, "epic_issue_number")
+    independent_scope = _normalize_independent_issue_numbers(independent_issue_numbers)
+    if epic_issue_number is None:
+        if not independent_scope:
+            raise EpicDispatchError(
+                "dispatch scope requires epic_issue_number or independent_issue_numbers"
+            )
+        normalized_epic = None
+    else:
+        normalized_epic = _normalize_positive_int(epic_issue_number, "epic_issue_number")
+        if independent_scope:
+            raise EpicDispatchError(
+                "independent_issue_numbers cannot be combined with epic_issue_number"
+            )
     normalized_max = _normalize_positive_int(max_parallel, "max_parallel")
+    if independent_scope and normalized_max > FAST_LANE_MAX_PARALLEL:
+        raise EpicDispatchError(
+            f"independent fast lane max_parallel must not exceed {FAST_LANE_MAX_PARALLEL}"
+        )
     runtimes = _normalize_runtime_targets(runtime_targets)
     lease_issues = _normalize_active_leases(active_leases)
     normalized_candidates = [_normalize_candidate(item) for item in candidates]
@@ -64,12 +82,18 @@ def build_dispatch_plan(
         _validate_run_state_owner(
             run_state,
             epic_issue_number=normalized_epic,
+            independent_issue_numbers=independent_scope,
             run_id=normalized_run_id,
         )
     run_state_constraints = _normalize_json_list(
         run_state.get("reusable_constraints", []) if run_state is not None else [],
         "run_state.reusable_constraints",
     )
+    if independent_scope:
+        _validate_independent_fast_lane_admission(
+            normalized_candidates,
+            independent_issue_numbers=independent_scope,
+        )
 
     decisions: list[dict[str, Any]] = []
     context_packs: list[dict[str, Any]] = []
@@ -125,9 +149,8 @@ def build_dispatch_plan(
         )
         decisions.append(decision)
 
-    return {
+    result = {
         "schema_version": SCHEMA_VERSION,
-        "epic_issue_number": normalized_epic,
         "run_id": normalized_run_id,
         "max_parallel": normalized_max,
         "runtime_targets": runtimes,
@@ -144,6 +167,15 @@ def build_dispatch_plan(
         "source": "builderops.epic_dispatch.dry_run",
         "run_state_seen": run_state_seen,
     }
+    if independent_scope:
+        result["scope"] = {
+            "kind": "independent_issue_set",
+            "issue_numbers": independent_scope,
+            "parent_closure": "prohibited-without-real-governed-parent",
+        }
+    else:
+        result["epic_issue_number"] = normalized_epic
+    return result
 
 
 def _build_tcd_decision(
@@ -219,6 +251,10 @@ def _build_context_pack(
             "builderops_routing_required": True,
             "github_lifecycle_truth": "Issues/PRs/CI",
             "no_project_or_label_mutation_by_dispatch_planner": True,
+        },
+        "coordination": {
+            "routine_worker_to_worker": "prohibited",
+            "discovered_overlap": "typed-coordinator-exception",
         },
         "return_schema": HANDOFF_RECEIPT_SCHEMA,
     }
@@ -345,6 +381,9 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             for value in candidate.get("dependencies", candidate.get("depends_on", []))
         ],
         "dependencies_satisfied": bool(candidate.get("dependencies_satisfied", False)),
+        "strict_ready": bool(candidate.get("strict_ready", True)),
+        "authority_ambiguous": bool(candidate.get("authority_ambiguous", False)),
+        "has_migration": bool(candidate.get("has_migration", False)),
         "likely_touched_files": set(
             _normalize_string_list(
                 candidate.get("likely_touched_files", []),
@@ -382,17 +421,22 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_run_state_owner(
     run_state: Mapping[str, Any],
     *,
-    epic_issue_number: int,
+    epic_issue_number: int | None,
+    independent_issue_numbers: list[int],
     run_id: str,
 ) -> None:
-    state_epic = _normalize_positive_int(
-        run_state.get("epic_issue_number"),
-        "run_state.epic_issue_number",
+    state_epic = run_state.get("epic_issue_number")
+    state_independent = _normalize_independent_issue_numbers(
+        run_state.get("independent_issue_numbers", [])
     )
     state_run_id = _normalize_string(run_state.get("run_id"), "run_state.run_id")
-    if state_epic != epic_issue_number:
+    if state_epic != epic_issue_number or state_independent != independent_issue_numbers:
+        if state_epic is not None:
+            raise EpicDispatchError(
+                f"run_id {run_id!r} already belongs to epic {state_epic}"
+            )
         raise EpicDispatchError(
-            f"run_id {run_id!r} already belongs to epic {state_epic}"
+            f"run_id {run_id!r} belongs to a different dispatch scope"
         )
     if state_run_id != run_id:
         raise EpicDispatchError(
@@ -411,6 +455,40 @@ def _normalize_active_leases(
             value = lease
         lease_issues.add(_normalize_positive_int(value, "active_leases"))
     return lease_issues
+
+
+def _normalize_independent_issue_numbers(values: Iterable[int]) -> list[int]:
+    normalized = [_normalize_positive_int(value, "independent_issue_numbers") for value in values]
+    if len(set(normalized)) != len(normalized):
+        raise EpicDispatchError("independent_issue_numbers must be unique")
+    return sorted(normalized)
+
+
+def _validate_independent_fast_lane_admission(
+    candidates: list[dict[str, Any]], *, independent_issue_numbers: list[int]
+) -> None:
+    by_number = {candidate["issue_number"]: candidate for candidate in candidates}
+    if set(by_number) != set(independent_issue_numbers):
+        raise EpicDispatchError(
+            "independent issue set must match candidates exactly"
+        )
+    for candidate in candidates:
+        if not candidate["strict_ready"] or candidate["state"] != "OPEN" or "agent:ready" not in candidate["labels"]:
+            raise EpicDispatchError(f"issue {candidate['issue_number']} is not strictly ready")
+        if candidate["dependencies"]:
+            raise EpicDispatchError(f"issue {candidate['issue_number']} has dependencies")
+        if candidate["authority_ambiguous"]:
+            raise EpicDispatchError(f"issue {candidate['issue_number']} has authority ambiguity")
+        if candidate["has_migration"]:
+            raise EpicDispatchError(f"issue {candidate['issue_number']} includes a migration")
+    touched: set[str] = set()
+    for candidate in candidates:
+        overlap = touched.intersection(candidate["likely_touched_files"])
+        if overlap:
+            raise EpicDispatchError(
+                f"independent issue set has likely shared mutation surface: {sorted(overlap)}"
+            )
+        touched.update(candidate["likely_touched_files"])
 
 
 def _normalize_runtime_targets(values: Iterable[str]) -> list[str]:

@@ -286,3 +286,74 @@ def test_cli_dispatch_plan_is_dry_run_and_does_not_write_state(tmp_path: Path) -
     assert payload["context_packs"][0]["issue_contract"]["number"] == 5001
     assert payload["epic_run_state_update"]["dispatch_decisions"][0]["id"] == "dispatch-5001"
     assert not epic_run_state_path("run-cli-dispatch", root=tmp_path).exists()
+
+
+def test_explicit_independent_issue_set_needs_no_synthetic_epic() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5101, 5102],
+        run_id="independent-fast-lane",
+        candidates=[
+            _candidate(5101, risk="high", files=["app/a.py"]),
+            _candidate(5102, risk="high", files=["app/b.py"]),
+        ],
+    )
+
+    assert "epic_issue_number" not in plan
+    assert plan["scope"] == {
+        "kind": "independent_issue_set",
+        "issue_numbers": [5101, 5102],
+        "parent_closure": "prohibited-without-real-governed-parent",
+    }
+    assert plan["selected_count"] == 2
+
+
+def test_fast_lane_rejects_non_independent_or_over_budget_sets() -> None:
+    base = [_candidate(5201, risk="high", files=["app/a.py"])]
+    for candidate_overrides, expected in (
+        ([ _candidate(5201, risk="high", dependencies=[1])], "dependencies"),
+        ([ _candidate(5201, risk="high", files=["app/a.py"]), _candidate(5202, risk="high", files=["app/a.py"])], "shared mutation"),
+        ([dict(_candidate(5201, risk="high"), has_migration=True)], "migration"),
+        ([dict(_candidate(5201, risk="high"), authority_ambiguous=True)], "authority ambiguity"),
+    ):
+        try:
+            build_dispatch_plan(
+                independent_issue_numbers=[item["issue_number"] for item in candidate_overrides],
+                run_id="independent-reject",
+                candidates=candidate_overrides,
+            )
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:  # pragma: no cover - assertion keeps each admission rule fail-closed.
+            raise AssertionError(f"expected {expected} rejection")
+
+    try:
+        build_dispatch_plan(
+            independent_issue_numbers=[5201],
+            run_id="independent-cap",
+            max_parallel=3,
+            candidates=base,
+        )
+    except ValueError as exc:
+        assert "must not exceed 2" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected pilot cap rejection")
+
+
+def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5301],
+        run_id="independent-pack",
+        candidates=[_candidate(5301, risk="high", files=["app/a.py"])],
+    )
+    pack = plan["context_packs"][0]
+
+    assert pack["issue_contract"]["number"] == 5301
+    assert pack["branch_worktree_plan"]["worker_self_claim"] is True
+    assert pack["validation_ledger"]
+    assert pack["known_constraints"]
+    assert pack["return_schema"]["schema_name"] == "subagent_handoff_receipt"
+    assert pack["coordination"] == {
+        "routine_worker_to_worker": "prohibited",
+        "discovered_overlap": "typed-coordinator-exception",
+    }
+    assert "epic_history" not in json.dumps(pack)

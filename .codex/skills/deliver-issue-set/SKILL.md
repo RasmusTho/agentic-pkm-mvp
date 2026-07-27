@@ -34,6 +34,12 @@ Load secondary skills only when the work needs them:
 
 ## Modes
 
+### Independent-Issue Fast Lane
+
+An explicit set of strictly ready independent Issues may be dispatched without inventing a synthetic epic. Cap the pilot at a maximum of two workers. Each worker gets exactly one minimal context pack, worktree, branch, PR, `Verify:` ledger, known constraints, and compact terminal receipt. Routine worker-to-worker coordination is prohibited: a dependency, shared mutation surface, migration, contract overlap, or authority ambiguity is a typed coordinator exception that pauses or rejects only the affected wave. The plan and any run-state are evidence-only and rebuildable from live Issue, dispatcher, PR, CI, review, merge, and closure authority; they never authorize effects or parent closure.
+
+Consume, rather than restate, the canonical severity and known-defect routes in `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` and `.codex/skills/bug-to-issue/SKILL.md`: invalid, malformed, low-confidence, protected, and P0/P1 outcomes block; a valid P2 is deferred through the governed intake without a synchronous repair/re-review loop.
+
 ### Planning / Readiness Mode
 
 Use this mode when the user asks to review, plan, prepare, triage, or make issues ready.
