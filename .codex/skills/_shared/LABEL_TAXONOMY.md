@@ -26,9 +26,9 @@ Rules:
 - `agent:blocked` and `agent:needs-human` belong on non-active work. A Project may mirror them as
   `Backlog`, but that projection does not control pickup.
 - Closed or delivered Issues must not retain any `agent:*` label.
-- `state:known-defect` belongs only on the rolling Known Defects registry Issue. That container is
-  not an implementation Issue, carries no `agent:*` label, remains in `Backlog` if projected, and
-  must never carry `agent:ready`.
+- `state:known-defect` belongs only on the locked rolling Known Defects registry Issue. That
+  container also carries `type:bug`, is not an implementation Issue, carries no `agent:*` label,
+  remains in `Backlog` if projected, and must never carry `agent:ready`.
 - Registry entries are schema-marked Issue comments, not labels or child Issues. When an entry is
   selected for implementation, create/link a normal bounded `type:bug` Issue with exactly one
   priority, exactly one truthful normal agent state, the canonical contract, ACs, and `Verify:`

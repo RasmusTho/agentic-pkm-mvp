@@ -19,8 +19,18 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, Sequence
 from urllib.parse import quote, urlparse
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.validate_issue_readiness import (
+    analyze_acceptance_criteria,
+    extract_sections,
+)
 
 REGISTRY_LABEL = "state:known-defect"
 REGISTRY_LABEL_COLOR = "C5DEF5"
@@ -33,6 +43,9 @@ PROMOTION_MARKER_TEMPLATE = (
     "<!-- known-defect-promotion:v1 id={defect_id} issue={issue_number} -->"
 )
 ENTRY_ID_RE = re.compile(r"^KD-[0-9A-F]{12}$")
+ENTRY_MARKER_RE = re.compile(
+    r"<!-- known-defect-entry:v1 id=(KD-[0-9A-F]{12}) -->"
+)
 PROMOTION_MARKER_RE = re.compile(
     r"<!-- known-defect-promotion:v1 id=(KD-[0-9A-F]{12}) issue=(\d+) -->"
 )
@@ -222,6 +235,8 @@ class RegistryGateway(Protocol):
 
     def create_registry_issue(self) -> dict[str, Any]: ...
 
+    def lock_registry_issue(self, issue_number: int) -> None: ...
+
     def list_comments(self, issue_number: int) -> list[dict[str, Any]]: ...
 
     def add_comment(self, issue_number: int, body: str) -> dict[str, Any]: ...
@@ -256,6 +271,8 @@ class GhRegistryGateway:
             raise KnownDefectsError(
                 f"GitHub REST request failed ({method} {endpoint}): {message}"
             )
+        if not completed.stdout.strip():
+            return None
         try:
             return json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
@@ -329,6 +346,9 @@ class GhRegistryGateway:
             },
         )
 
+    def lock_registry_issue(self, issue_number: int) -> None:
+        self._request("PUT", f"repos/{self.repo}/issues/{issue_number}/lock")
+
     def list_comments(self, issue_number: int) -> list[dict[str, Any]]:
         return self._list_paginated(f"repos/{self.repo}/issues/{issue_number}/comments")
 
@@ -350,8 +370,8 @@ def render_registry_body() -> str:
             "deferred P2/P3 defects.",
             "",
             "- Each schema-marked comment is one defect entry.",
-            "- This Issue is not an implementation contract and must never receive "
-            "`agent:ready`.",
+            "- This Issue is locked, carries no `agent:*` state, is not an "
+            "implementation contract, and must never receive `agent:ready`.",
             "- Maintainability suggestions and unproven observations do not belong here.",
             "- Promotion creates a normal bounded `type:bug` Issue with the canonical "
             "contract, acceptance criteria, `Verify:` targets, and truthful agent state.",
@@ -371,29 +391,119 @@ def _validate_registry_issue(issue: dict[str, Any], *, require_open: bool) -> No
         raise KnownDefectsError(
             f"Issue #{issue.get('number')} is not a Known Defects registry"
         )
-    if REGISTRY_LABEL not in _label_names(issue):
+    labels = _label_names(issue)
+    required_labels = {"type:bug", REGISTRY_LABEL}
+    if not required_labels <= labels:
+        missing = ", ".join(sorted(required_labels - labels))
         raise KnownDefectsError(
-            f"Issue #{issue.get('number')} lacks canonical label {REGISTRY_LABEL}"
+            f"Issue #{issue.get('number')} lacks canonical label(s): {missing}"
         )
-    if "agent:ready" in _label_names(issue):
+    agent_labels = sorted(label for label in labels if label.startswith("agent:"))
+    if agent_labels:
         raise KnownDefectsError(
-            f"Issue #{issue.get('number')} is falsely labeled agent:ready"
+            f"Issue #{issue.get('number')} must carry no agent state: "
+            + ", ".join(agent_labels)
+        )
+    unexpected_labels = sorted(labels - required_labels)
+    if unexpected_labels:
+        raise KnownDefectsError(
+            f"Issue #{issue.get('number')} has unexpected registry label(s): "
+            + ", ".join(unexpected_labels)
+        )
+    if issue.get("locked") is not True:
+        raise KnownDefectsError(
+            f"registry Issue #{issue.get('number')} must be locked before intake"
         )
     if require_open and str(issue.get("state", "")).lower() != "open":
         raise KnownDefectsError(f"registry Issue #{issue.get('number')} is not open")
+
+
+def _entry_id_from_comment(body: str) -> str | None:
+    lines = body.splitlines()
+    if not lines or not lines[0].startswith("<!-- known-defect-entry:"):
+        return None
+    marker = ENTRY_MARKER_RE.fullmatch(lines[0])
+    if marker is None:
+        raise KnownDefectsError("malformed known-defect entry marker")
+    defect_id = marker.group(1)
+    if len(lines) != 10 or lines[1] != f"### {defect_id}" or lines[2] != "":
+        raise KnownDefectsError(f"malformed known-defect entry shape for {defect_id}")
+    required_prefixes = (
+        "- State: deferred; not an implementation contract",
+        "- Source: PR #",
+        "- Reproducible symptom:",
+        "- Evidence:",
+        "- Impact/severity:",
+        "- Workaround:",
+        "- Re-evaluation/promotion trigger:",
+    )
+    for line, prefix in zip(lines[3:], required_prefixes, strict=True):
+        if not line.startswith(prefix):
+            raise KnownDefectsError(
+                f"malformed known-defect entry {defect_id}: expected one {prefix!r}"
+            )
+    return defect_id
+
+
+def _promotion_from_comment(body: str) -> tuple[str, int] | None:
+    lines = body.splitlines()
+    if not lines or not lines[0].startswith("<!-- known-defect-promotion:"):
+        return None
+    marker = PROMOTION_MARKER_RE.fullmatch(lines[0])
+    if marker is None:
+        raise KnownDefectsError("malformed known-defect promotion marker")
+    defect_id, issue_number_text = marker.groups()
+    issue_number = int(issue_number_text)
+    expected_receipt = (
+        f"Promotion receipt: {defect_id} is now tracked for implementation by "
+        f"#{issue_number}."
+    )
+    expected_authority = (
+        "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
+        "and execution state."
+    )
+    if (
+        len(lines) != 3
+        or lines[1] != expected_receipt
+        or lines[2] != expected_authority
+    ):
+        raise KnownDefectsError(
+            f"malformed known-defect promotion shape for {defect_id}"
+        )
+    return defect_id, issue_number
+
+
+def _promotion_targets(
+    comments: Sequence[dict[str, Any]],
+    defect_id: str,
+) -> tuple[set[int], dict[int, dict[str, Any]]]:
+    targets: set[int] = set()
+    evidence: dict[int, dict[str, Any]] = {}
+    for comment in comments:
+        parsed = _promotion_from_comment(comment.get("body") or "")
+        if parsed is None or parsed[0] != defect_id:
+            continue
+        issue_number = parsed[1]
+        targets.add(issue_number)
+        evidence.setdefault(issue_number, comment)
+    return targets, evidence
 
 
 def _find_entry(
     gateway: RegistryGateway,
     defect_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    marker = ENTRY_MARKER_TEMPLATE.format(defect_id=defect_id)
     for issue in sorted(
         gateway.list_registry_issues("all"),
         key=lambda item: int(item["number"]),
     ):
-        for comment in gateway.list_comments(int(issue["number"])):
-            if marker in (comment.get("body") or ""):
+        _validate_registry_issue(issue, require_open=False)
+        for comment in sorted(
+            gateway.list_comments(int(issue["number"])),
+            key=lambda item: int(item.get("id") or 0),
+        ):
+            parsed_id = _entry_id_from_comment(comment.get("body") or "")
+            if parsed_id == defect_id:
                 return issue, comment
     return None
 
@@ -407,19 +517,23 @@ def _select_registry(
         _validate_registry_issue(issue, require_open=True)
         return issue
     open_registries = gateway.list_registry_issues("open")
+    for issue in open_registries:
+        _validate_registry_issue(issue, require_open=True)
     if len(open_registries) > 1:
         numbers = ", ".join(f"#{item['number']}" for item in open_registries)
         raise KnownDefectsError(
             f"multiple open registries found ({numbers}); pass --registry-issue explicitly"
         )
     if open_registries:
-        issue = open_registries[0]
-        _validate_registry_issue(issue, require_open=True)
-        return issue
+        return open_registries[0]
     created = gateway.create_registry_issue()
+    gateway.lock_registry_issue(int(created["number"]))
+    created = gateway.get_issue(int(created["number"]))
     _validate_registry_issue(created, require_open=True)
     # Detect a concurrent first-registry creation before appending.
     open_registries = gateway.list_registry_issues("open")
+    for issue in open_registries:
+        _validate_registry_issue(issue, require_open=True)
     if len(open_registries) != 1:
         numbers = ", ".join(f"#{item['number']}" for item in open_registries)
         raise KnownDefectsError(
@@ -471,13 +585,21 @@ def lookup_defect(
             "defect_id": defect_id,
         }
     issue, comment = found
-    promotion_issue = None
-    for candidate in gateway.list_comments(int(issue["number"])):
-        for marker_id, marker_issue in PROMOTION_MARKER_RE.findall(
-            candidate.get("body") or ""
-        ):
-            if marker_id == defect_id:
-                promotion_issue = int(marker_issue)
+    targets, _evidence = _promotion_targets(
+        gateway.list_comments(int(issue["number"])),
+        defect_id,
+    )
+    if len(targets) > 1:
+        return {
+            "schema": "known-defect-receipt.v1",
+            "status": "promotion_conflict",
+            "defect_id": defect_id,
+            "registry_issue": int(issue["number"]),
+            "promotion_issues": sorted(targets),
+            "promotion_issue": None,
+            "url": comment.get("html_url"),
+        }
+    promotion_issue = next(iter(targets), None)
     return {
         "schema": "known-defect-receipt.v1",
         "status": "promoted" if promotion_issue is not None else "deferred",
@@ -492,8 +614,11 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
     labels = _label_names(issue)
     if str(issue.get("state", "")).lower() != "open":
         raise KnownDefectsError("promotion target must be an open Issue")
-    if "type:bug" not in labels:
-        raise KnownDefectsError("promotion target must carry type:bug")
+    type_labels = {label for label in labels if label.startswith("type:")}
+    if type_labels != {"type:bug"}:
+        raise KnownDefectsError(
+            "promotion target must carry exactly one type label: type:bug"
+        )
     if REGISTRY_LABEL in labels:
         raise KnownDefectsError("promotion target must not be another registry Issue")
     agent_states = labels & NORMAL_AGENT_STATES
@@ -520,8 +645,18 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
         raise KnownDefectsError(
             "promotion target lacks canonical section(s): " + ", ".join(missing)
         )
-    if not re.search(r"^\s*Verify:\s+\S", body, flags=re.MULTILINE):
-        raise KnownDefectsError("promotion target Acceptance Criteria lack Verify targets")
+    acceptance = extract_sections(body).get("acceptance criteria")
+    report = analyze_acceptance_criteria(acceptance)
+    if not report.present or report.malformed:
+        raise KnownDefectsError(
+            "promotion target must contain at least one well-formed Acceptance Criterion"
+        )
+    if not report.verify_markers_present:
+        missing = "; ".join(report.missing_verify_items)
+        raise KnownDefectsError(
+            "promotion target Acceptance Criteria lack concrete Verify targets: "
+            + missing
+        )
 
 
 def promote_defect(
@@ -537,28 +672,33 @@ def promote_defect(
     registry, _entry_comment = found
     target = gateway.get_issue(issue_number)
     _validate_promotion_issue(target)
-    existing_target = None
     marker = PROMOTION_MARKER_TEMPLATE.format(
         defect_id=defect_id,
         issue_number=issue_number,
     )
-    for comment in gateway.list_comments(int(registry["number"])):
-        body = comment.get("body") or ""
-        for marker_id, marker_issue in PROMOTION_MARKER_RE.findall(body):
-            if marker_id == defect_id:
-                existing_target = int(marker_issue)
-                if existing_target == issue_number:
-                    return {
-                        "schema": "known-defect-receipt.v1",
-                        "status": "promotion_duplicate",
-                        "defect_id": defect_id,
-                        "registry_issue": int(registry["number"]),
-                        "promotion_issue": issue_number,
-                        "url": comment.get("html_url"),
-                    }
-                raise KnownDefectsError(
-                    f"{defect_id} is already linked to promotion Issue #{existing_target}"
-                )
+    targets, evidence = _promotion_targets(
+        gateway.list_comments(int(registry["number"])),
+        defect_id,
+    )
+    if len(targets) > 1:
+        raise KnownDefectsError(
+            f"{defect_id} has conflicting promotion Issues: "
+            + ", ".join(f"#{number}" for number in sorted(targets))
+        )
+    if targets:
+        existing_target = next(iter(targets))
+        if existing_target == issue_number:
+            return {
+                "schema": "known-defect-receipt.v1",
+                "status": "promotion_duplicate",
+                "defect_id": defect_id,
+                "registry_issue": int(registry["number"]),
+                "promotion_issue": issue_number,
+                "url": evidence[issue_number].get("html_url"),
+            }
+        raise KnownDefectsError(
+            f"{defect_id} is already linked to promotion Issue #{existing_target}"
+        )
     comment = gateway.add_comment(
         int(registry["number"]),
         "\n".join(
@@ -571,6 +711,15 @@ def promote_defect(
             )
         ),
     )
+    targets, _evidence = _promotion_targets(
+        gateway.list_comments(int(registry["number"])),
+        defect_id,
+    )
+    if targets != {issue_number}:
+        rendered_targets = ", ".join(f"#{number}" for number in sorted(targets))
+        raise KnownDefectsError(
+            f"promotion conflict detected for {defect_id}: {rendered_targets}"
+        )
     return {
         "schema": "known-defect-receipt.v1",
         "status": "promoted",

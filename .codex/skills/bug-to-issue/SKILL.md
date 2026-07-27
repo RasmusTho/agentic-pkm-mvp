@@ -36,9 +36,10 @@ looking up a confirmed registry entry do not require an LLM coordinator.
 
 ## Deferred Known Defects registry
 
-The rolling registry is one open Issue carrying `type:bug` and `state:known-defect`. It is a
-container for schema-marked comments, not an implementation contract, and must never carry
-`agent:ready`. `state:known-defect` is defined centrally in
+The rolling registry is one open, locked Issue carrying `type:bug` and `state:known-defect`. It is a
+container for schema-marked comments, not an implementation contract, carries no `agent:*` state,
+and must never carry `agent:ready`. Locking limits comments to repository collaborators so marker
+comments remain within the builder authority boundary. `state:known-defect` is defined centrally in
 `.codex/skills/_shared/LABEL_TAXONOMY.md`.
 
 Use the stdlib-only REST helper:
@@ -64,7 +65,9 @@ The helper:
 - derives `KD-<12 uppercase hex>` deterministically from source identity and normalized symptom;
 - accepts `--defect-key <stable-key>` when later source SHAs or evidence wording should deduplicate
   to the same defect;
-- finds or creates the single rolling registry Issue;
+- finds or creates and locks the single rolling registry Issue;
+- rejects unlocked or mislabeled registries and parses only exact first-line markers with the
+  expected schema shape;
 - detects the exact defect marker across existing registries before appending;
 - posts one compact JSON `known-defect-receipt.v1` with `created`, `duplicate`, `excluded`, or
   `promotion_required` status.
@@ -89,6 +92,12 @@ If multiple open registry Issues are ever found, intake fails closed instead of 
 the duplicate registry state, or pass `--registry-issue <N>` explicitly after verifying the
 canonical survivor.
 
+GitHub comment creation has no compare-and-swap operation. Sequential retries are idempotent; two
+truly concurrent same-id intakes can still append identical comments after the same stale read.
+Those comments represent one defect id, and lookup deterministically treats the earliest comment as
+canonical. Registry reconciliation may remove later identical comments; it must never create a
+second implementation Issue from them.
+
 ### Promotion
 
 Promote an entry when it is selected for implementation or its impact, repetition, or failed
@@ -106,8 +115,11 @@ python3 .codex/skills/bug-to-issue/scripts/known_defects.py promote \
   --issue <BUG_ISSUE_NUMBER>
 ```
 
-The link operation is idempotent and emits a compact promotion receipt. The promoted Issue owns
-implementation scope and closure; the registry entry remains durable source evidence.
+The link operation is idempotent and emits a compact promotion receipt. A post-write read detects
+concurrent conflicting promotion targets; lookup then returns `promotion_conflict` with no canonical
+target, and further promotion fails closed until a collaborator reconciles the marker comments.
+The promoted Issue owns implementation scope and closure; the registry entry remains durable source
+evidence.
 
 ## Normal bounded bug-Issue workflow
 

@@ -29,8 +29,8 @@ Keep only these labels for the delivery control plane taxonomy:
 - `state:known-defect`
 
 `state:known-defect` is a narrow registry-container exception, not an agent execution state. The
-rolling Known Defects Issue uses it without any `agent:*` label; normal implementation Issues never
-use it.
+locked rolling Known Defects Issue uses it with `type:bug` and without any `agent:*` label; normal
+implementation Issues never use it.
 
 ## Project contract
 
@@ -53,8 +53,9 @@ Agent-label meanings:
 - `agent:blocked`: blocked by dependency waiting, including parent validation hubs waiting on child slices; normally pair with a non-active status such as `Backlog`
 - `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with a non-active status such as `Backlog`
 - open implementation Issues should normally carry exactly one truthful agent-state label
-- `state:known-defect`: one rolling registry Issue for confirmed deferred P2/P3 entries; keep it in
-  `Backlog`, without an agent-state label, and never treat it as pickup-eligible
+- `state:known-defect`: one locked rolling registry Issue for confirmed deferred P2/P3 entries;
+  keep it in `Backlog`, with `type:bug`, without an agent-state label, and never treat it as
+  pickup-eligible
 
 Interpretation rule:
 - GitHub Project `Status` is an optional legacy projection of lifecycle state, not a pickup gate or source of truth.

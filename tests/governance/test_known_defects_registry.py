@@ -65,6 +65,7 @@ class FakeGateway:
         issue = {
             "number": self.next_issue,
             "state": "open",
+            "locked": False,
             "title": "Known Defects Registry (rolling)",
             "body": known_defects.render_registry_body(),
             "labels": [
@@ -76,6 +77,9 @@ class FakeGateway:
         self.comments[self.next_issue] = []
         self.next_issue += 1
         return issue
+
+    def lock_registry_issue(self, issue_number: int) -> None:
+        self.issues[issue_number]["locked"] = True
 
     def list_comments(self, issue_number: int) -> list[dict[str, Any]]:
         return list(self.comments.get(issue_number, []))
@@ -300,6 +304,226 @@ def test_promotion_rejects_another_registry_or_incomplete_issue() -> None:
     }
     with pytest.raises(known_defects.KnownDefectsError, match="canonical section"):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+def test_registry_rejects_missing_type_bug_any_agent_state_and_unlocked_history() -> None:
+    for mutation, expected in (
+        (
+            lambda issue: issue.update(
+                labels=[{"name": known_defects.REGISTRY_LABEL}]
+            ),
+            "type:bug",
+        ),
+        (
+            lambda issue: issue["labels"].append({"name": "agent:blocked"}),
+            "must carry no agent state",
+        ),
+        (
+            lambda issue: issue.update(locked=False),
+            "must be locked",
+        ),
+    ):
+        gateway = FakeGateway()
+        issue = gateway.create_registry_issue()
+        gateway.lock_registry_issue(issue["number"])
+        mutation(issue)
+        with pytest.raises(known_defects.KnownDefectsError, match=expected):
+            known_defects.lookup_defect("KD-000000000000", gateway)
+
+
+def test_marker_injection_in_manual_comment_is_not_registry_authority() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    gateway.add_comment(
+        issue["number"],
+        "Manual note with injected marker "
+        "<!-- known-defect-entry:v1 id=KD-000000000000 -->",
+    )
+
+    receipt = known_defects.lookup_defect("KD-000000000000", gateway)
+
+    assert receipt["status"] == "not_found"
+
+
+def test_malformed_first_line_schema_marker_fails_closed() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    gateway.add_comment(
+        issue["number"],
+        "<!-- known-defect-entry:v1 id=KD-000000000000 -->\nnot the schema",
+    )
+
+    with pytest.raises(known_defects.KnownDefectsError, match="entry shape"):
+        known_defects.lookup_defect("KD-000000000000", gateway)
+
+
+def test_multiple_open_registries_fail_closed() -> None:
+    gateway = FakeGateway()
+    first = gateway.create_registry_issue()
+    gateway.lock_registry_issue(first["number"])
+    second = gateway.create_registry_issue()
+    gateway.lock_registry_issue(second["number"])
+
+    with pytest.raises(known_defects.KnownDefectsError, match="multiple open registries"):
+        known_defects.intake_defect(_defect(), gateway)
+
+
+def test_crash_after_comment_before_receipt_is_safe_to_retry() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    defect = _defect()
+    original = gateway.add_comment(issue["number"], defect.render_entry())
+
+    receipt = known_defects.intake_defect(defect, gateway)
+
+    assert receipt["status"] == "duplicate"
+    assert receipt["url"] == original["html_url"]
+    assert len(gateway.comments[issue["number"]]) == 1
+
+
+def test_closed_registry_is_read_for_duplicates_but_never_appended() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    issue["state"] = "closed"
+    defect = _defect()
+    gateway.add_comment(issue["number"], defect.render_entry())
+
+    duplicate = known_defects.intake_defect(defect, gateway)
+    created = known_defects.intake_defect(
+        _defect(defect_key="different-defect"),
+        gateway,
+    )
+
+    assert duplicate["status"] == "duplicate"
+    assert duplicate["registry_issue"] == issue["number"]
+    assert created["status"] == "created"
+    assert created["registry_issue"] != issue["number"]
+    assert len(gateway.comments[issue["number"]]) == 1
+
+
+def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    body = _canonical_bug_body().replace(
+        "- [ ] Regression no longer reproduces.\n  Verify: `tests/x.py::test_x`",
+        (
+            "- [ ] Regression no longer reproduces.\n"
+            "  Verify: `tests/x.py::test_x`\n"
+            "- [ ] A second behavioral claim is satisfied."
+        ),
+    )
+    gateway.issues[901] = {
+        "number": 901,
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="lack concrete Verify"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+class ConflictingPromotionGateway(FakeGateway):
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if body.startswith("<!-- known-defect-promotion:"):
+            defect_id = known_defects.PROMOTION_MARKER_RE.fullmatch(
+                body.splitlines()[0]
+            ).group(1)
+            super().add_comment(
+                issue_number,
+                "\n".join(
+                    (
+                        known_defects.PROMOTION_MARKER_TEMPLATE.format(
+                            defect_id=defect_id,
+                            issue_number=902,
+                        ),
+                        (
+                            f"Promotion receipt: {defect_id} is now tracked for "
+                            "implementation by #902."
+                        ),
+                        (
+                            "The bounded bug Issue owns scope, acceptance criteria, "
+                            "Verify targets, and execution state."
+                        ),
+                    )
+                ),
+            )
+        return comment
+
+
+def test_concurrent_conflicting_promotions_never_choose_a_canonical_target() -> None:
+    gateway = ConflictingPromotionGateway()
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="promotion conflict"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    receipt = known_defects.lookup_defect(defect.defect_id, gateway)
+    assert receipt["status"] == "promotion_conflict"
+    assert receipt["promotion_issue"] is None
+    assert receipt["promotion_issues"] == [901, 902]
+    assert receipt["registry_issue"] == intake["registry_issue"]
+
+
+def test_rest_gateway_fails_closed_on_transport_and_non_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+
+    def transport_failure(*_args: Any, **_kwargs: Any) -> Any:
+        return type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "network down"},
+        )()
+
+    monkeypatch.setattr(known_defects.subprocess, "run", transport_failure)
+    with pytest.raises(known_defects.KnownDefectsError, match="network down"):
+        gateway.get_issue(1)
+
+    def invalid_json(*_args: Any, **_kwargs: Any) -> Any:
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "not-json", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(known_defects.subprocess, "run", invalid_json)
+    with pytest.raises(known_defects.KnownDefectsError, match="invalid JSON"):
+        gateway.get_issue(1)
+
+
+def test_rest_pagination_bound_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    monkeypatch.setattr(
+        gateway,
+        "_request",
+        lambda *_args, **_kwargs: [{"number": number} for number in range(100)],
+    )
+
+    with pytest.raises(known_defects.KnownDefectsError, match="pagination bound"):
+        gateway._list_paginated("repos/RasmusTho/agentic-pkm-mvp/issues")
 
 
 def test_known_defect_label_is_canonical_and_registry_only() -> None:
