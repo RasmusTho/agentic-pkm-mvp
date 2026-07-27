@@ -45,6 +45,23 @@ def test_pr_contract_requires_one_bounded_final_review_declaration() -> None:
     assert "Final-Review-Rounds: 1` or `Final-Review-Rounds: 2" in workflow
 
 
+def test_pr_contract_trigger_excludes_review_requested_and_cancels_stale_runs() -> None:
+    """`pr-contract` has no assertion that reads anything `review_requested` changes (not the
+    body, file list, commits, or title), so re-running it on that event only burns CI minutes
+    and the shared Actions queue. Keep `opened`/`edited`/`reopened`/`synchronize` — `edited` is
+    how body repairs re-trigger the gate and `synchronize` is when the diff can change."""
+    workflow = _read_workflow()
+
+    assert "types: [opened, edited, reopened, synchronize]" in workflow
+    assert "review_requested" not in workflow
+
+    pr_contract_job = workflow[workflow.index("\n  pr-contract:") :]
+    assert "concurrency:" in pr_contract_job
+    concurrency_block = pr_contract_job[: pr_contract_job.index("runs-on:")]
+    assert "group: pr-contract-${{ github.event.pull_request.number }}" in concurrency_block
+    assert "cancel-in-progress: true" in concurrency_block
+
+
 _TIER1_LANE_REGEX = re.compile(
     r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
     re.IGNORECASE | re.MULTILINE,

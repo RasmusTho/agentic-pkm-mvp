@@ -44,25 +44,32 @@ Default rule:
 
 ## PR Body Preparation
 
-Before opening a PR, generate or preflight the body from lane inputs instead of reconstructing the
-template by hand:
+`.codex/skills/publish-pr/SKILL.md :: Step 6` is the authoritative source of the four PR-body
+templates (implementation, docs-authoring, governance, direct-repair) actually used at publication
+time. Copy the template for the chosen lane directly from that step. Each template already carries
+the fields the `pr-contract` gate requires — a single `Final-Review-Rounds: 1` (or `2`) line, a
+filled `## BuilderOps Routing` section with no `<...>` placeholder, and, for direct repair, the
+complete `Type:` / `Reason:` / `Validation:` / `Issue required: no` block — so an agent that copies
+one of them and fills in the bracketed content satisfies the gate by construction.
 
-```bash
-python3 scripts/pr_body_generator.py --input-json /path/to/pr-body-inputs.json > /tmp/pr-body.md
-```
-
-Use the generator for implementation, docs-authoring, governance, and direct-repair lanes when a PR
-touches governance surfaces, closes an issue, or needs BuilderOps routing evidence. The generated
-body remains editable before PR creation, but required lane inputs fail locally before any PR is
-opened:
+`scripts/pr_body_generator.py` implements the same field contract as a standalone generator
+(`--input-json` in, a complete body out) and is available for ad hoc preflight or drift-checking
+against these templates, but no skill invokes it as part of the publication path. Wiring
+`publish-pr` to the generator is deliberately out of scope for now: the generator hard-enforces the
+full 16-field `SBS Impact` block (`docs/architecture/SBS_OPERATING_MODEL.md`), and that block's
+contract is under an open owner ruling tracked outside this doc — wiring the generator in before
+that ruling lands would cement a contract that may be about to change. Revisit this section once
+the ruling lands. Whichever source is used — skill template or generator — required lane inputs must
+be concrete before any PR is opened:
 
 - implementation lane requires a linked issue;
 - every body requires concrete SBS impact, validation, and owner-doc writeback resolution;
 - issue-backed and direct-repair bodies require concrete BuilderOps routing lines;
 - direct repair requires `Type`, `Reason`, `Validation`, and `Issue required: no`.
 
-The generator does not weaken `pr-contract`, infer issues silently, open PRs, or write to GitHub. CI
-remains the authority for whether the final PR body satisfies the repository contract.
+Neither the skill templates nor the generator weaken `pr-contract`, infer issues silently, open PRs,
+or write to GitHub. CI remains the authority for whether the final PR body satisfies the repository
+contract.
 
 ## Multi-Issue PR Scope
 
