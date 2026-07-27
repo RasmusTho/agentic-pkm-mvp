@@ -1,12 +1,12 @@
 ---
 name: start-model-inquiry
-description: "Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured Mac mini through its subscription-authenticated host launcher when a development question needs independent model review before ticket creation."
+description: "Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured inquiry host through its subscription-authenticated launcher when a development question needs independent model review before ticket creation."
 ---
 
 # Start Model Inquiry
 
 Use this Builder System skill when the operator asks to investigate one concrete development
-question before issue creation. Run the durable artifact-first workflow on the configured Mac mini;
+question before issue creation. Run the durable artifact-first workflow on the configured inquiry host;
 do not conduct the inquiry in chat history or in the calling workspace.
 
 ## Fixed Boundary
@@ -95,6 +95,8 @@ Run exactly one route as a single-flight operation.
 
    Do not use `rm`, `unlink`, a glob, or a shell cleanup wrapper for this local temporary file. Do
    not register staging or lock release as unconditional cleanup.
+
+   Do not register remote lock release until the launch outcome is known.
 3. Write the question verbatim to a temporary UTF-8 Markdown file with mode `0600`. Treat the
    question as file content; never interpolate it into a shell command.
 4. Stage the question.
@@ -175,7 +177,7 @@ separately: a cleanup failure must not replace or reclassify the captured launch
 allowed staging/lock release fails, report it and do not start another inquiry. Never delete durable
 inquiry artifacts.
 
-The configured Mac mini owns the existing Claude and Codex subscription sessions, BuilderOps
+The configured inquiry host owns the existing Claude and Codex subscription sessions, BuilderOps
 configuration, and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host
 alias. The launcher and pinned host identity are host-specific operator configuration outside Git.
 
@@ -198,6 +200,7 @@ move its model or adapter configuration into the local workspace.
 - On an ambiguous outcome, delete only the calling process's temporary question file. Do not
   release either route's lock or staged question. A later operator can decide whether the host
   launcher completed; do not make that decision from this skill.
+- Do not release the remote lock after an ambiguous launcher outcome.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
   the configured host.
 - Do not overlap invocations that use the fixed question path; both routes use the same exclusive
@@ -207,8 +210,9 @@ move its model or adapter configuration into the local workspace.
 
 ## Boundaries
 
-- Do not run BuilderOps, Python, Codex, Claude, providers, or adapters directly for this inquiry.
-  The proven-local route may invoke only the fixed subscription-authenticated host launcher.
+- Do not run local BuilderOps, Python, Codex, or Claude commands directly for this inquiry, and do
+  not invoke providers or adapters directly. The proven-local route may invoke only the fixed
+  subscription-authenticated host launcher.
 - Do not install dependencies, run vault-init, configure adapters, or use API keys.
 - Do not configure, inspect, copy, or print remote-host proxy credentials, certificates, or endpoints.
 - Do not create a GitHub Issue; use the separate promotion path after a ready receipt exists.

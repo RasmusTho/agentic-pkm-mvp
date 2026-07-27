@@ -26,14 +26,14 @@ write the question verbatim to a mode-`0600` local Markdown file. Remote callers
 ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
 ```
 
-The configured Mac mini owns the BuilderOps vault, adapters, durable artifacts, and the existing
+The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and the existing
 Claude and Codex subscription sessions. Its launcher settings, credentials, and executable paths
 are host-specific operator configuration and stay outside Git; the portable subscription adapter
 profile is versioned with the BuilderOps command. That profile gives both roles `xhigh` reasoning
 effort and a bounded extended deadline. Neither skill rebuilds that environment, configures
 providers, or reimplements orchestration in prompt prose.
 
-The repo-local Codex skill also supports a caller already running on the configured Mac mini. Before
+The repo-local Codex skill also supports a caller already running on the configured inquiry host. Before
 any connection attempt or lock mutation, it expands the fixed `Tailscale_macmini` alias with
 the fixed system `ssh -G`. The effective SSH user must equal the current fixed-system `id -un`, and
 the process `$HOME` must byte-match that account's `NFSHomeDirectory` from macOS directory service.
@@ -99,34 +99,34 @@ other.
 
 - [x] Both desktop skill packages preserve the exact remote-host bridge command and report its
   inquiry receipt fields. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_preserve_remote_macmini_launcher_contract`.
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages reject local BuilderOps setup, provider configuration, API keys, and
   desktop-control automation. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_preserve_remote_macmini_launcher_contract`.
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages fail loudly for a copy/SSH failure, empty stdout, malformed JSON, or an absent
   receipt field. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_preserve_remote_macmini_launcher_contract`.
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages atomically lock the fixed host question path rather than silently overwriting
   a concurrent inquiry. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_preserve_remote_macmini_launcher_contract`.
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages release staging and the lock through the selected route only after a pre-launch
   failure or a verified receipt, preserving both after an ambiguous launcher result. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_preserve_remote_macmini_launcher_contract`.
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Codex local cleanup uses policy-compatible exact-target deletion for the caller temp and fixed
   staging file, never a blocked shell `rm -f`, and cannot mask the captured launcher result. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_codex_skill_local_route_is_identity_gated_and_fail_closed`.
+  `tests/architecture/test_agent_skill_entrypoints.py::test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed`.
 - [x] The Codex skill selects its local-host route only after fixed-alias, OS principal/home, and
   pinned-host-key proofs all match, invokes only the fixed host launcher, shares the fixed
   single-flight lock, strictly validates the terminal response, and preserves staging after
   ambiguous outcomes. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_codex_skill_local_route_is_identity_gated_and_fail_closed`.
+  `tests/architecture/test_agent_skill_entrypoints.py::test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed`.
 - [x] A terminal `provider_error` returns one JSON response carrying the established receipt fields
   and only an optional allowlisted diagnostic object. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_local_launcher_emits_terminal_provider_error_json`.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/governance/test_start_model_inquiry_skill.py`
+- `pytest -q tests/architecture/test_agent_skill_entrypoints.py tests/governance/test_start_model_inquiry_skill.py`
 - `python3 scripts/lint_skills_consistency.py`
 - `python3 scripts/package_claude_skill.py --output /tmp/start-model-inquiry.zip`
 
