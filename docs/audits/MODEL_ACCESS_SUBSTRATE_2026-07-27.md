@@ -1,4 +1,4 @@
-State: Advisory design position, 2026-07-27. Evidence baseline: worktree `claude/reverent-kilby-ffb5fb` off `origin/main` at `ae37a7a49`, plus read-only host inspection of Demerzel. No implementation, no Issue, no PR is authorized by this document. It requests exactly one owner ruling (§7).
+State: Advisory design position, 2026-07-27. Evidence baseline: worktree `claude/reverent-kilby-ffb5fb` off `origin/main` at `ae37a7a49`, plus read-only inspection of the configured inquiry host. No implementation, no Issue, no PR is authorized by this document. It requests exactly one owner ruling (§7).
 Doc role: Reference (architecture design position — pre-ADR)
 Authority: Evidence-based analysis and a recommendation only. `docs/adr/ADR-0063-shared-llm-contract-kernel.md` remains authoritative for the Product/Builder contract seam; `docs/LLM_ROUTING.md` for current Product routing; ADR-0062 for Builder credential/process separation; `docs/LOCAL_SECRET_PROVISIONING/` for the host secret boundary. Owner docs win on disagreement.
 Owner: Architecture spine / LLM boundary
@@ -38,7 +38,7 @@ One thing genuinely needs the owner: **what the default programmatic auth path i
 Three corrections, each material to the design.
 
 **1.1 The Anthropic path is not broken — it has a bespoke bridge the Codex path lacks.**
-Demerzel runs `local.yggdrasil.claude-proxy` (loaded, PID present): a hand-written
+The configured inquiry host runs `local.yggdrasil.claude-proxy` (loaded, PID present): a hand-written
 `ThreadingHTTPServer` on `0.0.0.0:8743` under `~/.local/lib/yggdrasil-claude-proxy/`, TLS 1.2+ with
 a pinned cert, bearer token from `~/.config/yggdrasil-claude-proxy/client-token`, a strict argv
 allowlist, then `subprocess.run([~/.local/bin/claude, *argv])`. It runs in the **GUI login session**
@@ -226,7 +226,7 @@ One contract, four bindings, no new machinery:
 | Surface | Binding | Notes |
 |---|---|---|
 | Laptop (dev) | Keychain via `host_secret_contract.json`, channel `dev` | Mechanism already delivered (HSP-01). Needs the model-provider identifiers added and `host_secret_contract.py:17-19`'s hardcoded allowlist made data |
-| Demerzel host | Same contract, channels `test`/`prod`, plus the **brokered session** backend for subscription paths | The proxy generalized: one local service, N providers, in Git, values still host-only |
+| Inquiry host | Same contract, channels `test`/`prod`, plus the **brokered session** backend for subscription paths | The proxy generalized: one local service, N providers, in Git, values still host-only |
 | dev/test/prod channels | The contract's `channel` dimension — already isolated and tested (INV-HSP-2) | No new isolation model |
 | CI | Declared secret backend only, via GitHub Actions secrets, resolved through the same contract | Subscription sessions are **structurally impossible** in CI. This is not a limitation to engineer around; it is the reason §7 exists |
 
