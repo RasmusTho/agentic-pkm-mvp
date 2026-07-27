@@ -5,8 +5,8 @@ Owner: BuilderOps governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: app/builderops, app/cli/builderops.py, ADR-0010, BuilderOps object model
-Last reviewed: 2026-07-14
-Last verified against: issues #1501/#1502/#1507/#1508/#3686
+Last reviewed: 2026-07-27
+Last verified against: issues #1501/#1502/#1507/#1508/#3686; store-posture and receipt-bootstrap mechanics verified against app/builderops/config.py, app/builderops/cutover_evidence.py, and app/builderops/cli.py at c25f86949
 
 # BuilderOps Vault Store and CLI
 
@@ -170,6 +170,86 @@ or reconcile records, or perform the live cutover.
 
 Default home-directory resolution is lazy. An absolute explicit DB/state/CLI override therefore
 continues to work in hostless automation where no user home can be resolved.
+
+### Choosing a store posture for a host
+
+The receipt route and the explicit override are not interchangeable defaults. `validate_receipt`
+re-derives its bindings on every implicit store load, so the receipt posture only holds on a host
+where those bindings are stable:
+
+- the current working directory must sit inside exactly one declared participant root;
+- `_participants` resolves each declared root with `strict=True`, so a root that no longer exists
+  fails the gate closed;
+- the legacy-store inventory beneath the declared roots is re-walked and compared on each load, and
+  any legacy-store write after the reconciliation epoch is rejected.
+
+Prefer the receipt when the host's BuilderOps working directories all live under a small set of
+long-lived roots that can be declared once, and the legacy stores beneath those roots are frozen.
+Implicit selection is then self-verifying, with no environment state to lose.
+
+Prefer the explicit override (`BUILDEROPS_STATE_DIR`, or `BUILDEROPS_DB_PATH`) when any of the
+following holds on the host:
+
+- BuilderOps commands run from worktrees under several unrelated parent directories — for example
+  `<repo>/.claude/worktrees/`, `~/.codex/worktrees/`, and `~/code/pkm-worktrees/`. Every parent has
+  to be declared, and adding a new worktree parent silently re-breaks the gate until the receipt is
+  regenerated.
+- Those parent directories are created and reaped routinely. A reaped root fails strict resolution
+  and takes store selection down with it.
+- The recursive legacy-store discovery walk over the declared roots is expensive enough that paying
+  it on every store load is unattractive.
+
+Set the override where every shell inherits it (for example `~/.zshenv`), so interactive shells,
+agent tool shells, and CLI sessions resolve the same store regardless of which checkout or worktree
+they start from. Record the choice in a host-local operator note; that note is host state, not repo
+authority. Worked example: the primary development laptop was consolidated onto the explicit
+`BUILDEROPS_STATE_DIR` posture on 2026-07-27, with the reasoning kept host-locally in
+`~/.local/state/builderops/HOST_POSTURE.md` on that machine.
+
+Either posture yields the same host-stable store. The override does not weaken the SQLite
+separation check or the vault-confinement guard; it only bypasses the receipt gate during store
+selection.
+
+### Bootstrapping the receipt on a host with no host-stable store
+
+`cutover-evidence generate` verifies an existing target; it never creates one. `build_receipt`
+inspects the implicit target with `inspect_target` and fails closed with `target store is empty`
+unless that database already exists, is an initialized BuilderOps database, and holds at least one
+record. The producer always resolves the target from the default state directory:
+`BUILDEROPS_STATE_DIR` does not redirect it, and the CLI rejects `--db-path` before inspection.
+
+Because implicit selection is exactly what the guard blocks, the target cannot be created through
+the implicit path. On a host with no host-stable store yet, the receipt route is therefore
+override-first — the override is a prerequisite of the receipt, not an alternative to it:
+
+```bash
+# 1. Pin the store explicitly. The value must equal the default state directory, because that is
+#    the only target the producer will inspect.
+export BUILDEROPS_STATE_DIR="$HOME/.local/state/builderops"
+
+# 2. Initialize the target and give it at least one record. An initialized but record-free
+#    database still fails with "target store is empty".
+scripts/builderops_cli.sh builderops create-worklog \
+  --summary "Host store bootstrap" \
+  --body "Initialized the host-stable target store." \
+  --source-ref repo_doc:docs/builderops/BUILDEROPS_VAULT_STORE.md \
+  --idempotency-key create:host_store_bootstrap
+
+# 3. Stop BuilderOps writers and reconcile every legacy store beneath the participant roots into
+#    that target, then generate the receipt from a working directory inside exactly one declared
+#    participant root.
+python -m app.builderops builderops cutover-evidence generate \
+  --participants-file participants.json --reconciliation-file reconciliation.json \
+  --actor <operator> --json
+
+# 4. Drop the override and confirm that implicit selection now passes.
+unset BUILDEROPS_STATE_DIR
+scripts/builderops_cli.sh builderops list --json
+```
+
+Stopping after step 2 leaves a working host-stable store under the explicit-override posture. The
+receipt only adds self-verifying implicit selection on top of it, and is worth producing only when
+the bindings in `Choosing a store posture for a host` hold.
 
 ### Shared artifact vault and advisory claim signals
 
