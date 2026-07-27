@@ -36,6 +36,7 @@ from app.builderops.delivery_orchestration_contracts import (
     TcdMetrics,
     ValidationEvidence,
     canonical_hash,
+    delivery_effect_input_hash,
     delivery_initiation_approval_hash,
     parse_delivery_contract,
     validate_delivery_plan_evidence,
@@ -87,12 +88,17 @@ def _issue(number: int, content_hash: str) -> IssueScope:
     )
 
 
-def _authority(issue: IssueScope, state: str = "open") -> AuthoritySnapshot:
+def _authority(
+    issue: IssueScope,
+    state: str = "open",
+    labels: tuple[str, ...] = ("type:task",),
+) -> AuthoritySnapshot:
     return AuthoritySnapshot(
         authority_type="github_issue",
         authority_id=issue.authority_id,
         content_hash=issue.contract_hash,
         observed_state=state,
+        observed_labels=labels,
         observed_at=TS,
     )
 
@@ -128,13 +134,18 @@ def _initiation(issue: IssueScope) -> DeliveryInitiation:
     budget = _budget()
     source_authorities = (_authority(issue),)
     provenance = _provenance("initiation-4165")
+    approval_id = "approval-4165"
+    approver = _actor()
+    approval_source_refs = (
+        _source("RasmusTho/agentic-pkm-mvp#4165", SHA_C),
+    )
     return DeliveryInitiation(
         initiation_id="init-4165",
         requested_scope=requested_scope,
         exclusions=exclusions,
         approval_evidence=ApprovalEvidence(
-            approval_id="approval-4165",
-            approver=_actor(),
+            approval_id=approval_id,
+            approver=approver,
             approved_at=TS,
             approved_payload_hash=delivery_initiation_approval_hash(
                 initiation_id="init-4165",
@@ -144,8 +155,12 @@ def _initiation(issue: IssueScope) -> DeliveryInitiation:
                 budget=budget,
                 source_authorities=source_authorities,
                 provenance=provenance,
+                approval_id=approval_id,
+                approver=approver,
+                approved_at=TS,
+                approval_source_refs=approval_source_refs,
             ),
-            source_refs=(_source("RasmusTho/agentic-pkm-mvp#4165", SHA_C),),
+            source_refs=approval_source_refs,
         ),
         policy_profile=policy_profile,
         budget=budget,
@@ -246,7 +261,7 @@ def _review_result(issue: IssueScope, plan: DeliveryPlan) -> ReviewResult:
                 evidence_refs=("review:4200:finding-p2-1",),
             ),
         ),
-        known_defect_refs=("known-defect:4300",),
+        known_defect_refs=("registry:4300:KD-AAAAAAAAAAAA",),
         provenance=_provenance("review-result-4165"),
     )
 
@@ -310,14 +325,17 @@ def _receipt(
                 known_defects=(
                     KnownDefectRef(
                         issue_number=4300,
+                        defect_id="KD-AAAAAAAAAAAA",
                         severity="P2",
-                        registry_ref="known-defect:4300",
+                        registry_ref="registry:4300:KD-AAAAAAAAAAAA",
                         finding_hash=canonical_hash(review.findings[0]),
                     ),
                 ),
                 exceptions=(),
                 closure=ClosureEvidence(
                     issue_number=issue.issue_number,
+                    pull_request_number=4200,
+                    exact_head_sha=SHA_D,
                     closed_at=TS,
                     closure_ref="github-issue-event:4165:closed",
                 ),
@@ -396,18 +414,29 @@ def test_contracts_round_trip_canonically() -> None:
         exception=None,
         provenance=_provenance("event-1"),
     )
+    effect_plan_ref = event.plan_ref
+    effect_authorities = (_authority(issue),)
     effect = ReducerEffect(
         effect_id="effect-1",
         run_id="run-4165",
-        plan_ref=event.plan_ref,
+        plan_ref=effect_plan_ref,
         sequence=2,
         effect_class="await_ci",
         issue=issue,
         pull_request_number=4200,
         exact_head_sha=SHA_D,
-        expected_authorities=(_authority(issue),),
+        expected_authorities=effect_authorities,
         idempotency_key="run-4165:await-ci:4165:2",
-        input_hash=SHA_B,
+        input_hash=delivery_effect_input_hash(
+            run_id="run-4165",
+            plan_ref=effect_plan_ref,
+            sequence=2,
+            effect_class="await_ci",
+            issue=issue,
+            pull_request_number=4200,
+            exact_head_sha=SHA_D,
+            expected_authorities=effect_authorities,
+        ),
         provenance=_provenance("effect-1"),
     )
     receipt = _receipt(issue, initiation, plan, worker, review)
@@ -469,6 +498,11 @@ def test_contracts_round_trip_canonically() -> None:
     with pytest.raises(ValidationError, match="pull request and exact head"):
         parse_delivery_contract(invalid_effect)
 
+    invalid_effect = effect.model_dump(mode="json")
+    invalid_effect["sequence"] += 1
+    with pytest.raises(ValidationError, match="input hash"):
+        parse_delivery_contract(invalid_effect)
+
     foreign_event_payload = event.model_dump(mode="json")
     foreign_event_payload["subject_authority"] = _authority(
         _issue(9999, SHA_C)
@@ -481,6 +515,53 @@ def test_contracts_round_trip_canonically() -> None:
             plan=plan,
             worker_result=worker,
         )
+
+    foreign_worker_payload = worker.model_dump(mode="json")
+    foreign_worker_payload["issue"] = _issue(9999, SHA_C).model_dump(mode="json")
+    foreign_worker = parse_delivery_contract(foreign_worker_payload)
+    assert isinstance(foreign_worker, StructuredWorkerResult)
+    foreign_result_event = ReducerEvent(
+        event_id="event-foreign-result",
+        run_id=foreign_worker.run_id,
+        plan_ref=foreign_worker.plan_ref,
+        sequence=3,
+        event_type="worker_result_recorded",
+        subject_authority=_authority(foreign_worker.issue),
+        effect_ref=None,
+        result_ref=ContractRef(
+            schema_version=foreign_worker.schema_version,
+            contract_id=foreign_worker.result_id,
+            content_hash=foreign_worker.content_hash,
+        ),
+        exception=None,
+        provenance=_provenance("event-foreign-result"),
+    )
+    with pytest.raises(ValueError, match="outside exact plan scope"):
+        validate_reducer_event_evidence(
+            foreign_result_event,
+            plan=plan,
+            worker_result=foreign_worker,
+        )
+
+    stale_effect_payload = effect.model_dump(mode="json")
+    stale_authority = _authority(issue, "closed")
+    stale_effect_payload["expected_authorities"] = [
+        stale_authority.model_dump(mode="json")
+    ]
+    stale_effect_payload["input_hash"] = delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence,
+        effect_class=effect.effect_class,
+        issue=effect.issue,
+        pull_request_number=effect.pull_request_number,
+        exact_head_sha=effect.exact_head_sha,
+        expected_authorities=(stale_authority,),
+    )
+    stale_effect = parse_delivery_contract(stale_effect_payload)
+    assert isinstance(stale_effect, ReducerEffect)
+    with pytest.raises(ValueError, match="expected live authority"):
+        validate_reducer_effect_evidence(stale_effect, plan=plan)
 
     invalid_timestamp = initiation.model_dump(mode="json")
     invalid_timestamp["provenance"]["created_at"] = "2026-99-99T99:99:99Z"
@@ -522,6 +603,11 @@ def test_initiation_is_evidence_not_execution_authority() -> None:
     with pytest.raises(ValidationError, match="exact canonical initiation payload"):
         parse_delivery_contract(payload)
 
+    payload = initiation.model_dump(mode="json")
+    payload["approval_evidence"]["approval_id"] = "substituted-approval"
+    with pytest.raises(ValidationError, match="exact canonical initiation payload"):
+        parse_delivery_contract(payload)
+
 
 def test_plan_binds_scope_and_expected_authority() -> None:
     issue = _issue(4165, SHA_A)
@@ -547,6 +633,11 @@ def test_plan_binds_scope_and_expected_authority() -> None:
     payload = plan.model_dump(mode="json")
     payload["input_authorities"] = []
     with pytest.raises(ValidationError, match="input authorities"):
+        parse_delivery_contract(payload)
+
+    payload = plan.model_dump(mode="json")
+    payload["input_authorities"][0]["observed_labels"] = []
+    with pytest.raises(ValidationError, match="expected state or labels"):
         parse_delivery_contract(payload)
 
     payload = plan.model_dump(mode="json")
@@ -602,6 +693,46 @@ def test_plan_binds_scope_and_expected_authority() -> None:
     with pytest.raises(ValueError, match="approved scope"):
         validate_delivery_plan_evidence(foreign_plan, initiation=initiation)
 
+    expanded_issue = _issue(4166, SHA_C)
+    expanded_scope = (issue, expanded_issue)
+    expanded_authorities = (_authority(issue), _authority(expanded_issue))
+    expanded_approval_hash = delivery_initiation_approval_hash(
+        initiation_id=initiation.initiation_id,
+        requested_scope=expanded_scope,
+        exclusions=initiation.exclusions,
+        policy_profile=initiation.policy_profile,
+        budget=initiation.budget,
+        source_authorities=expanded_authorities,
+        provenance=initiation.provenance,
+        approval_id=initiation.approval_evidence.approval_id,
+        approver=initiation.approval_evidence.approver,
+        approved_at=initiation.approval_evidence.approved_at,
+        approval_source_refs=initiation.approval_evidence.source_refs,
+    )
+    expanded_initiation = initiation.model_copy(
+        update={
+            "requested_scope": expanded_scope,
+            "source_authorities": expanded_authorities,
+            "approval_evidence": initiation.approval_evidence.model_copy(
+                update={"approved_payload_hash": expanded_approval_hash}
+            ),
+        }
+    )
+    narrowed_plan = plan.model_copy(
+        update={
+            "initiation_ref": ContractRef(
+                schema_version=expanded_initiation.schema_version,
+                contract_id=expanded_initiation.initiation_id,
+                content_hash=expanded_initiation.content_hash,
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="explain every omitted"):
+        validate_delivery_plan_evidence(
+            narrowed_plan,
+            initiation=expanded_initiation,
+        )
+
 
 def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     issue = _issue(4165, SHA_A)
@@ -642,6 +773,11 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["closure"]["exact_head_sha"] = SHA_C
+    with pytest.raises(ValidationError, match="closure evidence"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["check_evidence"] = []
     with pytest.raises(ValidationError, match="accepted exact-head proof"):
         parse_delivery_contract(payload)
@@ -678,6 +814,36 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             worker_results=(worker,),
             review_results=(review,),
         )
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["known_defects"][0]["issue_number"] = 9999
+    with pytest.raises(ValidationError, match="registry ref"):
+        parse_delivery_contract(payload)
+
+    substituted_issue = _issue(issue.issue_number, SHA_C)
+    substituted_worker_payload = worker.model_dump(mode="json")
+    substituted_worker_payload["issue"] = substituted_issue.model_dump(mode="json")
+    substituted_worker = parse_delivery_contract(substituted_worker_payload)
+    assert isinstance(substituted_worker, StructuredWorkerResult)
+    substituted_review_payload = review.model_dump(mode="json")
+    substituted_review_payload["issue"] = substituted_issue.model_dump(mode="json")
+    substituted_review = parse_delivery_contract(substituted_review_payload)
+    assert isinstance(substituted_review, ReviewResult)
+    substituted_receipt_payload = receipt.model_dump(mode="json")
+    substituted_proof = substituted_receipt_payload["issue_proofs"][0]
+    substituted_proof["issue"] = substituted_issue.model_dump(mode="json")
+    substituted_proof["worker_result_ref"] = ContractRef(
+        schema_version=substituted_worker.schema_version,
+        contract_id=substituted_worker.result_id,
+        content_hash=substituted_worker.content_hash,
+    ).model_dump(mode="json")
+    substituted_proof["review_result_ref"] = ContractRef(
+        schema_version=substituted_review.schema_version,
+        contract_id=substituted_review.result_id,
+        content_hash=substituted_review.content_hash,
+    ).model_dump(mode="json")
+    with pytest.raises(ValidationError, match="cover final scope exactly"):
+        parse_delivery_contract(substituted_receipt_payload)
 
     worker_exception = DeliveryException(
         kind="execution_failed",
@@ -735,6 +901,80 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         )
         is failed_receipt
     )
+    for contradictory_outcome in ("blocked", "cancelled"):
+        contradictory_payload = failed_receipt.model_dump(mode="json")
+        contradictory_payload["terminal_outcome"] = contradictory_outcome
+        contradictory_receipt = parse_delivery_contract(contradictory_payload)
+        assert isinstance(contradictory_receipt, DeliveryReceipt)
+        with pytest.raises(ValueError, match="terminal outcome contradicts"):
+            validate_delivery_receipt_evidence(
+                contradictory_receipt,
+                initiation=initiation,
+                plan=plan,
+                worker_results=(failed_worker,),
+                review_results=(),
+            )
+
+    terminal_fixtures = (
+        (
+            "blocked",
+            DeliveryException(
+                kind="dependency_blocked",
+                code="worker-blocked",
+                message="Dependency remains blocked.",
+                retryable=True,
+                evidence_refs=("worker:blocked",),
+            ),
+        ),
+        (
+            "cancelled",
+            DeliveryException(
+                kind="cancelled",
+                code="worker-cancelled",
+                message="Run was explicitly cancelled.",
+                retryable=False,
+                evidence_refs=("worker:cancelled",),
+            ),
+        ),
+    )
+    for worker_status, terminal_exception in terminal_fixtures:
+        terminal_worker_payload = failed_worker.model_dump(mode="json")
+        terminal_worker_payload["status"] = worker_status
+        terminal_worker_payload["exceptions"] = [
+            terminal_exception.model_dump(mode="json")
+        ]
+        terminal_worker = parse_delivery_contract(terminal_worker_payload)
+        assert isinstance(terminal_worker, StructuredWorkerResult)
+        for contradictory_outcome in {
+            "blocked",
+            "failed",
+            "cancelled",
+        } - {worker_status}:
+            contradictory_payload = failed_receipt.model_dump(mode="json")
+            contradictory_payload["terminal_outcome"] = contradictory_outcome
+            contradictory_payload["exceptions"] = [
+                terminal_exception.model_dump(mode="json")
+            ]
+            contradictory_payload["issue_proofs"][0]["worker_result_ref"] = (
+                ContractRef(
+                    schema_version=terminal_worker.schema_version,
+                    contract_id=terminal_worker.result_id,
+                    content_hash=terminal_worker.content_hash,
+                ).model_dump(mode="json")
+            )
+            contradictory_payload["issue_proofs"][0]["exceptions"] = [
+                terminal_exception.model_dump(mode="json")
+            ]
+            contradictory_receipt = parse_delivery_contract(contradictory_payload)
+            assert isinstance(contradictory_receipt, DeliveryReceipt)
+            with pytest.raises(ValueError, match="terminal outcome contradicts"):
+                validate_delivery_receipt_evidence(
+                    contradictory_receipt,
+                    initiation=initiation,
+                    plan=plan,
+                    worker_results=(terminal_worker,),
+                    review_results=(),
+                )
 
     mismatched_plan_payload = plan.model_dump(mode="json")
     mismatched_plan_payload["plan_id"] = "other-plan"

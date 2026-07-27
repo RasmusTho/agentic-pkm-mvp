@@ -210,7 +210,13 @@ class AuthoritySnapshot(_StrictFrozenModel):
     authority_id: NonEmptyStr
     content_hash: Sha256
     observed_state: NonEmptyStr
+    observed_labels: tuple[NonEmptyStr, ...]
     observed_at: UtcTimestamp
+
+    @model_validator(mode="after")
+    def _validate_labels(self) -> AuthoritySnapshot:
+        _require_unique(self.observed_labels, "authority snapshot labels")
+        return self
 
 
 class PolicyProfile(_StrictFrozenModel):
@@ -265,6 +271,10 @@ def delivery_initiation_approval_hash(
     budget: DeliveryBudget,
     source_authorities: tuple[AuthoritySnapshot, ...],
     provenance: Provenance,
+    approval_id: str,
+    approver: ActorIdentity,
+    approved_at: str,
+    approval_source_refs: tuple[SourceRef, ...],
 ) -> str:
     """Hash the exact semantic initiation request that approval authenticates."""
 
@@ -282,6 +292,17 @@ def delivery_initiation_approval_hash(
                 item.model_dump(mode="json") for item in source_authorities
             ],
             "provenance": provenance.model_dump(mode="json"),
+            "approval_context": {
+                "approval_id": approval_id,
+                "approver": approver.model_dump(mode="json"),
+                "approved_at": approved_at,
+                "source_refs": [
+                    item.model_dump(mode="json")
+                    for item in approval_source_refs
+                ],
+                "immutable": True,
+                "effect_authority": False,
+            },
         }
     )
 
@@ -312,6 +333,10 @@ class DeliveryInitiation(CanonicalDeliveryContract):
             tuple(item.scope_key for item in self.exclusions),
             "scope exclusions",
         )
+        _require_unique(
+            tuple(item.authority_id for item in self.source_authorities),
+            "source authority IDs",
+        )
         authorities = {
             (item.authority_id, item.content_hash) for item in self.source_authorities
         }
@@ -332,6 +357,10 @@ class DeliveryInitiation(CanonicalDeliveryContract):
             budget=self.budget,
             source_authorities=self.source_authorities,
             provenance=self.provenance,
+            approval_id=self.approval_evidence.approval_id,
+            approver=self.approval_evidence.approver,
+            approved_at=self.approval_evidence.approved_at,
+            approval_source_refs=self.approval_evidence.source_refs,
         )
         if self.approval_evidence.approved_payload_hash != expected_approval_hash:
             raise ValueError(
@@ -400,6 +429,10 @@ class DeliveryPlan(CanonicalDeliveryContract):
             tuple(item.scope_key for item in self.exclusions),
             "scope exclusions",
         )
+        _require_unique(
+            tuple(item.authority_id for item in self.input_authorities),
+            "input authority IDs",
+        )
         if tuple(wave.wave_index for wave in self.dependency_waves) != tuple(
             range(len(self.dependency_waves))
         ):
@@ -437,7 +470,8 @@ class DeliveryPlan(CanonicalDeliveryContract):
                 "expected states must preserve exact final-scope authority"
             )
         authority_bindings = {
-            (item.authority_id, item.content_hash) for item in self.input_authorities
+            (item.authority_id, item.content_hash): item
+            for item in self.input_authorities
         }
         missing = [
             item.authority_id
@@ -448,6 +482,25 @@ class DeliveryPlan(CanonicalDeliveryContract):
             raise ValueError(
                 f"input authorities must bind every final scope item: {missing}"
             )
+        for expected_state in self.expected_states:
+            snapshot = authority_bindings[
+                (
+                    expected_state.issue.authority_id,
+                    expected_state.issue.contract_hash,
+                )
+            ]
+            if (
+                snapshot.observed_state != expected_state.issue_state
+                or not set(expected_state.required_labels).issubset(
+                    snapshot.observed_labels
+                )
+                or set(expected_state.forbidden_labels).intersection(
+                    snapshot.observed_labels
+                )
+            ):
+                raise ValueError(
+                    "input authority snapshot contradicts expected state or labels"
+                )
         if not self.effect_allowlist:
             raise ValueError("effect allowlist must not be empty")
         _require_unique(self.effect_allowlist, "effect allowlist")
@@ -473,6 +526,15 @@ def validate_delivery_plan_evidence(
         approved_scope.get(item.scope_key) != item for item in plan.final_scope
     ):
         raise ValueError("plan final scope must be an exact subset of approved scope")
+    final_scope_keys = {item.scope_key for item in plan.final_scope}
+    missing_scope_refs = {
+        f"{item.repository.casefold()}#{item.issue_number}"
+        for item in initiation.requested_scope
+        if item.scope_key not in final_scope_keys
+    }
+    exclusion_refs = {item.scope_key.casefold() for item in plan.exclusions}
+    if not missing_scope_refs.issubset(exclusion_refs):
+        raise ValueError("plan exclusions must explain every omitted approved issue")
     if not set(initiation.exclusions).issubset(set(plan.exclusions)):
         raise ValueError("plan must preserve initiation exclusions")
     if plan.policy_profile != initiation.policy_profile:
@@ -581,6 +643,35 @@ class ReducerEvent(CanonicalDeliveryContract):
         return self
 
 
+def delivery_effect_input_hash(
+    *,
+    run_id: str,
+    plan_ref: ContractRef,
+    sequence: int,
+    effect_class: EffectClass,
+    issue: IssueScope,
+    pull_request_number: int | None,
+    exact_head_sha: str | None,
+    expected_authorities: tuple[AuthoritySnapshot, ...],
+) -> str:
+    """Hash the complete semantic input to one proposed reducer effect."""
+
+    return canonical_hash(
+        {
+            "run_id": run_id,
+            "plan_ref": plan_ref.model_dump(mode="json"),
+            "sequence": sequence,
+            "effect_class": effect_class,
+            "issue": issue.model_dump(mode="json"),
+            "pull_request_number": pull_request_number,
+            "exact_head_sha": exact_head_sha,
+            "expected_authorities": [
+                item.model_dump(mode="json") for item in expected_authorities
+            ],
+        }
+    )
+
+
 class ReducerEffect(CanonicalDeliveryContract):
     contract_family: ClassVar[str] = "reducer"
     schema_version: Literal[
@@ -607,6 +698,10 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError("reducer effect must bind DeliveryPlan.v1")
         if not self.expected_authorities:
             raise ValueError("reducer effect must bind expected live authority")
+        _require_unique(
+            tuple(item.authority_id for item in self.expected_authorities),
+            "effect expected authority IDs",
+        )
         if not any(
             authority.authority_id == self.issue.authority_id
             and authority.content_hash == self.issue.contract_hash
@@ -633,6 +728,18 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError(
                 f"{self.effect_class} must not carry pull request or exact head"
             )
+        expected_input_hash = delivery_effect_input_hash(
+            run_id=self.run_id,
+            plan_ref=self.plan_ref,
+            sequence=self.sequence,
+            effect_class=self.effect_class,
+            issue=self.issue,
+            pull_request_number=self.pull_request_number,
+            exact_head_sha=self.exact_head_sha,
+            expected_authorities=self.expected_authorities,
+        )
+        if self.input_hash != expected_input_hash:
+            raise ValueError("reducer effect input hash must bind exact semantic input")
         return self
 
 
@@ -689,8 +796,32 @@ class StructuredWorkerResult(CanonicalDeliveryContract):
                 for item in self.validations
             ):
                 raise ValueError("worker validation must bind the exact result head")
-        elif not self.exceptions:
-            raise ValueError("non-completed worker result requires a typed exception")
+        else:
+            if not self.exceptions:
+                raise ValueError(
+                    "non-completed worker result requires a typed exception"
+                )
+            allowed_exception_kinds: dict[str, set[str]] = {
+                "blocked": {
+                    "authority_conflict",
+                    "dependency_blocked",
+                    "budget_exhausted",
+                    "review_blocking",
+                },
+                "failed": {
+                    "malformed_result",
+                    "external_state_unknown",
+                    "execution_failed",
+                },
+                "cancelled": {"cancelled"},
+            }
+            if any(
+                item.kind not in allowed_exception_kinds[self.status]
+                for item in self.exceptions
+            ):
+                raise ValueError(
+                    "worker exception kinds must match terminal status"
+                )
         return self
 
 
@@ -799,10 +930,23 @@ def validate_reducer_effect_evidence(
         ),
         None,
     )
-    if expected_state is None or not any(
-        authority.authority_id == expected_state.issue.authority_id
-        and authority.content_hash == expected_state.expected_contract_hash
+    matching_authorities = tuple(
+        authority
         for authority in effect.expected_authorities
+        if authority.authority_id == effect.issue.authority_id
+    )
+    if (
+        expected_state is None
+        or len(matching_authorities) != 1
+        or matching_authorities[0].content_hash
+        != expected_state.expected_contract_hash
+        or matching_authorities[0].observed_state != expected_state.issue_state
+        or not set(expected_state.required_labels).issubset(
+            matching_authorities[0].observed_labels
+        )
+        or set(expected_state.forbidden_labels).intersection(
+            matching_authorities[0].observed_labels
+        )
     ):
         raise ValueError("reducer effect lacks the plan's expected live authority")
     return effect
@@ -899,6 +1043,18 @@ def validate_reducer_event_evidence(
             raise ValueError("authority-change event must carry changed authority")
 
     if referenced_issue is not None:
+        planned_issue = next(
+            (
+                item
+                for item in plan.final_scope
+                if item.scope_key == referenced_issue.scope_key
+            ),
+            None,
+        )
+        if planned_issue != referenced_issue:
+            raise ValueError(
+                "reducer event references evidence outside exact plan scope"
+            )
         subject = event.subject_authority
         if (
             subject is None
@@ -920,9 +1076,22 @@ class CheckEvidence(_StrictFrozenModel):
 
 class KnownDefectRef(_StrictFrozenModel):
     issue_number: PositiveInt
+    defect_id: Annotated[
+        str,
+        StringConstraints(pattern=r"^KD-[0-9A-F]{12}$"),
+    ]
     severity: Literal["P2"]
     registry_ref: NonEmptyStr
     finding_hash: Sha256
+
+    @model_validator(mode="after")
+    def _validate_identity(self) -> KnownDefectRef:
+        expected_ref = f"registry:{self.issue_number}:{self.defect_id}"
+        if self.registry_ref != expected_ref:
+            raise ValueError(
+                "known defect registry ref must bind issue number and defect ID"
+            )
+        return self
 
 
 class MergeIdentity(_StrictFrozenModel):
@@ -936,6 +1105,8 @@ class MergeIdentity(_StrictFrozenModel):
 
 class ClosureEvidence(_StrictFrozenModel):
     issue_number: PositiveInt
+    pull_request_number: PositiveInt
+    exact_head_sha: GitSha
     closed_at: UtcTimestamp
     closure_ref: NonEmptyStr
 
@@ -978,6 +1149,15 @@ class IssueDeliveryProof(_StrictFrozenModel):
                 raise ValueError("merge identity must bind a pull request")
         if self.closure is not None and self.closure.issue_number != self.issue.issue_number:
             raise ValueError("closure evidence must bind the proof issue")
+        if self.closure is not None:
+            if self.exact_head_sha != self.closure.exact_head_sha:
+                raise ValueError("closure evidence must bind the exact head")
+            if (
+                self.merge_identity is not None
+                and self.closure.pull_request_number
+                != self.merge_identity.pull_request_number
+            ):
+                raise ValueError("closure evidence must bind the merged pull request")
         if (self.review_result_ref is None) != (self.review_disposition is None):
             raise ValueError(
                 "review ref and disposition must be present or absent together"
@@ -1087,9 +1267,11 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             tuple(item.issue.scope_key for item in self.issue_proofs),
             "receipt issue proofs",
         )
-        if {
-            item.issue.scope_key for item in self.issue_proofs
-        } != {item.scope_key for item in self.final_scope}:
+        proof_scope = {
+            item.issue.scope_key: item.issue for item in self.issue_proofs
+        }
+        final_scope = {item.scope_key: item for item in self.final_scope}
+        if proof_scope != final_scope:
             raise ValueError("receipt issue proofs must cover final scope exactly")
         if tuple(step.step_index for step in self.recovery_history) != tuple(
             range(len(self.recovery_history))
@@ -1200,6 +1382,10 @@ def validate_delivery_receipt_evidence(
         raise ValueError("structured result IDs must be unique")
     used_workers: set[str] = set()
     used_reviews: set[str] = set()
+    proof_outcomes: list[
+        Literal["delivered", "blocked", "failed", "cancelled"]
+    ] = []
+    planned_scope = {item.scope_key: item for item in plan.final_scope}
     for proof in receipt.issue_proofs:
         worker = workers.get(proof.worker_result_ref.contract_id)
         review = (
@@ -1235,6 +1421,7 @@ def validate_delivery_receipt_evidence(
         if (
             worker.run_id != receipt.run_id
             or worker.plan_ref != expected_plan_ref
+            or planned_scope.get(proof.issue.scope_key) != proof.issue
             or worker.issue != proof.issue
             or worker.exact_head_sha != proof.exact_head_sha
             or worker.pull_request_number != pull_request_number
@@ -1270,9 +1457,50 @@ def validate_delivery_receipt_evidence(
             used_reviews.add(review.result_id)
         elif proof.review_disposition is not None or proof.known_defects:
             raise ValueError("receipt proof carries review evidence without a review")
+        proof_is_delivered = (
+            worker.status == "completed"
+            and proof.merge_identity is not None
+            and proof.closure is not None
+            and bool(proof.check_evidence)
+            and all(item.status == "passed" for item in proof.check_evidence)
+            and proof.review_disposition not in {None, "reject"}
+            and not proof.exceptions
+        )
+        if proof_is_delivered:
+            proof_outcomes.append("delivered")
+        elif worker.status != "completed":
+            proof_outcomes.append(worker.status)
+        else:
+            exception_kinds = {item.kind for item in proof.exceptions}
+            if not exception_kinds:
+                raise ValueError(
+                    "non-delivered completed worker proof requires a typed exception"
+                )
+            if exception_kinds.intersection(
+                {"malformed_result", "external_state_unknown", "execution_failed"}
+            ):
+                proof_outcomes.append("failed")
+            elif "cancelled" in exception_kinds:
+                proof_outcomes.append("cancelled")
+            else:
+                proof_outcomes.append("blocked")
         used_workers.add(worker.result_id)
     if used_workers != set(workers) or used_reviews != set(reviews):
         raise ValueError("supplied structured evidence must be used exactly once")
+    if all(outcome == "delivered" for outcome in proof_outcomes):
+        expected_terminal_outcome = "delivered"
+    elif "delivered" in proof_outcomes:
+        expected_terminal_outcome = "partially_delivered"
+    elif "failed" in proof_outcomes:
+        expected_terminal_outcome = "failed"
+    elif "cancelled" in proof_outcomes:
+        expected_terminal_outcome = "cancelled"
+    else:
+        expected_terminal_outcome = "blocked"
+    if receipt.terminal_outcome != expected_terminal_outcome:
+        raise ValueError(
+            "receipt terminal outcome contradicts resolved issue proofs"
+        )
     return receipt
 
 
@@ -1383,6 +1611,7 @@ __all__ = [
     "WORKER_RESULT_VERSION",
     "canonical_hash",
     "canonical_json",
+    "delivery_effect_input_hash",
     "delivery_initiation_approval_hash",
     "parse_delivery_contract",
     "validate_delivery_plan_evidence",
