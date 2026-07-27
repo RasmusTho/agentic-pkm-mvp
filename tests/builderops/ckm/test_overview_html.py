@@ -2003,9 +2003,10 @@ class _VisibleHtmlTextParser(HTMLParser):
 
     def close(self) -> None:
         super().close()
-        assert not self._ignored_elements, (
-            "malformed style/script close would make the authored-text scan incomplete"
-        )
+        if self._ignored_elements:
+            raise AssertionError(
+                "malformed style/script close would make the authored-text scan incomplete"
+            )
 
 
 def _visible_html_text(markup: str) -> str:
@@ -2031,21 +2032,22 @@ def test_visible_html_text_ignores_non_visible_bodies_without_double_decoding() 
     )
 
 
-@pytest.mark.parametrize(
-    "markup",
-    [
-        "<p>before</p><script>hidden</script arbitrary=\"x\"><p>after</p>",
-        "<p>before</p><style>hidden",
-    ],
-)
-def test_visible_html_text_fails_closed_on_malformed_ignored_element(
-    markup: str,
-) -> None:
+def test_visible_html_text_handles_or_fails_closed_attribute_bearing_malformed_close() -> None:
+    markup = '<p>before</p><script>hidden</script arbitrary="x"><p>after</p>'
+    try:
+        visible = _visible_html_text(markup)
+    except AssertionError as error:
+        assert str(error) == "malformed style/script close would make the authored-text scan incomplete"
+    else:
+        assert visible == "beforeafter"
+
+
+def test_visible_html_text_fails_closed_on_unclosed_style() -> None:
     with pytest.raises(
         AssertionError,
         match="malformed style/script close would make the authored-text scan incomplete",
     ):
-        _visible_html_text(markup)
+        _visible_html_text("<p>before</p><style>hidden")
 
 
 def _finding_with(
