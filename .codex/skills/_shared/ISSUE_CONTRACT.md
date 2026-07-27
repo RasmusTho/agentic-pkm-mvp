@@ -99,6 +99,7 @@ verifiability"); this file is the skill-facing summary.
 - Owner-doc impact: <none / will-update-in-PR / follow-up-issue>
 - Transition debt impact: <reduces / adds bounded debt / no effect>
 - Fitness rule impact: <strengthens / weakens / follow-up / no effect>
+- Boundary risk: <the one thing that must not cross a boundary because of this change, or none>
 
 ## Constraints
 - <what must not change>

@@ -2,16 +2,9 @@ version: 1
 issues:
   source_of_truth: GitHub Issues
   required_template: .github/ISSUE_TEMPLATE/task.yml
-  required_sections:
-    - Context
-    - Scope
-    - Source Anchors
-    - SBS Impact
-    - Constraints
-    - Acceptance Criteria
-    - Out of Scope
-    - Suggested Validation
-    - Source Docs
+  # Required-section enforcement lives in code, not here: the JS `required` array in
+  # `.github/workflows/issue-pr-governance.yml` and the Python `REQUIRED_SECTIONS` tuple in
+  # `scripts/validate_issue_readiness.py` are the two live, cross-checked copies (#4188).
   special_containers:
     known_defects_registry:
       selector_label: state:known-defect
