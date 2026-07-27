@@ -101,7 +101,9 @@ def apply_promotion_frontmatter(
                 updated,
                 expected_version=expected_version,
             )
-        except KnowledgeWriteConflict:
+        except KnowledgeWriteConflict as exc:
+            if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
+                raise
             return False
     return True
 
@@ -175,7 +177,9 @@ def process_note_update(
                 prepared_panel.panel.updated_markdown,
                 expected_version=expected_version,
             )
-        except KnowledgeWriteConflict:
+        except KnowledgeWriteConflict as exc:
+            if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
+                raise
             return NoteUpdateResult(
                 uuid=note_uuid,
                 current_path=resolved_path,

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from app.events.schema import OutboxEvent
 from app.settings.panel_actions import PanelActionMapping
 from app.vault.paths import get_vault_inbox_dir_rel
+import app.watcher.registry as registry
 from app.watcher.registry import _emit_panel_events, _process_panel_note, RegistryConfig, WatcherSpec, _run_spec_tick
 from app.watcher.state import WatcherState
 
@@ -98,6 +99,73 @@ uuid: test-uuid
     assert payloads, "expected payloads in JSONL"
 
 
+def test_process_panel_note_stale_write_has_no_acknowledgement_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note_path = vault / "note.md"
+    note_path.write_text(
+        "---\nuuid: test-uuid\n---\n\n- [x] Do thing\n",
+        encoding="utf-8",
+    )
+    concurrent = "---\nuuid: test-uuid\n---\n\nConcurrent human body\n"
+    event = OutboxEvent(
+        event="promote.intent.created",
+        source="test",
+        payload={"note": {"uuid": "test-uuid"}},
+    )
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+
+    monkeypatch.setattr(
+        registry,
+        "handle_note_update",
+        lambda **kwargs: SimpleNamespace(
+            updated_markdown="Prepared stale output\n",
+            events=[event],
+            executed_action_ids=["action-1"],
+        ),
+    )
+
+    def reject_stale_write(*args, **kwargs) -> bool:
+        note_path.write_text(concurrent, encoding="utf-8")
+        return False
+
+    monkeypatch.setattr(registry, "_write_markdown_if_changed", reject_stale_write)
+    monkeypatch.setattr(
+        registry,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "write_outbox_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "_write_jsonl_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    state = WatcherState()
+
+    emitted = _process_panel_note(
+        vault_root=vault,
+        rel_path=note_path.relative_to(vault),
+        outbox_path=tmp_path / "outbox.jsonl",
+        state=state,
+        action_mappings={},
+    )
+
+    assert emitted == 0
+    assert state.errors == 1
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert note_path.read_text(encoding="utf-8") == concurrent
+
+
 def test_process_panel_note_retries_transient_read_failure(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -123,15 +191,15 @@ uuid: test-uuid
     monkeypatch.setattr("app.watcher.registry.write_outbox_event", fake_write_outbox)
 
     attempts = {"count": 0}
-    real_read = Path.read_text
+    real_read = registry.read_note_text_with_version
 
-    def flaky_read(self: Path, *args, **kwargs):
-        if self == note_path and attempts["count"] == 0:
+    def flaky_read(path: Path):
+        if path == note_path and attempts["count"] == 0:
             attempts["count"] += 1
             raise OSError(2, "No such file or directory")
-        return real_read(self, *args, **kwargs)
+        return real_read(path)
 
-    monkeypatch.setattr("pathlib.Path.read_text", flaky_read)
+    monkeypatch.setattr(registry, "read_note_text_with_version", flaky_read)
 
     mappings = {
         "Make this note evergreen": PanelActionMapping(
@@ -153,6 +221,7 @@ uuid: test-uuid
 
     assert written > 0
     assert events
+    assert attempts["count"] == 1
 
 
 def test_process_panel_note_retries_transient_uuid_failure(tmp_path, monkeypatch):

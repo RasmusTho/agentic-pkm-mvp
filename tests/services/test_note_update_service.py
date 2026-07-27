@@ -8,12 +8,27 @@ import pytest
 
 from app.agents.panel import integration as panel_integration
 from app.agents.panel import writeback as panel_writeback
+from app.knowledge.contracts import NoteLocator, WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.orchestrator.handler import OrchestratorContext
 from app.planner.schema import make_simple_plan
 from app.services.note_update import NoteUpdateResult, process_note_update
 from app.settings.panel_actions import PanelActionMapping
 from scripts.yaml_roundtrip import load_frontmatter
+
+
+def _staged_conflict() -> KnowledgeWriteConflict:
+    receipt = WriteReceipt(
+        operation="write_note",
+        locator=NoteLocator(vault="Vault", path="note.md"),
+        adapter="fs_vault",
+        outcome="conflict_staged",
+        conflict_artifact="note (conflicted copy runtime).md",
+    )
+    return KnowledgeWriteConflict(
+        "rewritten note conflict staged",
+        receipt=receipt,
+    )
 
 
 def _note_content(uuid: str, checked: bool) -> str:
@@ -123,9 +138,7 @@ def test_process_note_update_staged_conflict_returns_stale_before_acknowledgemen
     monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
     monkeypatch.setattr(
         "app.services.note_update.write_note_from_absolute",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            KnowledgeWriteConflict("rewritten note conflict staged")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(_staged_conflict()),
     )
     monkeypatch.setattr(
         panel_writeback,
@@ -153,6 +166,56 @@ def test_process_note_update_staged_conflict_returns_stale_before_acknowledgemen
     assert executed_id_writes == []
     assert (snapshot_dir / f"{note_uuid}.md").read_text(encoding="utf-8") == snapshot_before
     assert note_path.read_text(encoding="utf-8") == current
+
+
+def test_process_note_update_propagates_receiptless_conflict_before_acknowledgements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    note_path = tmp_path / "note.md"
+    note_uuid = "note-indeterminate-1"
+    current = _note_content(note_uuid, checked=True)
+    note_path.write_text(current, encoding="utf-8")
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_before = _note_content(note_uuid, checked=False)
+    _write_snapshot(snapshot_dir, note_uuid, snapshot_before)
+    acknowledgements: list[str] = []
+
+    monkeypatch.setattr(
+        "app.settings.panel_actions.load_panel_action_mappings",
+        lambda: _mapping(),
+    )
+    monkeypatch.setattr(
+        "app.services.note_update.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("indeterminate post-exchange failure")
+        ),
+    )
+    monkeypatch.setattr(
+        panel_integration,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: acknowledgements.append("persist_ids"),
+    )
+    monkeypatch.setattr(
+        panel_integration,
+        "handle_event",
+        lambda *args, **kwargs: acknowledgements.append("dispatch"),
+    )
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="indeterminate post-exchange failure",
+    ):
+        process_note_update(
+            note_path,
+            OrchestratorContext(
+                settings={"panel_events_enable": True, "origin": "test.note_update"}
+            ),
+            snapshot_dir=snapshot_dir,
+        )
+
+    assert acknowledgements == []
+    assert (snapshot_dir / f"{note_uuid}.md").read_text(encoding="utf-8") == snapshot_before
 
 
 def test_process_note_update_commits_acknowledgements_only_after_canonical_write(

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel.filters import strip_ai_panels
-from app.agents.panel.writeback import strip_ai_status_block
+from app.agents.panel.writeback import strip_ai_status_block, upsert_executed_ids
 from app.agents.panel_agent.policy import watcher_may_run_panel, watcher_panel_candidate
 from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, SystemClock, VersionMismatch
 from app.ingest import vault_alpha as vault_alpha
@@ -22,6 +22,7 @@ from app.services.companion_note import (
 )
 from app.events.types import INGEST_OBJECT_DELETED
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+from app.knowledge.write_ops import read_note_text_with_version
 from app.services.outbox import insert_object_and_outbox
 from app.services.vault_sync import delete_note
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
@@ -608,9 +609,10 @@ def run_watcher_tick(
         store = ObjectStore()
         for note_path in policy_allowed_paths:
             rel_path = note_path.relative_to(vault_root)
-            current_markdown = ""
             try:
-                current_markdown = note_path.read_text(encoding="utf-8")
+                current_markdown, expected_version = read_note_text_with_version(
+                    note_path
+                )
             except Exception:
                 messages.append(
                     f"Warning: unable to read {note_path}; skipping panel run."
@@ -660,7 +662,6 @@ def run_watcher_tick(
                     continue
 
                 _hydrate_store_with_markdown(canonical_object_id, note_path)
-                expected_version = _WRITE_GUARD.compute_version(current_markdown.encode("utf-8"))
 
                 stored = store.get_object(canonical_object_id)
                 old_markdown = ""
@@ -673,6 +674,7 @@ def run_watcher_tick(
                     current_markdown,
                     action_mappings=action_mappings,
                     note_path=str(note_path),
+                    persist_executed_ids=False,
                 )
 
                 disallowed_actions = _disallowed_actions(
@@ -694,13 +696,52 @@ def run_watcher_tick(
                 if panel_result.state.actions or panel_result.intents or panel_result.events:
                     summary["panel_runs"] += 1
 
+                if emit_only:
+                    created_events = [
+                        event
+                        for event in panel_result.events
+                        if getattr(event, "event", None) == "panel.intent.created"
+                    ]
+                    _write_outbox_events(resolved_outbox, created_events)
+                    continue
+
+                if panel_result.updated_markdown != current_markdown:
+                    try:
+                        DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher panel write")
+                        _WRITE_GUARD.write_if_unchanged(
+                            note_path,
+                            expected_version,
+                            panel_result.updated_markdown,
+                        )
+                        _hydrate_store_with_markdown(canonical_object_id, note_path)
+                    except VersionMismatch:
+                        messages.append(f"Warning: stale write prevented for {note_path}")
+                        summary["errors"] += 1
+                        continue
+                    except WritesBlockedError:
+                        raise
+                    except Exception:
+                        messages.append(f"Warning: failed to write updates to {note_path}")
+                        summary["errors"] += 1
+                        continue
+
+                if panel_result.executed_action_ids:
+                    upsert_executed_ids(
+                        canonical_object_id,
+                        panel_result.executed_action_ids,
+                    )
+
                 applied_actions = sum(
-                    1 for intent in panel_result.intents if getattr(intent, "kind", None) == "action_triggered"
+                    1
+                    for intent in panel_result.intents
+                    if getattr(intent, "kind", None) == "action_triggered"
                 )
                 summary["applied_actions"] += applied_actions
 
                 checked_actions = [
-                    action for action in panel_result.state.actions if action.checked and action.text
+                    action
+                    for action in panel_result.state.actions
+                    if action.checked and action.text
                 ]
                 if checked_actions and applied_actions == 0:
                     summary["skipped_idempotent"] += len(checked_actions)
@@ -713,24 +754,6 @@ def run_watcher_tick(
                         or getattr(ev, "event_type", "") == "promote.intent.created"
                     ]
                 )
-
-                if not emit_only and panel_result.updated_markdown != current_markdown:
-                    try:
-                        DEFAULT_WRITE_GUARD.assert_writes_allowed("vault watcher panel write")
-                        _WRITE_GUARD.write_if_unchanged(
-                            note_path,
-                            expected_version,
-                            panel_result.updated_markdown,
-                        )
-                        _hydrate_store_with_markdown(canonical_object_id, note_path)
-                    except VersionMismatch:
-                        messages.append(f"Warning: stale write prevented for {note_path}")
-                        summary["errors"] += 1
-                    except WritesBlockedError:
-                        raise
-                    except Exception:
-                        messages.append(f"Warning: failed to write updates to {note_path}")
-                        summary["errors"] += 1
 
                 _write_outbox_events(resolved_outbox, panel_result.events)
             finally:

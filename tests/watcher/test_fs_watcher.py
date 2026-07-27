@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from importlib import reload
 from pathlib import Path
@@ -19,9 +20,16 @@ class RecordingVaultPort:
         self.messages: list[tuple[str, str | None]] = []
 
     def read_note(self, path: Path) -> NoteRead:
-        text = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
         frontmatter, body = load_frontmatter(text)
-        return NoteRead(path=path, frontmatter=frontmatter, body=body, mtime_ns=path.stat().st_mtime_ns)
+        return NoteRead(
+            path=path,
+            frontmatter=frontmatter,
+            body=body,
+            mtime_ns=path.stat().st_mtime_ns,
+            version=hashlib.sha256(raw).hexdigest(),
+        )
 
     def ensure_uuid(self, note: NoteRead, *, expected_mtime_ns: int | None = None) -> EnsureUuidResult:
         if note.frontmatter.get("uuid"):
@@ -30,12 +38,24 @@ class RecordingVaultPort:
             self.append_inbox_item(f"Deferred UUID injection for {note.path.name}")
             return EnsureUuidResult(deferred=True, wrote=False, uuid_value=None, reason="active_edit")
         note.frontmatter["uuid"] = "generated-uuid"
-        self.write_frontmatter(note.path, note.frontmatter, note.body, expected_mtime_ns=expected_mtime_ns)
+        self.write_frontmatter(
+            note.path,
+            note.frontmatter,
+            note.body,
+            expected_mtime_ns=expected_mtime_ns,
+            expected_version=note.version,
+        )
         self.append_inbox_item(f"Injected UUID in {note.path.name}", uri="obsidian://advanced-uri?vault=Vault")
         return EnsureUuidResult(deferred=False, wrote=True, uuid_value="generated-uuid")
 
     def write_frontmatter(
-        self, path: Path, frontmatter: dict[str, object], body: str, *, expected_mtime_ns: int | None = None
+        self,
+        path: Path,
+        frontmatter: dict[str, object],
+        body: str,
+        *,
+        expected_mtime_ns: int | None = None,
+        expected_version: str | None = None,
     ) -> bool:
         path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
         return True

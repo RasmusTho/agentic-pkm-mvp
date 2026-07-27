@@ -6,6 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.components.concurrency import VersionMismatch
+from app.settings.panel_actions import PanelActionMapping
+import app.watcher.vault_watcher as watcher_module
 from app.watcher.vault_watcher import VaultWatcher, compute_changes, load_snapshot, run_watcher_tick, save_snapshot
 
 
@@ -124,7 +127,7 @@ def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path:
         vault_root=vault,
         snapshot_path=vault / ".state.json",
         skip_panel=False,
-        emit_only=True,
+        emit_only=False,
         dry_run=False,
         max_notes=10,
         force=False,
@@ -193,7 +196,7 @@ def test_watcher_panel_writeback_uses_canonical_identity_for_retained_uuid(
         vault_root=vault,
         snapshot_path=vault / ".state.json",
         skip_panel=False,
-        emit_only=True,
+        emit_only=False,
         dry_run=False,
         max_notes=10,
         force=False,
@@ -203,3 +206,190 @@ def test_watcher_panel_writeback_uses_canonical_identity_for_retained_uuid(
     assert summary["applied_actions"] == 1
     assert set(rows) == {canonical_id}
     assert rows[canonical_id].payload["executed_action_ids"]
+
+
+def test_vault_watcher_stale_panel_write_has_no_acknowledgement_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    inbox = vault / "Inbox"
+    inbox.mkdir(parents=True)
+    note = inbox / "stale.md"
+    note.write_text(
+        "---\n"
+        "uuid: note-stale-watcher\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "## AI-åtgärder\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    concurrent = "Concurrent human snapshot\n"
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    mapping = PanelActionMapping(
+        text="Do thing",
+        event_type="promote.intent.created",
+        payload_template={"maturity": "evergreen"},
+        action_id="promote.evergreen",
+    )
+
+    class EmptyObjectStore:
+        def get_object(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "load_panel_action_mappings",
+        lambda: {"Do thing": mapping},
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_disallowed_actions",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(watcher_module, "ObjectStore", EmptyObjectStore)
+    panel_agent_module = importlib.import_module("app.agents.panel.agent")
+    monkeypatch.setattr(panel_agent_module, "ObjectStore", EmptyObjectStore)
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    def reject_stale_write(
+        path: Path,
+        expected_version: str,
+        content: str,
+    ) -> None:
+        note.write_text(concurrent, encoding="utf-8")
+        raise VersionMismatch(str(path))
+
+    monkeypatch.setattr(
+        watcher_module._WRITE_GUARD,
+        "write_if_unchanged",
+        reject_stale_write,
+    )
+
+    summary, messages = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["errors"] == 1
+    assert summary["applied_actions"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert note.read_text(encoding="utf-8") == concurrent
+    assert any("stale write prevented" in message for message in messages)
+
+
+def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    inbox = vault / "Inbox"
+    inbox.mkdir(parents=True)
+    note = inbox / "emit-only.md"
+    original = (
+        "---\n"
+        "uuid: note-emit-only\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n"
+    )
+    note.write_text(original, encoding="utf-8")
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    events = [
+        SimpleNamespace(event="panel.intent.created"),
+        SimpleNamespace(event="panel.intent.executed"),
+        SimpleNamespace(event="promote.intent.created"),
+    ]
+    prepared = SimpleNamespace(
+        state=SimpleNamespace(actions=[]),
+        intents=[SimpleNamespace(kind="action_triggered")],
+        events=events,
+        updated_markdown="Prepared but intentionally not written\n",
+        executed_action_ids=["action-1"],
+    )
+
+    class EmptyObjectStore:
+        def get_object(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *args, **kwargs: prepared,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_disallowed_actions",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(watcher_module, "ObjectStore", EmptyObjectStore)
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, selected: emitted_events.extend(selected),
+    )
+    monkeypatch.setattr(
+        watcher_module._WRITE_GUARD,
+        "write_if_unchanged",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("emit-only must not write canonical Markdown")
+        ),
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["applied_actions"] == 0
+    assert persisted_ids == []
+    assert [event.event for event in emitted_events] == ["panel.intent.created"]
+    assert note.read_text(encoding="utf-8") == original

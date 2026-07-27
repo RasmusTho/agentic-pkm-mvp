@@ -15,11 +15,13 @@ from uuid import uuid4
 import yaml
 
 from app.agents.panel.agent import handle_note_update
+from app.agents.panel.writeback import upsert_executed_ids
 from app.briefing.trigger import scheduled_briefing_tick
 from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
+from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
@@ -309,10 +311,15 @@ def _write_jsonl_event(event: OutboxEvent, outbox_path: Path) -> None:
     append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
 
 
-def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
+def _write_markdown_if_changed(
+    note_path: Path,
+    original: str,
+    updated: str,
+    *,
+    expected_version: str,
+) -> bool:
     if original == updated:
         return False
-    expected_version = _WRITE_GUARD.compute_version(original.encode("utf-8"))
     DEFAULT_WRITE_GUARD.assert_writes_allowed("panel watcher update")
     try:
         _WRITE_GUARD.write_if_unchanged(note_path, expected_version, updated)
@@ -321,10 +328,15 @@ def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> 
         return False
 
 
-def _read_panel_note_with_retry(note_path: Path, *, attempts: int = 5, base_sleep: float = 0.2) -> str:
+def _read_panel_note_with_retry(
+    note_path: Path,
+    *,
+    attempts: int = 5,
+    base_sleep: float = 0.2,
+) -> tuple[str, str]:
     for attempt in range(attempts):
         try:
-            return note_path.read_text(encoding="utf-8")
+            return read_note_text_with_version(note_path)
         except OSError as exc:
             if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS} and attempt + 1 < attempts:
                 time.sleep(base_sleep * (2**attempt))
@@ -366,17 +378,17 @@ def _process_panel_note(
         str(note_path),
     )
     try:
-        markdown = _read_panel_note_with_retry(note_path)
-    except Exception as exc:
-        state.errors += 1
-        print(f"WARN: failed to read panel note {note_path}: {exc}")
-        return 0
-
-    try:
         note_uuid = _ensure_panel_note_uuid_with_retry(note_path, vault_root=vault_root)
     except Exception as exc:
         state.errors += 1
         print(f"WARN: failed to ensure uuid for {note_path}: {exc}")
+        return 0
+
+    try:
+        markdown, expected_version = _read_panel_note_with_retry(note_path)
+    except Exception as exc:
+        state.errors += 1
+        print(f"WARN: failed to read panel note {note_path}: {exc}")
         return 0
 
     frontmatter, _ = load_frontmatter(markdown)
@@ -393,17 +405,33 @@ def _process_panel_note(
             action_mappings=action_mappings,
             note_path=str(note_path),
             proactive_assist=True,
+            persist_executed_ids=False,
         )
     except Exception as exc:
         state.errors += 1
         print(f"WARN: panel agent failed for {note_path}: {exc}")
         return 0
 
-    try:
-        _write_markdown_if_changed(note_path, markdown, result.updated_markdown)
-    except Exception as exc:
-        state.errors += 1
-        print(f"WARN: failed to write panel updates for {note_path}: {exc}")
+    if result.updated_markdown != markdown:
+        try:
+            wrote = _write_markdown_if_changed(
+                note_path,
+                markdown,
+                result.updated_markdown,
+                expected_version=expected_version,
+            )
+        except Exception as exc:
+            state.errors += 1
+            print(f"WARN: failed to write panel updates for {note_path}: {exc}")
+            return 0
+        if not wrote:
+            state.errors += 1
+            print(f"WARN: stale write prevented for {note_path}")
+            return 0
+
+    executed_action_ids = getattr(result, "executed_action_ids", [])
+    if executed_action_ids:
+        upsert_executed_ids(canonical_note_id, executed_action_ids)
 
     for event in result.events:
         try:

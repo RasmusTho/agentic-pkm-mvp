@@ -34,14 +34,15 @@ Consequently, a normal helper return continues to mean the canonical write compl
 that understands the non-canonical result may opt in explicitly to receive the staged receipt and
 must branch on `outcome` before acknowledging success or running downstream effects.
 
-Text-producing callers MUST capture their decoded UTF-8 content and `expected_version` from one
-raw filesystem read through `read_note_text_with_version`; the version is SHA-256 over those exact
-bytes. `read_text()` followed by UTF-8 re-encoding is invalid because newline normalization can
-change the version token. Callers that only need a version token may hash `read_bytes()` directly.
-For a read/transform/write pipeline, any acknowledgement effects are post-write: panel flows, for
-example, prepare without ID persistence or event dispatch, perform the canonical write, then commit
-non-empty executed IDs and eligible dispatch. A staged conflict cannot advance the snapshot or those
-effects.
+Text-producing callers MUST bind decoded UTF-8 content and `expected_version` to the same raw
+filesystem read; direct read/transform/write paths use `read_note_text_with_version`, whose version
+is SHA-256 over those exact bytes. `read_text()` followed by UTF-8 re-encoding is invalid because
+newline normalization can change the token. For a read/transform/write pipeline, acknowledgement
+effects are post-write: version-aware panel service/watcher flows prepare without ID persistence or
+event dispatch/emission, perform the canonical write, then commit non-empty executed IDs and
+eligible effects. An attached `conflict_staged` receipt cannot advance a snapshot or those effects.
+A receiptless/other `KnowledgeWriteConflict` is not classified as stale: it propagates as an
+indeterminate error because the write may already have linearized.
 
 Reference types:
 - `NoteLocator(vault, path)` where `path` is vault-relative and portable (`/` separators).

@@ -35,6 +35,7 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.indexer.consumer import process_event as process_indexer_event
+from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.logging_setup import configure_json_logging
@@ -952,7 +953,9 @@ def _ensure_uuid_with_backoff(note_path: Path, *, vault_root: Path) -> str:
 def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
     if original == updated:
         return False
-    expected_version = _WRITE_GUARD.compute_version(original.encode("utf-8"))
+    current, expected_version = read_note_text_with_version(note_path)
+    if current != original:
+        return False
     DEFAULT_WRITE_GUARD.assert_writes_allowed("panel worker update")
     try:
         _WRITE_GUARD.write_if_unchanged(note_path, expected_version, updated)
@@ -966,7 +969,7 @@ def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: flo
     for attempt in range(attempts):
         try:
             before = note_path.stat()
-            raw_text = note_path.read_text(encoding="utf-8")
+            raw_text, raw_version = read_note_text_with_version(note_path)
             after = note_path.stat()
         except OSError as exc:
             if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS}:
@@ -978,7 +981,7 @@ def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: flo
         signature = (
             float(after.st_mtime),
             int(after.st_size),
-            hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+            raw_version,
         )
         if before.st_mtime == after.st_mtime and before.st_size == after.st_size:
             if signature == previous_signature:

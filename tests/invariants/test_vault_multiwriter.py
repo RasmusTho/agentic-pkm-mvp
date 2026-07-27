@@ -328,21 +328,21 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
         "app/chat/canvas_writer.py": 1,
         "app/episodes/assignment.py": 1,
         "app/episodes/store.py": 1,
+        "app/ports/filesystem_vault_adapter.py": 1,
         "app/promotion/queue.py": 1,
         "app/services/note_update.py": 2,
         "app/services/note_uuid.py": 1,
+        "app/watcher/registry.py": 1,
+        "app/watcher/vault_watcher.py": 1,
+        "app/workers/outbox_worker.py": 1,
     }
 
-    assert sum(text_producers.values()) == 10
+    assert sum(text_producers.values()) == 14
     for relative_path, expected_reads in text_producers.items():
         source = (repo_root / relative_path).read_text(encoding="utf-8")
         assert source.count("read_note_text_with_version(") >= expected_reads, relative_path
         assert "expected_version = hashlib.sha256(" not in source, relative_path
-
-    hash_only_source = (
-        repo_root / "app/ports/filesystem_vault_adapter.py"
-    ).read_text(encoding="utf-8")
-    assert "expected_version = hashlib.sha256(resolved.read_bytes()).hexdigest()" in hash_only_source
+        assert "expected_version = _WRITE_GUARD.compute_version(" not in source, relative_path
 
 
 def test_rewritten_write_with_expected_version_conflicts_when_target_was_deleted(
