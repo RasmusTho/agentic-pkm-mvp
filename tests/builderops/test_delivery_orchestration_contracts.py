@@ -25,6 +25,8 @@ from app.builderops.delivery_orchestration_contracts import (
     MergeIdentity,
     PolicyProfile,
     Provenance,
+    REDUCER_EFFECT_VERSION,
+    RecoveryAuthorityReadback,
     RecoveryStep,
     ReducerEffect,
     ReducerEvent,
@@ -71,9 +73,13 @@ def _source(source_id: str, content_hash: str = SHA_A) -> SourceRef:
     )
 
 
-def _provenance(correlation_id: str) -> Provenance:
+def _provenance(
+    correlation_id: str,
+    *,
+    created_at: str = TS,
+) -> Provenance:
     return Provenance(
-        created_at=TS,
+        created_at=created_at,
         created_by=_actor("builder:codex-root-4165"),
         source_refs=(_source("RasmusTho/agentic-pkm-mvp#4165"),),
         correlation_id=correlation_id,
@@ -307,7 +313,9 @@ def _receipt(
                 worker_result_ref=worker_ref,
                 review_result_ref=review_ref,
                 exact_head_sha=SHA_D,
+                delivery_stage="closed",
                 merge_identity=MergeIdentity(
+                    authority_id="github:pull-request:4200",
                     pull_request_number=4200,
                     exact_head_sha=SHA_D,
                     base_sha=SHA_E,
@@ -318,8 +326,11 @@ def _receipt(
                 check_evidence=(
                     CheckEvidence(
                         check_name="Unit tests (not pg)",
+                        authority_id="checks:unit-tests:9001",
+                        pull_request_number=4200,
                         status="passed",
                         exact_head_sha=SHA_D,
+                        completed_at=TS,
                         evidence_ref="github-check:9001",
                     ),
                 ),
@@ -335,6 +346,7 @@ def _receipt(
                 ),
                 exceptions=(),
                 closure=ClosureEvidence(
+                    authority_id=issue.authority_id,
                     repository=issue.repository,
                     issue_number=issue.issue_number,
                     pull_request_number=4200,
@@ -358,10 +370,37 @@ def _receipt(
                 step_index=0,
                 exception_kind="external_state_unknown",
                 exception_code="merge-timeout-reconciled",
+                exception_hash=canonical_hash(
+                    DeliveryException(
+                        kind="external_state_unknown",
+                        code="merge-timeout-reconciled",
+                        message=(
+                            "Merge call timed out and was reconciled "
+                            "from live authority."
+                        ),
+                        retryable=False,
+                        evidence_refs=("github-pr:4200:merged",),
+                    )
+                ),
+                effect_ref=ContractRef(
+                    schema_version=REDUCER_EFFECT_VERSION,
+                    contract_id="effect-merge-4165",
+                    content_hash=SHA_A,
+                ),
                 effect_class="merge_pull_request",
                 issue=issue,
                 action="read_live_authority",
-                authority_readback_refs=("github-pr:4200:merged",),
+                authority_readbacks=(
+                    RecoveryAuthorityReadback(
+                        authority_id="github:pull-request:4200",
+                        issue=issue,
+                        pull_request_number=4200,
+                        exact_head_sha=SHA_D,
+                        observed_state="merged",
+                        observed_at=TS,
+                        evidence_ref="github-pr:4200:merged",
+                    ),
+                ),
                 outcome="reconciled",
                 occurred_at=TS,
             ),
@@ -389,7 +428,10 @@ def _receipt(
         ),
         started_at=TS,
         completed_at="2026-07-27T10:20:00Z",
-        provenance=_provenance("receipt-4165"),
+        provenance=_provenance(
+            "receipt-4165",
+            created_at="2026-07-27T10:20:00Z",
+        ),
     )
 
 
@@ -751,6 +793,27 @@ def test_initiation_is_evidence_not_execution_authority() -> None:
     with pytest.raises(ValidationError, match="exact canonical initiation payload"):
         parse_delivery_contract(payload)
 
+    payload = initiation.model_dump(mode="json")
+    late_approval = "2026-07-27T10:00:01Z"
+    payload["approval_evidence"]["approved_at"] = late_approval
+    payload["approval_evidence"]["approved_payload_hash"] = (
+        delivery_initiation_approval_hash(
+            initiation_id=initiation.initiation_id,
+            requested_scope=initiation.requested_scope,
+            exclusions=initiation.exclusions,
+            policy_profile=initiation.policy_profile,
+            budget=initiation.budget,
+            source_authorities=initiation.source_authorities,
+            provenance=initiation.provenance,
+            approval_id=initiation.approval_evidence.approval_id,
+            approver=initiation.approval_evidence.approver,
+            approved_at=late_approval,
+            approval_source_refs=initiation.approval_evidence.source_refs,
+        )
+    )
+    with pytest.raises(ValidationError, match="approval must precede"):
+        parse_delivery_contract(payload)
+
 
 def test_plan_binds_scope_and_expected_authority() -> None:
     issue = _issue(4165, SHA_A)
@@ -772,6 +835,16 @@ def test_plan_binds_scope_and_expected_authority() -> None:
         "record_delivery_receipt",
     )
     assert validate_delivery_plan_evidence(plan, initiation=initiation) is plan
+
+    early_plan = plan.model_copy(
+        update={
+            "provenance": plan.provenance.model_copy(
+                update={"created_at": "2026-07-27T09:59:59Z"}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="follow initiation"):
+        validate_delivery_plan_evidence(early_plan, initiation=initiation)
 
     payload = plan.model_dump(mode="json")
     payload["input_authorities"] = []
@@ -973,12 +1046,12 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     payload["recovery_history"][0]["occurred_at"] = (
         "2026-07-27T10:05:00Z"
     )
-    with pytest.raises(ValidationError, match="follow observed merge"):
+    with pytest.raises(ValidationError, match="bind observed merge"):
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["merge_identity"] = None
-    with pytest.raises(ValidationError, match="requires matching merge"):
+    with pytest.raises(ValidationError, match="requires merge and closure"):
         parse_delivery_contract(payload)
 
     for occurred_at in (
@@ -987,8 +1060,21 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     ):
         payload = receipt.model_dump(mode="json")
         payload["recovery_history"][0]["occurred_at"] = occurred_at
+        payload["recovery_history"][0]["authority_readbacks"][0][
+            "observed_at"
+        ] = occurred_at
         with pytest.raises(ValidationError, match="lifecycle chronology"):
             parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["provenance"]["created_at"] = "2026-07-27T10:19:59Z"
+    with pytest.raises(ValidationError, match="terminal completion"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["tcd_metrics"]["lead_time_seconds"] = 1_199
+    with pytest.raises(ValidationError, match="lead time"):
+        parse_delivery_contract(payload)
 
     second_recovery_exception = DeliveryException(
         kind="external_state_unknown",
@@ -1009,10 +1095,26 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             step_index=1,
             exception_kind=second_recovery_exception.kind,
             exception_code=second_recovery_exception.code,
+            exception_hash=canonical_hash(second_recovery_exception),
+            effect_ref=ContractRef(
+                schema_version=REDUCER_EFFECT_VERSION,
+                contract_id="effect-close-4165",
+                content_hash=SHA_B,
+            ),
             effect_class="close_issue",
             issue=issue,
             action="read_live_closure_authority",
-            authority_readback_refs=("github-issue:4165:closed",),
+            authority_readbacks=(
+                RecoveryAuthorityReadback(
+                    authority_id=issue.authority_id,
+                    issue=issue,
+                    pull_request_number=4200,
+                    exact_head_sha=SHA_D,
+                    observed_state="closed",
+                    observed_at="2026-07-27T10:05:00Z",
+                    evidence_ref="github-issue:4165:closed",
+                ),
+            ),
             outcome="reconciled",
             occurred_at="2026-07-27T10:05:00Z",
         ).model_dump(mode="json")
@@ -1030,6 +1132,17 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     with pytest.raises(ValidationError, match="exact result head"):
         parse_delivery_contract(headless_worker_payload)
 
+    with pytest.raises(ValidationError):
+        CheckEvidence(
+            check_name="Unit tests (not pg)",
+            authority_id="checks:unit-tests:invalid-sha",
+            pull_request_number=4200,
+            status="passed",
+            exact_head_sha="a" * 41,
+            completed_at=TS,
+            evidence_ref="github-check:invalid-sha",
+        )
+
     payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["check_evidence"][0]["check_name"] = (
         "unrelated-advisory-check"
@@ -1044,6 +1157,60 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             worker_results=(worker,),
             review_results=(review,),
         )
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["check_evidence"][0][
+        "pull_request_number"
+    ] = 9999
+    wrong_pr_check_receipt = parse_delivery_contract(payload)
+    assert isinstance(wrong_pr_check_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="exact PR"):
+        validate_delivery_receipt_evidence(
+            wrong_pr_check_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+        )
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["check_evidence"][0]["completed_at"] = (
+        "2026-07-27T10:00:01Z"
+    )
+    late_check_receipt = parse_delivery_contract(payload)
+    assert isinstance(late_check_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="accepted review"):
+        validate_delivery_receipt_evidence(
+            late_check_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+        )
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["effect_class"] = "close_issue"
+    with pytest.raises(ValidationError, match="bind observed closure"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["authority_readbacks"][0][
+        "authority_id"
+    ] = "github:pull-request:9999"
+    with pytest.raises(ValidationError, match="bind observed merge"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["authority_readbacks"][0][
+        "observed_at"
+    ] = "2026-07-27T10:00:01Z"
+    with pytest.raises(ValidationError, match="must not follow"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["exception_hash"] = SHA_C
+    with pytest.raises(ValidationError, match="typed receipt exceptions"):
+        parse_delivery_contract(payload)
 
     late_worker_payload = worker.model_dump(mode="json")
     late_worker_payload["provenance"]["created_at"] = (
@@ -1072,6 +1239,37 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             worker_results=(late_worker,),
             review_results=(late_review,),
         )
+
+    closure_exception = DeliveryException(
+        kind="execution_failed",
+        code="closure-failed-after-merge",
+        message="The issue closure effect failed after merge was observed.",
+        retryable=False,
+        evidence_refs=("github-issue:4165:still-open",),
+    )
+    partial_payload = receipt.model_dump(mode="json")
+    partial_payload["terminal_outcome"] = "partially_delivered"
+    partial_payload["exceptions"] = [
+        closure_exception.model_dump(mode="json")
+    ]
+    partial_payload["recovery_history"] = []
+    partial_payload["issue_proofs"][0]["delivery_stage"] = "merged"
+    partial_payload["issue_proofs"][0]["closure"] = None
+    partial_payload["issue_proofs"][0]["exceptions"] = [
+        closure_exception.model_dump(mode="json")
+    ]
+    partial_receipt = parse_delivery_contract(partial_payload)
+    assert isinstance(partial_receipt, DeliveryReceipt)
+    assert (
+        validate_delivery_receipt_evidence(
+            partial_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+        )
+        is partial_receipt
+    )
 
     payload = receipt.model_dump(mode="json")
     payload["recovery_history"] = []
@@ -1234,9 +1432,10 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
                 contract_id=failed_worker.result_id,
                 content_hash=failed_worker.content_hash,
             ).model_dump(mode="json"),
-            "review_result_ref": None,
-            "exact_head_sha": None,
-            "merge_identity": None,
+                "review_result_ref": None,
+                "exact_head_sha": None,
+                "delivery_stage": "worker_terminal",
+                "merge_identity": None,
             "check_evidence": [],
             "review_disposition": None,
             "known_defects": [],

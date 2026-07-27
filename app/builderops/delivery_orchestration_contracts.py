@@ -61,7 +61,10 @@ def _validate_utc_timestamp(value: str) -> str:
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-GitSha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40,64}$")]
+GitSha = Annotated[
+    str,
+    StringConstraints(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"),
+]
 UtcTimestamp = Annotated[str, AfterValidator(_validate_utc_timestamp)]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
@@ -370,6 +373,10 @@ class DeliveryInitiation(CanonicalDeliveryContract):
 
     @model_validator(mode="after")
     def _validate_initiation(self) -> DeliveryInitiation:
+        if self.approval_evidence.approved_at > self.provenance.created_at:
+            raise ValueError(
+                "initiation approval must precede initiation provenance"
+            )
         if not self.requested_scope:
             raise ValueError("requested scope must not be empty")
         _require_unique(
@@ -572,6 +579,8 @@ def validate_delivery_plan_evidence(
     )
     if plan.initiation_ref != expected_initiation_ref:
         raise ValueError("plan does not bind the supplied initiation")
+    if initiation.provenance.created_at > plan.provenance.created_at:
+        raise ValueError("plan provenance must follow initiation provenance")
     approved_scope = {item.scope_key: item for item in initiation.requested_scope}
     if any(
         approved_scope.get(item.scope_key) != item for item in plan.final_scope
@@ -1216,8 +1225,11 @@ def validate_reducer_event_evidence(
 
 class CheckEvidence(_StrictFrozenModel):
     check_name: NonEmptyStr
+    authority_id: NonEmptyStr
+    pull_request_number: PositiveInt
     status: Literal["passed", "failed", "skipped"]
     exact_head_sha: GitSha
+    completed_at: UtcTimestamp
     evidence_ref: NonEmptyStr
 
 
@@ -1242,6 +1254,7 @@ class KnownDefectRef(_StrictFrozenModel):
 
 
 class MergeIdentity(_StrictFrozenModel):
+    authority_id: NonEmptyStr
     pull_request_number: PositiveInt
     exact_head_sha: GitSha
     base_sha: GitSha
@@ -1251,6 +1264,7 @@ class MergeIdentity(_StrictFrozenModel):
 
 
 class ClosureEvidence(_StrictFrozenModel):
+    authority_id: NonEmptyStr
     repository: Annotated[
         str,
         StringConstraints(
@@ -1270,6 +1284,12 @@ class IssueDeliveryProof(_StrictFrozenModel):
     worker_result_ref: ContractRef
     review_result_ref: ContractRef | None
     exact_head_sha: GitSha | None
+    delivery_stage: Literal[
+        "worker_terminal",
+        "merge_ready",
+        "merged",
+        "closed",
+    ]
     merge_identity: MergeIdentity | None
     check_evidence: tuple[CheckEvidence, ...]
     review_disposition: Literal["accept", "reject", "accept_with_risk"] | None
@@ -1301,6 +1321,32 @@ class IssueDeliveryProof(_StrictFrozenModel):
                 raise ValueError("merge identity must bind the exact head")
             if self.merge_identity.pull_request_number < 1:
                 raise ValueError("merge identity must bind a pull request")
+        if self.delivery_stage == "closed":
+            if self.merge_identity is None or self.closure is None:
+                raise ValueError(
+                    "closed delivery stage requires merge and closure evidence"
+                )
+        elif self.delivery_stage == "merged":
+            if self.merge_identity is None or self.closure is not None:
+                raise ValueError(
+                    "merged delivery stage requires merge without closure"
+                )
+        elif self.delivery_stage == "merge_ready":
+            if (
+                self.exact_head_sha is None
+                or self.merge_identity is not None
+                or self.closure is not None
+                or not self.check_evidence
+                or self.review_result_ref is None
+            ):
+                raise ValueError(
+                    "merge-ready delivery stage requires head, checks, and review "
+                    "without merge or closure"
+                )
+        elif self.merge_identity is not None or self.closure is not None:
+            raise ValueError(
+                "worker-terminal delivery stage cannot carry merge or closure"
+            )
         if self.closure is not None and self.closure.issue_number != self.issue.issue_number:
             raise ValueError("closure evidence must bind the proof issue")
         if self.closure is not None:
@@ -1337,25 +1383,46 @@ class IssueDeliveryProof(_StrictFrozenModel):
         return self
 
 
+class RecoveryAuthorityReadback(_StrictFrozenModel):
+    authority_id: NonEmptyStr
+    issue: IssueScope
+    pull_request_number: PositiveInt | None
+    exact_head_sha: GitSha | None
+    observed_state: Literal["merged", "closed", "unchanged", "unknown"]
+    observed_at: UtcTimestamp
+    evidence_ref: NonEmptyStr
+
+
 class RecoveryStep(_StrictFrozenModel):
     step_index: NonNegativeInt
     exception_kind: ExceptionKind
     exception_code: NonEmptyStr
+    exception_hash: Sha256
+    effect_ref: ContractRef
     effect_class: EffectClass
     issue: IssueScope
     action: NonEmptyStr
-    authority_readback_refs: tuple[NonEmptyStr, ...]
+    authority_readbacks: tuple[RecoveryAuthorityReadback, ...]
     outcome: Literal["reconciled", "retry_scheduled", "blocked", "failed"]
     occurred_at: UtcTimestamp
 
     @model_validator(mode="after")
     def _validate_readbacks(self) -> RecoveryStep:
-        if not self.authority_readback_refs:
+        if self.effect_ref.schema_version != REDUCER_EFFECT_VERSION:
+            raise ValueError("recovery step must bind a reducer effect")
+        if not self.authority_readbacks:
             raise ValueError("recovery step must carry authority readback evidence")
         _require_unique(
-            self.authority_readback_refs,
-            "recovery authority readback refs",
+            tuple(item.evidence_ref for item in self.authority_readbacks),
+            "recovery authority readback evidence refs",
         )
+        if any(item.issue != self.issue for item in self.authority_readbacks):
+            raise ValueError("recovery readbacks must bind the exact step issue")
+        if any(
+            item.observed_at > self.occurred_at
+            for item in self.authority_readbacks
+        ):
+            raise ValueError("recovery readback must not follow the recovery step")
         return self
 
 
@@ -1455,7 +1522,10 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             or len(recovery_codes) != len(set(recovery_codes))
             or not set(recovery_codes).issubset(set(exception_codes))
             or any(
-                exception_by_code[step.exception_code].kind != step.exception_kind
+                exception_by_code[step.exception_code].kind
+                != step.exception_kind
+                or canonical_hash(exception_by_code[step.exception_code])
+                != step.exception_hash
                 for step in self.recovery_history
             )
         ):
@@ -1463,6 +1533,7 @@ class DeliveryReceipt(CanonicalDeliveryContract):
         delivered_proofs = tuple(
             proof.merge_identity is not None
             and proof.closure is not None
+            and proof.delivery_stage == "closed"
             and bool(proof.check_evidence)
             and proof.review_result_ref is not None
             and proof.review_disposition not in {None, "reject"}
@@ -1489,16 +1560,22 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             if not self.exceptions:
                 raise ValueError("non-delivered outcome requires a typed exception")
             if self.terminal_outcome == "partially_delivered":
-                if not any(delivered_proofs) or all(delivered_proofs):
+                if (
+                    not any(
+                        proof.merge_identity is not None
+                        for proof in self.issue_proofs
+                    )
+                    or all(delivered_proofs)
+                ):
                     raise ValueError(
-                        "partially delivered outcome requires mixed issue proof"
+                        "partially delivered outcome requires incomplete merged proof"
                     )
             elif any(
                 proof.merge_identity is not None or proof.closure is not None
                 for proof in self.issue_proofs
             ):
                 raise ValueError(
-                    "blocked, failed, or cancelled outcome cannot carry delivered proof"
+                    "blocked, failed, or cancelled outcome cannot carry merged proof"
                 )
         recovery_only_exceptions = tuple(
             exception_by_code[code]
@@ -1522,6 +1599,20 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             raise ValueError("TCD P2 dispositions must match receipt defect evidence")
         if self.started_at > self.completed_at:
             raise ValueError("receipt completion must not precede start")
+        if self.completed_at > self.provenance.created_at:
+            raise ValueError(
+                "receipt provenance must not precede terminal completion"
+            )
+        elapsed_seconds = int(
+            (
+                datetime.strptime(self.completed_at, "%Y-%m-%dT%H:%M:%SZ")
+                - datetime.strptime(self.started_at, "%Y-%m-%dT%H:%M:%SZ")
+            ).total_seconds()
+        )
+        if self.tcd_metrics.lead_time_seconds != elapsed_seconds:
+            raise ValueError(
+                "TCD lead time must match receipt lifecycle chronology"
+            )
         for proof in self.issue_proofs:
             merge_identity = proof.merge_identity
             closure = proof.closure
@@ -1570,22 +1661,51 @@ class DeliveryReceipt(CanonicalDeliveryContract):
                 raise ValueError(
                     "recovery evidence must bind exact receipt scope"
                 )
+            matching_readbacks = tuple(
+                readback
+                for readback in step.authority_readbacks
+                if readback.issue == step.issue
+            )
             if step.effect_class == "merge_pull_request":
                 if (
                     recovery_proof.merge_identity is None
                     or step.occurred_at
                     < recovery_proof.merge_identity.merged_at
+                    or not any(
+                        readback.observed_state == "merged"
+                        and readback.authority_id
+                        == recovery_proof.merge_identity.authority_id
+                        and readback.pull_request_number
+                        == recovery_proof.merge_identity.pull_request_number
+                        and readback.exact_head_sha
+                        == recovery_proof.merge_identity.exact_head_sha
+                        and readback.observed_at
+                        >= recovery_proof.merge_identity.merged_at
+                        for readback in matching_readbacks
+                    )
                 ):
                     raise ValueError(
-                        "merge recovery evidence must follow observed merge"
+                        "merge recovery evidence must bind observed merge"
                     )
             if step.effect_class == "close_issue":
                 if (
                     recovery_proof.closure is None
                     or step.occurred_at < recovery_proof.closure.closed_at
+                    or not any(
+                        readback.observed_state == "closed"
+                        and readback.authority_id
+                        == recovery_proof.closure.authority_id
+                        and readback.pull_request_number
+                        == recovery_proof.closure.pull_request_number
+                        and readback.exact_head_sha
+                        == recovery_proof.closure.exact_head_sha
+                        and readback.observed_at
+                        >= recovery_proof.closure.closed_at
+                        for readback in matching_readbacks
+                    )
                 ):
                     raise ValueError(
-                        "closure recovery evidence must follow observed closure"
+                        "closure recovery evidence must bind observed closure"
                     )
         return self
 
@@ -1619,12 +1739,14 @@ def validate_delivery_receipt_evidence(
         raise ValueError("receipt requested scope does not match initiation")
     if receipt.final_scope != plan.final_scope:
         raise ValueError("receipt final scope does not match plan")
-    if (
-        initiation.provenance.created_at > receipt.started_at
-        or plan.provenance.created_at > receipt.started_at
+    if not (
+        initiation.approval_evidence.approved_at
+        <= initiation.provenance.created_at
+        <= plan.provenance.created_at
+        <= receipt.started_at
     ):
         raise ValueError(
-            "initiation and plan evidence must precede receipt lifecycle"
+            "approval, initiation, plan, and receipt must use causal chronology"
         )
 
     workers = {item.result_id: item for item in worker_results}
@@ -1634,7 +1756,13 @@ def validate_delivery_receipt_evidence(
     used_workers: set[str] = set()
     used_reviews: set[str] = set()
     proof_outcomes: list[
-        Literal["delivered", "blocked", "failed", "cancelled"]
+        Literal[
+            "delivered",
+            "partially_delivered",
+            "blocked",
+            "failed",
+            "cancelled",
+        ]
     ] = []
     planned_scope = {item.scope_key: item for item in plan.final_scope}
     for proof in receipt.issue_proofs:
@@ -1676,7 +1804,7 @@ def validate_delivery_receipt_evidence(
             or worker.issue != proof.issue
             or worker.exact_head_sha != proof.exact_head_sha
             or worker.pull_request_number != pull_request_number
-            or worker.exceptions != proof.exceptions
+            or not set(worker.exceptions).issubset(set(proof.exceptions))
             or (
                 proof.closure is not None
                 and (
@@ -1740,12 +1868,29 @@ def validate_delivery_receipt_evidence(
             for item in proof.check_evidence
             if item.status == "passed"
         }
+        if any(
+            item.pull_request_number != pull_request_number
+            or item.exact_head_sha != proof.exact_head_sha
+            or not (
+                receipt.started_at
+                <= item.completed_at
+                <= receipt.completed_at
+            )
+            for item in proof.check_evidence
+        ):
+            raise ValueError(
+                "check evidence must bind exact PR, head, and receipt chronology"
+            )
         if proof.merge_identity is not None:
             if (
                 worker.status != "completed"
                 or review is None
                 or proof.review_disposition in {None, "reject"}
                 or not required_checks.issubset(passing_checks)
+                or any(
+                    item.completed_at > proof.merge_identity.merged_at
+                    for item in proof.check_evidence
+                )
                 or review.provenance.created_at
                 > proof.merge_identity.merged_at
                 or worker.provenance.created_at
@@ -1757,6 +1902,7 @@ def validate_delivery_receipt_evidence(
                 )
         proof_is_delivered = (
             worker.status == "completed"
+            and proof.delivery_stage == "closed"
             and proof.merge_identity is not None
             and proof.closure is not None
             and bool(proof.check_evidence)
@@ -1769,6 +1915,8 @@ def validate_delivery_receipt_evidence(
             proof_outcomes.append("delivered")
         elif worker.status != "completed":
             proof_outcomes.append(worker.status)
+        elif proof.merge_identity is not None:
+            proof_outcomes.append("partially_delivered")
         else:
             exception_kinds = {item.kind for item in proof.exceptions}
             if not exception_kinds:
@@ -1786,9 +1934,20 @@ def validate_delivery_receipt_evidence(
         used_workers.add(worker.result_id)
     if used_workers != set(workers) or used_reviews != set(reviews):
         raise ValueError("supplied structured evidence must be used exactly once")
-    if all(outcome == "delivered" for outcome in proof_outcomes):
+    all_proofs_delivered = all(
+        outcome == "delivered"
+        and proof.delivery_stage == "closed"
+        for outcome, proof in zip(
+            proof_outcomes,
+            receipt.issue_proofs,
+            strict=True,
+        )
+    )
+    if all_proofs_delivered:
         expected_terminal_outcome = "delivered"
-    elif "delivered" in proof_outcomes:
+    elif any(
+        proof.merge_identity is not None for proof in receipt.issue_proofs
+    ):
         expected_terminal_outcome = "partially_delivered"
     elif "failed" in proof_outcomes:
         expected_terminal_outcome = "failed"
@@ -1897,6 +2056,7 @@ __all__ = [
     "REDUCER_EFFECT_VERSION",
     "REDUCER_EVENT_VERSION",
     "REVIEW_RESULT_VERSION",
+    "RecoveryAuthorityReadback",
     "RecoveryStep",
     "ReducerEffect",
     "ReducerEvent",
