@@ -2,7 +2,7 @@ State: Implemented through VMW-01..04. GitHub feature parent #3132 holds the ter
 
 # Parent Feature Issue
 
-GitHub issue #3132 is the validation hub for this capability. VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126 delivered the bounded runtime slices; VMW-04 #3453 reconciled their current-base evidence and the invariant registry. The parent receipt preserves the one unresolved progressive-enhancement risk: remaining versionless rewritten writers do not opt into expected-version protection until their #3570 migration slices land.
+GitHub issue #3132 is the validation hub for this capability. VMW-01 #3450 / PR #3457, VMW-02 #3451 / PR #4133, and VMW-03 #3452 / PR #4126 delivered the bounded runtime slices; VMW-04 #3453 / PR #4148 reconciled their current-base evidence and the invariant registry. The parent receipt preserves the one unresolved progressive-enhancement risk: remaining versionless rewritten writers do not opt into expected-version protection until their #3570 migration slices land.
 
 ## Owner-doc writeback
 
