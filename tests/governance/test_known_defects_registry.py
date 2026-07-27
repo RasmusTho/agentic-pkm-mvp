@@ -1008,6 +1008,36 @@ def test_registry_close_before_append_retries_without_stale_mutation() -> None:
     assert len(gateway.comments[901]) == 1
 
 
+class CloseDuringFinalEntryAuthorityCheckGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_on_next_inventory = False
+
+    def get_issue(self, number: int) -> dict[str, Any]:
+        issue = super().get_issue(number)
+        if number == 900 and issue["locked"]:
+            self.close_on_next_inventory = True
+        return issue
+
+    def list_registry_issues(self, state: str) -> list[dict[str, Any]]:
+        if self.close_on_next_inventory:
+            self.issues[900]["state"] = "closed"
+            self.close_on_next_inventory = False
+        return super().list_registry_issues(state)
+
+
+def test_final_entry_authority_check_closure_retries_without_write() -> None:
+    gateway = CloseDuringFinalEntryAuthorityCheckGateway()
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 901
+    assert gateway.comments[900] == []
+    assert len(gateway.comments[901]) == 1
+    assert "phase=final" in gateway.comments[901][0]["body"].splitlines()[0]
+
+
 class CloseAfterAppendGateway(FakeGateway):
     def __init__(self) -> None:
         super().__init__()

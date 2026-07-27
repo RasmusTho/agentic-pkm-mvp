@@ -1125,10 +1125,25 @@ def _intake_defect(
                 allow_lifecycle_retry=False,
             )
         raise
-    _require_expected_single_open_registry(
-        gateway,
-        int(issue["number"]),
-    )
+    try:
+        _require_expected_single_open_registry(
+            gateway,
+            int(issue["number"]),
+        )
+    except KnownDefectsError:
+        current_issue = gateway.get_issue(int(issue["number"]))
+        if (
+            registry_issue is None
+            and allow_lifecycle_retry
+            and _closed_canonical_registry(current_issue)
+        ):
+            return _intake_defect(
+                defect,
+                gateway,
+                registry_issue=None,
+                allow_lifecycle_retry=False,
+            )
+        raise
     try:
         comment = gateway.add_comment(
             int(issue["number"]),
