@@ -1269,6 +1269,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/architecture/SBS_OPERATING_MODEL.md",
+      "category": "iv",
+      "why_load_bearing": "Operating model records the accepted ADR-0050 cross-repo constituent decision, which names the constituent repository directly.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
       "artifact": "docs/architecture/ecosystem-federation.md",
       "category": "iii",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
