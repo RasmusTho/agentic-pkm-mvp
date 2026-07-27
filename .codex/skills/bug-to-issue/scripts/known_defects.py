@@ -356,48 +356,6 @@ class GhRegistryGateway:
                 return rows
         raise KnownDefectsError(f"pagination bound exceeded for {endpoint}")
 
-    def _search_registry_identity_numbers(self) -> set[int]:
-        if self._registry_identity_numbers is not None:
-            return set(self._registry_identity_numbers)
-        query = quote(
-            f'repo:{self.repo} is:issue in:title "{REGISTRY_TITLE}"',
-            safe="",
-        )
-        numbers = set(self._registry_identity_numbers or ())
-        for page in range(1, 11):
-            payload = self._request(
-                "GET",
-                f"search/issues?q={query}&per_page=100&page={page}",
-            )
-            if (
-                not isinstance(payload, dict)
-                or not isinstance(payload.get("items"), list)
-            ):
-                raise KnownDefectsError(
-                    "expected object response from registry identity search"
-                )
-            if payload.get("incomplete_results") is True:
-                raise KnownDefectsError(
-                    "registry identity search returned incomplete results"
-                )
-            items = payload["items"]
-            for issue in items:
-                if (
-                    isinstance(issue, dict)
-                    and issue.get("title") == REGISTRY_TITLE
-                    and "pull_request" not in issue
-                ):
-                    number = int(issue.get("number") or 0)
-                    if number <= 0:
-                        raise KnownDefectsError(
-                            "registry identity search returned an invalid Issue number"
-                        )
-                    numbers.add(number)
-            if len(items) < 100:
-                self._registry_identity_numbers = numbers
-                return set(numbers)
-        raise KnownDefectsError("pagination bound exceeded for registry identity search")
-
     def refresh_registry_identities(self) -> None:
         numbers = set(self._registry_identity_numbers or ())
         endpoint = (
@@ -483,9 +441,8 @@ class GhRegistryGateway:
             for issue in labeled_issues
             if "pull_request" not in issue
         }
-        self._search_registry_identity_numbers()
         if self._registry_identity_numbers is None:
-            raise KnownDefectsError("registry identity cache failed to initialize")
+            self._registry_identity_numbers = set()
         self._registry_identity_numbers.update(issues_by_number)
         for number in self._registry_identity_numbers:
             if number not in issues_by_number:
@@ -1249,6 +1206,7 @@ def _intake_defect(
                 allow_lifecycle_retry=False,
             )
         raise
+    gateway.refresh_registry_identities()
     try:
         _require_expected_single_open_registry(
             gateway,
@@ -1319,6 +1277,7 @@ def intake_defect(
     *,
     registry_issue: int | None = None,
 ) -> dict[str, Any]:
+    gateway.refresh_registry_identities()
     return _intake_defect(
         defect,
         gateway,
@@ -1333,6 +1292,7 @@ def lookup_defect(
 ) -> dict[str, Any]:
     if not ENTRY_ID_RE.fullmatch(defect_id):
         raise KnownDefectsError("defect_id must have form KD-<12 uppercase hex>")
+    gateway.refresh_registry_identities()
     found = _find_entry(gateway, defect_id)
     if found is None:
         return {
@@ -1762,6 +1722,7 @@ def promote_defect(
 ) -> dict[str, Any]:
     if not ENTRY_ID_RE.fullmatch(defect_id):
         raise KnownDefectsError("defect_id must have form KD-<12 uppercase hex>")
+    gateway.refresh_registry_identities()
     found = _find_entry(gateway, defect_id)
     if found is None:
         raise KnownDefectsError(f"known defect {defect_id} was not found")
@@ -1818,6 +1779,7 @@ def promote_defect(
         )
     )
     comment: dict[str, Any] | None = None
+    gateway.refresh_registry_identities()
     _require_expected_single_open_registry(
         gateway,
         registry_number,

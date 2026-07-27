@@ -41,6 +41,7 @@ class FakeGateway:
         self.comments: dict[int, list[dict[str, Any]]] = {}
         self.next_issue = 900
         self.next_comment = 1
+        self.registry_identity_numbers: set[int] = set()
 
     def ensure_registry_label(self) -> None:
         self.label_ensured += 1
@@ -56,9 +57,7 @@ class FakeGateway:
                     for label in issue.get("labels", [])
                 }
                 or issue.get("title") == known_defects.REGISTRY_TITLE
-                or str(issue.get("body") or "").startswith(
-                    f"{known_defects.REGISTRY_MARKER}\n"
-                )
+                or int(issue["number"]) in self.registry_identity_numbers
             )
             and (state == "all" or issue["state"] == state)
         ]
@@ -67,7 +66,21 @@ class FakeGateway:
         return self.issues[number]
 
     def refresh_registry_identities(self) -> None:
-        return None
+        self.registry_identity_numbers.update(
+            int(issue["number"])
+            for issue in self.issues.values()
+            if (
+                known_defects.REGISTRY_LABEL
+                in {
+                    label["name"] if isinstance(label, dict) else label
+                    for label in issue.get("labels", [])
+                }
+                or issue.get("title") == known_defects.REGISTRY_TITLE
+                or str(issue.get("body") or "").startswith(
+                    f"{known_defects.REGISTRY_MARKER}\n"
+                )
+            )
+        )
 
     def create_registry_issue(self) -> dict[str, Any]:
         while self.next_issue in self.issues:
@@ -1064,6 +1077,41 @@ def test_final_entry_authority_check_closure_retries_without_write() -> None:
     assert gateway.comments[900] == []
     assert len(gateway.comments[901]) == 1
     assert "phase=final" in gateway.comments[901][0]["body"].splitlines()[0]
+
+
+class HiddenPriorAtFinalEntryFenceGateway(FakeGateway):
+    def __init__(self, defect: Any) -> None:
+        super().__init__()
+        self.defect = defect
+        self.identity_refreshes = 0
+
+    def refresh_registry_identities(self) -> None:
+        self.identity_refreshes += 1
+        if self.identity_refreshes == 3:
+            self.issues[899] = {
+                "number": 899,
+                "state": "closed",
+                "locked": True,
+                "title": "Renamed registry",
+                "body": known_defects.render_registry_body(),
+                "labels": [{"name": "type:bug"}],
+            }
+            self.comments[899] = []
+            super().add_comment(899, self.defect.render_entry(phase="final"))
+        super().refresh_registry_identities()
+
+
+def test_final_entry_fence_enumerates_hidden_prior_before_write() -> None:
+    defect = _defect()
+    gateway = HiddenPriorAtFinalEntryFenceGateway(defect)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="registry title"):
+        known_defects.intake_defect(defect, gateway)
+
+    assert gateway.identity_refreshes == 3
+    assert gateway.comments[900] == []
+    assert len(gateway.comments[899]) == 1
+    assert "phase=final" in gateway.comments[899][0]["body"].splitlines()[0]
 
 
 class CloseAfterAppendGateway(FakeGateway):
@@ -2677,52 +2725,6 @@ def test_rest_pagination_bound_fails_closed(monkeypatch: pytest.MonkeyPatch) -> 
         gateway._list_paginated("repos/RasmusTho/agentic-pkm-mvp/issues")
 
 
-def test_rest_registry_discovery_retains_unlabeled_title_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
-    requests: list[str] = []
-    unlabeled = {
-        "number": 900,
-        "title": known_defects.REGISTRY_TITLE,
-        "state": "open",
-        "locked": True,
-        "body": known_defects.render_registry_body(),
-        "labels": [{"name": "type:bug"}],
-    }
-
-    def request(
-        method: str,
-        endpoint: str,
-        _payload: dict[str, Any] | None = None,
-    ) -> Any:
-        assert method == "GET"
-        requests.append(endpoint)
-        if endpoint.startswith(
-            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
-        ):
-            return []
-        if endpoint.startswith("search/issues?"):
-            return {
-                "incomplete_results": False,
-                "items": [
-                    {
-                        "number": 900,
-                        "title": known_defects.REGISTRY_TITLE,
-                    }
-                ],
-            }
-        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/900":
-            return unlabeled
-        raise AssertionError(endpoint)
-
-    monkeypatch.setattr(gateway, "_request", request)
-
-    assert gateway.list_registry_issues("all") == [unlabeled]
-    assert gateway.list_registry_issues("all") == [unlabeled]
-    assert sum(endpoint.startswith("search/issues?") for endpoint in requests) == 1
-
-
 def test_rest_selector_discovery_is_cached_before_label_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2754,11 +2756,6 @@ def test_rest_selector_discovery_is_cached_before_label_loss(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
         ):
             return [labeled] if label_present else []
-        if endpoint.startswith("search/issues?"):
-            return {
-                "incomplete_results": False,
-                "items": [],
-            }
         if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/900":
             return unlabeled
         raise AssertionError(endpoint)
@@ -2777,7 +2774,6 @@ def test_rest_precreate_enumeration_finds_stale_search_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
-    search_reads = 0
     authoritative_reads = 0
     unlabeled = {
         "number": 4200,
@@ -2793,18 +2789,12 @@ def test_rest_precreate_enumeration_finds_stale_search_identity(
         endpoint: str,
         _payload: dict[str, Any] | None = None,
     ) -> Any:
-        nonlocal authoritative_reads, search_reads
+        nonlocal authoritative_reads
         assert method == "GET"
         if endpoint.startswith(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
         ):
             return []
-        if endpoint.startswith("search/issues?"):
-            search_reads += 1
-            return {
-                "incomplete_results": False,
-                "items": [],
-            }
         if endpoint.startswith(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all"
             "&sort=created&direction=desc"
@@ -2820,9 +2810,66 @@ def test_rest_precreate_enumeration_finds_stale_search_identity(
     with pytest.raises(known_defects.KnownDefectsError, match="registry title"):
         known_defects._select_registry(gateway, None)
 
-    assert search_reads == 1
     assert authoritative_reads == 1
     assert gateway._registry_identity_numbers == {4200}
+
+
+def test_rest_public_lookup_enumerates_hidden_prior_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    hidden = {
+        "number": 4200,
+        "title": "Renamed registry",
+        "state": "closed",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [{"name": "type:bug"}],
+    }
+    current = {
+        "number": 4201,
+        "title": known_defects.REGISTRY_TITLE,
+        "state": "open",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": known_defects.REGISTRY_LABEL},
+        ],
+    }
+    authoritative_reads = 0
+    hidden_reads = 0
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        nonlocal authoritative_reads, hidden_reads
+        assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all"
+            "&sort=created&direction=desc"
+        ):
+            authoritative_reads += 1
+            return [current, hidden]
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
+        ):
+            return [current]
+        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/4200":
+            hidden_reads += 1
+            return hidden
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="registry container"):
+        known_defects.lookup_defect(_defect().defect_id, gateway)
+
+    assert authoritative_reads == 1
+    assert hidden_reads == 1
+    assert gateway._registry_identity_numbers == {4200, 4201}
 
 
 def test_known_defect_label_is_canonical_and_registry_only() -> None:
