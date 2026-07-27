@@ -2634,7 +2634,7 @@ def test_cockpit_answers_fixed_owner_questions_without_authority(
         assert safety.script_count == 1
         assert safety.script_sources == [] and safety.inline_handlers == []
         source_values_removed = re.sub(
-            r"<(?:style|script)\b[^>]*>.*?</(?:style|script)>",
+            r"<(?:style|script)\b[^>]*>.*?</(?:style|script)\s*>",
             "",
             rendered,
             flags=re.S | re.I,
