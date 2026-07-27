@@ -68,6 +68,24 @@ REQUIRED_ISSUE_SECTIONS = (
     "Suggested Validation",
     "Source Docs",
 )
+OPTIONAL_ISSUE_SECTION = "Applies learning (optional)"
+REQUIRED_SBS_FIELDS = (
+    "Primary subsystem",
+    "Secondary subsystem(s)",
+    "Write class",
+    "Authority impact",
+    "Persistence impact",
+    "Derived/rebuildable impact",
+    "Human knowledge impact",
+    "Memory impact",
+    "Retrieval/context impact",
+    "Sync/deployment impact",
+    "External boundary impact",
+    "New or changed contract",
+    "Owner-doc impact",
+    "Transition debt impact",
+    "Fitness rule impact",
+)
 
 
 class KnownDefectsError(RuntimeError):
@@ -242,6 +260,8 @@ class RegistryGateway(Protocol):
 
     def add_comment(self, issue_number: int, body: str) -> dict[str, Any]: ...
 
+    def delete_comment(self, comment_id: int) -> None: ...
+
 
 class GhRegistryGateway:
     """Small REST-only GitHub gateway used by the deterministic CLI."""
@@ -358,6 +378,12 @@ class GhRegistryGateway:
             "POST",
             f"repos/{self.repo}/issues/{issue_number}/comments",
             {"body": body},
+        )
+
+    def delete_comment(self, comment_id: int) -> None:
+        self._request(
+            "DELETE",
+            f"repos/{self.repo}/issues/comments/{comment_id}",
         )
 
 
@@ -676,11 +702,41 @@ def _select_registry(
     return selected
 
 
-def intake_defect(
+def _compensate_comment(
+    gateway: RegistryGateway,
+    issue_number: int,
+    comment: dict[str, Any],
+) -> None:
+    comment_id = int(comment.get("id") or 0)
+    if comment_id <= 0:
+        raise KnownDefectsError(
+            "cannot compensate a stale registry append without a comment id"
+        )
+    gateway.delete_comment(comment_id)
+    remaining_ids = {
+        int(item.get("id") or 0)
+        for item in gateway.list_comments(issue_number)
+    }
+    if comment_id in remaining_ids:
+        raise KnownDefectsError(
+            f"failed to compensate stale registry comment #{comment_id}"
+        )
+
+
+def _closed_canonical_registry(issue: dict[str, Any]) -> bool:
+    try:
+        _validate_registry_issue(issue, require_open=False)
+    except KnownDefectsError:
+        return False
+    return str(issue.get("state", "")).lower() == "closed"
+
+
+def _intake_defect(
     defect: KnownDefect,
     gateway: RegistryGateway,
     *,
     registry_issue: int | None = None,
+    allow_lifecycle_retry: bool,
 ) -> dict[str, Any]:
     gateway.ensure_registry_label()
     existing = _find_entry(
@@ -713,7 +769,40 @@ def intake_defect(
             "url": comment.get("html_url"),
         }
     _inventory_comments(gateway, int(issue["number"]))
+    fresh_issue = gateway.get_issue(int(issue["number"]))
+    try:
+        _validate_registry_issue(fresh_issue, require_open=True)
+    except KnownDefectsError:
+        if (
+            registry_issue is None
+            and allow_lifecycle_retry
+            and _closed_canonical_registry(fresh_issue)
+        ):
+            return _intake_defect(
+                defect,
+                gateway,
+                registry_issue=None,
+                allow_lifecycle_retry=False,
+            )
+        raise
     comment = gateway.add_comment(int(issue["number"]), defect.render_entry())
+    post_write_issue = gateway.get_issue(int(issue["number"]))
+    try:
+        _validate_registry_issue(post_write_issue, require_open=True)
+    except KnownDefectsError:
+        _compensate_comment(gateway, int(issue["number"]), comment)
+        if (
+            registry_issue is None
+            and allow_lifecycle_retry
+            and _closed_canonical_registry(post_write_issue)
+        ):
+            return _intake_defect(
+                defect,
+                gateway,
+                registry_issue=None,
+                allow_lifecycle_retry=False,
+            )
+        raise
     return {
         "schema": "known-defect-receipt.v1",
         "status": "created",
@@ -721,6 +810,20 @@ def intake_defect(
         "registry_issue": int(issue["number"]),
         "url": comment.get("html_url"),
     }
+
+
+def intake_defect(
+    defect: KnownDefect,
+    gateway: RegistryGateway,
+    *,
+    registry_issue: int | None = None,
+) -> dict[str, Any]:
+    return _intake_defect(
+        defect,
+        gateway,
+        registry_issue=registry_issue,
+        allow_lifecycle_retry=True,
+    )
 
 
 def lookup_defect(
@@ -762,17 +865,62 @@ def lookup_defect(
     }
 
 
+def _top_level_sections(body: str) -> dict[str, str]:
+    matches = list(re.finditer(r"^##[ \t]+(.+?)[ \t]*$", body, re.MULTILINE))
+    sections: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        title = " ".join(match.group(1).split())
+        key = title.casefold()
+        if key in sections:
+            raise KnownDefectsError(
+                f"promotion target repeats canonical section: {title}"
+            )
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        sections[key] = body[start:end].strip()
+    return sections
+
+
+def _has_concrete_section_content(value: str) -> bool:
+    if not value.strip():
+        return False
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        content = re.sub(
+            r"^[-*]\s+(?:\[[ xX]\]\s+)?",
+            "",
+            line,
+        ).strip().strip("`").strip()
+        if not content or re.fullmatch(r"<[^>]+>", content):
+            continue
+        if content.casefold() in {"tbd", "todo", "n/a"}:
+            continue
+        return True
+    return False
+
+
 def _validate_promotion_issue(issue: dict[str, Any]) -> None:
     labels = _label_names(issue)
     if str(issue.get("state", "")).lower() != "open":
         raise KnownDefectsError("promotion target must be an open Issue")
+    if REGISTRY_LABEL in labels:
+        raise KnownDefectsError("promotion target must not be another registry Issue")
+    title = str(issue.get("title") or "")
+    if (
+        re.fullmatch(r"bug: \S(?:.{0,153}\S)?", title) is None
+        or "\n" in title
+    ):
+        raise KnownDefectsError(
+            "promotion target title must have canonical shape "
+            "'bug: <short bounded outcome>'"
+        )
     type_labels = {label for label in labels if label.startswith("type:")}
     if type_labels != {"type:bug"}:
         raise KnownDefectsError(
             "promotion target must carry exactly one type label: type:bug"
         )
-    if REGISTRY_LABEL in labels:
-        raise KnownDefectsError("promotion target must not be another registry Issue")
     agent_states = {label for label in labels if label.startswith("agent:")}
     if len(agent_states) != 1 or not agent_states <= NORMAL_AGENT_STATES:
         raise KnownDefectsError(
@@ -784,18 +932,64 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
             "promotion target must carry exactly one canonical priority label"
         )
     body = issue.get("body") or ""
+    sections = _top_level_sections(body)
+    required_keys = {heading.casefold() for heading in REQUIRED_ISSUE_SECTIONS}
+    allowed_keys = required_keys | {OPTIONAL_ISSUE_SECTION.casefold()}
     missing = [
         heading
         for heading in REQUIRED_ISSUE_SECTIONS
-        if not re.search(
-            rf"^##\s+{re.escape(heading)}\s*$",
-            body,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
+        if heading.casefold() not in sections
     ]
     if missing:
         raise KnownDefectsError(
             "promotion target lacks canonical section(s): " + ", ".join(missing)
+        )
+    unexpected = sorted(set(sections) - allowed_keys)
+    if unexpected:
+        raise KnownDefectsError(
+            "promotion target has unexpected top-level section(s): "
+            + ", ".join(unexpected)
+        )
+    empty = [
+        heading
+        for heading in REQUIRED_ISSUE_SECTIONS
+        if not _has_concrete_section_content(sections[heading.casefold()])
+    ]
+    if empty:
+        raise KnownDefectsError(
+            "promotion target has empty or placeholder canonical section(s): "
+            + ", ".join(empty)
+        )
+    if re.search(
+        r"(?m)^-\s+`[^`\n]+::[^`\n]+`\s*$",
+        sections["source anchors"],
+    ) is None:
+        raise KnownDefectsError(
+            "promotion target Source Anchors must name a durable path and anchor"
+        )
+    if re.search(
+        r"(?m)^-\s+`[^`\n]+`\s*$",
+        sections["source docs"],
+    ) is None:
+        raise KnownDefectsError(
+            "promotion target Source Docs must name a durable repo path"
+        )
+    sbs = sections["sbs impact"]
+    missing_sbs = []
+    for field in REQUIRED_SBS_FIELDS:
+        matches = list(re.finditer(
+            rf"(?mi)^-\s+{re.escape(field)}:\s*(.+?)\s*$",
+            sbs,
+        ))
+        if (
+            len(matches) != 1
+            or not _has_concrete_section_content(matches[0].group(1))
+        ):
+            missing_sbs.append(field)
+    if missing_sbs:
+        raise KnownDefectsError(
+            "promotion target lacks concrete SBS field(s): "
+            + ", ".join(missing_sbs)
         )
     acceptance = extract_sections(body).get("acceptance criteria")
     report = analyze_acceptance_criteria(acceptance)

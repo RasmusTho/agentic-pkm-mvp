@@ -97,6 +97,14 @@ class FakeGateway:
         self.comments.setdefault(issue_number, []).append(comment)
         return comment
 
+    def delete_comment(self, comment_id: int) -> None:
+        for issue_comments in self.comments.values():
+            issue_comments[:] = [
+                comment
+                for comment in issue_comments
+                if int(comment["id"]) != comment_id
+            ]
+
 
 def _defect(**overrides: Any) -> Any:
     values = {
@@ -120,13 +128,56 @@ def _defect(**overrides: Any) -> Any:
 
 
 def _canonical_bug_body() -> str:
-    sections = []
-    for heading in known_defects.REQUIRED_ISSUE_SECTIONS:
-        content = "Concrete content."
-        if heading == "Acceptance Criteria":
-            content = "- [ ] Regression no longer reproduces.\n  Verify: `tests/x.py::test_x`"
-        sections.append(f"## {heading}\n\n{content}")
-    return "\n\n".join(sections)
+    return """## Context
+
+The confirmed defect needs a bounded implementation contract.
+
+## Scope
+
+Change the affected helper and its focused regression test.
+
+## Source Anchors
+
+- `.codex/skills/bug-to-issue/SKILL.md :: Promotion`
+
+## SBS Impact
+
+- Primary subsystem: Builder System / CES boundary
+- Secondary subsystem(s): none
+- Write class: governance/docs/process
+- Authority impact: bounded defect repair
+- Persistence impact: none
+- Derived/rebuildable impact: none
+- Human knowledge impact: none
+- Memory impact: none
+- Retrieval/context impact: none
+- Sync/deployment impact: none
+- External boundary impact: none
+- New or changed contract: none
+- Owner-doc impact: none
+- Transition debt impact: reduces
+- Fitness rule impact: strengthens
+
+## Constraints
+
+- Preserve unrelated behavior.
+
+## Acceptance Criteria
+
+- [ ] Regression no longer reproduces.
+  Verify: `tests/x.py::test_x`
+
+## Out of Scope
+
+- Unrelated refactors.
+
+## Suggested Validation
+
+- `pytest -q tests/x.py`
+
+## Source Docs
+
+- `.codex/skills/_shared/ISSUE_CONTRACT.md`"""
 
 
 def test_repeated_intake_is_idempotent_and_reuses_one_registry() -> None:
@@ -260,6 +311,7 @@ def test_promotion_links_only_a_canonical_normal_bug_issue() -> None:
     intake = known_defects.intake_defect(defect, gateway)
     gateway.issues[901] = {
         "number": 901,
+        "title": "bug: prevent stale retry receipts",
         "state": "open",
         "body": _canonical_bug_body(),
         "labels": [
@@ -296,6 +348,7 @@ def test_promotion_retry_converges_after_target_claim_or_closure(
     known_defects.intake_defect(defect, gateway)
     gateway.issues[901] = {
         "number": 901,
+        "title": "bug: prevent stale retry receipts",
         "state": "open",
         "body": _canonical_bug_body(),
         "labels": [
@@ -335,6 +388,7 @@ def test_promotion_rejects_another_registry_or_incomplete_issue() -> None:
 
     gateway.issues[901] = {
         "number": 901,
+        "title": "bug: reject incomplete promotion contracts",
         "state": "open",
         "body": "## Context\n\nToo small.",
         "labels": [
@@ -344,6 +398,94 @@ def test_promotion_rejects_another_registry_or_incomplete_issue() -> None:
         ],
     }
     with pytest.raises(known_defects.KnownDefectsError, match="canonical section"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "fix stale retry receipts",
+        "BUG: stale retry receipts",
+        "bug: ",
+        "bug: " + "x" * 156,
+    ],
+)
+def test_promotion_rejects_noncanonical_bug_title(title: str) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": title,
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="title"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+def test_promotion_rejects_empty_or_placeholder_canonical_sections() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    body = "\n\n".join(
+        (
+            f"## {heading}\n\n"
+            + (
+                "- [ ] A bounded outcome.\n  Verify: `tests/x.py::test_x`"
+                if heading == "Acceptance Criteria"
+                else "<placeholder>"
+            )
+        )
+        for heading in known_defects.REQUIRED_ISSUE_SECTIONS
+    )
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject empty promotion contracts",
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="placeholder"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+def test_promotion_rejects_missing_sbs_fields_and_unexpected_top_level_section() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject incomplete SBS contracts",
+        "state": "open",
+        "body": _canonical_bug_body().replace(
+            "- Fitness rule impact: strengthens",
+            "- Other impact: none",
+        ),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+    with pytest.raises(known_defects.KnownDefectsError, match="Fitness rule"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    gateway.issues[901]["body"] = (
+        _canonical_bug_body() + "\n\n## Manual Notes\n\nNot canonical."
+    )
+    with pytest.raises(known_defects.KnownDefectsError, match="unexpected"):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 
@@ -652,6 +794,75 @@ def test_closed_registry_is_read_for_duplicates_but_never_appended() -> None:
     assert len(gateway.comments[issue["number"]]) == 1
 
 
+class CloseBeforeAppendGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed_once = False
+
+    def get_issue(self, number: int) -> dict[str, Any]:
+        issue = super().get_issue(number)
+        if number == 900 and issue["locked"] and not self.closed_once:
+            issue["state"] = "closed"
+            self.closed_once = True
+        return issue
+
+
+def test_registry_close_before_append_retries_without_stale_mutation() -> None:
+    gateway = CloseBeforeAppendGateway()
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 901
+    assert gateway.comments[900] == []
+    assert len(gateway.comments[901]) == 1
+
+
+class CloseAfterAppendGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed_once = False
+
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if (
+            issue_number == 900
+            and body.startswith("<!-- known-defect-entry:")
+            and not self.closed_once
+        ):
+            self.issues[issue_number]["state"] = "closed"
+            self.closed_once = True
+        return comment
+
+
+def test_registry_close_after_append_compensates_and_retries_once() -> None:
+    gateway = CloseAfterAppendGateway()
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 901
+    assert gateway.comments[900] == []
+    assert len(gateway.comments[901]) == 1
+
+
+class MalformedAfterAppendGateway(FakeGateway):
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if issue_number == 900 and body.startswith("<!-- known-defect-entry:"):
+            self.issues[issue_number]["labels"].append({"name": "agent:blocked"})
+        return comment
+
+
+def test_registry_authority_drift_after_append_is_compensated_and_fails_closed() -> None:
+    gateway = MalformedAfterAppendGateway()
+
+    with pytest.raises(known_defects.KnownDefectsError, match="agent state"):
+        known_defects.intake_defect(_defect(), gateway)
+
+    assert gateway.comments[900] == []
+
+
 def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     gateway = FakeGateway()
     defect = _defect()
@@ -666,6 +877,7 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     )
     gateway.issues[901] = {
         "number": 901,
+        "title": "bug: require a Verify target on every criterion",
         "state": "open",
         "body": body,
         "labels": [
@@ -688,6 +900,7 @@ def test_promotion_rejects_unknown_labels_on_canonical_axes(
     known_defects.intake_defect(defect, gateway)
     gateway.issues[901] = {
         "number": 901,
+        "title": "bug: reject ambiguous promotion labels",
         "state": "open",
         "body": _canonical_bug_body(),
         "labels": [
@@ -738,6 +951,7 @@ def test_concurrent_conflicting_promotions_never_choose_a_canonical_target() -> 
     intake = known_defects.intake_defect(defect, gateway)
     gateway.issues[901] = {
         "number": 901,
+        "title": "bug: prevent conflicting promotion authority",
         "state": "open",
         "body": _canonical_bug_body(),
         "labels": [

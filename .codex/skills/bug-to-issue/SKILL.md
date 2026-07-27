@@ -104,6 +104,12 @@ Those comments represent one defect id, and lookup deterministically treats the 
 canonical. Registry reconciliation may remove later identical comments; it must never create a
 second implementation Issue from them.
 
+Intake rereads the selected registry immediately before and after comment creation. If a canonical
+registry closes at either boundary, intake compensates any just-created comment and makes one
+bounded retry against a new open registry. If the body, labels, or lock state drift, intake removes
+its just-created comment and fails closed for explicit reconciliation. This keeps closure races from
+silently appending durable entries to stale registry authority.
+
 ### Promotion
 
 Promote an entry when it is selected for implementation or its impact, repetition, or failed
@@ -112,8 +118,8 @@ workaround satisfies the recorded trigger:
 1. Create/update a normal bounded `type:bug` Issue using the canonical workflow below.
 2. Give that Issue exactly one priority and one truthful normal agent state. A promoted Issue is not
    `state:known-defect`.
-3. Link the registry entry after the normal Issue has the canonical sections, ACs, and `Verify:`
-   targets:
+3. Link the registry entry only after the normal Issue has the canonical `bug: <short bounded
+   outcome>` title, every concrete canonical section and SBS field, ACs, and `Verify:` targets:
 
 ```bash
 python3 .codex/skills/bug-to-issue/scripts/known_defects.py promote \
