@@ -32,14 +32,85 @@ _SYSTEM_OWNED_FIELDS = frozenset(
 _IMMUTABLE_FIELDS = frozenset({"question_id", "scope", "created_at", "registered_via"})
 _QUESTION_ID_RE = re.compile(r"^sq-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _RFC3339_DATETIME_RE = re.compile(
-    r"^(?P<date>\d{4}-(?:0[1-9]|1[0-2])-\d{2})"
-    r"T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d"
-    r"(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$",
-    re.ASCII | re.IGNORECASE,
+    r"^(?P<year>[0-9]{4})-(?P<month>0[1-9]|1[0-2])-(?P<day>[0-9]{2})"
+    r"[Tt](?P<hour>[01][0-9]|2[0-3]):(?P<minute>[0-5][0-9]):"
+    r"(?P<second>[0-5][0-9]|60)(?:\.[0-9]+)?"
+    r"(?P<timezone>[Zz]|(?P<offset_sign>[+-])"
+    r"(?P<offset_hour>[01][0-9]|2[0-3]):(?P<offset_minute>[0-5][0-9]))$",
+    re.ASCII,
 )
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "question-note.schema.json"
 _LOGGER = logging.getLogger(__name__)
 _QUESTION_NOTE_FORMAT_CHECKER = FormatChecker()
+
+
+def _is_gregorian_leap_year(year: int) -> bool:
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+def _days_in_gregorian_month(year: int, month: int) -> int:
+    if month == 2:
+        return 29 if _is_gregorian_leap_year(year) else 28
+    return 30 if month in {4, 6, 9, 11} else 31
+
+
+def _shift_gregorian_date(
+    year: int, month: int, day: int, day_delta: int
+) -> tuple[int, int, int] | None:
+    """Shift a four-digit RFC 3339 date by at most one day."""
+    if day_delta == 0:
+        return year, month, day
+    if day_delta == -1:
+        if day > 1:
+            return year, month, day - 1
+        if month > 1:
+            previous_month = month - 1
+            return year, previous_month, _days_in_gregorian_month(year, previous_month)
+        if year == 0:
+            return None
+        return year - 1, 12, 31
+    if day < _days_in_gregorian_month(year, month):
+        return year, month, day + 1
+    if month < 12:
+        return year, month + 1, 1
+    if year == 9999:
+        return None
+    return year + 1, 1, 1
+
+
+def _is_rfc3339_leap_second(match: re.Match[str]) -> bool:
+    """Check whether a local ``:60`` maps to an RFC 3339 UTC leap-second point."""
+    timezone_text = match.group("timezone")
+    offset_minutes = 0
+    if timezone_text not in {"Z", "z"}:
+        offset_minutes = int(match.group("offset_hour")) * 60 + int(
+            match.group("offset_minute")
+        )
+        if match.group("offset_sign") == "-":
+            offset_minutes = -offset_minutes
+
+    utc_minute = int(match.group("hour")) * 60 + int(match.group("minute")) - offset_minutes
+    day_delta = 0
+    if utc_minute < 0:
+        utc_minute += 24 * 60
+        day_delta = -1
+    elif utc_minute >= 24 * 60:
+        utc_minute -= 24 * 60
+        day_delta = 1
+
+    utc_date = _shift_gregorian_date(
+        int(match.group("year")),
+        int(match.group("month")),
+        int(match.group("day")),
+        day_delta,
+    )
+    if utc_date is None:
+        return False
+    _utc_year, utc_month, utc_day = utc_date
+    return (
+        (utc_month, utc_day) in {(6, 30), (12, 31)}
+        and divmod(utc_minute, 60) == (23, 59)
+    )
 
 
 @_QUESTION_NOTE_FORMAT_CHECKER.checks("date-time")
@@ -51,11 +122,16 @@ def _is_rfc3339_datetime(value: object) -> bool:
     match = _RFC3339_DATETIME_RE.fullmatch(value)
     if match is None:
         return False
-    try:
-        datetime.strptime(match.group("date"), "%Y-%m-%d")
-    except ValueError:
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    day = int(match.group("day"))
+    # RFC 3339 uses a four-digit proleptic Gregorian year and includes 0000.
+    # datetime.strptime() rejects that boundary, so validate the calendar directly.
+    if not 1 <= day <= _days_in_gregorian_month(year, month):
         return False
-    return True
+    # A format checker validates legal leap-second positions. Whether a producer
+    # may emit a particular announced leap second is a separate clock policy.
+    return match.group("second") != "60" or _is_rfc3339_leap_second(match)
 
 
 class HumanOwnedFieldMutationError(ValueError):
