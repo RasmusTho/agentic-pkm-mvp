@@ -45,14 +45,19 @@ def _compiler_sibling_artifacts() -> list[str]:
     ]
 
 
-def _is_ignored(relpath: str) -> bool:
-    """True when `.gitignore` covers ``relpath`` (path need not exist)."""
+def _is_ignored_in(repo: Path, relpath: str) -> bool:
+    """True when ``repo``'s `.gitignore` covers ``relpath`` (need not exist)."""
     result = subprocess.run(
         ["git", "check-ignore", "-q", "--", relpath],
-        cwd=REPO_ROOT,
+        cwd=repo,
         capture_output=True,
     )
     return result.returncode == 0
+
+
+def _is_ignored(relpath: str) -> bool:
+    """True when this repo's `.gitignore` covers ``relpath``."""
+    return _is_ignored_in(REPO_ROOT, relpath)
 
 
 @pytest.mark.parametrize("producer_root", PRODUCER_ROOTS)
@@ -67,7 +72,7 @@ def test_compiler_runtime_siblings_are_gitignored(producer_root: str) -> None:
 
 
 @pytest.mark.parametrize("producer_root", PRODUCER_ROOTS)
-def test_published_settings_symlink_is_gitignored(producer_root: str, tmp_path: Path) -> None:
+def test_published_settings_symlink_is_gitignored(producer_root: str) -> None:
     """``runtime/settings`` must be ignored even when it is a *symlink*.
 
     ``app/settings/compiler.py`` publishes the winning generation by pointing
@@ -96,15 +101,6 @@ def _pattern_matches_symlink(repo: Path, relpath: str) -> bool:
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(target.name)
     return _is_ignored_in(repo, relpath)
-
-
-def _is_ignored_in(repo: Path, relpath: str) -> bool:
-    result = subprocess.run(
-        ["git", "check-ignore", "-q", "--", relpath],
-        cwd=repo,
-        capture_output=True,
-    )
-    return result.returncode == 0
 
 
 def test_settings_pattern_matches_a_real_symlink(tmp_path: Path) -> None:
@@ -142,8 +138,17 @@ def test_ignore_patterns_stay_anchored_to_producer_roots() -> None:
     ``tests/runtime/``. Guard that the fix kept that property.
     """
     for tracked_root in ("app/runtime", "tests/runtime"):
+        # The /runtime/.settings.* pattern.
         probe = f"{tracked_root}/.settings.lock"
         assert not _is_ignored(probe), (
             f"{probe!r} is gitignored — the runtime-artifact pattern lost "
             "its anchoring and now hides tracked source/test trees."
         )
+        # The /runtime/settings pattern. Anchoring here comes from the leading
+        # slash, not the trailing one, so dropping the trailing slash to match
+        # the published symlink must not start swallowing these trees.
+        for probe in (f"{tracked_root}/settings", f"{tracked_root}/settings/loader.py"):
+            assert not _is_ignored(probe), (
+                f"{probe!r} is gitignored — the runtime/settings pattern lost "
+                "its anchoring and now hides tracked source/test trees."
+            )
