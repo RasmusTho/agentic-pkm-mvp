@@ -127,8 +127,20 @@ envelope but no transport or storage shape becomes contract authority.
   requires an actual transition from a pre-state containing `agent:ready` to a post-state without
   it, closures must observe the Issue closed, and non-mutating or failed effects cannot silently
   change the guarded Issue state.
+- **INV-DDO-6a — authority is resolved, not frozen.** The immutable plan input is the origin
+  authority state, not the state every later event must repeat. Structured worker and review result
+  events bind the *resolved current* authority for their Issue: the plan input advanced by the
+  events that legitimately move it — a truthful post-effect readback or an observed authority
+  change bound to the same run and plan. A truthful post-claim result is therefore valid without
+  attaching a stale pre-claim snapshot. Resolution is fail-closed: with no such proven event the
+  plan input remains the resolved state, and an authority state the event log does not prove is
+  rejected. A subjectless causal event — run start, elapsed timer, or recorded exception — may
+  cause an effect, but because it carries no authority of its own its effect must bind the resolved
+  current authority rather than assert one.
 - **INV-DDO-7 — exact-head evidence.** CI, review, merge eligibility, and closure evidence bind the
-  exact current PR head. New commits invalidate prior evidence.
+  exact current PR head. New commits invalidate prior evidence. Each check evidence entry also binds
+  a distinct check-run authority identity, so one reused check run can never be replayed under
+  several required check names and satisfy the required-check set as false-green merge evidence.
 - **INV-DDO-8 — severity routing is fail-closed.** P0/P1, protected risk, false-green evidence,
   malformed verdicts, and low-confidence verdicts block. A valid P2 is recorded once and deferred
   without synchronous repair. It becomes executable work only through the governed Issue path.

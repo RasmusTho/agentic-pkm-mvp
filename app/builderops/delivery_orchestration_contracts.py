@@ -295,6 +295,14 @@ def _same_authority_state(
     )
 
 
+_AUTHORITY_ADVANCING_EVENT_TYPES: Final[frozenset[str]] = frozenset(
+    {"effect_succeeded", "authority_changed"}
+)
+_SUBJECTLESS_CAUSAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
+    {"run_started", "timer_elapsed", "exception_recorded"}
+)
+
+
 def _claim_transition_is_truthful(
     expected: AuthoritySnapshot,
     *,
@@ -1077,6 +1085,42 @@ class ReducerEvent(CanonicalDeliveryContract):
         return self
 
 
+def resolve_current_authority(
+    *,
+    authority_id: str,
+    planned_authority: AuthoritySnapshot,
+    run_id: str,
+    plan_ref: ContractRef,
+    before_sequence: int,
+    prior_events: tuple[ReducerEvent, ...] = (),
+) -> AuthoritySnapshot:
+    """Resolve the latest proven authority state for one issue authority.
+
+    The immutable plan input is the origin state. Only reducer events that
+    legitimately advance authority - a truthful post-effect readback or an
+    observed authority change bound to the same run and plan - move the current
+    state forward. When no such prior event is supplied the plan input remains
+    the resolved state, so resolution can never accept an unproven authority
+    claim.
+    """
+
+    advancing = [
+        item
+        for item in prior_events
+        if item.run_id == run_id
+        and item.plan_ref == plan_ref
+        and item.sequence < before_sequence
+        and item.event_type in _AUTHORITY_ADVANCING_EVENT_TYPES
+        and item.subject_authority is not None
+        and item.subject_authority.authority_id == authority_id
+    ]
+    if not advancing:
+        return planned_authority
+    resolved = max(advancing, key=lambda item: item.sequence).subject_authority
+    assert resolved is not None
+    return resolved
+
+
 def delivery_effect_input_hash(
     *,
     run_id: str,
@@ -1243,9 +1287,13 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError("effect authority snapshots must bind the issue")
         causal_subject = self.causal_event.subject_authority
         if causal_subject is None:
-            if self.causal_event.event_type != "run_started":
+            if (
+                self.causal_event.event_type
+                not in _SUBJECTLESS_CAUSAL_EVENT_TYPES
+            ):
                 raise ValueError(
-                    "subjectless effect cause must be the run-started event"
+                    "subjectless effect cause must be a run-started, timer, "
+                    "or exception event"
                 )
         elif self.expected_authorities != (causal_subject,):
             raise ValueError(
@@ -1520,6 +1568,7 @@ def validate_reducer_effect_evidence(
     *,
     plan: DeliveryPlan,
     prior_effects: tuple[ReducerEffect, ...] = (),
+    prior_events: tuple[ReducerEvent, ...] = (),
     worker_results: tuple[StructuredWorkerResult, ...] = (),
     review_results: tuple[ReviewResult, ...] = (),
 ) -> ReducerEffect:
@@ -1588,6 +1637,9 @@ def validate_reducer_effect_evidence(
         worker_result=causal_worker,
         review_result=causal_review,
         prior_effects=prior_effects,
+        prior_events=tuple(
+            item for item in prior_events if item.sequence < causal_event.sequence
+        ),
         worker_results=worker_results,
         review_results=review_results,
     )
@@ -1662,24 +1714,23 @@ def validate_reducer_effect_evidence(
         expected_state is None
         or len(matching_authorities) != 1
         or len(planned_authorities) != 1
-        or (
-            causal_subject is None
-            and (
-                len(planned_authorities) != 1
-                or not _same_authority_state(
-                    matching_authorities[0],
-                    planned_authorities[0],
-                )
-            )
-        )
-        or (
-            causal_subject is not None
-            and not _same_authority_state(
-                matching_authorities[0],
-                causal_subject,
-            )
-        )
     ):
+        raise ValueError("reducer effect lacks the plan's expected live authority")
+    if causal_subject is None:
+        # A subjectless cause (run start, timer, or recorded exception) carries
+        # no authority of its own, so the effect must bind the latest authority
+        # proven by the supplied event log, falling back to the plan input.
+        current_authority = resolve_current_authority(
+            authority_id=effect.issue.authority_id,
+            planned_authority=planned_authorities[0],
+            run_id=effect.run_id,
+            plan_ref=effect.plan_ref,
+            before_sequence=effect.causal_event.sequence + 1,
+            prior_events=prior_events,
+        )
+    else:
+        current_authority = causal_subject
+    if not _same_authority_state(matching_authorities[0], current_authority):
         raise ValueError("reducer effect lacks the plan's expected live authority")
     return effect
 
@@ -1692,6 +1743,7 @@ def validate_reducer_event_evidence(
     worker_result: StructuredWorkerResult | None = None,
     review_result: ReviewResult | None = None,
     prior_effects: tuple[ReducerEffect, ...] = (),
+    prior_events: tuple[ReducerEvent, ...] = (),
     worker_results: tuple[StructuredWorkerResult, ...] = (),
     review_results: tuple[ReviewResult, ...] = (),
 ) -> ReducerEvent:
@@ -1725,6 +1777,9 @@ def validate_reducer_event_evidence(
                 item
                 for item in prior_effects
                 if item.sequence < effect.sequence
+            ),
+            prior_events=tuple(
+                item for item in prior_events if item.sequence < event.sequence
             ),
             worker_results=worker_results,
             review_results=review_results,
@@ -1830,11 +1885,16 @@ def validate_reducer_event_evidence(
         )
         if planned_authority is None:
             raise ValueError("authority-change event lacks planned authority")
-        if (
-            _same_authority_state(
-                event.subject_authority,
-                planned_authority,
-            )
+        if _same_authority_state(
+            event.subject_authority,
+            resolve_current_authority(
+                authority_id=event.subject_authority.authority_id,
+                planned_authority=planned_authority,
+                run_id=event.run_id,
+                plan_ref=event.plan_ref,
+                before_sequence=event.sequence,
+                prior_events=prior_events,
+            ),
         ):
             raise ValueError("authority-change event must carry changed authority")
 
@@ -1861,18 +1921,26 @@ def validate_reducer_event_evidence(
             ),
             None,
         )
-        subject_matches = (
-            subject is not None
-            and planned_authority is not None
-            and (
-                event.event_type in {"effect_succeeded", "effect_failed"}
-                or _same_authority_state(subject, planned_authority)
-            )
-        )
-        if not subject_matches:
+        if subject is None or planned_authority is None:
             raise ValueError(
                 "reducer event subject contradicts referenced evidence"
             )
+        if event.event_type not in {"effect_succeeded", "effect_failed"}:
+            # Structured worker/review results are produced after the plan input
+            # was observed, so they must express the resolved current authority
+            # rather than the immutable pre-claim plan snapshot.
+            current_authority = resolve_current_authority(
+                authority_id=referenced_issue.authority_id,
+                planned_authority=planned_authority,
+                run_id=event.run_id,
+                plan_ref=event.plan_ref,
+                before_sequence=event.sequence,
+                prior_events=prior_events,
+            )
+            if not _same_authority_state(subject, current_authority):
+                raise ValueError(
+                    "reducer event subject contradicts referenced evidence"
+                )
     return event
 
 
@@ -1985,6 +2053,14 @@ class IssueDeliveryProof(_StrictFrozenModel):
         _require_unique(
             tuple(item.check_name for item in self.check_evidence),
             "check evidence",
+        )
+        # One GitHub check run carries exactly one check name. Without this
+        # guard a single reused check run could be replayed under several
+        # required check names and satisfy the whole required-check set from one
+        # observation, which is false-green merge evidence.
+        _require_unique(
+            tuple(item.authority_id for item in self.check_evidence),
+            "check run authority identities",
         )
         if self.check_evidence != tuple(
             sorted(self.check_evidence, key=lambda item: item.check_name)
@@ -2784,11 +2860,21 @@ def validate_delivery_receipt_evidence(
         elif proof.review_disposition is not None or proof.known_defects:
             raise ValueError("receipt proof carries review evidence without a review")
         required_checks = set(plan.policy_profile.required_check_names)
-        passing_checks = {
-            item.check_name
+        # IssueDeliveryProof requires a distinct check-run authority per check
+        # name, so every satisfied required check name is backed by its own
+        # check run and one reused run cannot cover the required set.
+        passing_check_runs = {
+            (item.check_name, item.authority_id)
             for item in proof.check_evidence
             if item.status == "passed"
         }
+        passing_checks = {name for name, _ in passing_check_runs}
+        if len({authority for _, authority in passing_check_runs}) != len(
+            passing_checks
+        ):
+            raise ValueError(
+                "required check evidence must bind distinct check-run authorities"
+            )
         logical_outcome_keys = {
             effect_class: set(
                 delivery_effect_expected_outcome_keys(
@@ -3143,6 +3229,7 @@ __all__ = [
     "delivery_effect_input_hash",
     "delivery_initiation_approval_hash",
     "parse_delivery_contract",
+    "resolve_current_authority",
     "validate_delivery_plan_evidence",
     "validate_delivery_receipt_evidence",
     "validate_reducer_effect_evidence",

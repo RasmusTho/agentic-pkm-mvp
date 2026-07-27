@@ -38,6 +38,7 @@ from app.builderops.delivery_orchestration_contracts import (
     StructuredWorkerResult,
     TcdMetrics,
     ValidationEvidence,
+    WORKER_RESULT_VERSION,
     canonical_hash,
     delivery_event_id,
     delivery_event_input_hash,
@@ -3130,3 +3131,320 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             review_results=(review,),
             reducer_effects=(recovery_effect,),
         )
+
+
+def _ready_authority(issue: IssueScope) -> AuthoritySnapshot:
+    return _authority(issue, labels=("agent:ready", "type:task"))
+
+
+def _claimed_authority(issue: IssueScope) -> AuthoritySnapshot:
+    return _authority(issue, labels=("agent:in-progress", "type:task"))
+
+
+def _claimed_run_context(
+    issue: IssueScope,
+) -> tuple[DeliveryPlan, ReducerEffect, ReducerEvent, AuthoritySnapshot]:
+    """Build a run whose claim effect already moved authority past plan input."""
+
+    initiation = _initiation(issue, source_authority=_ready_authority(issue))
+    plan = _plan(issue, initiation)
+    claim_effect = _claim_effect(issue, plan)
+    claimed = _claimed_authority(issue)
+    claim_succeeded = _effect_result_event(
+        claim_effect,
+        subject=claimed,
+        outcome_state="claimed",
+        correlation_id="event-claim-succeeded",
+    )
+    assert (
+        validate_reducer_event_evidence(
+            claim_succeeded,
+            plan=plan,
+            effect=claim_effect,
+        )
+        is claim_succeeded
+    )
+    return plan, claim_effect, claim_succeeded, claimed
+
+
+def _structured_result_event(
+    *,
+    plan: DeliveryPlan,
+    event_type: str,
+    result_ref: ContractRef,
+    subject: AuthoritySnapshot,
+    sequence: int,
+    correlation_id: str,
+) -> ReducerEvent:
+    plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    input_hash = delivery_event_input_hash(
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=sequence,
+        event_type=event_type,
+        subject_authority=subject,
+        effect_ref=None,
+        result_ref=result_ref,
+        exception=None,
+    )
+    return ReducerEvent(
+        event_id=delivery_event_id(input_hash),
+        input_hash=input_hash,
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=sequence,
+        event_type=event_type,  # type: ignore[arg-type]
+        subject_authority=subject,
+        effect_ref=None,
+        result_ref=result_ref,
+        exception=None,
+        provenance=_provenance(correlation_id),
+    )
+
+
+def test_structured_result_events_bind_resolved_current_authority() -> None:
+    """A truthful post-claim worker/review result is not stale plan input."""
+
+    issue = _issue(4165, SHA_A)
+    plan, _unused_claim_effect, claim_succeeded, claimed = _claimed_run_context(
+        issue
+    )
+    worker = _worker_result(issue, plan)
+    review = _review_result(issue, plan)
+    worker_ref = ContractRef(
+        schema_version=worker.schema_version,
+        contract_id=worker.result_id,
+        content_hash=worker.content_hash,
+    )
+    review_ref = ContractRef(
+        schema_version=review.schema_version,
+        contract_id=review.result_id,
+        content_hash=review.content_hash,
+    )
+    worker_event = _structured_result_event(
+        plan=plan,
+        event_type="worker_result_recorded",
+        result_ref=worker_ref,
+        subject=claimed,
+        sequence=3,
+        correlation_id="event-worker-post-claim",
+    )
+    review_event = _structured_result_event(
+        plan=plan,
+        event_type="review_result_recorded",
+        result_ref=review_ref,
+        subject=claimed,
+        sequence=4,
+        correlation_id="event-review-post-claim",
+    )
+
+    assert (
+        validate_reducer_event_evidence(
+            worker_event,
+            plan=plan,
+            worker_result=worker,
+            prior_events=(claim_succeeded,),
+        )
+        is worker_event
+    )
+    assert (
+        validate_reducer_event_evidence(
+            review_event,
+            plan=plan,
+            review_result=review,
+            prior_events=(claim_succeeded,),
+        )
+        is review_event
+    )
+
+    # Without a proven claim transition the pre-claim plan input remains the
+    # resolved authority, so a post-claim subject stays fail-closed.
+    with pytest.raises(ValueError, match="subject contradicts"):
+        validate_reducer_event_evidence(
+            worker_event,
+            plan=plan,
+            worker_result=worker,
+        )
+
+    # Resolution accepts only authority that the supplied event log proves.
+    invented = _authority(issue, "closed", labels=("type:task",))
+    invented_event = _structured_result_event(
+        plan=plan,
+        event_type="worker_result_recorded",
+        result_ref=worker_ref,
+        subject=invented,
+        sequence=3,
+        correlation_id="event-worker-invented",
+    )
+    with pytest.raises(ValueError, match="subject contradicts"):
+        validate_reducer_event_evidence(
+            invented_event,
+            plan=plan,
+            worker_result=worker,
+            prior_events=(claim_succeeded,),
+        )
+
+
+def test_timer_events_can_cause_authority_bound_effects() -> None:
+    """A subjectless timer must be able to cause the next await/retry effect."""
+
+    issue = _issue(4165, SHA_A)
+    plan, claim_effect, claim_succeeded, claimed = _claimed_run_context(issue)
+    plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    timer_input_hash = delivery_event_input_hash(
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=3,
+        event_type="timer_elapsed",
+        subject_authority=None,
+        effect_ref=None,
+        result_ref=None,
+        exception=None,
+    )
+    timer_event = ReducerEvent(
+        event_id=delivery_event_id(timer_input_hash),
+        input_hash=timer_input_hash,
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=3,
+        event_type="timer_elapsed",
+        subject_authority=None,
+        effect_ref=None,
+        result_ref=None,
+        exception=None,
+        provenance=_provenance("event-ci-wait-timer"),
+    )
+
+    def _await_ci_effect(
+        authorities: tuple[AuthoritySnapshot, ...],
+    ) -> ReducerEffect:
+        expected_outcome_keys = delivery_effect_expected_outcome_keys(
+            effect_class="await_ci",
+            run_id="run-4165",
+            issue=issue,
+            pull_request_number=4200,
+            required_check_names=plan.policy_profile.required_check_names,
+        )
+        input_hash = delivery_effect_input_hash(
+            run_id="run-4165",
+            plan_ref=plan_ref,
+            effect_class="await_ci",
+            issue=issue,
+            pull_request_number=4200,
+            exact_head_sha=SHA_D,
+            expected_authorities=authorities,
+            expected_outcome_keys=expected_outcome_keys,
+        )
+        idempotency_key = delivery_effect_idempotency_key(input_hash)
+        return ReducerEffect(
+            effect_id=idempotency_key,
+            run_id="run-4165",
+            plan_ref=plan_ref,
+            causal_event=timer_event,
+            sequence=4,
+            effect_class="await_ci",
+            issue=issue,
+            pull_request_number=4200,
+            exact_head_sha=SHA_D,
+            expected_authorities=authorities,
+            expected_outcome_keys=expected_outcome_keys,
+            idempotency_key=idempotency_key,
+            input_hash=input_hash,
+            provenance=_provenance("effect-await-ci-4165"),
+        )
+
+    timer_effect = _await_ci_effect((claimed,))
+    assert (
+        validate_reducer_effect_evidence(
+            timer_effect,
+            plan=plan,
+            prior_effects=(claim_effect,),
+            prior_events=(claim_succeeded,),
+        )
+        is timer_effect
+    )
+
+    # The timer carries no authority of its own, so the effect must still bind
+    # the latest proven authority instead of a stale plan snapshot.
+    stale_timer_effect = _await_ci_effect((_ready_authority(issue),))
+    with pytest.raises(ValueError, match="expected live authority"):
+        validate_reducer_effect_evidence(
+            stale_timer_effect,
+            plan=plan,
+            prior_effects=(claim_effect,),
+            prior_events=(claim_succeeded,),
+        )
+
+
+def test_check_evidence_requires_distinct_check_run_identity() -> None:
+    """One reused check run cannot satisfy several required check names."""
+
+    issue = _issue(4165, SHA_A)
+    shared_check_run = {
+        "repository": issue.repository,
+        "check_run_id": "9001",
+        "authority_id": f"github:{issue.repository}/check-runs/9001",
+        "pull_request_number": 4200,
+        "status": "passed",
+        "exact_head_sha": SHA_D,
+        "completed_at": TS,
+        "evidence_ref": "github-check:9001",
+    }
+    with pytest.raises(
+        ValidationError,
+        match="check run authority identities must not contain duplicates",
+    ):
+        IssueDeliveryProof(
+            issue=issue,
+            worker_result_ref=ContractRef(
+                schema_version=WORKER_RESULT_VERSION,
+                contract_id="worker-result-4165",
+                content_hash=SHA_B,
+            ),
+            review_result_ref=None,
+            exact_head_sha=SHA_D,
+            delivery_stage="worker_terminal",
+            merge_identity=None,
+            check_evidence=(
+                CheckEvidence(
+                    check_name="Contract validation",
+                    **shared_check_run,  # type: ignore[arg-type]
+                ),
+                CheckEvidence(
+                    check_name="Unit tests (not pg)",
+                    **shared_check_run,  # type: ignore[arg-type]
+                ),
+            ),
+            review_disposition=None,
+            known_defects=(),
+            exceptions=(),
+            closure=None,
+        )
+
+    # The same false-green shape must also be rejected through deserialization.
+    initiation = _initiation(issue)
+    plan = _plan(issue, initiation)
+    worker = _worker_result(issue, plan)
+    review = _review_result(issue, plan)
+    receipt = _receipt(issue, initiation, plan, worker, review)
+    payload = receipt.model_dump(mode="json")
+    original_check = payload["issue_proofs"][0]["check_evidence"][0]
+    replayed_check = dict(original_check)
+    replayed_check["check_name"] = "Contract validation"
+    payload["issue_proofs"][0]["check_evidence"] = [
+        replayed_check,
+        original_check,
+    ]
+    with pytest.raises(
+        ValidationError,
+        match="check run authority identities must not contain duplicates",
+    ):
+        parse_delivery_contract(payload)
