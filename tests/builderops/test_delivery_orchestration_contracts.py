@@ -38,6 +38,8 @@ from app.builderops.delivery_orchestration_contracts import (
     TcdMetrics,
     ValidationEvidence,
     canonical_hash,
+    delivery_event_id,
+    delivery_event_input_hash,
     delivery_effect_idempotency_key,
     delivery_effect_input_hash,
     delivery_initiation_approval_hash,
@@ -201,13 +203,13 @@ def _plan(issue: IssueScope, initiation: DeliveryInitiation) -> DeliveryPlan:
         policy_profile=initiation.policy_profile,
         budget=initiation.budget,
         effect_allowlist=(
-            "claim_issue",
-            "launch_worker",
             "await_ci",
-            "request_review",
-            "merge_pull_request",
+            "claim_issue",
             "close_issue",
+            "launch_worker",
+            "merge_pull_request",
             "record_delivery_receipt",
+            "request_review",
         ),
         provenance=_provenance("plan-4165"),
     )
@@ -274,6 +276,42 @@ def _review_result(issue: IssueScope, plan: DeliveryPlan) -> ReviewResult:
     )
 
 
+def _recovery_effect(
+    issue: IssueScope,
+    plan: DeliveryPlan,
+) -> ReducerEffect:
+    plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    authorities = (_authority(issue),)
+    input_hash = delivery_effect_input_hash(
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=8,
+        effect_class="merge_pull_request",
+        issue=issue,
+        pull_request_number=4200,
+        exact_head_sha=SHA_D,
+        expected_authorities=authorities,
+    )
+    return ReducerEffect(
+        effect_id="effect-merge-4165",
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        sequence=8,
+        effect_class="merge_pull_request",
+        issue=issue,
+        pull_request_number=4200,
+        exact_head_sha=SHA_D,
+        expected_authorities=authorities,
+        idempotency_key=delivery_effect_idempotency_key(input_hash),
+        input_hash=input_hash,
+        provenance=_provenance("effect-merge-4165"),
+    )
+
+
 def _receipt(
     issue: IssueScope,
     initiation: DeliveryInitiation,
@@ -281,6 +319,7 @@ def _receipt(
     worker: StructuredWorkerResult,
     review: ReviewResult,
 ) -> DeliveryReceipt:
+    recovery_effect = _recovery_effect(issue, plan)
     worker_ref = ContractRef(
         schema_version=worker.schema_version,
         contract_id=worker.result_id,
@@ -315,7 +354,10 @@ def _receipt(
                 exact_head_sha=SHA_D,
                 delivery_stage="closed",
                 merge_identity=MergeIdentity(
-                    authority_id="github:pull-request:4200",
+                    repository=issue.repository,
+                    authority_id=(
+                        f"github:{issue.repository}/pulls/4200"
+                    ),
                     pull_request_number=4200,
                     exact_head_sha=SHA_D,
                     base_sha=SHA_E,
@@ -326,7 +368,11 @@ def _receipt(
                 check_evidence=(
                     CheckEvidence(
                         check_name="Unit tests (not pg)",
-                        authority_id="checks:unit-tests:9001",
+                        repository=issue.repository,
+                        check_run_id="9001",
+                        authority_id=(
+                            f"github:{issue.repository}/check-runs/9001"
+                        ),
                         pull_request_number=4200,
                         status="passed",
                         exact_head_sha=SHA_D,
@@ -383,16 +429,18 @@ def _receipt(
                     )
                 ),
                 effect_ref=ContractRef(
-                    schema_version=REDUCER_EFFECT_VERSION,
-                    contract_id="effect-merge-4165",
-                    content_hash=SHA_A,
+                    schema_version=recovery_effect.schema_version,
+                    contract_id=recovery_effect.effect_id,
+                    content_hash=recovery_effect.content_hash,
                 ),
                 effect_class="merge_pull_request",
                 issue=issue,
                 action="read_live_authority",
                 authority_readbacks=(
                     RecoveryAuthorityReadback(
-                        authority_id="github:pull-request:4200",
+                        authority_id=(
+                            f"github:{issue.repository}/pulls/4200"
+                        ),
                         issue=issue,
                         pull_request_number=4200,
                         exact_head_sha=SHA_D,
@@ -441,23 +489,37 @@ def test_contracts_round_trip_canonically() -> None:
     plan = _plan(issue, initiation)
     worker = _worker_result(issue, plan)
     review = _review_result(issue, plan)
-    event = ReducerEvent(
-        event_id="event-1",
+    event_plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    event_subject = _authority(issue)
+    event_result_ref = ContractRef(
+        schema_version=worker.schema_version,
+        contract_id=worker.result_id,
+        content_hash=worker.content_hash,
+    )
+    event_input_hash = delivery_event_input_hash(
         run_id="run-4165",
-        plan_ref=ContractRef(
-            schema_version=plan.schema_version,
-            contract_id=plan.plan_id,
-            content_hash=plan.content_hash,
-        ),
+        plan_ref=event_plan_ref,
         sequence=1,
         event_type="worker_result_recorded",
-        subject_authority=_authority(issue),
+        subject_authority=event_subject,
         effect_ref=None,
-        result_ref=ContractRef(
-            schema_version=worker.schema_version,
-            contract_id=worker.result_id,
-            content_hash=worker.content_hash,
-        ),
+        result_ref=event_result_ref,
+        exception=None,
+    )
+    event = ReducerEvent(
+        event_id=delivery_event_id(event_input_hash),
+        input_hash=event_input_hash,
+        run_id="run-4165",
+        plan_ref=event_plan_ref,
+        sequence=1,
+        event_type="worker_result_recorded",
+        subject_authority=event_subject,
+        effect_ref=None,
+        result_ref=event_result_ref,
         exception=None,
         provenance=_provenance("event-1"),
     )
@@ -523,6 +585,72 @@ def test_contracts_round_trip_canonically() -> None:
         is event
     )
 
+    effect_ref = ContractRef(
+        schema_version=effect.schema_version,
+        contract_id=effect.effect_id,
+        content_hash=effect.content_hash,
+    )
+    effect_event_input_hash = delivery_event_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence + 1,
+        event_type="effect_succeeded",
+        subject_authority=_authority(issue),
+        effect_ref=effect_ref,
+        result_ref=None,
+        exception=None,
+    )
+    effect_event = ReducerEvent(
+        event_id=delivery_event_id(effect_event_input_hash),
+        input_hash=effect_event_input_hash,
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence + 1,
+        event_type="effect_succeeded",
+        subject_authority=_authority(issue),
+        effect_ref=effect_ref,
+        result_ref=None,
+        exception=None,
+        provenance=_provenance("effect-event"),
+    )
+    assert (
+        validate_reducer_event_evidence(
+            effect_event,
+            plan=plan,
+            effect=effect,
+        )
+        is effect_event
+    )
+
+    early_effect_event_hash = delivery_event_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence,
+        event_type="effect_succeeded",
+        subject_authority=_authority(issue),
+        effect_ref=effect_ref,
+        result_ref=None,
+        exception=None,
+    )
+    early_effect_event = effect_event.model_copy(
+        update={
+            "event_id": delivery_event_id(early_effect_event_hash),
+            "input_hash": early_effect_event_hash,
+            "sequence": effect.sequence,
+        }
+    )
+    with pytest.raises(ValueError, match="follow effect"):
+        validate_reducer_event_evidence(
+            early_effect_event,
+            plan=plan,
+            effect=effect,
+        )
+
+    invalid_event_identity = event.model_dump(mode="json")
+    invalid_event_identity["event_id"] = "caller-selected-event"
+    with pytest.raises(ValidationError, match="derive from semantic input"):
+        parse_delivery_contract(invalid_event_identity)
+
     duplicate_key_json = initiation.canonical_json().replace(
         f'"schema_version":"{initiation.schema_version}"',
         (
@@ -536,6 +664,7 @@ def test_contracts_round_trip_canonically() -> None:
 
     invalid_event = event.model_dump(mode="json")
     invalid_event["event_type"] = "run_started"
+    invalid_event["sequence"] = 0
     invalid_event["subject_authority"] = None
     with pytest.raises(ValidationError, match="result ref"):
         parse_delivery_contract(invalid_event)
@@ -578,6 +707,9 @@ def test_contracts_round_trip_canonically() -> None:
     fresh_effect_payload["expected_authorities"] = [
         fresh_authority.model_dump(mode="json")
     ]
+    fresh_effect_payload["provenance"]["created_at"] = (
+        "2026-07-27T10:00:01Z"
+    )
     fresh_effect = parse_delivery_contract(fresh_effect_payload)
     assert isinstance(fresh_effect, ReducerEffect)
     assert validate_reducer_effect_evidence(fresh_effect, plan=plan) is fresh_effect
@@ -629,9 +761,23 @@ def test_contracts_round_trip_canonically() -> None:
         _authority(issue, labels=("type:task", "agent:ready"))
 
     foreign_event_payload = event.model_dump(mode="json")
-    foreign_event_payload["subject_authority"] = _authority(
-        _issue(9999, SHA_C)
-    ).model_dump(mode="json")
+    foreign_event_subject = _authority(_issue(9999, SHA_C))
+    foreign_event_payload["subject_authority"] = (
+        foreign_event_subject.model_dump(mode="json")
+    )
+    foreign_event_payload["input_hash"] = delivery_event_input_hash(
+        run_id=event.run_id,
+        plan_ref=event.plan_ref,
+        sequence=event.sequence,
+        event_type=event.event_type,
+        subject_authority=foreign_event_subject,
+        effect_ref=event.effect_ref,
+        result_ref=event.result_ref,
+        exception=event.exception,
+    )
+    foreign_event_payload["event_id"] = delivery_event_id(
+        foreign_event_payload["input_hash"]
+    )
     foreign_event = parse_delivery_contract(foreign_event_payload)
     assert isinstance(foreign_event, ReducerEvent)
     with pytest.raises(ValueError, match="subject contradicts"):
@@ -645,19 +791,32 @@ def test_contracts_round_trip_canonically() -> None:
     foreign_worker_payload["issue"] = _issue(9999, SHA_C).model_dump(mode="json")
     foreign_worker = parse_delivery_contract(foreign_worker_payload)
     assert isinstance(foreign_worker, StructuredWorkerResult)
-    foreign_result_event = ReducerEvent(
-        event_id="event-foreign-result",
+    foreign_event_subject = _authority(foreign_worker.issue)
+    foreign_result_ref = ContractRef(
+        schema_version=foreign_worker.schema_version,
+        contract_id=foreign_worker.result_id,
+        content_hash=foreign_worker.content_hash,
+    )
+    foreign_event_input_hash = delivery_event_input_hash(
         run_id=foreign_worker.run_id,
         plan_ref=foreign_worker.plan_ref,
         sequence=3,
         event_type="worker_result_recorded",
-        subject_authority=_authority(foreign_worker.issue),
+        subject_authority=foreign_event_subject,
         effect_ref=None,
-        result_ref=ContractRef(
-            schema_version=foreign_worker.schema_version,
-            contract_id=foreign_worker.result_id,
-            content_hash=foreign_worker.content_hash,
-        ),
+        result_ref=foreign_result_ref,
+        exception=None,
+    )
+    foreign_result_event = ReducerEvent(
+        event_id=delivery_event_id(foreign_event_input_hash),
+        input_hash=foreign_event_input_hash,
+        run_id=foreign_worker.run_id,
+        plan_ref=foreign_worker.plan_ref,
+        sequence=3,
+        event_type="worker_result_recorded",
+        subject_authority=foreign_event_subject,
+        effect_ref=None,
+        result_ref=foreign_result_ref,
         exception=None,
         provenance=_provenance("event-foreign-result"),
     )
@@ -722,6 +881,19 @@ def test_contracts_round_trip_canonically() -> None:
     missing_label_event_payload["subject_authority"] = (
         missing_label_authority.model_dump(mode="json")
     )
+    missing_label_event_payload["input_hash"] = delivery_event_input_hash(
+        run_id=event.run_id,
+        plan_ref=event.plan_ref,
+        sequence=event.sequence,
+        event_type=event.event_type,
+        subject_authority=missing_label_authority,
+        effect_ref=event.effect_ref,
+        result_ref=event.result_ref,
+        exception=event.exception,
+    )
+    missing_label_event_payload["event_id"] = delivery_event_id(
+        missing_label_event_payload["input_hash"]
+    )
     missing_label_event = parse_delivery_contract(missing_label_event_payload)
     assert isinstance(missing_label_event, ReducerEvent)
     with pytest.raises(ValueError, match="subject contradicts"):
@@ -731,13 +903,28 @@ def test_contracts_round_trip_canonically() -> None:
             worker_result=worker,
         )
 
-    label_change_event = ReducerEvent(
-        event_id="event-label-change",
+    label_change_subject = _authority(
+        issue,
+        labels=("agent:ready", "type:task"),
+    )
+    label_change_input_hash = delivery_event_input_hash(
         run_id="run-4165",
         plan_ref=effect_plan_ref,
         sequence=3,
         event_type="authority_changed",
-        subject_authority=_authority(issue, labels=("agent:ready", "type:task")),
+        subject_authority=label_change_subject,
+        effect_ref=None,
+        result_ref=None,
+        exception=None,
+    )
+    label_change_event = ReducerEvent(
+        event_id=delivery_event_id(label_change_input_hash),
+        input_hash=label_change_input_hash,
+        run_id="run-4165",
+        plan_ref=effect_plan_ref,
+        sequence=3,
+        event_type="authority_changed",
+        subject_authority=label_change_subject,
         effect_ref=None,
         result_ref=None,
         exception=None,
@@ -826,13 +1013,13 @@ def test_plan_binds_scope_and_expected_authority() -> None:
     assert plan.dependency_waves[0].issues == plan.final_scope
     assert plan.expected_states[0].expected_contract_hash == issue.contract_hash
     assert plan.effect_allowlist == (
-        "claim_issue",
-        "launch_worker",
         "await_ci",
-        "request_review",
-        "merge_pull_request",
+        "claim_issue",
         "close_issue",
+        "launch_worker",
+        "merge_pull_request",
         "record_delivery_receipt",
+        "request_review",
     )
     assert validate_delivery_plan_evidence(plan, initiation=initiation) is plan
 
@@ -845,6 +1032,11 @@ def test_plan_binds_scope_and_expected_authority() -> None:
     )
     with pytest.raises(ValueError, match="follow initiation"):
         validate_delivery_plan_evidence(early_plan, initiation=initiation)
+
+    payload = plan.model_dump(mode="json")
+    payload["effect_allowlist"] = list(reversed(payload["effect_allowlist"]))
+    with pytest.raises(ValidationError, match="canonical sorted order"):
+        parse_delivery_contract(payload)
 
     payload = plan.model_dump(mode="json")
     payload["input_authorities"] = []
@@ -984,6 +1176,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     plan = _plan(issue, initiation)
     worker = _worker_result(issue, plan)
     review = _review_result(issue, plan)
+    recovery_effect = _recovery_effect(issue, plan)
     receipt = _receipt(issue, initiation, plan, worker, review)
 
     proof = receipt.issue_proofs[0]
@@ -1007,6 +1200,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(recovery_effect,),
         )
         is receipt
     )
@@ -1135,7 +1329,11 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     with pytest.raises(ValidationError):
         CheckEvidence(
             check_name="Unit tests (not pg)",
-            authority_id="checks:unit-tests:invalid-sha",
+            repository=issue.repository,
+            check_run_id="invalid-sha",
+            authority_id=(
+                f"github:{issue.repository}/check-runs/invalid-sha"
+            ),
             pull_request_number=4200,
             status="passed",
             exact_head_sha="a" * 41,
@@ -1156,6 +1354,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(recovery_effect,),
         )
 
     payload = receipt.model_dump(mode="json")
@@ -1171,7 +1370,29 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(recovery_effect,),
         )
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["check_evidence"][0][
+        "authority_id"
+    ] = "arbitrary:unresolved"
+    with pytest.raises(ValidationError, match="check authority ID"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["closure"][
+        "authority_id"
+    ] = "arbitrary:issue-authority"
+    with pytest.raises(ValidationError, match="issue authority"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["merge_identity"][
+        "authority_id"
+    ] = "arbitrary:pr-authority"
+    with pytest.raises(ValidationError, match="merge authority ID"):
+        parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["check_evidence"][0]["completed_at"] = (
@@ -1179,13 +1400,76 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     )
     late_check_receipt = parse_delivery_contract(payload)
     assert isinstance(late_check_receipt, DeliveryReceipt)
-    with pytest.raises(ValueError, match="accepted review"):
+    with pytest.raises(ValueError, match="precede review"):
         validate_delivery_receipt_evidence(
             late_check_receipt,
             initiation=initiation,
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(recovery_effect,),
+        )
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["check_evidence"][0]["completed_at"] = (
+        "2026-07-27T10:05:00Z"
+    )
+    payload["issue_proofs"][0]["merge_identity"]["merged_at"] = (
+        "2026-07-27T10:10:00Z"
+    )
+    payload["issue_proofs"][0]["closure"]["closed_at"] = (
+        "2026-07-27T10:11:00Z"
+    )
+    payload["recovery_history"][0]["authority_readbacks"][0][
+        "observed_at"
+    ] = "2026-07-27T10:10:00Z"
+    payload["recovery_history"][0]["occurred_at"] = (
+        "2026-07-27T10:10:00Z"
+    )
+    post_review_check_receipt = parse_delivery_contract(payload)
+    assert isinstance(post_review_check_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="precede review"):
+        validate_delivery_receipt_evidence(
+            post_review_check_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recovery_effect,),
+        )
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["effect_ref"]["contract_id"] = (
+        "foreign-effect"
+    )
+    payload["recovery_history"][0]["effect_ref"]["content_hash"] = SHA_C
+    foreign_effect_receipt = parse_delivery_contract(payload)
+    assert isinstance(foreign_effect_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="effect ref does not resolve"):
+        validate_delivery_receipt_evidence(
+            foreign_effect_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recovery_effect,),
+        )
+
+    payload = receipt.model_dump(mode="json")
+    payload["tcd_metrics"]["worker_starts"] = 0
+    payload["tcd_metrics"]["review_rounds"] = 0
+    payload["tcd_metrics"]["ci_wait_cycles"] = 0
+    payload["tcd_metrics"]["deterministic_transitions"] = 0
+    contradictory_tcd_receipt = parse_delivery_contract(payload)
+    assert isinstance(contradictory_tcd_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="TCD counters"):
+        validate_delivery_receipt_evidence(
+            contradictory_tcd_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recovery_effect,),
         )
 
     payload = receipt.model_dump(mode="json")
@@ -1238,6 +1522,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(late_worker,),
             review_results=(late_review,),
+            reducer_effects=(recovery_effect,),
         )
 
     closure_exception = DeliveryException(
@@ -1267,6 +1552,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(),
         )
         is partial_receipt
     )
@@ -1302,6 +1588,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(recovery_effect,),
         )
 
     payload = receipt.model_dump(mode="json")
@@ -1347,6 +1634,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(p3_review,),
+            reducer_effects=(recovery_effect,),
         )
         is p3_receipt
     )
@@ -1371,6 +1659,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(recovery_effect,),
         )
 
     substituted_issue = _issue(issue.issue_number, SHA_C)
@@ -1432,10 +1721,10 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
                 contract_id=failed_worker.result_id,
                 content_hash=failed_worker.content_hash,
             ).model_dump(mode="json"),
-                "review_result_ref": None,
-                "exact_head_sha": None,
-                "delivery_stage": "worker_terminal",
-                "merge_identity": None,
+            "review_result_ref": None,
+            "exact_head_sha": None,
+            "delivery_stage": "worker_terminal",
+            "merge_identity": None,
             "check_evidence": [],
             "review_disposition": None,
             "known_defects": [],
@@ -1452,6 +1741,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(failed_worker,),
             review_results=(),
+            reducer_effects=(),
         )
         is failed_receipt
     )
@@ -1480,6 +1770,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
                 plan=plan,
                 worker_results=(failed_worker,),
                 review_results=(),
+                reducer_effects=(),
             )
 
     terminal_fixtures = (
@@ -1541,6 +1832,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
                     plan=plan,
                     worker_results=(terminal_worker,),
                     review_results=(),
+                    reducer_effects=(),
                 )
 
     mismatched_plan_payload = plan.model_dump(mode="json")
@@ -1555,4 +1847,5 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=mismatched_plan,
             worker_results=(worker,),
             review_results=(review,),
+            reducer_effects=(recovery_effect,),
         )

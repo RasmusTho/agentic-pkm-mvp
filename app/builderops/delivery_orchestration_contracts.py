@@ -177,6 +177,15 @@ class Provenance(_StrictFrozenModel):
             tuple((item.source_type, item.source_id) for item in self.source_refs),
             "provenance source refs",
         )
+        if self.source_refs != tuple(
+            sorted(
+                self.source_refs,
+                key=lambda item: (item.source_type, item.source_id),
+            )
+        ):
+            raise ValueError(
+                "provenance source refs must use canonical sorted order"
+            )
         return self
 
 
@@ -197,6 +206,15 @@ class IssueScope(_StrictFrozenModel):
     issue_number: PositiveInt
     authority_id: NonEmptyStr
     contract_hash: Sha256
+
+    @model_validator(mode="after")
+    def _validate_authority_id(self) -> IssueScope:
+        expected = f"github:{self.repository}/issues/{self.issue_number}"
+        if self.authority_id != expected:
+            raise ValueError(
+                "issue scope authority ID must bind repository and issue"
+            )
+        return self
 
     @property
     def scope_key(self) -> tuple[str, int]:
@@ -309,6 +327,15 @@ class ApprovalEvidence(_StrictFrozenModel):
             tuple((item.source_type, item.source_id) for item in self.source_refs),
             "approval source refs",
         )
+        if self.source_refs != tuple(
+            sorted(
+                self.source_refs,
+                key=lambda item: (item.source_type, item.source_id),
+            )
+        ):
+            raise ValueError(
+                "approval source refs must use canonical sorted order"
+            )
         return self
 
 
@@ -391,6 +418,30 @@ class DeliveryInitiation(CanonicalDeliveryContract):
             tuple(item.authority_id for item in self.source_authorities),
             "source authority IDs",
         )
+        if self.requested_scope != tuple(
+            sorted(self.requested_scope, key=lambda item: item.scope_key)
+        ):
+            raise ValueError("requested scope must use canonical sorted order")
+        if self.exclusions != tuple(
+            sorted(self.exclusions, key=lambda item: item.scope_key)
+        ):
+            raise ValueError("scope exclusions must use canonical sorted order")
+        if self.source_authorities != tuple(
+            sorted(
+                self.source_authorities,
+                key=lambda item: item.authority_id,
+            )
+        ):
+            raise ValueError(
+                "source authorities must use canonical sorted order"
+            )
+        if any(
+            item.observed_at > self.approval_evidence.approved_at
+            for item in self.source_authorities
+        ):
+            raise ValueError(
+                "source authority observations must precede approval"
+            )
         authorities = {
             (item.authority_id, item.content_hash) for item in self.source_authorities
         }
@@ -432,6 +483,10 @@ class DependencyWave(_StrictFrozenModel):
         if not self.issues:
             raise ValueError("dependency wave must not be empty")
         _require_unique(tuple(item.scope_key for item in self.issues), "wave issues")
+        if self.issues != tuple(
+            sorted(self.issues, key=lambda item: item.scope_key)
+        ):
+            raise ValueError("wave issues must use canonical sorted order")
         return self
 
 
@@ -491,6 +546,39 @@ class DeliveryPlan(CanonicalDeliveryContract):
             tuple(item.authority_id for item in self.input_authorities),
             "input authority IDs",
         )
+        if self.final_scope != tuple(
+            sorted(self.final_scope, key=lambda item: item.scope_key)
+        ):
+            raise ValueError("final scope must use canonical sorted order")
+        if self.exclusions != tuple(
+            sorted(self.exclusions, key=lambda item: item.scope_key)
+        ):
+            raise ValueError("scope exclusions must use canonical sorted order")
+        if self.input_authorities != tuple(
+            sorted(
+                self.input_authorities,
+                key=lambda item: item.authority_id,
+            )
+        ):
+            raise ValueError(
+                "input authorities must use canonical sorted order"
+            )
+        if self.expected_states != tuple(
+            sorted(
+                self.expected_states,
+                key=lambda item: item.issue.scope_key,
+            )
+        ):
+            raise ValueError(
+                "expected states must use canonical sorted order"
+            )
+        if any(
+            item.observed_at > self.provenance.created_at
+            for item in self.input_authorities
+        ):
+            raise ValueError(
+                "input authority observations must precede plan provenance"
+            )
         if tuple(wave.wave_index for wave in self.dependency_waves) != tuple(
             range(len(self.dependency_waves))
         ):
@@ -562,6 +650,10 @@ class DeliveryPlan(CanonicalDeliveryContract):
         if not self.effect_allowlist:
             raise ValueError("effect allowlist must not be empty")
         _require_unique(self.effect_allowlist, "effect allowlist")
+        if self.effect_allowlist != tuple(sorted(self.effect_allowlist)):
+            raise ValueError(
+                "effect allowlist must use canonical sorted order"
+            )
         return self
 
 
@@ -652,7 +744,67 @@ class DeliveryException(_StrictFrozenModel):
         if not self.evidence_refs:
             raise ValueError("delivery exception must carry evidence")
         _require_unique(self.evidence_refs, "exception evidence refs")
+        if self.evidence_refs != tuple(sorted(self.evidence_refs)):
+            raise ValueError(
+                "exception evidence refs must use canonical sorted order"
+            )
         return self
+
+
+def delivery_event_input_hash(
+    *,
+    run_id: str,
+    plan_ref: ContractRef,
+    sequence: int,
+    event_type: str,
+    subject_authority: AuthoritySnapshot | None,
+    effect_ref: ContractRef | None,
+    result_ref: ContractRef | None,
+    exception: DeliveryException | None,
+) -> str:
+    """Hash the complete semantic input to one reducer event."""
+
+    authority_semantics = (
+        {
+            "authority_type": subject_authority.authority_type,
+            "authority_id": subject_authority.authority_id,
+            "content_hash": subject_authority.content_hash,
+            "observed_state": subject_authority.observed_state,
+            "observed_labels": list(subject_authority.observed_labels),
+        }
+        if subject_authority is not None
+        else None
+    )
+    return canonical_hash(
+        {
+            "run_id": run_id,
+            "plan_ref": plan_ref.model_dump(mode="json"),
+            "sequence": sequence,
+            "event_type": event_type,
+            "subject_authority": authority_semantics,
+            "effect_ref": (
+                effect_ref.model_dump(mode="json")
+                if effect_ref is not None
+                else None
+            ),
+            "result_ref": (
+                result_ref.model_dump(mode="json")
+                if result_ref is not None
+                else None
+            ),
+            "exception": (
+                exception.model_dump(mode="json")
+                if exception is not None
+                else None
+            ),
+        }
+    )
+
+
+def delivery_event_id(input_hash: str) -> str:
+    """Derive the sole event identity from validated semantic input."""
+
+    return f"builderops.delivery-event.v1:{input_hash}"
 
 
 class ReducerEvent(CanonicalDeliveryContract):
@@ -661,6 +813,7 @@ class ReducerEvent(CanonicalDeliveryContract):
         "builderops.delivery-reducer-event.v1"
     ] = REDUCER_EVENT_VERSION
     event_id: NonEmptyStr
+    input_hash: Sha256
     run_id: NonEmptyStr
     plan_ref: ContractRef
     sequence: NonNegativeInt
@@ -684,6 +837,10 @@ class ReducerEvent(CanonicalDeliveryContract):
     def _validate_event(self) -> ReducerEvent:
         if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
             raise ValueError("reducer event must bind DeliveryPlan.v1")
+        if (self.event_type == "run_started") != (self.sequence == 0):
+            raise ValueError(
+                "run-started must be sequence zero and later events must not"
+            )
         expected: dict[
             str,
             tuple[
@@ -735,6 +892,30 @@ class ReducerEvent(CanonicalDeliveryContract):
         if (self.exception is not None) != requires_exception:
             raise ValueError(
                 f"{self.event_type} typed exception does not match event contract"
+            )
+        if (
+            self.subject_authority is not None
+            and self.subject_authority.observed_at
+            > self.provenance.created_at
+        ):
+            raise ValueError(
+                "event authority observation must precede event provenance"
+            )
+        expected_input_hash = delivery_event_input_hash(
+            run_id=self.run_id,
+            plan_ref=self.plan_ref,
+            sequence=self.sequence,
+            event_type=self.event_type,
+            subject_authority=self.subject_authority,
+            effect_ref=self.effect_ref,
+            result_ref=self.result_ref,
+            exception=self.exception,
+        )
+        if self.input_hash != expected_input_hash:
+            raise ValueError("reducer event input hash must bind semantic input")
+        if self.event_id != delivery_event_id(expected_input_hash):
+            raise ValueError(
+                "reducer event identity must derive from semantic input"
             )
         return self
 
@@ -811,6 +992,13 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError("reducer effect must bind DeliveryPlan.v1")
         if not self.expected_authorities:
             raise ValueError("reducer effect must bind expected live authority")
+        if any(
+            item.observed_at > self.provenance.created_at
+            for item in self.expected_authorities
+        ):
+            raise ValueError(
+                "effect authority observations must precede effect provenance"
+            )
         _require_unique(
             tuple(item.authority_id for item in self.expected_authorities),
             "effect expected authority IDs",
@@ -904,6 +1092,14 @@ class StructuredWorkerResult(CanonicalDeliveryContract):
             tuple(item.name for item in self.validations),
             "validation evidence",
         )
+        if self.changed_files != tuple(sorted(self.changed_files)):
+            raise ValueError("changed files must use canonical sorted order")
+        if self.validations != tuple(
+            sorted(self.validations, key=lambda item: item.name)
+        ):
+            raise ValueError(
+                "validation evidence must use canonical sorted order"
+            )
         if self.status == "completed":
             if self.exact_head_sha is None or self.pull_request_number is None:
                 raise ValueError(
@@ -994,6 +1190,16 @@ class ReviewResult(CanonicalDeliveryContract):
             "review finding IDs",
         )
         _require_unique(self.known_defect_refs, "known defect refs")
+        if self.findings != tuple(
+            sorted(self.findings, key=lambda item: item.finding_id)
+        ):
+            raise ValueError(
+                "review findings must use canonical sorted order"
+            )
+        if self.known_defect_refs != tuple(sorted(self.known_defect_refs)):
+            raise ValueError(
+                "known defect refs must use canonical sorted order"
+            )
         has_blocker = any(
             finding.severity in {"P0", "P1"}
             or finding.protected_risk
@@ -1043,6 +1249,8 @@ def validate_reducer_effect_evidence(
     )
     if effect.plan_ref != expected_plan_ref:
         raise ValueError("reducer effect does not bind the supplied plan")
+    if effect.provenance.created_at < plan.provenance.created_at:
+        raise ValueError("reducer effect must follow plan provenance")
     planned_scope = {item.scope_key: item for item in plan.final_scope}
     if planned_scope.get(effect.issue.scope_key) != effect.issue:
         raise ValueError("reducer effect issue is outside exact plan scope")
@@ -1103,6 +1311,8 @@ def validate_reducer_event_evidence(
     )
     if event.plan_ref != expected_plan_ref:
         raise ValueError("reducer event does not bind the supplied plan")
+    if event.provenance.created_at < plan.provenance.created_at:
+        raise ValueError("reducer event must follow plan provenance")
 
     referenced_issue: IssueScope | None = None
     if event.event_type in {"effect_succeeded", "effect_failed"}:
@@ -1116,8 +1326,14 @@ def validate_reducer_event_evidence(
         if event.effect_ref != expected_effect_ref:
             raise ValueError("reducer event effect ref does not resolve")
         validate_reducer_effect_evidence(effect, plan=plan)
-        if effect.run_id != event.run_id:
-            raise ValueError("reducer event and effect run IDs must match")
+        if (
+            effect.run_id != event.run_id
+            or event.sequence <= effect.sequence
+            or event.provenance.created_at < effect.provenance.created_at
+        ):
+            raise ValueError(
+                "reducer effect-result event must match run and follow effect"
+            )
         referenced_issue = effect.issue
     elif event.event_type == "worker_result_recorded":
         if worker_result is None:
@@ -1131,6 +1347,8 @@ def validate_reducer_event_evidence(
             event.result_ref != expected_result_ref
             or worker_result.plan_ref != expected_plan_ref
             or worker_result.run_id != event.run_id
+            or event.provenance.created_at
+            < worker_result.provenance.created_at
         ):
             raise ValueError("reducer worker-result event does not resolve")
         referenced_issue = worker_result.issue
@@ -1147,6 +1365,8 @@ def validate_reducer_event_evidence(
             or review_result.plan_ref != expected_plan_ref
             or review_result.run_id != event.run_id
             or review_result.policy_profile != plan.policy_profile
+            or event.provenance.created_at
+            < review_result.provenance.created_at
         ):
             raise ValueError("reducer review-result event does not resolve")
         referenced_issue = review_result.issue
@@ -1225,12 +1445,31 @@ def validate_reducer_event_evidence(
 
 class CheckEvidence(_StrictFrozenModel):
     check_name: NonEmptyStr
+    repository: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+        ),
+    ]
+    check_run_id: NonEmptyStr
     authority_id: NonEmptyStr
     pull_request_number: PositiveInt
     status: Literal["passed", "failed", "skipped"]
     exact_head_sha: GitSha
     completed_at: UtcTimestamp
     evidence_ref: NonEmptyStr
+
+    @model_validator(mode="after")
+    def _validate_authority_id(self) -> CheckEvidence:
+        expected = (
+            f"github:{self.repository}/check-runs/{self.check_run_id}"
+        )
+        if self.authority_id != expected:
+            raise ValueError(
+                "check authority ID must bind repository and check run"
+            )
+        return self
 
 
 class KnownDefectRef(_StrictFrozenModel):
@@ -1254,6 +1493,13 @@ class KnownDefectRef(_StrictFrozenModel):
 
 
 class MergeIdentity(_StrictFrozenModel):
+    repository: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+        ),
+    ]
     authority_id: NonEmptyStr
     pull_request_number: PositiveInt
     exact_head_sha: GitSha
@@ -1261,6 +1507,17 @@ class MergeIdentity(_StrictFrozenModel):
     merge_commit_sha: GitSha
     merged_at: UtcTimestamp
     merged_by: ActorIdentity
+
+    @model_validator(mode="after")
+    def _validate_authority_id(self) -> MergeIdentity:
+        expected = (
+            f"github:{self.repository}/pulls/{self.pull_request_number}"
+        )
+        if self.authority_id != expected:
+            raise ValueError(
+                "merge authority ID must bind repository and pull request"
+            )
+        return self
 
 
 class ClosureEvidence(_StrictFrozenModel):
@@ -1310,15 +1567,31 @@ class IssueDeliveryProof(_StrictFrozenModel):
             tuple(item.check_name for item in self.check_evidence),
             "check evidence",
         )
+        if self.check_evidence != tuple(
+            sorted(self.check_evidence, key=lambda item: item.check_name)
+        ):
+            raise ValueError(
+                "check evidence must use canonical sorted order"
+            )
         if self.exact_head_sha is None and (
             self.check_evidence or self.merge_identity is not None
         ):
             raise ValueError("headless proof cannot carry checks or merge identity")
         if any(item.exact_head_sha != self.exact_head_sha for item in self.check_evidence):
             raise ValueError("check evidence must bind the exact head")
+        if any(
+            item.repository.casefold() != self.issue.repository.casefold()
+            for item in self.check_evidence
+        ):
+            raise ValueError("check evidence must bind the proof repository")
         if self.merge_identity is not None:
             if self.merge_identity.exact_head_sha != self.exact_head_sha:
                 raise ValueError("merge identity must bind the exact head")
+            if (
+                self.merge_identity.repository.casefold()
+                != self.issue.repository.casefold()
+            ):
+                raise ValueError("merge identity must bind the proof repository")
             if self.merge_identity.pull_request_number < 1:
                 raise ValueError("merge identity must bind a pull request")
         if self.delivery_stage == "closed":
@@ -1356,6 +1629,8 @@ class IssueDeliveryProof(_StrictFrozenModel):
                 )
             if self.closure.repository.casefold() != self.issue.repository.casefold():
                 raise ValueError("closure evidence must bind the proof repository")
+            if self.closure.authority_id != self.issue.authority_id:
+                raise ValueError("closure evidence must bind the issue authority")
             if self.exact_head_sha != self.closure.exact_head_sha:
                 raise ValueError("closure evidence must bind the exact head")
             if (
@@ -1380,6 +1655,12 @@ class IssueDeliveryProof(_StrictFrozenModel):
             tuple(item.finding_hash for item in self.known_defects),
             "known defect finding hashes",
         )
+        if self.known_defects != tuple(
+            sorted(self.known_defects, key=lambda item: item.registry_ref)
+        ):
+            raise ValueError(
+                "known defect evidence must use canonical sorted order"
+            )
         return self
 
 
@@ -1416,6 +1697,15 @@ class RecoveryStep(_StrictFrozenModel):
             tuple(item.evidence_ref for item in self.authority_readbacks),
             "recovery authority readback evidence refs",
         )
+        if self.authority_readbacks != tuple(
+            sorted(
+                self.authority_readbacks,
+                key=lambda item: item.evidence_ref,
+            )
+        ):
+            raise ValueError(
+                "recovery readbacks must use canonical sorted order"
+            )
         if any(item.issue != self.issue for item in self.authority_readbacks):
             raise ValueError("recovery readbacks must bind the exact step issue")
         if any(
@@ -1496,6 +1786,27 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             tuple(item.issue.scope_key for item in self.issue_proofs),
             "receipt issue proofs",
         )
+        if self.requested_scope != tuple(
+            sorted(self.requested_scope, key=lambda item: item.scope_key)
+        ):
+            raise ValueError(
+                "receipt requested scope must use canonical sorted order"
+            )
+        if self.final_scope != tuple(
+            sorted(self.final_scope, key=lambda item: item.scope_key)
+        ):
+            raise ValueError(
+                "receipt final scope must use canonical sorted order"
+            )
+        if self.issue_proofs != tuple(
+            sorted(
+                self.issue_proofs,
+                key=lambda item: item.issue.scope_key,
+            )
+        ):
+            raise ValueError(
+                "receipt issue proofs must use canonical sorted order"
+            )
         proof_scope = {
             item.issue.scope_key: item.issue for item in self.issue_proofs
         }
@@ -1717,6 +2028,7 @@ def validate_delivery_receipt_evidence(
     plan: DeliveryPlan,
     worker_results: tuple[StructuredWorkerResult, ...],
     review_results: tuple[ReviewResult, ...],
+    reducer_effects: tuple[ReducerEffect, ...],
 ) -> DeliveryReceipt:
     """Resolve every receipt reference against immutable evidence and exact scope."""
 
@@ -1751,8 +2063,64 @@ def validate_delivery_receipt_evidence(
 
     workers = {item.result_id: item for item in worker_results}
     reviews = {item.result_id: item for item in review_results}
-    if len(workers) != len(worker_results) or len(reviews) != len(review_results):
-        raise ValueError("structured result IDs must be unique")
+    effects = {item.effect_id: item for item in reducer_effects}
+    if (
+        len(workers) != len(worker_results)
+        or len(reviews) != len(review_results)
+        or len(effects) != len(reducer_effects)
+    ):
+        raise ValueError("structured result and effect IDs must be unique")
+    proof_by_scope = {
+        proof.issue.scope_key: proof for proof in receipt.issue_proofs
+    }
+    used_effects: set[str] = set()
+    pr_bound_effect_classes = {
+        "await_ci",
+        "request_review",
+        "merge_pull_request",
+        "close_issue",
+        "record_known_defect",
+        "record_delivery_receipt",
+    }
+    for step in receipt.recovery_history:
+        effect = effects.get(step.effect_ref.contract_id)
+        proof = proof_by_scope[step.issue.scope_key]
+        if effect is None or step.effect_ref != ContractRef(
+            schema_version=effect.schema_version,
+            contract_id=effect.effect_id,
+            content_hash=effect.content_hash,
+        ):
+            raise ValueError("recovery effect ref does not resolve")
+        validate_reducer_effect_evidence(effect, plan=plan)
+        expected_pr: int | None = None
+        if proof.merge_identity is not None:
+            expected_pr = proof.merge_identity.pull_request_number
+        else:
+            for readback in step.authority_readbacks:
+                if readback.pull_request_number is not None:
+                    expected_pr = readback.pull_request_number
+                    break
+        if (
+            effect.run_id != receipt.run_id
+            or effect.plan_ref != expected_plan_ref
+            or effect.effect_class != step.effect_class
+            or effect.issue != step.issue
+            or effect.provenance.created_at > step.occurred_at
+            or (
+                effect.effect_class in pr_bound_effect_classes
+                and (
+                    effect.pull_request_number != expected_pr
+                    or effect.exact_head_sha != proof.exact_head_sha
+                )
+            )
+        ):
+            raise ValueError(
+                "recovery effect must bind run, plan, class, issue, PR, head, "
+                "and chronology"
+            )
+        used_effects.add(effect.effect_id)
+    if used_effects != set(effects):
+        raise ValueError("every supplied recovery effect must be referenced")
     used_workers: set[str] = set()
     used_reviews: set[str] = set()
     proof_outcomes: list[
@@ -1860,6 +2228,13 @@ def validate_delivery_receipt_evidence(
                 raise ValueError(
                     "review evidence must follow worker within receipt chronology"
                 )
+            if any(
+                item.completed_at > review.provenance.created_at
+                for item in proof.check_evidence
+            ):
+                raise ValueError(
+                    "required check evidence must precede review evidence"
+                )
         elif proof.review_disposition is not None or proof.known_defects:
             raise ValueError("receipt proof carries review evidence without a review")
         required_checks = set(plan.policy_profile.required_check_names)
@@ -1958,6 +2333,17 @@ def validate_delivery_receipt_evidence(
     if receipt.terminal_outcome != expected_terminal_outcome:
         raise ValueError(
             "receipt terminal outcome contradicts resolved issue proofs"
+        )
+    checked_proofs = sum(bool(proof.check_evidence) for proof in receipt.issue_proofs)
+    if (
+        receipt.tcd_metrics.worker_starts < len(worker_results)
+        or receipt.tcd_metrics.review_rounds < len(review_results)
+        or receipt.tcd_metrics.ci_wait_cycles < checked_proofs
+        or receipt.tcd_metrics.deterministic_transitions
+        < len(receipt.issue_proofs) + len(receipt.recovery_history)
+    ):
+        raise ValueError(
+            "TCD counters must not contradict receipt evidence"
         )
     return receipt
 
@@ -2070,6 +2456,8 @@ __all__ = [
     "WORKER_RESULT_VERSION",
     "canonical_hash",
     "canonical_json",
+    "delivery_event_id",
+    "delivery_event_input_hash",
     "delivery_effect_idempotency_key",
     "delivery_effect_input_hash",
     "delivery_initiation_approval_hash",
