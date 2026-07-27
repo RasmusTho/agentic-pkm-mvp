@@ -235,6 +235,30 @@ low-convergence circuit breaker. A reviewer remains independent, current-SHA CI 
 and issue acceptance/`Verify:`, authority, verified-merge, and closure gates remain fail-closed
 regardless of finding severity.
 
+##### Dispatcher receipt compatibility
+
+The current `verification_closer_receipt` / `VerificationAgentLoop` contract can durably represent
+only `blocking` and `clean` review events; it has no lossless P2 disposition or deferred-Issue
+binding. Do not encode a P2-bearing review as `clean`, place an Issue URL in an otherwise
+unvalidated `receipt_ids` list, or emit a dispatcher `delivered` receipt for it. Any of those would
+create false-green closure evidence and therefore be a protected P1 defect.
+
+When the independent review has a true P2, use the live-evidence closure path in this skill:
+
+1. Keep the original GitHub review finding/thread as the stable finding record.
+2. Create or update the defect Issue through `bug-to-issue`, then reply on that finding/thread with
+   the Issue reference and mark or resolve the thread as deferred.
+3. Record the PR head SHA, finding URL, Issue URL, and reply/disposition URL in the delivery
+   receipt.
+4. Re-read those GitHub artifacts immediately before merge and fail closed if any link, severity,
+   or disposition is missing or contradictory.
+
+This live-evidence path is the closure authority for that PR. A dispatcher run that encounters the
+P2 must return `inconclusive` / `blocked_technical` before terminal delivery and hand off to this
+path; it must not manufacture a clean review event. Completing the P2 disposition does not trigger
+another review round. Dispatcher-native delivery for P2-bearing reviews remains unavailable until
+its schema, validator, ledger, and tests can represent and validate the complete disposition.
+
 #### Re-triggering after a fix
 
 One round is not sufficient once a P0/P1 finding leads to a code change — a fix can introduce a

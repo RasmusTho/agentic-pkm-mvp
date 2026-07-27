@@ -179,6 +179,33 @@ consume no attempt budget and cannot trigger those loops. This routing does not
 relax independent review, current-head-SHA CI, issue acceptance/`Verify:`
 evidence, authority checks, verified-merge controls, or closure gates.
 
+### Dispatcher Receipt Compatibility
+
+The implemented `verification_closer_receipt` and `VerificationAgentLoop`
+contracts represent only `blocking` and `clean` review events. They do not
+losslessly represent P2 severity, deferred disposition, and the bound defect
+Issue. Consequently:
+
+- A P2-bearing review must not be encoded as `clean` or accepted as a
+  dispatcher `delivered` receipt.
+- An arbitrary Issue reference in `receipt_ids` is not sufficient evidence;
+  the current validator does not bind it to a finding or disposition.
+- A dispatcher run that encounters a P2 must stop before terminal delivery with
+  `inconclusive` / `blocked_technical` and hand off to the live-evidence closure
+  path in `verification-and-closure`; it must not manufacture a clean event.
+- The live-evidence path must re-read the current PR head, original GitHub
+  finding/thread, bug-intake Issue, and reply/disposition reference immediately
+  before merge. Its delivery receipt records all four identities. Missing or
+  contradictory evidence is a protected P1 false-green closure defect.
+- Once that live evidence is complete, the P2 permits merge without a repair or
+  another review round. Dispatcher-native delivery for P2-bearing reviews
+  remains unavailable until its schema, validator, ledger, and behavioral tests
+  validate the complete disposition.
+
+This compatibility rule preserves autonomous closure through the existing
+GitHub evidence path without falsely claiming that the current executable
+dispatcher receipt can carry P2 semantics.
+
 ## CI Repair Gate Contract
 
 The CI repair gate analyzes failing checks and proposes or performs repair only

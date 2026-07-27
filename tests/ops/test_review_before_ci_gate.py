@@ -26,6 +26,9 @@ DEV_WORKFLOW = REPO_ROOT / "docs/development/DEV_WORKFLOW.md"
 PROCESS_MAP = REPO_ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 DISPATCHER_CONTRACT = REPO_ROOT / "docs/AGENT_ISSUE_DISPATCHER.md"
 AGENTS = REPO_ROOT / "AGENTS.md"
+PR_HOT_PATH = REPO_ROOT / "docs/development/PR_HOT_PATH.md"
+PR_ESCALATION_PATHS = REPO_ROOT / "docs/development/PR_ESCALATION_PATHS.md"
+VERIFICATION_AGENT_LOOP = REPO_ROOT / "app/dispatcher/verification_agent_loop.py"
 
 
 def _bare_repo_wide_not_pg_commands(text: str) -> list[str]:
@@ -487,10 +490,45 @@ def test_severity_routing_preserves_fail_closed_delivery_gates() -> None:
     assert "closure gates remain fail-closed" in closure_skill
 
 
+def test_pr_workflow_uses_the_canonical_severity_dispositions() -> None:
+    for path in (PR_HOT_PATH, PR_ESCALATION_PATHS):
+        surface = " ".join(path.read_text(encoding="utf-8").split())
+        assert "P0/P1 correctness, contract, or safety defect" in surface
+        assert "P2 real defect accepted for this PR" in surface
+        assert "leave the PR code unchanged" in surface
+        assert "through `bug-to-issue`" in surface
+        assert "without another review round" in surface
+        assert "P3 informational advice or non-defect suggestion" in surface
+        assert "no valid `blocking P2`" in surface
+        assert "fix if cheap" not in surface
+
+
+def test_p2_dispatcher_compatibility_fails_closed_until_receipts_are_lossless() -> None:
+    contract = " ".join(REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8").split())
+    closure_skill = " ".join(VERIFICATION_SKILL.read_text(encoding="utf-8").split())
+    agent_loop = VERIFICATION_AGENT_LOOP.read_text(encoding="utf-8")
+
+    # The executable ledger still has only blocking/clean outcomes. Governance
+    # must not misrepresent a P2 as clean while that remains true.
+    assert 'normalized not in {"blocking", "clean"}' in agent_loop
+    assert "review outcome must be blocking or clean" in agent_loop
+
+    for surface in (contract, closure_skill):
+        assert "must not" in surface
+        assert "P2-bearing review" in surface
+        assert "dispatcher `delivered` receipt" in surface
+        assert "must not manufacture a clean" in surface
+        assert "live-evidence" in surface
+        assert "original GitHub" in surface
+        assert "Issue" in surface
+        assert "reply/disposition" in surface
+        assert "immediately before merge" in surface
+        assert "protected P1" in surface
+        assert "without" in surface and "another review round" in surface
+
+
 def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> None:
-    hot_path = (REPO_ROOT / "docs/development/PR_HOT_PATH.md").read_text(
-        encoding="utf-8"
-    )
+    hot_path = PR_HOT_PATH.read_text(encoding="utf-8")
 
     assert "--risk-assessment-complete" in hot_path
     assert "A declared high-risk surface is never bypassable" in hot_path
