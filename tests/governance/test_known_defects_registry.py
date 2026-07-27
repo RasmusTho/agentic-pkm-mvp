@@ -54,7 +54,6 @@ class FakeGateway:
                 label["name"] if isinstance(label, dict) else label
                 for label in issue.get("labels", [])
             }
-            and known_defects.REGISTRY_MARKER in (issue.get("body") or "")
             and (state == "all" or issue["state"] == state)
         ]
 
@@ -370,6 +369,56 @@ def test_multiple_open_registries_fail_closed() -> None:
         known_defects.intake_defect(_defect(), gateway)
 
 
+def test_entry_in_first_of_two_open_registries_does_not_bypass_ambiguity() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    first = gateway.create_registry_issue()
+    gateway.lock_registry_issue(first["number"])
+    gateway.add_comment(first["number"], defect.render_entry())
+    second = gateway.create_registry_issue()
+    gateway.lock_registry_issue(second["number"])
+
+    with pytest.raises(known_defects.KnownDefectsError, match="multiple open registries"):
+        known_defects.intake_defect(defect, gateway)
+    with pytest.raises(known_defects.KnownDefectsError, match="multiple open registries"):
+        known_defects.lookup_defect(defect.defect_id, gateway)
+
+
+def test_later_malformed_registry_candidate_is_not_skipped_after_entry_match() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    first = gateway.create_registry_issue()
+    gateway.lock_registry_issue(first["number"])
+    gateway.add_comment(first["number"], defect.render_entry())
+    second = gateway.create_registry_issue()
+    gateway.lock_registry_issue(second["number"])
+    second["state"] = "closed"
+    second["body"] = "not a registry"
+
+    with pytest.raises(known_defects.KnownDefectsError, match="malformed"):
+        known_defects.lookup_defect(defect.defect_id, gateway)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "prefix\n" + known_defects.render_registry_body(),
+        known_defects.render_registry_body() + "\nsuffix",
+        "manual text " + known_defects.REGISTRY_MARKER,
+    ],
+)
+def test_registry_body_marker_must_be_exact_first_line_schema(
+    body: str,
+) -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    issue["body"] = body
+
+    with pytest.raises(known_defects.KnownDefectsError, match="malformed"):
+        known_defects.lookup_defect("KD-000000000000", gateway)
+
+
 def test_crash_after_comment_before_receipt_is_safe_to_retry() -> None:
     gateway = FakeGateway()
     issue = gateway.create_registry_issue()
@@ -429,6 +478,30 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     }
 
     with pytest.raises(known_defects.KnownDefectsError, match="lack concrete Verify"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize("extra_label", ["prio:urgent", "agent:paused"])
+def test_promotion_rejects_unknown_labels_on_canonical_axes(
+    extra_label: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+            {"name": extra_label},
+        ],
+    }
+
+    expected = "priority" if extra_label.startswith("prio:") else "agent-state"
+    with pytest.raises(known_defects.KnownDefectsError, match=expected):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 

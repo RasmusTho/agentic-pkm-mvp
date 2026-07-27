@@ -326,7 +326,7 @@ class GhRegistryGateway:
         return [
             issue
             for issue in issues
-            if "pull_request" not in issue and REGISTRY_MARKER in (issue.get("body") or "")
+            if "pull_request" not in issue
         ]
 
     def get_issue(self, number: int) -> dict[str, Any]:
@@ -387,9 +387,9 @@ def _label_names(issue: dict[str, Any]) -> set[str]:
 
 
 def _validate_registry_issue(issue: dict[str, Any], *, require_open: bool) -> None:
-    if REGISTRY_MARKER not in (issue.get("body") or ""):
+    if (issue.get("body") or "") != render_registry_body():
         raise KnownDefectsError(
-            f"Issue #{issue.get('number')} is not a Known Defects registry"
+            f"Issue #{issue.get('number')} has a malformed Known Defects registry body"
         )
     labels = _label_names(issue)
     required_labels = {"type:bug", REGISTRY_LABEL}
@@ -493,11 +493,19 @@ def _find_entry(
     gateway: RegistryGateway,
     defect_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    for issue in sorted(
+    issues = sorted(
         gateway.list_registry_issues("all"),
         key=lambda item: int(item["number"]),
-    ):
+    )
+    for issue in issues:
         _validate_registry_issue(issue, require_open=False)
+    open_registries = [
+        issue for issue in issues if str(issue.get("state", "")).lower() == "open"
+    ]
+    if len(open_registries) > 1:
+        numbers = ", ".join(f"#{item['number']}" for item in open_registries)
+        raise KnownDefectsError(f"multiple open registries found ({numbers})")
+    for issue in issues:
         for comment in sorted(
             gateway.list_comments(int(issue["number"])),
             key=lambda item: int(item.get("id") or 0),
@@ -621,13 +629,13 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
         )
     if REGISTRY_LABEL in labels:
         raise KnownDefectsError("promotion target must not be another registry Issue")
-    agent_states = labels & NORMAL_AGENT_STATES
-    if len(agent_states) != 1:
+    agent_states = {label for label in labels if label.startswith("agent:")}
+    if len(agent_states) != 1 or not agent_states <= NORMAL_AGENT_STATES:
         raise KnownDefectsError(
             "promotion target must carry exactly one truthful normal agent-state label"
         )
-    priorities = labels & PRIORITY_LABELS
-    if len(priorities) != 1:
+    priorities = {label for label in labels if label.startswith("prio:")}
+    if len(priorities) != 1 or not priorities <= PRIORITY_LABELS:
         raise KnownDefectsError(
             "promotion target must carry exactly one canonical priority label"
         )
