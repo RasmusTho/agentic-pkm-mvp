@@ -5,6 +5,8 @@ import os
 import stat
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from types import TracebackType
+from typing import BinaryIO
 
 import pytest
 
@@ -20,6 +22,84 @@ from app.knowledge.multiwriter import (
     is_conflict_artifact,
 )
 from app.knowledge.write_ops import write_note_from_absolute
+
+
+class _FaultingBinaryHandle:
+    def __init__(self, handle: BinaryIO, fault: str) -> None:
+        self._handle = handle
+        self._fault = fault
+
+    def __enter__(self) -> _FaultingBinaryHandle:
+        self._handle.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        return self._handle.__exit__(exc_type, exc, traceback)
+
+    def write(self, data: bytes) -> int:
+        if self._fault == "write":
+            raise OSError("simulated staged write failure")
+        return self._handle.write(data)
+
+    def flush(self) -> None:
+        if self._fault == "flush":
+            raise OSError("simulated staged flush failure")
+        self._handle.flush()
+
+    def fileno(self) -> int:
+        return self._handle.fileno()
+
+
+def _open_fd_count() -> int:
+    fd_root = Path("/proc/self/fd")
+    if not fd_root.exists():
+        fd_root = Path("/dev/fd")
+    return len(list(fd_root.iterdir()))
+
+
+def _install_staged_io_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fault: str,
+    fdopen_call: int,
+    regular_fsync_call: int,
+) -> None:
+    if fault in {"write", "flush"}:
+        real_fdopen = os.fdopen
+        calls = 0
+
+        def faulting_fdopen(
+            fd: int,
+            *args: object,
+            **kwargs: object,
+        ) -> object:
+            nonlocal calls
+            calls += 1
+            handle = real_fdopen(fd, *args, **kwargs)
+            if calls == fdopen_call:
+                return _FaultingBinaryHandle(handle, fault)
+            return handle
+
+        monkeypatch.setattr(os, "fdopen", faulting_fdopen)
+        return
+
+    real_fsync = os.fsync
+    regular_fsyncs = 0
+
+    def faulting_fsync(fd: int) -> None:
+        nonlocal regular_fsyncs
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            regular_fsyncs += 1
+            if regular_fsyncs == regular_fsync_call:
+                raise OSError("simulated staged fsync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", faulting_fsync)
 
 
 @pytest.mark.parametrize(
@@ -322,6 +402,73 @@ def test_stale_rewritten_write_retains_trusted_candidate_if_public_artifact_is_r
     assert trusted_candidates[0].read_bytes() == b"caller-proposal"
 
 
+@pytest.mark.parametrize("fault", ["write", "flush", "fsync"])
+def test_rewritten_write_staging_io_failure_cleans_controlled_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/staging-io-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    before_fds = _open_fd_count()
+    _install_staged_io_fault(
+        monkeypatch,
+        fault=fault,
+        fdopen_call=1,
+        regular_fsync_call=1,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="verification failed"):
+        adapter.write_note(
+            locator,
+            "caller proposal",
+            expected_version=hashlib.sha256(b"observed body").hexdigest(),
+        )
+
+    assert target.read_bytes() == b"observed body"
+    assert list(target.parent.glob(".*.rewrite-swap")) == []
+    assert list(target.parent.glob(".*.conflict-stage")) == []
+    assert _open_fd_count() == before_fds
+
+
+@pytest.mark.parametrize("fault", ["write", "flush", "fsync"])
+def test_initial_stale_candidate_io_failure_cleans_partial_and_preserves_proposal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/candidate-io-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"human current")
+    before_fds = _open_fd_count()
+    _install_staged_io_fault(
+        monkeypatch,
+        fault=fault,
+        fdopen_call=3,
+        regular_fsync_call=2,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="verification failed"):
+        adapter.write_note(
+            locator,
+            "caller proposal",
+            expected_version=hashlib.sha256(b"caller observed").hexdigest(),
+        )
+
+    assert target.read_bytes() == b"human current"
+    assert list(target.parent.glob(".*.rewrite-swap")) == []
+    assert list(target.parent.glob(".*.conflict-stage")) == []
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(retained) == 1
+    assert retained[0].read_bytes() == b"caller proposal"
+    assert _open_fd_count() == before_fds
+
+
 def test_staged_conflict_artifact_matches_quarantine_classifier(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/classified.md")
@@ -570,6 +717,63 @@ def test_rewritten_write_rolls_back_same_inode_save_after_final_version_read(
     assert b"THIRD-WRITER" in conflict_contents
 
 
+def test_rewritten_write_rolls_back_leaf_alias_swap_at_atomic_exchange(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/a.md")
+    target = tmp_path / locator.path
+    other = target.with_name("b.md")
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"same content")
+    other.write_bytes(b"same content")
+    expected_version = hashlib.sha256(b"same content").hexdigest()
+    real_exchange = adapters_module._atomic_exchange_at
+    exchanges = 0
+
+    def alias_at_linearization(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            target.unlink()
+            target.symlink_to(other.name)
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomic_exchange_at",
+        alias_at_linearization,
+    )
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="target changed at atomic exchange",
+    ):
+        adapter.write_note(
+            locator,
+            "stale proposal",
+            expected_version=expected_version,
+        )
+
+    assert exchanges == 2
+    assert target.is_symlink()
+    assert target.readlink() == Path(other.name)
+    assert target.read_bytes() == b"same content"
+    assert other.read_bytes() == b"same content"
+    conflict_contents = [
+        path.read_bytes()
+        for path in (target.parent / "_conflicts").rglob("*conflicted copy*")
+        if not path.is_symlink()
+    ]
+    assert b"stale proposal" in conflict_contents
+
+
 def test_rewritten_write_preserves_existing_file_mode(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/shared-mode.md")
@@ -750,6 +954,54 @@ def test_rewritten_write_post_exchange_read_failure_preserves_displaced_inode(
     assert target.read_bytes() == b"ENGINE"
     artifacts = list((target.parent / "_conflicts").rglob("*conflicted copy*"))
     assert artifacts
+    assert artifacts[0].read_bytes() == b"observed body"
+
+
+def test_rewritten_write_post_exchange_stat_failure_preserves_displaced_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/post-exchange-stat-error.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_exchange = adapters_module._atomic_exchange_at
+    real_stat = os.stat
+    exchange_completed = False
+    injected_failure = False
+
+    def recording_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchange_completed
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+        exchange_completed = True
+
+    def failing_post_exchange_stat(
+        path: os.PathLike[str] | str,
+        *args: object,
+        **kwargs: object,
+    ) -> os.stat_result:
+        nonlocal injected_failure
+        if exchange_completed and not injected_failure and path == target.name:
+            injected_failure = True
+            raise PermissionError("simulated post-exchange stat failure")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", recording_exchange)
+    monkeypatch.setattr(os, "stat", failing_post_exchange_stat)
+
+    with pytest.raises(KnowledgeWriteConflict, match="verification failed"):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert injected_failure
+    assert target.read_bytes() == b"ENGINE"
+    artifacts = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(artifacts) == 1
     assert artifacts[0].read_bytes() == b"observed body"
 
 

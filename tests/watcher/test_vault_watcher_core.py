@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.knowledge import adapters as knowledge_adapters
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.panel_actions import PanelActionMapping
@@ -527,8 +528,10 @@ def test_vault_watcher_rewritten_alias_swap_after_final_policy_has_no_acknowledg
     emitted_events: list[object] = []
     real_class_policy = watcher_module.watcher_panel_writeback_allowed
     policy_calls = 0
+    real_exchange = knowledge_adapters._atomic_exchange_at
+    exchanges = 0
 
-    def swap_after_final_policy(
+    def record_final_policy(
         relative_path: Path,
         **kwargs: object,
     ) -> bool:
@@ -536,10 +539,20 @@ def test_vault_watcher_rewritten_alias_swap_after_final_policy_has_no_acknowledg
         allowed = real_class_policy(relative_path, **kwargs)
         if relative_path == Path("Notes/a.md"):
             policy_calls += 1
-            if policy_calls == 3:
-                first.unlink()
-                first.symlink_to(second.name)
         return allowed
+
+    def swap_at_linearization(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            first.unlink()
+            first.symlink_to(second.name)
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
 
     prepared = SimpleNamespace(
         state=SimpleNamespace(
@@ -563,7 +576,12 @@ def test_vault_watcher_rewritten_alias_swap_after_final_policy_has_no_acknowledg
     monkeypatch.setattr(
         watcher_module,
         "watcher_panel_writeback_allowed",
-        swap_after_final_policy,
+        record_final_policy,
+    )
+    monkeypatch.setattr(
+        knowledge_adapters,
+        "_atomic_exchange_at",
+        swap_at_linearization,
     )
     monkeypatch.setattr(
         watcher_module,
@@ -609,13 +627,22 @@ def test_vault_watcher_rewritten_alias_swap_after_final_policy_has_no_acknowledg
     )
 
     assert policy_calls == 3
+    assert exchanges == 2
     assert summary["errors"] == 1
     assert summary["applied_actions"] == 0
     assert persisted_ids == []
     assert emitted_events == []
+    assert first.is_symlink()
+    assert first.readlink() == Path(second.name)
     assert second.read_text(encoding="utf-8") == original
     assert first.read_text(encoding="utf-8") == original
     assert any("indeterminate panel write" in message for message in messages)
+    conflict_contents = [
+        path.read_text(encoding="utf-8")
+        for path in (first.parent / "_conflicts").rglob("*conflicted copy*")
+        if not path.is_symlink()
+    ]
+    assert "Prepared stale output\n" in conflict_contents
 
 
 def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(

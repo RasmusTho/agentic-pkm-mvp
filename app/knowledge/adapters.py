@@ -187,6 +187,8 @@ def _stage_initial_stale_proposal(
     candidate_fd = -1
     candidate_stat: os.stat_result | None = None
     artifact_rel: PurePosixPath | None = None
+    candidate_payload_durable = False
+    artifact_published = False
     artifact_verified_for_receipt = False
     try:
         candidate_fd = os.open(
@@ -198,13 +200,16 @@ def _stage_initial_stale_proposal(
             0o600,
             dir_fd=parent_fd,
         )
-        open_candidate_fd = candidate_fd
+        # Capture ownership before any fallible payload I/O. Cleanup can then
+        # remove a partial controlled entry without touching a raced replacement.
+        candidate_stat = os.fstat(candidate_fd)
+        candidate_handle = os.fdopen(candidate_fd, "wb")
         candidate_fd = -1
-        with os.fdopen(open_candidate_fd, "wb") as candidate_handle:
+        with candidate_handle:
             candidate_handle.write(payload)
             candidate_handle.flush()
             os.fsync(candidate_handle.fileno())
-            candidate_stat = os.fstat(candidate_handle.fileno())
+        candidate_payload_durable = True
 
         for attempt in range(9):
             artifact_writer = (
@@ -227,6 +232,7 @@ def _stage_initial_stale_proposal(
                 )
             except FileExistsError:
                 continue
+            artifact_published = True
             break
         else:
             raise KnowledgeCapabilityError(
@@ -273,11 +279,20 @@ def _stage_initial_stale_proposal(
         if candidate_fd >= 0:
             os.close(candidate_fd)
         if (
-            artifact_verified_for_receipt
-            and candidate_stat is not None
-            and artifact_rel is not None
-            and _entry_has_identity(parent_fd, artifact_rel.name, candidate_stat)
+            candidate_stat is not None
             and _entry_has_identity(parent_fd, candidate_name, candidate_stat)
+            and (
+                not candidate_payload_durable
+                or (
+                    not artifact_published
+                    and _entry_has_identity(parent_fd, staged_name, staged_stat)
+                )
+                or (
+                    artifact_verified_for_receipt
+                    and artifact_rel is not None
+                    and _entry_has_identity(parent_fd, artifact_rel.name, candidate_stat)
+                )
+            )
         ):
             try:
                 os.unlink(candidate_name, dir_fd=parent_fd)
@@ -424,19 +439,21 @@ class FsVaultAdapter:
                     0o600,
                     dir_fd=parent_fd,
                 )
+                # Capture ownership before any fallible payload I/O so every
+                # pre-receipt failure can identity-clean this controlled name.
+                staged_stat = os.fstat(staged_fd)
+                staged_cleanup_stat = staged_stat
                 payload = content.encode("utf-8")
-                open_staged_fd = staged_fd
+                staged_handle = os.fdopen(staged_fd, "wb")
                 staged_fd = -1
-                with os.fdopen(open_staged_fd, "wb") as staged_handle:
+                with staged_handle:
                     staged_handle.write(payload)
                     staged_handle.flush()
                     os.fsync(staged_handle.fileno())
-                    staged_stat = os.fstat(staged_handle.fileno())
                 if staged_stat is None:
                     raise KnowledgeCapabilityError(
                         f"could not stat staged rewrite for note {locator.path}"
                     )
-                staged_cleanup_stat = staged_stat
                 payload_version = hashlib.sha256(payload).hexdigest()
 
                 # Validate twice through one descriptor, then use an atomic path exchange
@@ -548,12 +565,85 @@ class FsVaultAdapter:
                         "atomic exchange failed"
                     ) from exc
 
+                # From the instant the exchange succeeds, the displaced entry must
+                # survive every verification failure, including failure to stat
+                # either exchanged name.
+                preserve_staged_conflict = True
+                staged_cleanup_stat = opened_stat
+
+                # Bind the exchange to the exact target inode opened and checked
+                # above. A leaf replacement can occur inside the final
+                # check/exchange gap (for example, a same-content symlink to a
+                # different note). If the proposal is now canonical but the
+                # displaced entry is not the opened target, atomically restore
+                # that replacement before any artifact move or content read.
+                post_exchange_target = os.stat(
+                    target.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                post_exchange_displaced = os.stat(
+                    staged_name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if not _same_file_identity(post_exchange_target, staged_stat):
+                    preserve_staged_conflict = True
+                    staged_cleanup_stat = post_exchange_displaced
+                    raise KnowledgeWriteConflict(
+                        f"version mismatch for rewritten note {locator.path}: "
+                        "target changed after atomic exchange"
+                    )
+                if not _same_file_identity(post_exchange_displaced, opened_stat):
+                    preserve_staged_conflict = True
+                    staged_cleanup_stat = post_exchange_displaced
+                    try:
+                        _atomic_exchange_at(
+                            parent_fd,
+                            target.name,
+                            parent_fd,
+                            staged_name,
+                        )
+                        os.fsync(parent_fd)
+                    except OSError as exc:
+                        raise KnowledgeWriteConflict(
+                            f"version mismatch for rewritten note {locator.path}: "
+                            "atomic rollback failed; displaced content was preserved"
+                        ) from exc
+                    restored_target = os.stat(
+                        target.name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    restored_proposal = os.stat(
+                        staged_name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        not _same_file_identity(
+                            restored_target,
+                            post_exchange_displaced,
+                        )
+                        or not _same_file_identity(
+                            restored_proposal,
+                            staged_stat,
+                        )
+                    ):
+                        raise KnowledgeWriteConflict(
+                            f"version mismatch for rewritten note {locator.path}: "
+                            "atomic rollback verification failed; displaced content was preserved"
+                        )
+                    staged_cleanup_stat = staged_stat
+                    raise KnowledgeWriteConflict(
+                        f"version mismatch for rewritten note {locator.path}: "
+                        "target changed at atomic exchange"
+                    )
+
                 # The displaced inode must keep a durable path for the lifetime of any
                 # already-open external descriptor. There is no portable way to know when
                 # such descriptors close, so every successful optimistic exchange retains
                 # this pre-exchange version as a standard conflicted copy.
-                preserve_staged_conflict = True
-                staged_cleanup_stat = opened_stat
                 os.fsync(parent_fd)
                 _require_anchored_directory_identity(
                     root_fd,

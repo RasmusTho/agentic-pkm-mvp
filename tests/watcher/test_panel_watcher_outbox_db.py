@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.knowledge import adapters as knowledge_adapters
 from app.events.schema import OutboxEvent
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.knowledge.write_ops import write_note_from_absolute
@@ -286,23 +287,40 @@ def test_process_panel_note_rewritten_alias_swap_after_final_policy_has_no_ackno
     emitted_events: list[object] = []
     real_class_policy = registry.watcher_panel_writeback_allowed
     policy_calls = 0
+    real_exchange = knowledge_adapters._atomic_exchange_at
+    exchanges = 0
 
-    def swap_after_final_policy(
+    def record_final_policy(
         relative_path: Path,
         **kwargs: object,
     ) -> bool:
         nonlocal policy_calls
         allowed = real_class_policy(relative_path, **kwargs)
         policy_calls += 1
-        if policy_calls == 2:
+        return allowed
+
+    def swap_at_linearization(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
             first.unlink()
             first.symlink_to(second.name)
-        return allowed
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
 
     monkeypatch.setattr(
         registry,
         "watcher_panel_writeback_allowed",
-        swap_after_final_policy,
+        record_final_policy,
+    )
+    monkeypatch.setattr(
+        knowledge_adapters,
+        "_atomic_exchange_at",
+        swap_at_linearization,
     )
     monkeypatch.setattr(
         registry,
@@ -344,12 +362,21 @@ def test_process_panel_note_rewritten_alias_swap_after_final_policy_has_no_ackno
     )
 
     assert policy_calls == 2
+    assert exchanges == 2
     assert emitted == 0
     assert state.errors == 1
     assert persisted_ids == []
     assert emitted_events == []
+    assert first.is_symlink()
+    assert first.readlink() == Path(second.name)
     assert second.read_text(encoding="utf-8") == original
     assert first.read_text(encoding="utf-8") == original
+    conflict_contents = [
+        path.read_text(encoding="utf-8")
+        for path in (first.parent / "_conflicts").rglob("*conflicted copy*")
+        if not path.is_symlink()
+    ]
+    assert "Prepared stale output\n" in conflict_contents
 
 
 def test_process_panel_note_retries_transient_read_failure(tmp_path, monkeypatch):
