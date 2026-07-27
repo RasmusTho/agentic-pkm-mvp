@@ -114,6 +114,14 @@ Authority and downstream boundaries:
 - The panel can also surface system-generated suggested actions as unchecked checkbox proposals when the runtime has a plausible action but should keep the human-facing approval step visible. That suggestion path is for proposal quality, not a blanket requirement that every low-risk action wait for manual review.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
+- Watcher/service and `panel-update` CLI writeback use a two-phase acknowledgement boundary:
+  preparation derives Markdown and events without persisting executed IDs or dispatching plans;
+  after the canonical version-checked note write succeeds, commit persists non-empty executed IDs
+  and then dispatches eligible events. A stale/staged-conflict write leaves the snapshot and both
+  acknowledgement effects untouched, and watcher telemetry classifies it as skipped/deferred.
+  Commit is not a filesystem transaction with the already-durable note: a later persistence or
+  dispatch failure is surfaced as an update error and does not roll back or stale-retry the
+  canonical write.
 
 ## PanelAgent 2.0 (v5.6, accepted)
 

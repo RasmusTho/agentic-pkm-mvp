@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,17 @@ def test_default_vault_root_for_path_uses_filesystem_anchor(tmp_path: Path) -> N
     note = tmp_path / "vault" / "Inbox" / "note.md"
     root = write_ops.default_vault_root_for_path(note)
     assert root == Path(note.anchor)
+
+
+def test_read_note_text_with_version_hashes_exact_raw_bytes(tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    raw = b"---\r\nuuid: crlf-note\r\n---\r\n\r\nBody\r\n"
+    note.write_bytes(raw)
+
+    text, version = write_ops.read_note_text_with_version(note)
+
+    assert text.encode("utf-8") == raw
+    assert version == hashlib.sha256(raw).hexdigest()
 
 
 def test_write_note_from_absolute_resolves_locator_and_port(monkeypatch, tmp_path: Path) -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime
 from dataclasses import asdict
 import errno
-import hashlib
 import heapq
 import json
 import logging
@@ -82,7 +81,7 @@ from app.events.panel import (
 )
 from app.health_contract import DEFAULT_CONTRACT
 from app.knowledge.errors import KnowledgeWriteConflict
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.journaling.day_context import assemble_day_context
 from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.leave_point_cursor import latest_leave_point_projection
@@ -4540,7 +4539,7 @@ def update_companion_workspace_note_body(
             },
         ) from exc
 
-    original_content = note_path.read_text(encoding="utf-8")
+    original_content, expected_version = read_note_text_with_version(note_path)
     content_hash_before = _content_hash(original_content)
     if req.content_hash is not None and req.content_hash != content_hash_before:
         raise HTTPException(
@@ -4561,7 +4560,6 @@ def update_companion_workspace_note_body(
     # classified, so it requires an expected_version. We already read
     # ``original_content`` above for the content-hash freshness check, so its
     # hash is the exact expected_version the filesystem seam recomputes.
-    expected_version = hashlib.sha256(original_content.encode("utf-8")).hexdigest()
     _write_rewritten_note_or_409(
         note_path,
         new_content,
@@ -4632,7 +4630,7 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultS
             },
         )
 
-    current = note_path.read_text(encoding="utf-8")
+    current, expected_version = read_note_text_with_version(note_path)
     frontmatter_block, _ = _split_frontmatter(current)
     if frontmatter_block is not None:
         new_content = f"---{frontmatter_block}\n---\n{req.new_body}"
@@ -4642,7 +4640,6 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultS
     # Shared knowledge-write seam (#3450): this path is REWRITTEN-classified,
     # so it requires an expected_version. ``current`` was just read above, so
     # its hash is the exact expected_version the filesystem seam recomputes.
-    expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
     _write_rewritten_note_or_409(
         note_path,
         new_content,
@@ -4732,7 +4729,7 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
             },
         )
 
-    current = note_path.read_text(encoding="utf-8")
+    current, expected_version = read_note_text_with_version(note_path)
     if req.expected_content_hash and _content_hash(current) != req.expected_content_hash:
         raise HTTPException(
             status_code=409,
@@ -4754,7 +4751,6 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
     # (and already validated against ``expected_content_hash`` when the
     # caller supplied one), so its hash is the exact expected_version the
     # filesystem seam recomputes.
-    expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
     _write_rewritten_note_or_409(
         note_path,
         new_content,

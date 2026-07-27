@@ -13,6 +13,7 @@ from app.planner.schema import Plan
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 
 from .agent import PanelAgentResult, handle_note_update
+from .writeback import upsert_executed_ids
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -51,10 +52,57 @@ def panel_events_enabled(ctx: OrchestratorContext | Mapping[str, Any] | None = N
 
 
 class PanelPipelineResult(BaseModel):
+    note_id: str
     panel: PanelAgentResult
     events: list[Event | OutboxEvent]
     plans: list[Plan] = Field(default_factory=list)
     dispatch_count: int = 0
+
+
+def prepare_panel_update(
+    *,
+    note_id: str,
+    old_markdown: str,
+    new_markdown: str,
+    ctx: OrchestratorContext | Mapping[str, Any] | None = None,
+    action_mappings: Dict[str, PanelActionMapping] | None = None,
+    note_path: Path | str | None = None,
+) -> PanelPipelineResult:
+    mappings = action_mappings or load_panel_action_mappings()
+    resolved_note_path = str(note_path) if note_path is not None else None
+    panel_result = handle_note_update(
+        note_id,
+        old_markdown,
+        new_markdown,
+        action_mappings=mappings,
+        note_path=resolved_note_path,
+        persist_executed_ids=False,
+    )
+    events = list(panel_result.events)
+    return PanelPipelineResult(note_id=note_id, panel=panel_result, events=events)
+
+
+def commit_panel_update(
+    prepared: PanelPipelineResult,
+    *,
+    ctx: OrchestratorContext | Mapping[str, Any] | None = None,
+) -> PanelPipelineResult:
+    """Persist/dispatch a prepared panel transition after canonical write success."""
+
+    context = _ensure_context(ctx)
+    if prepared.panel.executed_action_ids:
+        upsert_executed_ids(
+            prepared.note_id,
+            prepared.panel.executed_action_ids,
+        )
+    plans: list[Plan] = []
+    if prepared.events and panel_events_enabled(context):
+        for event in prepared.events:
+            if event.event in {"panel.intent.created", "panel.intent.executed", "panel.action.triggered"}:
+                continue
+            plan = handle_event(event, context)
+            plans.append(plan)
+    return prepared.model_copy(update={"plans": plans, "dispatch_count": len(plans)})
 
 
 def handle_panel_update(
@@ -66,25 +114,23 @@ def handle_panel_update(
     action_mappings: Dict[str, PanelActionMapping] | None = None,
     note_path: Path | str | None = None,
 ) -> PanelPipelineResult:
-    context = _ensure_context(ctx)
-    mappings = action_mappings or load_panel_action_mappings()
-    resolved_note_path = str(note_path) if note_path is not None else None
-    panel_result = handle_note_update(
-        note_id,
-        old_markdown,
-        new_markdown,
-        action_mappings=mappings,
-        note_path=resolved_note_path,
+    """Compatibility path for callers without a separate canonical write commit."""
+
+    prepared = prepare_panel_update(
+        note_id=note_id,
+        old_markdown=old_markdown,
+        new_markdown=new_markdown,
+        ctx=ctx,
+        action_mappings=action_mappings,
+        note_path=note_path,
     )
-    events = list(panel_result.events)
-    plans: list[Plan] = []
-    if events and panel_events_enabled(context):
-        for event in events:
-            if event.event in {"panel.intent.created", "panel.intent.executed", "panel.action.triggered"}:
-                continue
-            plan = handle_event(event, context)
-            plans.append(plan)
-    return PanelPipelineResult(panel=panel_result, events=events, plans=plans, dispatch_count=len(plans))
+    return commit_panel_update(prepared, ctx=ctx)
 
 
-__all__ = ["PanelPipelineResult", "handle_panel_update", "panel_events_enabled"]
+__all__ = [
+    "PanelPipelineResult",
+    "commit_panel_update",
+    "handle_panel_update",
+    "panel_events_enabled",
+    "prepare_panel_update",
+]

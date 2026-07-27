@@ -321,6 +321,30 @@ def test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_
     assert receipt.writer_identity == "mac-runtime"
 
 
+def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    text_producers = {
+        "app/api/routes/companion.py": 3,
+        "app/chat/canvas_writer.py": 1,
+        "app/episodes/assignment.py": 1,
+        "app/episodes/store.py": 1,
+        "app/promotion/queue.py": 1,
+        "app/services/note_update.py": 2,
+        "app/services/note_uuid.py": 1,
+    }
+
+    assert sum(text_producers.values()) == 10
+    for relative_path, expected_reads in text_producers.items():
+        source = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert source.count("read_note_text_with_version(") >= expected_reads, relative_path
+        assert "expected_version = hashlib.sha256(" not in source, relative_path
+
+    hash_only_source = (
+        repo_root / "app/ports/filesystem_vault_adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "expected_version = hashlib.sha256(resolved.read_bytes()).hexdigest()" in hash_only_source
+
+
 def test_rewritten_write_with_expected_version_conflicts_when_target_was_deleted(
     tmp_path: Path,
 ) -> None:

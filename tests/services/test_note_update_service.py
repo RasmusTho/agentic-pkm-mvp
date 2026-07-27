@@ -6,8 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.panel import integration as panel_integration
+from app.agents.panel import writeback as panel_writeback
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.orchestrator.handler import OrchestratorContext
+from app.planner.schema import make_simple_plan
 from app.services.note_update import NoteUpdateResult, process_note_update
 from app.settings.panel_actions import PanelActionMapping
 from scripts.yaml_roundtrip import load_frontmatter
@@ -125,10 +128,23 @@ def test_process_note_update_staged_conflict_returns_stale_before_acknowledgemen
         ),
     )
     monkeypatch.setattr(
-        "app.services.note_update.upsert_executed_ids",
+        panel_writeback,
+        "upsert_executed_ids",
         lambda *args, **kwargs: executed_id_writes.append((args, kwargs)),
     )
-    ctx = OrchestratorContext(settings={"panel_events_enable": False, "origin": "test.note_update"})
+    monkeypatch.setattr(
+        panel_integration,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: executed_id_writes.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        panel_integration,
+        "handle_event",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("staged conflict must stop event dispatch")
+        ),
+    )
+    ctx = OrchestratorContext(settings={"panel_events_enable": True, "origin": "test.note_update"})
 
     result = process_note_update(note_path, ctx, snapshot_dir=snapshot_dir)
 
@@ -137,6 +153,50 @@ def test_process_note_update_staged_conflict_returns_stale_before_acknowledgemen
     assert executed_id_writes == []
     assert (snapshot_dir / f"{note_uuid}.md").read_text(encoding="utf-8") == snapshot_before
     assert note_path.read_text(encoding="utf-8") == current
+
+
+def test_process_note_update_commits_acknowledgements_only_after_canonical_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_path = tmp_path / "note.md"
+    note_uuid = "note-ordered-1"
+    note_path.write_text(_note_content(note_uuid, checked=True), encoding="utf-8")
+    snapshot_dir = tmp_path / "snapshots"
+    _write_snapshot(snapshot_dir, note_uuid, _note_content(note_uuid, checked=False))
+    order: list[str] = []
+
+    def write_canonical(
+        path: Path,
+        content: str,
+        *,
+        vault_root: Path | None = None,
+        expected_version: str | None = None,
+    ) -> None:
+        order.append("write")
+        Path(path).write_text(content, encoding="utf-8")
+
+    def persist_ids(*args, **kwargs):  # type: ignore[no-untyped-def]
+        order.append("persist_ids")
+
+    def dispatch_event(*args, **kwargs):  # type: ignore[no-untyped-def]
+        order.append("dispatch")
+        return make_simple_plan(goal="test", source_object_uuid=note_uuid)
+
+    monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
+    monkeypatch.setattr("app.services.note_update.write_note_from_absolute", write_canonical)
+    monkeypatch.setattr(panel_integration, "upsert_executed_ids", persist_ids)
+    monkeypatch.setattr(panel_integration, "handle_event", dispatch_event)
+    ctx = OrchestratorContext(settings={"panel_events_enable": True, "origin": "test.note_update"})
+
+    result = process_note_update(note_path, ctx, snapshot_dir=snapshot_dir)
+
+    assert result.stale is False
+    assert result.changed is True
+    assert result.dispatch_count == 1
+    assert order == ["write", "persist_ids", "dispatch"]
+    assert (snapshot_dir / f"{note_uuid}.md").read_text(encoding="utf-8") == note_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_process_note_update_detects_stale_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

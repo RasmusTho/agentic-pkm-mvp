@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,6 +32,13 @@ KNOWLEDGE_WRITE_ACTION = "knowledge.write_note"
 def default_vault_root_for_path(path: Path | str) -> Path:
     resolved = Path(path).expanduser().resolve()
     return Path(resolved.anchor) if resolved.anchor else Path("/")
+
+
+def read_note_text_with_version(path: Path | str) -> tuple[str, str]:
+    """Read once, preserving text bytes while hashing the exact filesystem payload."""
+
+    raw = Path(path).read_bytes()
+    return raw.decode("utf-8"), hashlib.sha256(raw).hexdigest()
 
 
 def _local_fs_settings() -> KnowledgeSettings:
@@ -192,6 +200,7 @@ __all__ = [
     "advanced_uri_from_vault_path",
     "append_note_relative",
     "default_vault_root_for_path",
+    "read_note_text_with_version",
     "write_note_from_absolute",
     "write_note_relative",
 ]

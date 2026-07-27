@@ -19,6 +19,7 @@ from app.knowledge.write_ops import (
     advanced_uri_from_vault_path,
     append_note_relative,
     default_vault_root_for_path,
+    read_note_text_with_version,
     write_note_from_absolute,
     write_note_relative,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "obsidian_dependency_status",
     "append_note_relative",
     "default_vault_root_for_path",
+    "read_note_text_with_version",
     "classify_note",
     "conflict_artifact_path",
     "is_conflict_artifact",

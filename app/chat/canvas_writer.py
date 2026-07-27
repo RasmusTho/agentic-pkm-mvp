@@ -11,11 +11,10 @@ boundary) — no direct file-system writes from this module.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from app.chat.session_log import SessionLog, SessionLogWriter
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.text.helpers import body_contains_frontmatter, split_frontmatter
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -114,7 +113,7 @@ class CanvasWriter:
             )
 
         # Read current note and split frontmatter from body
-        current = session.note_path.read_text(encoding="utf-8")
+        current, expected_version = read_note_text_with_version(session.note_path)
         frontmatter_block, _ = _split_frontmatter(current)
 
         # Reassemble: original frontmatter + new body
@@ -128,7 +127,6 @@ class CanvasWriter:
         # classifies as REWRITTEN — pass the hash of the content we just read
         # as expected_version so a legitimate same-session edit is not
         # rejected as a would-be silent overwrite.
-        expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
         write_note_from_absolute(
             note_abs, new_content, vault_root=self._vault_root, expected_version=expected_version
         )
