@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeAlias, cast
 
 from pydantic import (
@@ -45,14 +46,16 @@ DELIVERY_RECEIPT_VERSION: Final[
     Literal["builderops.delivery-receipt.v1"]
 ] = "builderops.delivery-receipt.v1"
 
-_UTC_TIMESTAMP = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$"
-)
+_UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 def _validate_utc_timestamp(value: str) -> str:
     if not _UTC_TIMESTAMP.fullmatch(value):
-        raise ValueError("timestamp must be an RFC 3339 UTC value ending in Z")
+        raise ValueError("timestamp must be second-precision RFC 3339 UTC ending in Z")
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as exc:
+        raise ValueError("timestamp must be a real UTC calendar value") from exc
     return value
 
 
@@ -91,7 +94,13 @@ def canonical_json(value: Any) -> str:
 
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="json")
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def canonical_hash(value: Any) -> str:
@@ -101,6 +110,17 @@ def canonical_hash(value: Any) -> str:
 def _require_unique(values: tuple[Any, ...], label: str) -> None:
     if len(values) != len(set(values)):
         raise ValueError(f"{label} must not contain duplicates")
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate delivery contract JSON key: {key}")
+        payload[key] = value
+    return payload
 
 
 class _StrictFrozenModel(BaseModel):
@@ -235,6 +255,34 @@ class ApprovalEvidence(_StrictFrozenModel):
         return self
 
 
+def delivery_initiation_approval_hash(
+    *,
+    initiation_id: str,
+    requested_scope: tuple[IssueScope, ...],
+    exclusions: tuple[ScopeExclusion, ...],
+    policy_profile: PolicyProfile,
+    budget: DeliveryBudget,
+    source_authorities: tuple[AuthoritySnapshot, ...],
+) -> str:
+    """Hash the exact semantic initiation request that approval authenticates."""
+
+    return canonical_hash(
+        {
+            "schema_version": DELIVERY_INITIATION_VERSION,
+            "initiation_id": initiation_id,
+            "requested_scope": [
+                item.model_dump(mode="json") for item in requested_scope
+            ],
+            "exclusions": [item.model_dump(mode="json") for item in exclusions],
+            "policy_profile": policy_profile.model_dump(mode="json"),
+            "budget": budget.model_dump(mode="json"),
+            "source_authorities": [
+                item.model_dump(mode="json") for item in source_authorities
+            ],
+        }
+    )
+
+
 class DeliveryInitiation(CanonicalDeliveryContract):
     contract_family: ClassVar[str] = "initiation"
     schema_version: Literal[
@@ -272,6 +320,18 @@ class DeliveryInitiation(CanonicalDeliveryContract):
         if missing:
             raise ValueError(
                 f"source authorities must bind every requested scope item: {missing}"
+            )
+        expected_approval_hash = delivery_initiation_approval_hash(
+            initiation_id=self.initiation_id,
+            requested_scope=self.requested_scope,
+            exclusions=self.exclusions,
+            policy_profile=self.policy_profile,
+            budget=self.budget,
+            source_authorities=self.source_authorities,
+        )
+        if self.approval_evidence.approved_payload_hash != expected_approval_hash:
+            raise ValueError(
+                "approval evidence must bind the exact canonical initiation payload"
             )
         return self
 
@@ -347,6 +407,13 @@ class DeliveryPlan(CanonicalDeliveryContract):
         )
         if len(wave_keys) != len(set(wave_keys)) or set(wave_keys) != set(scope_keys):
             raise ValueError("dependency waves must cover final scope exactly once")
+        if any(
+            len(wave.issues) > self.budget.max_parallel_workers
+            for wave in self.dependency_waves
+        ):
+            raise ValueError(
+                "dependency waves must not exceed max_parallel_workers"
+            )
         expected_keys = tuple(item.issue.scope_key for item in self.expected_states)
         if len(expected_keys) != len(set(expected_keys)) or set(expected_keys) != set(
             scope_keys
@@ -414,15 +481,58 @@ class ReducerEvent(CanonicalDeliveryContract):
     def _validate_event(self) -> ReducerEvent:
         if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
             raise ValueError("reducer event must bind DeliveryPlan.v1")
-        if self.event_type in {"effect_succeeded", "effect_failed"} and self.effect_ref is None:
-            raise ValueError("effect result events require an effect ref")
-        if self.event_type in {
-            "worker_result_recorded",
-            "review_result_recorded",
-        } and self.result_ref is None:
-            raise ValueError("structured-result events require a result ref")
-        if self.event_type == "exception_recorded" and self.exception is None:
-            raise ValueError("exception event requires a typed exception")
+        expected: dict[
+            str,
+            tuple[
+                bool,
+                str | None,
+                str | None,
+                bool,
+            ],
+        ] = {
+            "run_started": (False, None, None, False),
+            "effect_succeeded": (True, REDUCER_EFFECT_VERSION, None, False),
+            "effect_failed": (True, REDUCER_EFFECT_VERSION, None, True),
+            "authority_changed": (True, None, None, False),
+            "worker_result_recorded": (True, None, WORKER_RESULT_VERSION, False),
+            "review_result_recorded": (True, None, REVIEW_RESULT_VERSION, False),
+            "timer_elapsed": (False, None, None, False),
+            "exception_recorded": (False, None, None, True),
+        }
+        (
+            requires_subject,
+            effect_version,
+            result_version,
+            requires_exception,
+        ) = expected[self.event_type]
+        if (self.subject_authority is not None) != requires_subject:
+            raise ValueError(
+                f"{self.event_type} subject authority does not match event contract"
+            )
+        if effect_version is None:
+            if self.effect_ref is not None:
+                raise ValueError(f"{self.event_type} must not carry an effect ref")
+        elif (
+            self.effect_ref is None
+            or self.effect_ref.schema_version != effect_version
+        ):
+            raise ValueError(
+                f"{self.event_type} requires a typed reducer-effect ref"
+            )
+        if result_version is None:
+            if self.result_ref is not None:
+                raise ValueError(f"{self.event_type} must not carry a result ref")
+        elif (
+            self.result_ref is None
+            or self.result_ref.schema_version != result_version
+        ):
+            raise ValueError(
+                f"{self.event_type} requires the matching structured-result ref"
+            )
+        if (self.exception is not None) != requires_exception:
+            raise ValueError(
+                f"{self.event_type} typed exception does not match event contract"
+            )
         return self
 
 
@@ -436,7 +546,9 @@ class ReducerEffect(CanonicalDeliveryContract):
     plan_ref: ContractRef
     sequence: NonNegativeInt
     effect_class: EffectClass
-    issue: IssueScope | None
+    issue: IssueScope
+    pull_request_number: PositiveInt | None
+    exact_head_sha: GitSha | None
     expected_authorities: tuple[AuthoritySnapshot, ...]
     idempotency_key: NonEmptyStr
     input_hash: Sha256
@@ -450,12 +562,32 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError("reducer effect must bind DeliveryPlan.v1")
         if not self.expected_authorities:
             raise ValueError("reducer effect must bind expected live authority")
-        if self.issue is not None and not any(
+        if not any(
             authority.authority_id == self.issue.authority_id
             and authority.content_hash == self.issue.contract_hash
             for authority in self.expected_authorities
         ):
             raise ValueError("effect authority snapshots must bind the issue")
+        requires_pull_request = self.effect_class in {
+            "await_ci",
+            "request_review",
+            "merge_pull_request",
+            "close_issue",
+            "record_known_defect",
+            "record_delivery_receipt",
+        }
+        if requires_pull_request and (
+            self.pull_request_number is None or self.exact_head_sha is None
+        ):
+            raise ValueError(
+                f"{self.effect_class} requires pull request and exact head"
+            )
+        if not requires_pull_request and (
+            self.pull_request_number is not None or self.exact_head_sha is not None
+        ):
+            raise ValueError(
+                f"{self.effect_class} must not carry pull request or exact head"
+            )
         return self
 
 
@@ -473,6 +605,7 @@ class StructuredWorkerResult(CanonicalDeliveryContract):
     ] = WORKER_RESULT_VERSION
     result_id: NonEmptyStr
     run_id: NonEmptyStr
+    plan_ref: ContractRef
     issue: IssueScope
     status: Literal["completed", "blocked", "failed", "cancelled"]
     exact_head_sha: GitSha | None
@@ -485,6 +618,8 @@ class StructuredWorkerResult(CanonicalDeliveryContract):
 
     @model_validator(mode="after")
     def _validate_result(self) -> StructuredWorkerResult:
+        if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
+            raise ValueError("worker result must bind DeliveryPlan.v1")
         _require_unique(self.changed_files, "changed files")
         _require_unique(
             tuple(item.name for item in self.validations),
@@ -494,6 +629,10 @@ class StructuredWorkerResult(CanonicalDeliveryContract):
             if self.exact_head_sha is None or self.pull_request_number is None:
                 raise ValueError(
                     "completed worker result requires exact head and pull request"
+                )
+            if not self.validations:
+                raise ValueError(
+                    "completed worker result requires validation evidence"
                 )
             if any(item.status != "passed" for item in self.validations):
                 raise ValueError(
@@ -533,17 +672,22 @@ class ReviewResult(CanonicalDeliveryContract):
     ] = REVIEW_RESULT_VERSION
     result_id: NonEmptyStr
     run_id: NonEmptyStr
+    plan_ref: ContractRef
+    policy_profile: PolicyProfile
     issue: IssueScope
     pull_request_number: PositiveInt
     exact_head_sha: GitSha
     disposition: Literal["accept", "reject", "accept_with_risk"]
     confidence_basis_points: ConfidenceBasisPoints
+    minimum_confidence_basis_points: ConfidenceBasisPoints
     findings: tuple[ReviewFinding, ...]
     known_defect_refs: tuple[NonEmptyStr, ...]
     provenance: Provenance
 
     @model_validator(mode="after")
     def _validate_review(self) -> ReviewResult:
+        if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
+            raise ValueError("review result must bind DeliveryPlan.v1")
         _require_unique(
             tuple(item.finding_id for item in self.findings),
             "review finding IDs",
@@ -557,6 +701,11 @@ class ReviewResult(CanonicalDeliveryContract):
         )
         if has_blocker and self.disposition != "reject":
             raise ValueError("blocking review evidence requires reject disposition")
+        if (
+            self.confidence_basis_points < self.minimum_confidence_basis_points
+            and self.disposition != "reject"
+        ):
+            raise ValueError("low-confidence review evidence requires reject disposition")
         if self.disposition == "accept" and self.findings:
             raise ValueError("accept disposition must not carry findings")
         if self.disposition == "accept_with_risk" and not self.findings:
@@ -564,6 +713,16 @@ class ReviewResult(CanonicalDeliveryContract):
         if self.disposition != "accept_with_risk" and self.known_defect_refs:
             raise ValueError(
                 "known defect refs are only valid for accept_with_risk disposition"
+            )
+        p2_findings = sum(
+            finding.severity == "P2" for finding in self.findings
+        )
+        if (
+            self.disposition == "accept_with_risk"
+            and len(self.known_defect_refs) < p2_findings
+        ):
+            raise ValueError(
+                "accept_with_risk requires durable known-defect refs for every P2"
             )
         return self
 
@@ -638,6 +797,7 @@ class IssueDeliveryProof(_StrictFrozenModel):
 class RecoveryStep(_StrictFrozenModel):
     step_index: NonNegativeInt
     exception_kind: ExceptionKind
+    exception_code: NonEmptyStr
     action: NonEmptyStr
     authority_readback_refs: tuple[NonEmptyStr, ...]
     outcome: Literal["reconciled", "retry_scheduled", "blocked", "failed"]
@@ -692,6 +852,8 @@ class DeliveryReceipt(CanonicalDeliveryContract):
         "failed",
         "cancelled",
     ]
+    requested_scope: tuple[IssueScope, ...]
+    final_scope: tuple[IssueScope, ...]
     issue_proofs: tuple[IssueDeliveryProof, ...]
     exceptions: tuple[DeliveryException, ...]
     recovery_history: tuple[RecoveryStep, ...]
@@ -708,10 +870,24 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             raise ValueError("receipt plan ref must bind DeliveryPlan.v1")
         if not self.issue_proofs:
             raise ValueError("delivery receipt must carry per-issue proof")
+        if not self.requested_scope or not self.final_scope:
+            raise ValueError("delivery receipt must preserve requested and final scope")
+        _require_unique(
+            tuple(item.scope_key for item in self.requested_scope),
+            "receipt requested scope",
+        )
+        _require_unique(
+            tuple(item.scope_key for item in self.final_scope),
+            "receipt final scope",
+        )
         _require_unique(
             tuple(item.issue.scope_key for item in self.issue_proofs),
             "receipt issue proofs",
         )
+        if {
+            item.issue.scope_key for item in self.issue_proofs
+        } != {item.scope_key for item in self.final_scope}:
+            raise ValueError("receipt issue proofs must cover final scope exactly")
         if tuple(step.step_index for step in self.recovery_history) != tuple(
             range(len(self.recovery_history))
         ):
@@ -722,16 +898,126 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             if any(
                 proof.merge_identity is None
                 or proof.closure is None
+                or not proof.check_evidence
                 or proof.review_disposition == "reject"
                 or any(check.status != "passed" for check in proof.check_evidence)
+                or bool(proof.exceptions)
+                or (
+                    proof.review_disposition == "accept_with_risk"
+                    and not proof.known_defects
+                )
                 for proof in self.issue_proofs
             ):
                 raise ValueError(
                     "delivered outcome requires merged, closed, accepted exact-head proof"
                 )
+            exception_codes = tuple(item.code for item in self.exceptions)
+            recovery_codes = tuple(
+                item.exception_code for item in self.recovery_history
+            )
+            if (
+                len(exception_codes) != len(set(exception_codes))
+                or len(recovery_codes) != len(set(recovery_codes))
+                or set(exception_codes) != set(recovery_codes)
+                or any(
+                    step.outcome != "reconciled"
+                    for step in self.recovery_history
+                )
+            ):
+                raise ValueError(
+                    "delivered outcome requires one reconciled recovery per exception"
+                )
         elif not self.exceptions:
             raise ValueError("non-delivered outcome requires a typed exception")
+        if self.started_at > self.completed_at:
+            raise ValueError("receipt completion must not precede start")
         return self
+
+
+def validate_delivery_receipt_evidence(
+    receipt: DeliveryReceipt,
+    *,
+    initiation: DeliveryInitiation,
+    plan: DeliveryPlan,
+    worker_results: tuple[StructuredWorkerResult, ...],
+    review_results: tuple[ReviewResult, ...],
+) -> DeliveryReceipt:
+    """Resolve every receipt reference against immutable evidence and exact scope."""
+
+    expected_initiation_ref = ContractRef(
+        schema_version=initiation.schema_version,
+        contract_id=initiation.initiation_id,
+        content_hash=initiation.content_hash,
+    )
+    expected_plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    if receipt.initiation_ref != expected_initiation_ref:
+        raise ValueError("receipt initiation ref does not resolve to supplied evidence")
+    if receipt.plan_ref != expected_plan_ref:
+        raise ValueError("receipt plan ref does not resolve to supplied evidence")
+    if plan.initiation_ref != expected_initiation_ref:
+        raise ValueError("plan does not bind the supplied initiation")
+    if receipt.requested_scope != initiation.requested_scope:
+        raise ValueError("receipt requested scope does not match initiation")
+    if receipt.final_scope != plan.final_scope:
+        raise ValueError("receipt final scope does not match plan")
+
+    workers = {item.result_id: item for item in worker_results}
+    reviews = {item.result_id: item for item in review_results}
+    if len(workers) != len(worker_results) or len(reviews) != len(review_results):
+        raise ValueError("structured result IDs must be unique")
+    used_workers: set[str] = set()
+    used_reviews: set[str] = set()
+    for proof in receipt.issue_proofs:
+        worker = workers.get(proof.worker_result_ref.contract_id)
+        review = reviews.get(proof.review_result_ref.contract_id)
+        if worker is None or review is None:
+            raise ValueError("receipt proof references unresolved structured evidence")
+        if proof.worker_result_ref != ContractRef(
+            schema_version=worker.schema_version,
+            contract_id=worker.result_id,
+            content_hash=worker.content_hash,
+        ):
+            raise ValueError("worker result ref hash does not match supplied evidence")
+        if proof.review_result_ref != ContractRef(
+            schema_version=review.schema_version,
+            contract_id=review.result_id,
+            content_hash=review.content_hash,
+        ):
+            raise ValueError("review result ref hash does not match supplied evidence")
+        pull_request_number = (
+            proof.merge_identity.pull_request_number
+            if proof.merge_identity is not None
+            else worker.pull_request_number
+        )
+        if (
+            worker.run_id != receipt.run_id
+            or review.run_id != receipt.run_id
+            or worker.plan_ref != expected_plan_ref
+            or review.plan_ref != expected_plan_ref
+            or worker.issue != proof.issue
+            or review.issue != proof.issue
+            or worker.status != "completed"
+            or worker.exact_head_sha != proof.exact_head_sha
+            or review.exact_head_sha != proof.exact_head_sha
+            or worker.pull_request_number != pull_request_number
+            or review.pull_request_number != pull_request_number
+            or review.disposition != proof.review_disposition
+            or review.policy_profile != plan.policy_profile
+            or set(review.known_defect_refs)
+            != {item.registry_ref for item in proof.known_defects}
+        ):
+            raise ValueError(
+                "receipt proof does not match run, plan, scope, PR, head, review, or policy evidence"
+            )
+        used_workers.add(worker.result_id)
+        used_reviews.add(review.result_id)
+    if used_workers != set(workers) or used_reviews != set(reviews):
+        raise ValueError("supplied structured evidence must be used exactly once")
+    return receipt
 
 
 DeliveryContract = (
@@ -771,10 +1057,18 @@ def parse_delivery_contract(
             encoded = canonical_json(dict(raw)).encode("utf-8")
             payload = dict(raw)
         else:
-            encoded = bytes(raw) if not isinstance(raw, str) else raw.encode("utf-8")
-            payload = json.loads(encoded)
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            source = bytes(raw) if not isinstance(raw, str) else raw.encode("utf-8")
+            payload = json.loads(
+                source,
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+            encoded = canonical_json(payload).encode("utf-8")
+    except json.JSONDecodeError as exc:
         raise ValueError("delivery contract must be one JSON object") from exc
+    except TypeError as exc:
+        raise ValueError("delivery contract must be one JSON object") from exc
+    except ValueError:
+        raise
     if not isinstance(payload, dict):
         raise ValueError("delivery contract must be one JSON object")
     schema_version = payload.get("schema_version")
@@ -833,5 +1127,7 @@ __all__ = [
     "WORKER_RESULT_VERSION",
     "canonical_hash",
     "canonical_json",
+    "delivery_initiation_approval_hash",
     "parse_delivery_contract",
+    "validate_delivery_receipt_evidence",
 ]

@@ -35,7 +35,9 @@ from app.builderops.delivery_orchestration_contracts import (
     StructuredWorkerResult,
     TcdMetrics,
     ValidationEvidence,
+    delivery_initiation_approval_hash,
     parse_delivery_contract,
+    validate_delivery_receipt_evidence,
 )
 
 SHA_A = "a" * 64
@@ -110,25 +112,37 @@ def _budget() -> DeliveryBudget:
 
 
 def _initiation(issue: IssueScope) -> DeliveryInitiation:
+    exclusions = (
+        ScopeExclusion(
+            scope_key="durable-carrier-selection",
+            reason="Deferred to the explicit carrier governance gate.",
+        ),
+    )
+    requested_scope = (issue,)
+    policy_profile = _policy()
+    budget = _budget()
+    source_authorities = (_authority(issue),)
     return DeliveryInitiation(
         initiation_id="init-4165",
-        requested_scope=(issue,),
-        exclusions=(
-            ScopeExclusion(
-                scope_key="durable-carrier-selection",
-                reason="Deferred to the explicit carrier governance gate.",
-            ),
-        ),
+        requested_scope=requested_scope,
+        exclusions=exclusions,
         approval_evidence=ApprovalEvidence(
             approval_id="approval-4165",
             approver=_actor(),
             approved_at=TS,
-            approved_payload_hash=SHA_C,
+            approved_payload_hash=delivery_initiation_approval_hash(
+                initiation_id="init-4165",
+                requested_scope=requested_scope,
+                exclusions=exclusions,
+                policy_profile=policy_profile,
+                budget=budget,
+                source_authorities=source_authorities,
+            ),
             source_refs=(_source("RasmusTho/agentic-pkm-mvp#4165", SHA_C),),
         ),
-        policy_profile=_policy(),
-        budget=_budget(),
-        source_authorities=(_authority(issue),),
+        policy_profile=policy_profile,
+        budget=budget,
+        source_authorities=source_authorities,
         provenance=_provenance("initiation-4165"),
     )
 
@@ -169,10 +183,18 @@ def _plan(issue: IssueScope, initiation: DeliveryInitiation) -> DeliveryPlan:
     )
 
 
-def _worker_result(issue: IssueScope) -> StructuredWorkerResult:
+def _worker_result(
+    issue: IssueScope,
+    plan: DeliveryPlan,
+) -> StructuredWorkerResult:
     return StructuredWorkerResult(
         result_id="worker-result-4165",
         run_id="run-4165",
+        plan_ref=ContractRef(
+            schema_version=plan.schema_version,
+            contract_id=plan.plan_id,
+            content_hash=plan.content_hash,
+        ),
         issue=issue,
         status="completed",
         exact_head_sha=SHA_D,
@@ -192,15 +214,22 @@ def _worker_result(issue: IssueScope) -> StructuredWorkerResult:
     )
 
 
-def _review_result(issue: IssueScope) -> ReviewResult:
+def _review_result(issue: IssueScope, plan: DeliveryPlan) -> ReviewResult:
     return ReviewResult(
         result_id="review-result-4165",
         run_id="run-4165",
+        plan_ref=ContractRef(
+            schema_version=plan.schema_version,
+            contract_id=plan.plan_id,
+            content_hash=plan.content_hash,
+        ),
+        policy_profile=plan.policy_profile,
         issue=issue,
         pull_request_number=4200,
         exact_head_sha=SHA_D,
         disposition="accept_with_risk",
         confidence_basis_points=9_500,
+        minimum_confidence_basis_points=8_000,
         findings=(
             ReviewFinding(
                 finding_id="finding-p2-1",
@@ -247,6 +276,8 @@ def _receipt(
             content_hash=plan.content_hash,
         ),
         terminal_outcome="delivered",
+        requested_scope=initiation.requested_scope,
+        final_scope=plan.final_scope,
         issue_proofs=(
             IssueDeliveryProof(
                 issue=issue,
@@ -299,6 +330,7 @@ def _receipt(
             RecoveryStep(
                 step_index=0,
                 exception_kind="external_state_unknown",
+                exception_code="merge-timeout-reconciled",
                 action="read_live_authority",
                 authority_readback_refs=("github-pr:4200:merged",),
                 outcome="reconciled",
@@ -336,8 +368,8 @@ def test_contracts_round_trip_canonically() -> None:
     issue = _issue(4165, SHA_A)
     initiation = _initiation(issue)
     plan = _plan(issue, initiation)
-    worker = _worker_result(issue)
-    review = _review_result(issue)
+    worker = _worker_result(issue, plan)
+    review = _review_result(issue, plan)
     event = ReducerEvent(
         event_id="event-1",
         run_id="run-4165",
@@ -365,6 +397,8 @@ def test_contracts_round_trip_canonically() -> None:
         sequence=2,
         effect_class="await_ci",
         issue=issue,
+        pull_request_number=4200,
+        exact_head_sha=SHA_D,
         expected_authorities=(_authority(issue),),
         idempotency_key="run-4165:await-ci:4165:2",
         input_hash=SHA_B,
@@ -395,6 +429,34 @@ def test_contracts_round_trip_canonically() -> None:
         reordered = dict(reversed(list(json.loads(canonical).items())))
         assert parse_delivery_contract(reordered).canonical_bytes() == canonical
 
+    duplicate_key_json = initiation.canonical_json().replace(
+        f'"schema_version":"{initiation.schema_version}"',
+        (
+            '"schema_version":"unsupported.delivery.v0",'
+            f'"schema_version":"{initiation.schema_version}"'
+        ),
+        1,
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_delivery_contract(duplicate_key_json)
+
+    invalid_event = event.model_dump(mode="json")
+    invalid_event["event_type"] = "run_started"
+    invalid_event["subject_authority"] = None
+    with pytest.raises(ValidationError, match="result ref"):
+        parse_delivery_contract(invalid_event)
+
+    invalid_effect = effect.model_dump(mode="json")
+    invalid_effect["pull_request_number"] = None
+    invalid_effect["exact_head_sha"] = None
+    with pytest.raises(ValidationError, match="pull request and exact head"):
+        parse_delivery_contract(invalid_effect)
+
+    invalid_timestamp = initiation.model_dump(mode="json")
+    invalid_timestamp["provenance"]["created_at"] = "2026-99-99T99:99:99Z"
+    with pytest.raises(ValidationError, match="real UTC calendar"):
+        parse_delivery_contract(invalid_timestamp)
+
 
 def test_initiation_is_evidence_not_execution_authority() -> None:
     issue = _issue(4165, SHA_A)
@@ -418,6 +480,11 @@ def test_initiation_is_evidence_not_execution_authority() -> None:
     payload = initiation.model_dump(mode="json")
     payload["approval_evidence"]["effect_authority"] = True
     with pytest.raises(ValidationError):
+        parse_delivery_contract(payload)
+
+    payload = initiation.model_dump(mode="json")
+    payload["budget"]["max_coordinator_turns"] += 1
+    with pytest.raises(ValidationError, match="exact canonical initiation payload"):
         parse_delivery_contract(payload)
 
 
@@ -451,13 +518,35 @@ def test_plan_binds_scope_and_expected_authority() -> None:
     with pytest.raises(ValidationError, match="waves"):
         parse_delivery_contract(payload)
 
+    second_issue = _issue(4166, SHA_C)
+    payload = plan.model_dump(mode="json")
+    payload["budget"]["max_parallel_workers"] = 1
+    payload["final_scope"].append(second_issue.model_dump(mode="json"))
+    payload["input_authorities"].append(
+        _authority(second_issue).model_dump(mode="json")
+    )
+    payload["dependency_waves"][0]["issues"].append(
+        second_issue.model_dump(mode="json")
+    )
+    payload["expected_states"].append(
+        ExpectedAuthorityState(
+            issue=second_issue,
+            issue_state="open",
+            required_labels=("type:task",),
+            forbidden_labels=("agent:blocked",),
+            expected_contract_hash=second_issue.contract_hash,
+        ).model_dump(mode="json")
+    )
+    with pytest.raises(ValidationError, match="max_parallel_workers"):
+        parse_delivery_contract(payload)
+
 
 def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     issue = _issue(4165, SHA_A)
     initiation = _initiation(issue)
     plan = _plan(issue, initiation)
-    worker = _worker_result(issue)
-    review = _review_result(issue)
+    worker = _worker_result(issue, plan)
+    review = _review_result(issue, plan)
     receipt = _receipt(issue, initiation, plan, worker, review)
 
     proof = receipt.issue_proofs[0]
@@ -474,8 +563,52 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     assert receipt.recovery_history[0].outcome == "reconciled"
     assert receipt.tcd_metrics.deterministic_transitions == 9
     assert receipt.tcd_metrics.human_interventions == 0
+    assert (
+        validate_delivery_receipt_evidence(
+            receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+        )
+        is receipt
+    )
 
     payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["merge_identity"]["exact_head_sha"] = SHA_C
     with pytest.raises(ValidationError, match="exact head"):
         parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["check_evidence"] = []
+    with pytest.raises(ValidationError, match="accepted exact-head proof"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"] = []
+    with pytest.raises(ValidationError, match="reconciled recovery"):
+        parse_delivery_contract(payload)
+
+    payload = review.model_dump(mode="json")
+    payload["confidence_basis_points"] = 0
+    with pytest.raises(ValidationError, match="low-confidence"):
+        parse_delivery_contract(payload)
+
+    payload = review.model_dump(mode="json")
+    payload["known_defect_refs"] = []
+    with pytest.raises(ValidationError, match="known-defect refs"):
+        parse_delivery_contract(payload)
+
+    mismatched_plan_payload = plan.model_dump(mode="json")
+    mismatched_plan_payload["plan_id"] = "other-plan"
+    mismatched_plan = DeliveryPlan.model_validate_json(
+        json.dumps(mismatched_plan_payload)
+    )
+    with pytest.raises(ValueError, match="plan ref"):
+        validate_delivery_receipt_evidence(
+            receipt,
+            initiation=initiation,
+            plan=mismatched_plan,
+            worker_results=(worker,),
+            review_results=(review,),
+        )
