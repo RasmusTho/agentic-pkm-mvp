@@ -62,6 +62,25 @@ def _open_fd_count() -> int:
     return len(list(fd_root.iterdir()))
 
 
+def _has_open_file_identity(expected: os.stat_result) -> bool:
+    for fd in range(1024):
+        try:
+            current = os.fstat(fd)
+        except OSError:
+            continue
+        if (
+            current.st_dev,
+            current.st_ino,
+            stat.S_IFMT(current.st_mode),
+        ) == (
+            expected.st_dev,
+            expected.st_ino,
+            stat.S_IFMT(expected.st_mode),
+        ):
+            return True
+    return False
+
+
 def _install_staged_io_fault(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -260,6 +279,7 @@ def test_rewritten_write_uses_atomic_replace_at_filesystem_seam(
 
     monkeypatch.setattr(adapters_module, "_atomic_exchange_at", recording_exchange)
 
+    before_fds = _open_fd_count()
     receipt = adapter.write_note(
         locator,
         "replacement",
@@ -272,6 +292,7 @@ def test_rewritten_write_uses_atomic_replace_at_filesystem_seam(
     assert receipt.operation == "write_note"
     assert receipt.outcome == "written"
     assert receipt.conflict_artifact is None
+    assert _open_fd_count() == before_fds
 
 
 def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
@@ -284,13 +305,16 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
     target.write_bytes(b"human-current")
     stale_version = hashlib.sha256(b"caller-observed").hexdigest()
     real_stage = adapters_module._stage_initial_stale_proposal
+    real_link = os.link
     racer_entry_name: str | None = None
+    candidate_guard_observed = False
 
     def unexpected_exchange(*_args: object) -> None:
         raise AssertionError("an initially stale write must not exchange the canonical note")
 
     def replace_hidden_entry_before_publication(
         parent_fd: int,
+        conflict_fd: int,
         staged_name: str,
         staged_locator: NoteLocator,
         *,
@@ -299,8 +323,9 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
         staged_stat: os.stat_result,
         writer_identity: str,
         written_at: datetime,
-    ) -> PurePosixPath:
+    ) -> tuple[PurePosixPath, os.stat_result]:
         nonlocal racer_entry_name
+        assert _has_open_file_identity(staged_stat)
         os.unlink(staged_name, dir_fd=parent_fd)
         replacement_fd = os.open(
             staged_name,
@@ -316,6 +341,7 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
         racer_entry_name = staged_name
         return real_stage(
             parent_fd,
+            conflict_fd,
             staged_name,
             staged_locator,
             payload=payload,
@@ -325,13 +351,39 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
             written_at=written_at,
         )
 
+    def observe_candidate_guard(
+        src: str,
+        dst: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        nonlocal candidate_guard_observed
+        if src.endswith(".conflict-stage") and src_dir_fd is not None:
+            candidate_stat = os.stat(
+                src,
+                dir_fd=src_dir_fd,
+                follow_symlinks=False,
+            )
+            candidate_guard_observed = _has_open_file_identity(candidate_stat)
+        real_link(
+            src,
+            dst,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
     monkeypatch.setattr(adapters_module, "_atomic_exchange_at", unexpected_exchange)
+    monkeypatch.setattr(os, "link", observe_candidate_guard)
     monkeypatch.setattr(
         adapters_module,
         "_stage_initial_stale_proposal",
         replace_hidden_entry_before_publication,
     )
 
+    before_fds = _open_fd_count()
     receipt = adapter.write_note(
         locator,
         "caller-proposal",
@@ -348,8 +400,297 @@ def test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam(
     assert artifact.parent == target.parent
     assert artifact.read_bytes() == b"caller-proposal"
     assert "remote-writer" in artifact.name
+    assert candidate_guard_observed
     assert racer_entry_name is not None
     assert (target.parent / racer_entry_name).read_bytes() == b"directory-racer"
+    retained_cleanup = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(retained_cleanup) == 1
+    assert all(path.read_bytes() == b"caller-proposal" for path in retained_cleanup)
+    assert _open_fd_count() == before_fds
+
+
+def test_cleanup_atomically_restores_replacement_injected_before_retention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "Notes"
+    conflict = parent / "_conflicts"
+    conflict.mkdir(parents=True)
+    source_name = ".cleanup-race.md.rewrite-swap"
+    source = parent / source_name
+    source.write_bytes(b"controlled")
+    parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    conflict_fd = os.open(conflict, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    guard_fd = os.open(source_name, os.O_RDONLY, dir_fd=parent_fd)
+    expected = os.fstat(guard_fd)
+    real_rename = adapters_module._atomic_rename_noreplace_at
+    injected = False
+
+    def replace_immediately_before_atomic_retention(
+        source_dir_fd: int,
+        moving_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal injected
+        if not injected and source_dir_fd == parent_fd and moving_name == source_name:
+            injected = True
+            os.unlink(moving_name, dir_fd=source_dir_fd)
+            replacement_fd = os.open(
+                moving_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=source_dir_fd,
+            )
+            with os.fdopen(replacement_fd, "wb") as replacement:
+                replacement.write(b"directory-racer")
+                replacement.flush()
+                os.fsync(replacement.fileno())
+            os.fsync(source_dir_fd)
+        real_rename(
+            source_dir_fd,
+            moving_name,
+            destination_dir_fd,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomic_rename_noreplace_at",
+        replace_immediately_before_atomic_retention,
+    )
+    try:
+        retained_name = adapters_module._atomically_retain_controlled_entry(
+            parent_fd,
+            source_name,
+            expected,
+            conflict_fd,
+            NoteLocator(vault="Vault", path="Notes/cleanup-race.md"),
+        )
+    finally:
+        os.close(guard_fd)
+        os.close(conflict_fd)
+        os.close(parent_fd)
+
+    assert injected
+    assert retained_name is None
+    assert source.read_bytes() == b"directory-racer"
+    assert list(conflict.iterdir()) == []
+
+
+def test_cleanup_restore_collision_closes_all_adapter_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/cleanup-collision.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_rename = adapters_module._atomic_rename_noreplace_at
+    injected_source: str | None = None
+    restore_collision = False
+
+    def stop_before_exchange(*_args: object, **_kwargs: object) -> None:
+        raise KnowledgeWriteConflict("forced pre-exchange cleanup")
+
+    def collide_with_cleanup_restoration(
+        source_dir_fd: int,
+        moving_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal injected_source, restore_collision
+        if injected_source is None and moving_name.endswith(".rewrite-swap"):
+            injected_source = moving_name
+            os.unlink(moving_name, dir_fd=source_dir_fd)
+            replacement_fd = os.open(
+                moving_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=source_dir_fd,
+            )
+            with os.fdopen(replacement_fd, "wb") as replacement:
+                replacement.write(b"directory-racer")
+                replacement.flush()
+                os.fsync(replacement.fileno())
+            os.fsync(source_dir_fd)
+        elif (
+            injected_source is not None
+            and not restore_collision
+            and destination_name == injected_source
+        ):
+            restore_collision = True
+            entrant_fd = os.open(
+                destination_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=destination_dir_fd,
+            )
+            with os.fdopen(entrant_fd, "wb") as entrant:
+                entrant.write(b"later-entrant")
+                entrant.flush()
+                os.fsync(entrant.fileno())
+            os.fsync(destination_dir_fd)
+        real_rename(
+            source_dir_fd,
+            moving_name,
+            destination_dir_fd,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_require_anchored_directory_identity",
+        stop_before_exchange,
+    )
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomic_rename_noreplace_at",
+        collide_with_cleanup_restoration,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(KnowledgeWriteConflict, match="cleanup replacement was retained"):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert _open_fd_count() == before_fds
+    assert injected_source is not None
+    assert restore_collision
+    assert (target.parent / injected_source).read_bytes() == b"later-entrant"
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(retained) == 3
+    assert {path.read_bytes() for path in retained} == {
+        b"observed body",
+        b"ENGINE",
+        b"directory-racer",
+    }
+
+
+def test_staging_guard_dup_failure_keeps_owner_open_through_retention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/staging-dup-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    real_dup = os.dup
+    real_retain = adapters_module._atomically_retain_controlled_entry
+    retained_with_owner = False
+
+    def fail_first_regular_dup(fd: int) -> int:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("simulated staging guard dup failure")
+        return real_dup(fd)
+
+    def observe_owner_during_retention(
+        source_dir_fd: int,
+        source_name: str,
+        expected: os.stat_result,
+        conflict_dir_fd: int,
+        retained_locator: NoteLocator,
+        *,
+        retain_guard: bool = False,
+    ):
+        nonlocal retained_with_owner
+        if source_name.endswith(".rewrite-swap"):
+            retained_with_owner = _has_open_file_identity(expected)
+        return real_retain(
+            source_dir_fd,
+            source_name,
+            expected,
+            conflict_dir_fd,
+            retained_locator,
+            retain_guard=retain_guard,
+        )
+
+    monkeypatch.setattr(os, "dup", fail_first_regular_dup)
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomically_retain_controlled_entry",
+        observe_owner_during_retention,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(KnowledgeWriteConflict, match="verification failed"):
+        adapter.write_note(
+            locator,
+            "ENGINE",
+            expected_version=hashlib.sha256(b"observed body").hexdigest(),
+        )
+
+    assert retained_with_owner
+    assert _open_fd_count() == before_fds
+    assert target.read_bytes() == b"observed body"
+    assert not list(target.parent.glob(".*.rewrite-swap"))
+
+
+def test_candidate_guard_dup_failure_keeps_owner_open_through_retention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/candidate-dup-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"human-current")
+    real_dup = os.dup
+    real_retain = adapters_module._atomically_retain_controlled_entry
+    regular_dup_calls = 0
+    retained_with_owner = False
+
+    def fail_candidate_regular_dup(fd: int) -> int:
+        nonlocal regular_dup_calls
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            regular_dup_calls += 1
+            if regular_dup_calls == 3:
+                raise OSError("simulated candidate guard dup failure")
+        return real_dup(fd)
+
+    def observe_owner_during_retention(
+        source_dir_fd: int,
+        source_name: str,
+        expected: os.stat_result,
+        conflict_dir_fd: int,
+        retained_locator: NoteLocator,
+        *,
+        retain_guard: bool = False,
+    ):
+        nonlocal retained_with_owner
+        if source_name.endswith(".conflict-stage"):
+            retained_with_owner = _has_open_file_identity(expected)
+        return real_retain(
+            source_dir_fd,
+            source_name,
+            expected,
+            conflict_dir_fd,
+            retained_locator,
+            retain_guard=retain_guard,
+        )
+
+    monkeypatch.setattr(os, "dup", fail_candidate_regular_dup)
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomically_retain_controlled_entry",
+        observe_owner_during_retention,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(KnowledgeWriteConflict, match="verification failed"):
+        adapter.write_note(
+            locator,
+            "caller proposal",
+            expected_version=hashlib.sha256(b"caller observed").hexdigest(),
+        )
+
+    assert regular_dup_calls == 3
+    assert retained_with_owner
+    assert _open_fd_count() == before_fds
+    assert target.read_bytes() == b"human-current"
+    assert not list(target.parent.glob(".*.conflict-stage"))
 
 
 def test_stale_rewritten_write_retains_trusted_candidate_if_public_artifact_is_replaced(
@@ -402,6 +743,57 @@ def test_stale_rewritten_write_retains_trusted_candidate_if_public_artifact_is_r
     assert trusted_candidates[0].read_bytes() == b"caller-proposal"
 
 
+def test_stale_public_artifact_replaced_after_helper_fails_outer_receipt_fence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/outer-replacement.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"human-current")
+    real_stage = adapters_module._stage_initial_stale_proposal
+    replaced_artifact: PurePosixPath | None = None
+
+    def replace_after_helper(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal replaced_artifact
+        artifact_rel, artifact_stat = real_stage(*args, **kwargs)
+        parent_fd = args[0]
+        os.unlink(artifact_rel.name, dir_fd=parent_fd)
+        replacement_fd = os.open(
+            artifact_rel.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        with os.fdopen(replacement_fd, "wb") as replacement:
+            replacement.write(b"directory-racer")
+            replacement.flush()
+            os.fsync(replacement.fileno())
+        os.fsync(parent_fd)
+        replaced_artifact = artifact_rel
+        return artifact_rel, artifact_stat
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_stage_initial_stale_proposal",
+        replace_after_helper,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="changed before receipt"):
+        adapter.write_note(
+            locator,
+            "caller-proposal",
+            expected_version=hashlib.sha256(b"caller-observed").hexdigest(),
+        )
+
+    assert replaced_artifact is not None
+    assert (tmp_path / replaced_artifact).read_bytes() == b"directory-racer"
+    assert target.read_bytes() == b"human-current"
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert b"caller-proposal" in {path.read_bytes() for path in retained}
+
+
 @pytest.mark.parametrize("fault", ["write", "flush", "fsync"])
 def test_rewritten_write_staging_io_failure_cleans_controlled_entry(
     tmp_path: Path,
@@ -431,6 +823,9 @@ def test_rewritten_write_staging_io_failure_cleans_controlled_entry(
     assert target.read_bytes() == b"observed body"
     assert list(target.parent.glob(".*.rewrite-swap")) == []
     assert list(target.parent.glob(".*.conflict-stage")) == []
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(retained) == 1
+    assert all(path.suffix == ".conflict" for path in retained)
     assert _open_fd_count() == before_fds
 
 
@@ -464,8 +859,9 @@ def test_initial_stale_candidate_io_failure_cleans_partial_and_preserves_proposa
     assert list(target.parent.glob(".*.rewrite-swap")) == []
     assert list(target.parent.glob(".*.conflict-stage")) == []
     retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
-    assert len(retained) == 1
-    assert retained[0].read_bytes() == b"caller proposal"
+    assert len(retained) == 2
+    assert b"caller proposal" in {path.read_bytes() for path in retained}
+    assert all(path.suffix == ".conflict" for path in retained)
     assert _open_fd_count() == before_fds
 
 
@@ -486,6 +882,9 @@ def test_staged_conflict_artifact_matches_quarantine_classifier(tmp_path: Path) 
     assert receipt.outcome == "conflict_staged"
     assert receipt.conflict_artifact is not None
     assert is_conflict_artifact(receipt.conflict_artifact)
+    retained_cleanup = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(retained_cleanup) == 2
+    assert all(path.read_bytes() == b"stale proposal" for path in retained_cleanup)
 
 
 def test_append_only_write_does_not_stage_stale_conflict(
@@ -665,7 +1064,7 @@ def test_rewritten_write_conflicts_with_same_inode_save_after_version_read(
     assert target.read_bytes() == b"HUMAN-SAVE"
 
 
-def test_rewritten_write_rolls_back_same_inode_save_after_final_version_read(
+def test_rewritten_write_preserves_nested_writers_without_recursive_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = FsVaultAdapter(tmp_path)
@@ -700,24 +1099,36 @@ def test_rewritten_write_rolls_back_same_inode_save_after_final_version_read(
         nonlocal exchanges
         exchanges += 1
         if exchanges == 2:
+            target.unlink()
             target.write_bytes(b"THIRD-WRITER")
         real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+        if exchanges == 2:
+            target.unlink()
+            target.write_bytes(b"FOURTH-WRITER")
 
     monkeypatch.setattr(adapters_module, "_read_handle", save_after_final_read)
     monkeypatch.setattr(adapters_module, "_atomic_exchange_at", racing_exchange)
 
-    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+    before_fds = _open_fd_count()
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="canonical outcome is indeterminate",
+    ):
         adapter.write_note(locator, "ENGINE", expected_version=expected_version)
 
-    assert target.read_bytes() == b"HUMAN-AFTER-FINAL-READ"
+    assert exchanges == 2
+    assert target.read_bytes() == b"FOURTH-WRITER"
     conflict_contents = [
         path.read_bytes()
         for path in (target.parent / "_conflicts").rglob("*conflicted copy*")
     ]
+    assert b"HUMAN-AFTER-FINAL-READ" in conflict_contents
     assert b"THIRD-WRITER" in conflict_contents
+    assert b"ENGINE" in conflict_contents
+    assert _open_fd_count() == before_fds
 
 
-def test_rewritten_write_rolls_back_leaf_alias_swap_at_atomic_exchange(
+def test_rewritten_write_preserves_leaf_alias_without_recursive_rollback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -741,6 +1152,7 @@ def test_rewritten_write_rolls_back_leaf_alias_swap_at_atomic_exchange(
         nonlocal exchanges
         exchanges += 1
         if exchanges == 1:
+            assert _has_open_file_identity(target.stat())
             target.unlink()
             target.symlink_to(other.name)
         real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
@@ -751,6 +1163,7 @@ def test_rewritten_write_rolls_back_leaf_alias_swap_at_atomic_exchange(
         alias_at_linearization,
     )
 
+    before_fds = _open_fd_count()
     with pytest.raises(
         KnowledgeWriteConflict,
         match="target changed at atomic exchange",
@@ -761,17 +1174,68 @@ def test_rewritten_write_rolls_back_leaf_alias_swap_at_atomic_exchange(
             expected_version=expected_version,
         )
 
-    assert exchanges == 2
-    assert target.is_symlink()
-    assert target.readlink() == Path(other.name)
-    assert target.read_bytes() == b"same content"
+    assert exchanges == 1
+    assert not target.is_symlink()
+    assert target.read_bytes() == b"stale proposal"
     assert other.read_bytes() == b"same content"
-    conflict_contents = [
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert any(path.is_symlink() and path.readlink() == Path(other.name) for path in retained)
+    assert any(not path.is_symlink() and path.read_bytes() == b"same content" for path in retained)
+    assert _open_fd_count() == before_fds
+
+
+def test_rewritten_write_preserves_post_exchange_writer_and_proposal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/post-exchange-writer.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_exchange = adapters_module._atomic_exchange_at
+    exchanges = 0
+
+    def writers_around_primary_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            target.unlink()
+            target.write_bytes(b"THIRD-WRITER")
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+        if exchanges == 1:
+            target.unlink()
+            target.write_bytes(b"FOURTH-WRITER")
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomic_exchange_at",
+        writers_around_primary_exchange,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="target changed after atomic exchange",
+    ):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert exchanges == 1
+    assert target.read_bytes() == b"FOURTH-WRITER"
+    conflict_contents = {
         path.read_bytes()
-        for path in (target.parent / "_conflicts").rglob("*conflicted copy*")
-        if not path.is_symlink()
-    ]
-    assert b"stale proposal" in conflict_contents
+        for path in (target.parent / "_conflicts").glob("*.md.conflict")
+    }
+    assert b"THIRD-WRITER" in conflict_contents
+    assert b"ENGINE" in conflict_contents
+    assert b"observed body" in conflict_contents
+    assert _open_fd_count() == before_fds
 
 
 def test_rewritten_write_preserves_existing_file_mode(tmp_path: Path) -> None:
@@ -884,6 +1348,7 @@ def test_rewritten_write_conflicts_on_mode_change_at_atomic_exchange(
     target.chmod(0o644)
     expected_version = hashlib.sha256(b"observed body").hexdigest()
     real_exchange = adapters_module._atomic_exchange_at
+    exchanges = 0
 
     def chmod_before_exchange(
         first_dir_fd: int,
@@ -891,7 +1356,10 @@ def test_rewritten_write_conflicts_on_mode_change_at_atomic_exchange(
         second_dir_fd: int,
         second_name: str,
     ) -> None:
-        target.chmod(0o600)
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            target.chmod(0o600)
         real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
 
     monkeypatch.setattr(adapters_module, "_atomic_exchange_at", chmod_before_exchange)
@@ -899,8 +1367,14 @@ def test_rewritten_write_conflicts_on_mode_change_at_atomic_exchange(
     with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
         adapter.write_note(locator, "ENGINE", expected_version=expected_version)
 
+    assert exchanges == 2
     assert target.read_bytes() == b"observed body"
     assert target.stat().st_mode & 0o777 == 0o600
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert retained
+    assert all(not path.samefile(target) for path in retained)
+    retained[0].write_bytes(b"RECOVERY-EDIT")
+    assert target.read_bytes() == b"observed body"
 
 
 def test_rewritten_write_retains_pre_exchange_inode_for_late_stale_fd_save(
@@ -930,6 +1404,622 @@ def test_rewritten_write_retains_pre_exchange_inode_for_late_stale_fd_save(
     assert b"HUMAN-LATE-SAVE" in conflict_contents
 
 
+def test_rewritten_write_recovery_guard_survives_primary_artifact_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/recovery-guard.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    stale_handle = target.open("r+b")
+    real_retain = adapters_module._atomically_retain_controlled_entry
+    replaced_primary: str | None = None
+
+    def replace_primary_after_guard_publication(
+        source_dir_fd: int,
+        source_name: str,
+        expected: os.stat_result,
+        conflict_dir_fd: int,
+        retained_locator: NoteLocator,
+        *,
+        retain_guard: bool = False,
+    ):
+        nonlocal replaced_primary
+        retained = real_retain(
+            source_dir_fd,
+            source_name,
+            expected,
+            conflict_dir_fd,
+            retained_locator,
+            retain_guard=retain_guard,
+        )
+        if retain_guard and retained is not None:
+            assert retained.guard_name is not None
+            original_bytes = adapters_module._read_entry(
+                conflict_dir_fd,
+                retained.name,
+            )
+            original_mode = stat.S_IMODE(
+                os.stat(
+                    retained.name,
+                    dir_fd=conflict_dir_fd,
+                    follow_symlinks=False,
+                ).st_mode
+            )
+            os.unlink(retained.name, dir_fd=conflict_dir_fd)
+            replacement_fd = os.open(
+                retained.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                original_mode,
+                dir_fd=conflict_dir_fd,
+            )
+            with os.fdopen(replacement_fd, "wb") as replacement:
+                replacement.write(original_bytes)
+                replacement.flush()
+                os.fsync(replacement.fileno())
+            os.fsync(conflict_dir_fd)
+            replaced_primary = retained.name
+        return retained
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomically_retain_controlled_entry",
+        replace_primary_after_guard_publication,
+    )
+
+    receipt = adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+    stale_handle.seek(0)
+    stale_handle.write(b"HUMAN-LATE-SAVE")
+    stale_handle.truncate()
+    stale_handle.flush()
+    stale_handle.close()
+
+    assert receipt.operation == "write_note"
+    assert replaced_primary is not None
+    assert target.read_bytes() == b"ENGINE"
+    conflict_contents = [
+        path.read_bytes()
+        for path in (target.parent / "_conflicts").glob("*.md.conflict")
+    ]
+    assert b"observed body" in conflict_contents
+    assert b"HUMAN-LATE-SAVE" in conflict_contents
+
+
+def test_rewritten_write_snapshots_original_before_first_recovery_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/pre-guard-replacement.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    stale_handle = target.open("r+b")
+    real_link_recovery = adapters_module._link_identity_recovery
+    replaced = False
+
+    def replace_before_first_guard_link(
+        source_dir_fd: int,
+        source_name: str,
+        expected: os.stat_result,
+        conflict_dir_fd: int,
+        retained_locator: NoteLocator,
+    ) -> str:
+        nonlocal replaced
+        if not replaced and source_name.endswith(".rewrite-swap"):
+            replaced = True
+            stale_handle.seek(0)
+            stale_handle.write(b"HUMAN-LATE")
+            stale_handle.truncate()
+            stale_handle.flush()
+            os.fsync(stale_handle.fileno())
+            os.unlink(source_name, dir_fd=source_dir_fd)
+            racer_fd = os.open(
+                source_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=source_dir_fd,
+            )
+            with os.fdopen(racer_fd, "wb") as racer:
+                racer.write(b"RACER-HIDDEN")
+                racer.flush()
+                os.fsync(racer.fileno())
+            os.fsync(source_dir_fd)
+        return real_link_recovery(
+            source_dir_fd,
+            source_name,
+            expected,
+            conflict_dir_fd,
+            retained_locator,
+        )
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_link_identity_recovery",
+        replace_before_first_guard_link,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="recovery guard changed",
+    ):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert replaced
+    assert target.read_bytes() == b"ENGINE"
+    conflict_contents = {
+        path.read_bytes()
+        for path in (target.parent / "_conflicts").glob("*.md.conflict")
+    }
+    assert b"observed body" in conflict_contents
+    assert b"HUMAN-LATE" in conflict_contents
+    assert b"RACER-HIDDEN" in conflict_contents
+    assert _open_fd_count() == before_fds
+    stale_handle.close()
+
+
+def test_rewritten_write_preserves_intended_payload_after_staging_inode_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/staging-inode-mutation.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_exchange = adapters_module._atomic_exchange_at
+    exchanges = 0
+
+    def mutate_staging_before_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            mutated_fd = os.open(
+                second_name,
+                os.O_WRONLY | os.O_TRUNC,
+                dir_fd=second_dir_fd,
+            )
+            with os.fdopen(mutated_fd, "wb") as mutated:
+                mutated.write(b"MUTATED-STAGE")
+                mutated.flush()
+                os.fsync(mutated.fileno())
+            os.fsync(second_dir_fd)
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomic_exchange_at",
+        mutate_staging_before_exchange,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="target content changed after atomic exchange",
+    ):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert exchanges == 1
+    assert target.read_bytes() == b"MUTATED-STAGE"
+    conflict_contents = {
+        path.read_bytes()
+        for path in (target.parent / "_conflicts").glob("*.md.conflict")
+    }
+    assert b"ENGINE" in conflict_contents
+    assert b"observed body" in conflict_contents
+    assert _open_fd_count() == before_fds
+
+
+def test_rewritten_write_preserves_intended_payload_after_precondition_name_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/precondition-name-swap.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    precondition_calls = 0
+    replaced_name: str | None = None
+
+    def replace_staging_before_precondition(
+        _root_fd: int,
+        _root_path: Path,
+        _relative_parent: PurePosixPath,
+        parent_fd: int,
+        _conflict_fd: int,
+        _locator: NoteLocator,
+    ) -> None:
+        nonlocal precondition_calls, replaced_name
+        precondition_calls += 1
+        if precondition_calls != 1:
+            return
+        replaced_name = next(
+            name for name in os.listdir(parent_fd) if name.endswith(".rewrite-swap")
+        )
+        os.unlink(replaced_name, dir_fd=parent_fd)
+        racer_fd = os.open(
+            replaced_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        with os.fdopen(racer_fd, "wb") as racer:
+            racer.write(b"RACER-HIDDEN")
+            racer.flush()
+            os.fsync(racer.fileno())
+        os.fsync(parent_fd)
+        raise KnowledgeWriteConflict("forced safe precondition failure")
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_require_anchored_directory_identity",
+        replace_staging_before_precondition,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="forced safe precondition failure",
+    ):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert precondition_calls == 1
+    assert replaced_name is not None
+    assert target.read_bytes() == b"observed body"
+    assert (target.parent / replaced_name).read_bytes() == b"RACER-HIDDEN"
+    conflict_contents = {
+        path.read_bytes()
+        for path in (target.parent / "_conflicts").glob("*.md.conflict")
+    }
+    assert b"ENGINE" in conflict_contents
+    assert b"observed body" in conflict_contents
+    assert _open_fd_count() == before_fds
+
+
+def test_rewritten_write_snapshots_proposal_before_original_snapshot_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/original-snapshot-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    replaced_name: str | None = None
+
+    def fail_original_snapshot_after_staging_replacement(
+        _source_fd: int,
+        _expected: os.stat_result,
+        _conflict_dir_fd: int,
+        _locator: NoteLocator,
+    ) -> str:
+        nonlocal replaced_name
+        replaced_name = next(
+            path.name
+            for path in target.parent.iterdir()
+            if path.name.endswith(".rewrite-swap")
+        )
+        os.unlink(target.parent / replaced_name)
+        replacement = target.parent / replaced_name
+        replacement.write_bytes(b"RACER-HIDDEN")
+        with replacement.open("rb") as racer:
+            os.fsync(racer.fileno())
+        raise KnowledgeWriteConflict("forced original snapshot failure")
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_snapshot_descriptor_recovery",
+        fail_original_snapshot_after_staging_replacement,
+    )
+
+    before_fds = _open_fd_count()
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="forced original snapshot failure",
+    ):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert replaced_name is not None
+    assert target.read_bytes() == b"observed body"
+    assert (target.parent / replaced_name).read_bytes() == b"RACER-HIDDEN"
+    conflict_contents = {
+        path.read_bytes()
+        for path in (target.parent / "_conflicts").glob("*.md.conflict")
+    }
+    assert b"ENGINE" in conflict_contents
+    assert _open_fd_count() == before_fds
+
+
+def test_rewritten_write_pre_move_replacement_keeps_guarded_displaced_inode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/pre-move-guard.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    stale_handle = target.open("r+b")
+    real_rename = adapters_module._atomic_rename_noreplace_at
+    replaced_source: str | None = None
+
+    def replace_immediately_before_retention_move(
+        source_dir_fd: int,
+        moving_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal replaced_source
+        if replaced_source is None and moving_name.endswith(".rewrite-swap"):
+            replaced_source = moving_name
+            current_mode = stat.S_IMODE(
+                os.stat(
+                    moving_name,
+                    dir_fd=source_dir_fd,
+                    follow_symlinks=False,
+                ).st_mode
+            )
+            os.unlink(moving_name, dir_fd=source_dir_fd)
+            replacement_fd = os.open(
+                moving_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                current_mode,
+                dir_fd=source_dir_fd,
+            )
+            with os.fdopen(replacement_fd, "wb") as replacement:
+                replacement.write(b"observed body")
+                replacement.flush()
+                os.fsync(replacement.fileno())
+            os.fsync(source_dir_fd)
+        real_rename(
+            source_dir_fd,
+            moving_name,
+            destination_dir_fd,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomic_rename_noreplace_at",
+        replace_immediately_before_retention_move,
+    )
+
+    receipt = adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+    stale_handle.seek(0)
+    stale_handle.write(b"HUMAN-LATE-SAVE")
+    stale_handle.truncate()
+    stale_handle.flush()
+    stale_handle.close()
+
+    assert receipt.operation == "write_note"
+    assert replaced_source is not None
+    assert (target.parent / replaced_source).read_bytes() == b"observed body"
+    assert target.read_bytes() == b"ENGINE"
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(retained) == 4
+    late_save_recoveries = [
+        path for path in retained if path.read_bytes() == b"HUMAN-LATE-SAVE"
+    ]
+    assert len(late_save_recoveries) == 2
+    assert late_save_recoveries[0].samefile(late_save_recoveries[1])
+    assert sum(path.read_bytes() == b"observed body" for path in retained) == 1
+    assert sum(path.read_bytes() == b"ENGINE" for path in retained) == 1
+
+
+def test_snapshot_rollback_reads_exact_descriptor_while_recovery_name_swaps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/snapshot-name-race.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_read_handle = adapters_module._read_handle
+    real_retain = adapters_module._atomically_retain_controlled_entry
+    real_stable_read = adapters_module._read_stable_descriptor
+    handle_reads = 0
+    retained_entry = None
+    swapped = False
+
+    def save_after_final_read(handle) -> bytes:  # type: ignore[no-untyped-def]
+        nonlocal handle_reads
+        data = real_read_handle(handle)
+        handle_reads += 1
+        if handle_reads == 2:
+            with target.open("r+b") as concurrent:
+                concurrent.seek(0)
+                concurrent.write(b"HUMAN-BEFORE-EXCHANGE")
+                concurrent.truncate()
+                concurrent.flush()
+        return data
+
+    def capture_retained_entry(
+        source_dir_fd: int,
+        source_name: str,
+        expected: os.stat_result,
+        conflict_dir_fd: int,
+        retained_locator: NoteLocator,
+        *,
+        retain_guard: bool = False,
+    ):
+        nonlocal retained_entry
+        result = real_retain(
+            source_dir_fd,
+            source_name,
+            expected,
+            conflict_dir_fd,
+            retained_locator,
+            retain_guard=retain_guard,
+        )
+        if retain_guard:
+            retained_entry = result
+        return result
+
+    def swap_name_around_descriptor_read(
+        fd: int,
+    ) -> tuple[bytes, os.stat_result]:
+        nonlocal swapped
+        if retained_entry is None or swapped:
+            return real_stable_read(fd)
+        assert retained_entry is not None
+        assert retained_entry.guard_name is not None
+        conflict = target.parent / "_conflicts"
+        primary = conflict / retained_entry.name
+        guard = conflict / retained_entry.guard_name
+        original_mode = stat.S_IMODE(primary.stat().st_mode)
+        primary.unlink()
+        primary.write_bytes(b"RACER-SNAPSHOT")
+        primary.chmod(original_mode)
+        data, descriptor_stat = real_stable_read(fd)
+        primary.unlink()
+        os.link(guard, primary)
+        swapped = True
+        return data, descriptor_stat
+
+    monkeypatch.setattr(adapters_module, "_read_handle", save_after_final_read)
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomically_retain_controlled_entry",
+        capture_retained_entry,
+    )
+    monkeypatch.setattr(
+        adapters_module,
+        "_read_stable_descriptor",
+        swap_name_around_descriptor_read,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert swapped
+    assert target.read_bytes() == b"HUMAN-BEFORE-EXCHANGE"
+    assert target.read_bytes() != b"RACER-SNAPSHOT"
+    retained = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert b"HUMAN-BEFORE-EXCHANGE" in {path.read_bytes() for path in retained}
+
+
+def test_snapshot_rollback_verifies_proposal_descriptor_while_name_swaps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/proposal-name-race.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_read_handle = adapters_module._read_handle
+    real_stable_read = adapters_module._read_stable_descriptor
+    real_exchange = adapters_module._atomic_exchange_at
+    handle_reads = 0
+    descriptor_reads = 0
+    exchanges = 0
+    rollback_dir_fd = -1
+    rollback_name: str | None = None
+    swapped = False
+
+    def save_after_final_read(handle) -> bytes:  # type: ignore[no-untyped-def]
+        nonlocal handle_reads
+        data = real_read_handle(handle)
+        handle_reads += 1
+        if handle_reads == 2:
+            with target.open("r+b") as concurrent:
+                concurrent.seek(0)
+                concurrent.write(b"HUMAN-BEFORE-EXCHANGE")
+                concurrent.truncate()
+                concurrent.flush()
+        return data
+
+    def capture_rollback_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges, rollback_dir_fd, rollback_name
+        exchanges += 1
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+        if exchanges == 2:
+            rollback_dir_fd = second_dir_fd
+            rollback_name = second_name
+
+    def swap_proposal_name_around_descriptor_read(
+        fd: int,
+    ) -> tuple[bytes, os.stat_result]:
+        nonlocal descriptor_reads, swapped
+        descriptor_reads += 1
+        if descriptor_reads != 4:
+            return real_stable_read(fd)
+        assert rollback_dir_fd >= 0
+        assert rollback_name is not None
+        held_name = f".{rollback_name}.held"
+        os.rename(
+            rollback_name,
+            held_name,
+            src_dir_fd=rollback_dir_fd,
+            dst_dir_fd=rollback_dir_fd,
+        )
+        racer_fd = os.open(
+            rollback_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=rollback_dir_fd,
+        )
+        with os.fdopen(racer_fd, "wb") as racer:
+            racer.write(b"RACER-PROPOSAL")
+            racer.flush()
+            os.fsync(racer.fileno())
+        data, descriptor_stat = real_stable_read(fd)
+        os.unlink(rollback_name, dir_fd=rollback_dir_fd)
+        os.rename(
+            held_name,
+            rollback_name,
+            src_dir_fd=rollback_dir_fd,
+            dst_dir_fd=rollback_dir_fd,
+        )
+        os.fsync(rollback_dir_fd)
+        swapped = True
+        return data, descriptor_stat
+
+    monkeypatch.setattr(adapters_module, "_read_handle", save_after_final_read)
+    monkeypatch.setattr(
+        adapters_module,
+        "_atomic_exchange_at",
+        capture_rollback_exchange,
+    )
+    monkeypatch.setattr(
+        adapters_module,
+        "_read_stable_descriptor",
+        swap_proposal_name_around_descriptor_read,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert swapped
+    assert descriptor_reads == 4
+    assert exchanges == 2
+    assert target.read_bytes() == b"HUMAN-BEFORE-EXCHANGE"
+    assert target.read_bytes() != b"RACER-PROPOSAL"
+
+
 def test_rewritten_write_post_exchange_read_failure_preserves_displaced_inode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -939,22 +2029,30 @@ def test_rewritten_write_post_exchange_read_failure_preserves_displaced_inode(
     target.parent.mkdir(parents=True)
     target.write_bytes(b"observed body")
     expected_version = hashlib.sha256(b"observed body").hexdigest()
-    real_read_entry = adapters_module._read_entry
+    real_stable_read = adapters_module._read_stable_descriptor
+    descriptor_reads = 0
 
-    def failing_artifact_read(dir_fd: int, name: str) -> bytes:
-        if "conflicted copy" in name:
+    def failing_descriptor_read(fd: int) -> tuple[bytes, os.stat_result]:
+        nonlocal descriptor_reads
+        descriptor_reads += 1
+        if descriptor_reads == 2:
             raise PermissionError("simulated displaced verification failure")
-        return real_read_entry(dir_fd, name)
+        return real_stable_read(fd)
 
-    monkeypatch.setattr(adapters_module, "_read_entry", failing_artifact_read)
+    monkeypatch.setattr(
+        adapters_module,
+        "_read_stable_descriptor",
+        failing_descriptor_read,
+    )
 
     with pytest.raises(KnowledgeWriteConflict, match="verification failed"):
         adapter.write_note(locator, "ENGINE", expected_version=expected_version)
 
+    assert descriptor_reads == 2
     assert target.read_bytes() == b"ENGINE"
     artifacts = list((target.parent / "_conflicts").rglob("*conflicted copy*"))
     assert artifacts
-    assert artifacts[0].read_bytes() == b"observed body"
+    assert b"observed body" in {path.read_bytes() for path in artifacts}
 
 
 def test_rewritten_write_post_exchange_stat_failure_preserves_displaced_inode(
@@ -1001,8 +2099,79 @@ def test_rewritten_write_post_exchange_stat_failure_preserves_displaced_inode(
     assert injected_failure
     assert target.read_bytes() == b"ENGINE"
     artifacts = list((target.parent / "_conflicts").glob("*.md.conflict"))
-    assert len(artifacts) == 1
-    assert artifacts[0].read_bytes() == b"observed body"
+    assert {path.read_bytes() for path in artifacts} == {
+        b"observed body",
+        b"ENGINE",
+    }
+
+
+def test_finalizer_proof_read_failure_closes_fds_and_raises_write_conflict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/finalizer-proof-error.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_exchange = adapters_module._atomic_exchange_at
+    real_stat = os.stat
+    real_fstat = os.fstat
+    exchange_completed = False
+    body_failed = False
+    proof_failed = False
+
+    def recording_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchange_completed
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+        exchange_completed = True
+
+    def fail_body_post_exchange_stat(
+        path: os.PathLike[str] | str,
+        *args: object,
+        **kwargs: object,
+    ) -> os.stat_result:
+        nonlocal body_failed
+        if exchange_completed and not body_failed and path == target.name:
+            body_failed = True
+            raise PermissionError("simulated post-exchange body proof failure")
+        return real_stat(path, *args, **kwargs)
+
+    def fail_finalizer_fstat(fd: int) -> os.stat_result:
+        nonlocal proof_failed
+        if body_failed and not proof_failed:
+            proof_failed = True
+            raise OSError("simulated finalizer proof-read failure")
+        return real_fstat(fd)
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", recording_exchange)
+    monkeypatch.setattr(os, "stat", fail_body_post_exchange_stat)
+    monkeypatch.setattr(os, "fstat", fail_finalizer_fstat)
+
+    before_fds = _open_fd_count()
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="late displaced-content recovery failed",
+    ) as captured:
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert body_failed
+    assert proof_failed
+    assert isinstance(captured.value.__cause__, OSError)
+    assert target.read_bytes() == b"ENGINE"
+    conflict_contents = {
+        path.read_bytes()
+        for path in (target.parent / "_conflicts").glob("*.md.conflict")
+    }
+    assert b"observed body" in conflict_contents
+    assert b"ENGINE" in conflict_contents
+    assert _open_fd_count() == before_fds
 
 
 def test_rewritten_write_first_exchange_error_uses_knowledge_conflict(
@@ -1043,8 +2212,17 @@ def test_retained_displaced_inode_is_not_visible_to_markdown_search(tmp_path: Pa
 
     assert adapter.search_notes("Vault", "SECRET-OLD-ONLY") == []
     artifacts = list((target.parent / "_conflicts").glob("*.md.conflict"))
-    assert len(artifacts) == 1
-    assert artifacts[0].read_bytes() == b"SECRET-OLD-ONLY"
+    assert len(artifacts) == 4
+    old_recoveries = [
+        path for path in artifacts if path.read_bytes() == b"SECRET-OLD-ONLY"
+    ]
+    assert len(old_recoveries) == 3
+    assert any(
+        left != right and left.samefile(right)
+        for left in old_recoveries
+        for right in old_recoveries
+    )
+    assert sum(path.read_bytes() == b"CURRENT" for path in artifacts) == 1
 
 
 def test_top_level_note_conflict_artifact_stays_inside_normal_vault(tmp_path: Path) -> None:
@@ -1134,7 +2312,12 @@ def test_rewritten_write_stays_on_anchored_parent_when_path_is_swapped_to_symlin
 
     assert (moved_notes / target.name).read_bytes() == b"observed body"
     assert outside_target.read_bytes() == b"OUTSIDE"
-    assert not list((moved_notes / "_conflicts").glob("*.md.conflict"))
+    retained = list((moved_notes / "_conflicts").glob("*.md.conflict"))
+    assert len(retained) == 3
+    assert {path.read_bytes() for path in retained} == {
+        b"observed body",
+        b"ENGINE",
+    }
 
 
 def test_rewritten_write_stays_on_anchored_conflict_dir_when_path_is_swapped(
@@ -1222,8 +2405,11 @@ def test_rewritten_write_never_reports_success_after_parent_moves_at_exchange(
     assert (notes / target.name).read_bytes() == b"THIRD-WRITER"
     assert (moved_notes / target.name).read_bytes() == b"ENGINE"
     artifacts = list((moved_notes / "_conflicts").glob("*.md.conflict"))
-    assert len(artifacts) == 1
-    assert artifacts[0].read_bytes() == b"observed body"
+    assert len(artifacts) == 4
+    assert {path.read_bytes() for path in artifacts} == {
+        b"observed body",
+        b"ENGINE",
+    }
 
 
 def test_rewritten_write_fsyncs_anchored_directories(
@@ -1269,7 +2455,7 @@ def test_rewritten_write_retains_displaced_inode_when_post_exchange_fsync_fails(
         nonlocal directory_fsyncs
         if stat.S_ISDIR(os.fstat(fd).st_mode):
             directory_fsyncs += 1
-            if directory_fsyncs == 2:
+            if directory_fsyncs == 4:
                 raise OSError("simulated post-exchange directory fsync failure")
         real_fsync(fd)
 
@@ -1284,8 +2470,11 @@ def test_rewritten_write_retains_displaced_inode_when_post_exchange_fsync_fails(
 
     assert target.read_bytes() == b"ENGINE"
     artifacts = list((target.parent / "_conflicts").glob("*.md.conflict"))
-    assert len(artifacts) == 1
-    assert artifacts[0].read_bytes() == b"observed body"
+    assert len(artifacts) == 4
+    assert {path.read_bytes() for path in artifacts} == {
+        b"observed body",
+        b"ENGINE",
+    }
 
 
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:

@@ -362,15 +362,18 @@ def test_process_panel_note_rewritten_alias_swap_after_final_policy_has_no_ackno
     )
 
     assert policy_calls == 2
-    assert exchanges == 2
+    assert exchanges == 1
     assert emitted == 0
     assert state.errors == 1
     assert persisted_ids == []
     assert emitted_events == []
-    assert first.is_symlink()
-    assert first.readlink() == Path(second.name)
+    assert not first.is_symlink()
     assert second.read_text(encoding="utf-8") == original
-    assert first.read_text(encoding="utf-8") == original
+    assert first.read_text(encoding="utf-8") == "Prepared stale output\n"
+    assert any(
+        path.is_symlink() and path.readlink() == Path(second.name)
+        for path in (first.parent / "_conflicts").glob("*.md.conflict")
+    )
     conflict_contents = [
         path.read_text(encoding="utf-8")
         for path in (first.parent / "_conflicts").rglob("*conflicted copy*")

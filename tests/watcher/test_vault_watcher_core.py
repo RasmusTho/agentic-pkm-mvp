@@ -627,15 +627,18 @@ def test_vault_watcher_rewritten_alias_swap_after_final_policy_has_no_acknowledg
     )
 
     assert policy_calls == 3
-    assert exchanges == 2
+    assert exchanges == 1
     assert summary["errors"] == 1
     assert summary["applied_actions"] == 0
     assert persisted_ids == []
     assert emitted_events == []
-    assert first.is_symlink()
-    assert first.readlink() == Path(second.name)
+    assert not first.is_symlink()
     assert second.read_text(encoding="utf-8") == original
-    assert first.read_text(encoding="utf-8") == original
+    assert first.read_text(encoding="utf-8") == "Prepared stale output\n"
+    assert any(
+        path.is_symlink() and path.readlink() == Path(second.name)
+        for path in (first.parent / "_conflicts").glob("*.md.conflict")
+    )
     assert any("indeterminate panel write" in message for message in messages)
     conflict_contents = [
         path.read_text(encoding="utf-8")
