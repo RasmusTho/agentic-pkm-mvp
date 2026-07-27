@@ -119,8 +119,8 @@ Authority and downstream boundaries:
   emitting events; watcher policy first resolves the path against the canonical vault root,
   rejects symlink aliases, and admits only paths classified `REWRITTEN`, so create-once Sources
   and append-only paths never enter watcher UUID healing, preparation, writeback, or
-  acknowledgement. The filesystem seam also rejects any expected-version request for a
-  non-rewritten class before mutation. After a rewritten note's canonical version-checked hardened knowledge write
+  acknowledgement. The filesystem seam classifies the canonical vault-relative target and rejects
+  any expected-version request for a non-rewritten class before mutation. After a rewritten note's canonical version-checked hardened knowledge write
   succeeds, the watcher persists non-empty executed IDs and then releases eligible effects. A staged conflict leaves the snapshot
   and acknowledgement effects untouched, and watcher telemetry classifies it as skipped/deferred.
   Receiptless/other write conflicts propagate as errors because the canonical write may already

@@ -320,7 +320,7 @@ class FsVaultAdapter:
         writer_identity: str | None = None,
     ) -> WriteReceipt:
         target = self._absolute_path(locator)
-        note_class = self._classify(locator.path, WriteOperation.WRITE)
+        note_class = self._classify_target(target, WriteOperation.WRITE)
         effective_writer_identity = writer_identity or "mimer.runtime"
         written_at = datetime.now(UTC)
         if expected_version is not None and note_class is not NoteClass.REWRITTEN:
@@ -635,7 +635,7 @@ class FsVaultAdapter:
             operation="append_note",
             locator=locator,
             adapter="fs_vault",
-            note_class=self._classify(locator.path, WriteOperation.APPEND),
+            note_class=self._classify_target(target, WriteOperation.APPEND),
             writer_identity="mimer.runtime",
             written_at=datetime.now(UTC).isoformat(),
         )
@@ -645,9 +645,15 @@ class FsVaultAdapter:
         existing = target.read_text(encoding="utf-8") if target.exists() else ""
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content + existing, encoding="utf-8")
-        return WriteReceipt(operation="prepend_note", locator=locator, adapter="fs_vault")
+        return WriteReceipt(
+            operation="prepend_note",
+            locator=locator,
+            adapter="fs_vault",
+            note_class=self._classify_target(target, WriteOperation.PREPEND),
+        )
 
-    def _classify(self, path: str, operation: WriteOperation) -> NoteClass:
+    def _classify_target(self, target: Path, operation: WriteOperation) -> NoteClass:
+        canonical_relative = target.relative_to(self.vault_root.resolve()).as_posix()
         capture_note_rel = self.capture_note_rel
         if capture_note_rel is None:
             capture_note_rel = (os.getenv("VAULT_CAPTURE_NOTE_REL") or "").strip() or None
@@ -661,7 +667,7 @@ class FsVaultAdapter:
                 # roots with no selected vault layout.
                 capture_note_rel = None
         return classify_note(
-            path,
+            canonical_relative,
             operation,
             capture_note_rel=capture_note_rel,
             sources_root_rel=self.sources_root_rel,

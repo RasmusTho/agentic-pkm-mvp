@@ -88,6 +88,34 @@ def test_expected_version_write_rejects_create_once_note_before_mutation(
     assert list(target.parent.iterdir()) == [target]
 
 
+def test_adapter_classifies_canonical_target_before_expected_version_write(
+    tmp_path: Path,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    target = tmp_path / "Sources" / "panel-source.md"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"canonical source")
+    alias = tmp_path / "Notes" / "source-alias.md"
+    alias.parent.mkdir()
+    alias.symlink_to(Path("..") / "Sources" / target.name)
+    locator = NoteLocator(vault="Vault", path="Notes/source-alias.md")
+    expected_version = hashlib.sha256(b"canonical source").hexdigest()
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="expected-version write requires a rewritten note class",
+    ):
+        adapter.write_note(
+            locator,
+            "stale watcher proposal",
+            expected_version=expected_version,
+            writer_identity="watcher",
+        )
+
+    assert target.read_bytes() == b"canonical source"
+    assert alias.read_bytes() == b"canonical source"
+
+
 def test_rewritten_write_uses_atomic_replace_at_filesystem_seam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
