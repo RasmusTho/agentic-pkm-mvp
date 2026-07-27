@@ -557,6 +557,28 @@ def test_contracts_round_trip_canonically() -> None:
         exact_head_sha=effect.exact_head_sha,
         expected_authorities=(second_authority, _authority(issue)),
     )
+    reordered_authorities_payload = effect.model_dump(mode="json")
+    reordered_authorities = (second_authority, _authority(issue))
+    reordered_authorities_payload["expected_authorities"] = [
+        item.model_dump(mode="json") for item in reordered_authorities
+    ]
+    reordered_authorities_payload["input_hash"] = delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence,
+        effect_class=effect.effect_class,
+        issue=effect.issue,
+        pull_request_number=effect.pull_request_number,
+        exact_head_sha=effect.exact_head_sha,
+        expected_authorities=reordered_authorities,
+    )
+    reordered_authorities_payload["idempotency_key"] = (
+        delivery_effect_idempotency_key(
+            reordered_authorities_payload["input_hash"]
+        )
+    )
+    with pytest.raises(ValidationError, match="canonical sorted order"):
+        parse_delivery_contract(reordered_authorities_payload)
 
     with pytest.raises(ValidationError, match="canonical sorted order"):
         _authority(issue, labels=("type:task", "agent:ready"))

@@ -792,6 +792,14 @@ class ReducerEffect(CanonicalDeliveryContract):
             tuple(item.authority_id for item in self.expected_authorities),
             "effect expected authority IDs",
         )
+        if tuple(
+            item.authority_id for item in self.expected_authorities
+        ) != tuple(
+            sorted(item.authority_id for item in self.expected_authorities)
+        ):
+            raise ValueError(
+                "effect expected authorities must use canonical sorted order"
+            )
         if not any(
             authority.authority_id == self.issue.authority_id
             and authority.content_hash == self.issue.contract_hash
