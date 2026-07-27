@@ -743,6 +743,27 @@ def _closed_canonical_registry(issue: dict[str, Any]) -> bool:
     return str(issue.get("state", "")).lower() == "closed"
 
 
+def _entry_comments(
+    gateway: RegistryGateway,
+    issue_number: int,
+    defect_id: str,
+) -> list[dict[str, Any]]:
+    return [
+        comment
+        for comment in _inventory_comments(gateway, issue_number)
+        if _entry_id_from_comment(comment.get("body") or "") == defect_id
+    ]
+
+
+def _delete_comments(
+    gateway: RegistryGateway,
+    issue_number: int,
+    comments: Sequence[dict[str, Any]],
+) -> None:
+    for comment in comments:
+        _compensate_comment(gateway, issue_number, comment)
+
+
 def _intake_defect(
     defect: KnownDefect,
     gateway: RegistryGateway,
@@ -797,7 +818,45 @@ def _intake_defect(
                 allow_lifecycle_retry=False,
             )
         raise
-    comment = gateway.add_comment(int(issue["number"]), defect.render_entry())
+    try:
+        comment = gateway.add_comment(int(issue["number"]), defect.render_entry())
+    except KnownDefectsError:
+        issue_number = int(issue["number"])
+        current_issue = gateway.get_issue(issue_number)
+        matching_comments = _entry_comments(
+            gateway,
+            issue_number,
+            defect.defect_id,
+        )
+        if not matching_comments:
+            raise
+        try:
+            _validate_registry_issue(current_issue, require_open=True)
+        except KnownDefectsError:
+            _delete_comments(gateway, issue_number, matching_comments)
+            if (
+                registry_issue is None
+                and allow_lifecycle_retry
+                and _closed_canonical_registry(current_issue)
+            ):
+                return _intake_defect(
+                    defect,
+                    gateway,
+                    registry_issue=None,
+                    allow_lifecycle_retry=False,
+                )
+            raise
+        canonical_comment = min(
+            matching_comments,
+            key=lambda item: int(item.get("id") or 0),
+        )
+        return {
+            "schema": "known-defect-receipt.v1",
+            "status": "created",
+            "defect_id": defect.defect_id,
+            "registry_issue": issue_number,
+            "url": canonical_comment.get("html_url"),
+        }
     post_write_issue: dict[str, Any] | None = None
     try:
         post_write_issue = gateway.get_issue(int(issue["number"]))
@@ -960,13 +1019,19 @@ def _has_resolvable_verify_target(item: str) -> bool:
             r"doc writeback at `(?:docs|\.codex)/[^`]+ :: [^`]+`",
             raw_target,
             re.IGNORECASE,
-        ):
+        ) and re.search(r"<[^>]+>", raw_target) is None:
             return True
         if re.fullmatch(
-            r"(?:roadmap diff|runtime receipt):\s+\S(?:.*\S)?",
+            r"roadmap diff:\s+`docs/[^`]+ :: [^`]+`",
             target,
             re.IGNORECASE,
         ) and re.search(r"<[^>]+>", target) is None:
+            return True
+        if re.fullmatch(
+            r"runtime receipt:\s+[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.v[1-9][0-9]*",
+            target,
+            re.IGNORECASE,
+        ):
             return True
     return False
 
@@ -1037,17 +1102,28 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
             "promotion target has empty or placeholder canonical section(s): "
             + ", ".join(empty)
         )
-    if re.search(
-        r"(?m)^-\s+`[^`\n]+::[^`\n]+`\s*$",
+    source_anchors = re.findall(
+        r"(?m)^-\s+`([^`\n]+)::([^`\n]+)`\s*$",
         sections["Source Anchors"],
-    ) is None:
+    )
+    if (
+        not source_anchors
+        or any(
+            re.search(r"<[^>]+>", path + anchor)
+            for path, anchor in source_anchors
+        )
+    ):
         raise KnownDefectsError(
             "promotion target Source Anchors must name a durable path and anchor"
         )
-    if re.search(
-        r"(?m)^-\s+`[^`\n]+`\s*$",
+    source_docs = re.findall(
+        r"(?m)^-\s+`([^`\n]+)`\s*$",
         sections["Source Docs"],
-    ) is None:
+    )
+    if (
+        not source_docs
+        or any(re.search(r"<[^>]+>", path) for path in source_docs)
+    ):
         raise KnownDefectsError(
             "promotion target Source Docs must name a durable repo path"
         )
@@ -1188,21 +1264,60 @@ def promote_defect(
         issue_number=issue_number,
         authority_sha256=authority_sha256,
     )
-    comment = gateway.add_comment(
-        int(registry["number"]),
-        "\n".join(
-            (
-                marker,
-                f"Promotion receipt: {defect_id} is now tracked for implementation by "
-                f"#{issue_number}.",
-                f"Validated target authority: sha256:{authority_sha256}.",
-                "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
-                "and execution state.",
-            )
-        ),
+    registry_number = int(registry["number"])
+    promotion_body = "\n".join(
+        (
+            marker,
+            f"Promotion receipt: {defect_id} is now tracked for implementation by "
+            f"#{issue_number}.",
+            f"Validated target authority: sha256:{authority_sha256}.",
+            "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
+            "and execution state.",
+        )
     )
     try:
-        post_registry = gateway.get_issue(int(registry["number"]))
+        comment = gateway.add_comment(registry_number, promotion_body)
+    except KnownDefectsError:
+        comments = _inventory_comments(gateway, registry_number)
+        targets, evidence, authority_digests = _promotion_targets(
+            comments,
+            defect_id,
+        )
+        exact_comments = [
+            item
+            for item in comments
+            if _promotion_from_comment(item.get("body") or "")
+            == (defect_id, issue_number, authority_sha256)
+        ]
+        if not exact_comments:
+            raise
+        if (
+            targets != {issue_number}
+            or authority_digests.get(issue_number) != {authority_sha256}
+        ):
+            raise KnownDefectsError(
+                f"ambiguous promotion response exposed conflicting authority for "
+                f"{defect_id}"
+            )
+        try:
+            post_registry = gateway.get_issue(registry_number)
+            _validate_registry_issue(post_registry, require_open=True)
+            post_target = gateway.get_issue(issue_number)
+            _validate_promoted_target_snapshot(post_target, authority_sha256)
+        except KnownDefectsError:
+            _delete_comments(gateway, registry_number, exact_comments)
+            raise
+        canonical_comment = evidence[issue_number]
+        return {
+            "schema": "known-defect-receipt.v1",
+            "status": "promoted",
+            "defect_id": defect_id,
+            "registry_issue": registry_number,
+            "promotion_issue": issue_number,
+            "url": canonical_comment.get("html_url"),
+        }
+    try:
+        post_registry = gateway.get_issue(registry_number)
         _validate_registry_issue(post_registry, require_open=True)
         post_target = gateway.get_issue(issue_number)
         _validate_promoted_target_snapshot(post_target, authority_sha256)

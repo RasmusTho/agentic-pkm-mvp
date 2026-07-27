@@ -964,6 +964,45 @@ def test_indeterminate_post_append_read_compensates_before_failing() -> None:
     assert gateway.comments[900] == []
 
 
+class AmbiguousEntryCreateGateway(FakeGateway):
+    def __init__(self, *, close_registry: bool = True) -> None:
+        super().__init__()
+        self.ambiguous_once = True
+        self.close_registry = close_registry
+
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if body.startswith("<!-- known-defect-entry:") and self.ambiguous_once:
+            self.ambiguous_once = False
+            if self.close_registry:
+                self.issues[issue_number]["state"] = "closed"
+            raise known_defects.KnownDefectsError(
+                "ambiguous entry comment-create response"
+            )
+        return comment
+
+
+def test_ambiguous_entry_create_response_reconciles_closure_before_retry() -> None:
+    gateway = AmbiguousEntryCreateGateway()
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 901
+    assert gateway.comments[900] == []
+    assert len(gateway.comments[901]) == 1
+
+
+def test_ambiguous_entry_create_response_completes_from_open_inventory() -> None:
+    gateway = AmbiguousEntryCreateGateway(close_registry=False)
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 900
+    assert len(gateway.comments[900]) == 1
+
+
 def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     gateway = FakeGateway()
     defect = _defect()
@@ -1200,6 +1239,106 @@ def test_indeterminate_promotion_post_write_read_compensates_marker() -> None:
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
     assert len(gateway.comments[intake["registry_issue"]]) == 1
+
+
+class AmbiguousPromotionCreateGateway(FakeGateway):
+    def __init__(self, *, close_registry: bool = True) -> None:
+        super().__init__()
+        self.ambiguous_once = True
+        self.close_registry = close_registry
+
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if body.startswith("<!-- known-defect-promotion:") and self.ambiguous_once:
+            self.ambiguous_once = False
+            if self.close_registry:
+                self.issues[issue_number]["state"] = "closed"
+            raise known_defects.KnownDefectsError(
+                "ambiguous promotion comment-create response"
+            )
+        return comment
+
+
+def test_ambiguous_promotion_create_response_compensates_closed_registry() -> None:
+    gateway = AmbiguousPromotionCreateGateway()
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: guard ambiguous promotion creation",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="not open"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert len(gateway.comments[intake["registry_issue"]]) == 1
+    with pytest.raises(known_defects.KnownDefectsError, match="not open"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+def test_ambiguous_promotion_create_response_completes_from_open_inventory() -> None:
+    gateway = AmbiguousPromotionCreateGateway(close_registry=False)
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: guard ambiguous promotion creation",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    promoted = known_defects.promote_defect(defect.defect_id, 901, gateway)
+    duplicate = known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert promoted["status"] == "promoted"
+    assert duplicate["status"] == "promotion_duplicate"
+
+
+def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    body = (
+        _canonical_bug_body()
+        .replace(
+            "- `.codex/skills/bug-to-issue/SKILL.md :: Promotion`",
+            "Unrelated prose.\n\n- `<path> :: <anchor>`",
+        )
+        .replace(
+            "- `.codex/skills/_shared/ISSUE_CONTRACT.md`",
+            "Unrelated prose.\n\n- `<path>`",
+        )
+        .replace(
+            "Verify: `tests/x.py::test_x`",
+            "Verify: runtime receipt: later",
+        )
+    )
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject placeholder promotion authority",
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="Source Anchors"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 
 def test_rest_gateway_fails_closed_on_transport_and_non_json(

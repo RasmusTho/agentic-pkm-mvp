@@ -108,7 +108,9 @@ Intake rereads the selected registry immediately before and after comment creati
 registry closes at either boundary, intake compensates any just-created comment and makes one
 bounded retry against a new open registry. If the body, labels, or lock state drift, intake removes
 its just-created comment and fails closed for explicit reconciliation. This keeps closure races from
-silently appending durable entries to stale registry authority.
+silently appending durable entries to stale registry authority. An ambiguous comment-create response
+is immediately reconciled from live Issue/comment inventories: an open canonical registry completes
+the receipt, while closure or authority drift compensates the matching comment before retry/failure.
 
 ### Promotion
 
@@ -134,7 +136,9 @@ Each marker binds the target number to a SHA-256 digest of its validated title, 
 priority authority. The helper rereads both registry and target after writing: contract/body/label
 drift or an indeterminate read compensates the marker and fails closed, while normal claim or
 closure transitions may change only lifecycle state and the canonical agent label. Same-target
-retries revalidate the digest before returning the existing receipt.
+retries revalidate the digest before returning the existing receipt. Ambiguous marker creation is
+resolved from the full comment inventory before any success receipt; stale closed-registry markers
+are compensated.
 The promoted Issue owns implementation scope and closure; the registry entry remains durable source
 evidence.
 
