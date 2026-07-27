@@ -219,3 +219,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The plan covered Markdown and HTML structural spoofing, but accepted authority rendering also required an explicit Unicode default-ignorable and bidi-output policy plus contracted owner-authority phrase forms.
 **Upstream artifact:** `docs/YOUTUBE_SOURCE_NOTE_V2/COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE.md :: Acceptance Criteria` — add Unicode/bidi and contracted-language cases to the visible-authority convergence matrix before implementation reaches expensive verification.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
+
+## 2026-07-27 — #4111 (atomic HKA creation prerequisite)
+**Source:** issue-to-code pre-implementation reassessment
+**Diverged:** The dependency plan treated #4111 as executable after #4110, but D5 requires the canonical atomic KnowledgePort create-if-absent boundary still blocked in #4132.
+**Upstream artifact:** `docs/YOUTUBE_SOURCE_NOTE_V2/PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS.md` and `docs/YOUTUBE_SOURCE_NOTE_V2/ISSUE_DRAFTS.md` — make the atomic HKA creation prerequisite explicit before the persistence slice becomes pickup-eligible.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
