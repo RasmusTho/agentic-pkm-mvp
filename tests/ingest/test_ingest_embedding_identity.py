@@ -20,6 +20,8 @@ from typing import Any
 
 import pytest
 
+import app.components.embeddings as embeddings_pkg
+import app.components.llm.fabric as fabric
 import app.ingest.api as ingest_api
 import app.outbox.events as outbox_events
 from app.components.embeddings import get_embedding_identity
@@ -96,6 +98,55 @@ def test_ingest_embedding_requested_carries_resolved_identity(
     assert set(expected) == {"provider", "model", "dim", "normalize"}
 
 
+def test_ingest_resolves_through_the_router_not_the_bare_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins *which* resolution path ingest uses.
+
+    In the default environment the router path and a bare
+    `resolve_embedding_identity()` return the same identity, so a test that
+    re-derives the expected value cannot tell them apart — swapping the
+    implementation would leave it green. They diverge once a task policy or
+    profile is configured, and only the router path matches what the indexer
+    consumer resolves.
+
+    Feeding a sentinel through the router and asserting it reaches the event
+    pins the decision without depending on settings fixtures.
+    """
+
+    captured = _capture_requested_events(monkeypatch)
+
+    class _SentinelIdentity:
+        provider = "ollama"
+        model = "sentinel-router-model:latest"
+        dim = 768
+        normalize = True
+
+    class _SentinelClient:
+        identity = _SentinelIdentity()
+
+    monkeypatch.setattr(fabric, "get_embeddings_client", lambda _intent: _SentinelClient())
+
+    ingest_api.ingest_object(
+        object_id=None,
+        kind="note",
+        source_ref="unit-test",
+        payload={"title": "Router path"},
+        text="Alpha beta gamma",
+    )
+
+    identity = _requested_meta(captured).get("embedding_identity")
+    assert identity == {
+        "provider": "ollama",
+        "model": "sentinel-router-model:latest",
+        "dim": 768,
+        "normalize": True,
+    }, (
+        "ingest must stamp the identity resolved through get_embeddings_client "
+        f"(the indexer's path); got {identity!r}"
+    )
+
+
 def test_ingest_embedding_requested_never_names_an_unservable_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -137,7 +188,10 @@ def test_ingest_embedding_requested_fails_loud_when_identity_unresolvable(
     def _boom(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("embedding identity unavailable")
 
-    monkeypatch.setattr(ingest_api, "get_embeddings_client", _boom)
+    # Patched at the source module, not on ingest_api: the resolver imports these
+    # function-locally (so `import app.ingest` stays cheap), so there is no
+    # module attribute to shadow — this also keeps the real import path under test.
+    monkeypatch.setattr(fabric, "get_embeddings_client", _boom)
 
     with pytest.raises(RuntimeError, match="embedding identity unavailable"):
         ingest_api.ingest_object(
@@ -178,7 +232,7 @@ def test_ingest_embedding_requested_fails_loud_on_incomplete_identity(
         normalize = True
 
     monkeypatch.setattr(
-        ingest_api, "get_embedding_identity", lambda **_kwargs: _BlankIdentity()
+        embeddings_pkg, "get_embedding_identity", lambda **_kwargs: _BlankIdentity()
     )
 
     with pytest.raises(RuntimeError, match="embedding identity"):

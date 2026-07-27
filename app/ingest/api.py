@@ -5,9 +5,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
 
-from app.components.embeddings import get_embedding_identity
-from app.components.llm.fabric import get_embeddings_client
-from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import get_embed_dim
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 
@@ -32,9 +29,19 @@ def _requested_embedding_identity() -> Dict[str, Any]:
     reintroduce it under a different literal.
     """
 
-    # Local import: app.index.artifact_metadata imports app.ingest.chunk_policy,
-    # which initializes app.ingest and re-enters this module. Same reason the
-    # object-store and outbox imports below are function-local.
+    # All four imports are function-local, matching this module's existing
+    # convention (see the object-store and outbox imports below). Two distinct
+    # reasons:
+    #   - artifact_metadata imports app.ingest.chunk_policy, which initializes
+    #     app.ingest and re-enters this module — a genuine cycle.
+    #   - the llm fabric pulls in app.services.llm and the whole HTTP client
+    #     stack (httpx/requests/urllib3/...). At module scope that cost lands on
+    #     every importer of app.ingest — including app/watcher/vault_watcher.py
+    #     — for a value only this function needs. Measured: +313 modules and
+    #     ~3s on `import app.ingest`.
+    from app.components.embeddings import get_embedding_identity
+    from app.components.llm.fabric import get_embeddings_client
+    from app.components.llm.router import LLMTaskIntent
     from app.index.artifact_metadata import embedding_identity_provenance
 
     identity = get_embedding_identity(

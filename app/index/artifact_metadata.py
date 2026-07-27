@@ -46,8 +46,8 @@ def embedding_identity_provenance(identity: Any) -> dict[str, Any]:
 
 
 # The projector shipped under this private name and is still referenced by
-# in-module call sites and tests/index/test_artifact_metadata.py. Alias, not a
-# second implementation — there is exactly one projection of this contract.
+# tests/index/test_artifact_metadata.py. Alias, not a second implementation —
+# there is exactly one projection of this contract.
 _embedding_identity_dict = embedding_identity_provenance
 
 
@@ -153,7 +153,7 @@ def build_indexed_unit_payload(
     # census (tests/properties/test_store_payload_episode_ref.py) verifies for builder-covered sinks.
     payload_out["episode_ref"] = episode_ref_from_frontmatter(payload_out)
     if embedding_identity is not None:
-        payload_out["embedding_identity"] = _embedding_identity_dict(embedding_identity)
+        payload_out["embedding_identity"] = embedding_identity_provenance(embedding_identity)
 
     # Transform provenance stamp (KERNEL-06, #2768, audit invariant I-D1).
     # Rides inside this same payload dict so it commits in the same upsert
@@ -169,7 +169,7 @@ def build_indexed_unit_payload(
         "content_hash": compute_content_hash(canonical_text),
         "chunk_policy_version": CHUNK_POLICY_VERSION,
         "pipeline_version": EMBED_PIPELINE_VERSION,
-        "embedding_identity": _embedding_identity_dict(embedding_identity) if embedding_identity is not None else None,
+        "embedding_identity": embedding_identity_provenance(embedding_identity) if embedding_identity is not None else None,
     }
     return payload_out
 

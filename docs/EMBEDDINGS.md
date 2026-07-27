@@ -196,8 +196,7 @@ mixed-identity detection and reconcile read those, not the request event.
 Emitters attach the identity by resolution, never by a hardcoded model literal. A producer that
 cannot resolve a complete identity must fail loud rather than stamp a default — a substituted
 literal is indistinguishable from a real identity downstream, and a model name no registered
-adapter serves is a false provenance claim (`app/ingest/api.py::_requested_embedding_identity`,
-#4178).
+adapter serves is a false provenance claim (#4178).
 
 ### Fallback rule
 
