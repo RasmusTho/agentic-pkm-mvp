@@ -18,6 +18,14 @@ Deterministic, stdlib-only, read-only. Catches the defect classes found by the
 6. Frontmatter `description:` is non-empty and single-line.
 7. `feature-breakdown/SKILL.md`, when present, keeps its `docs/DOCS_INDEX.md`
    registration instruction (regression guard for #3559).
+8. The `SBS Impact` field list is identical, in the same order, across
+   `.codex/skills/_shared/ISSUE_CONTRACT.md`, `.github/ISSUE_TEMPLATE/task.yml`,
+   `.github/pull_request_template.md`, and `scripts/pr_body_generator.py ::
+   SBS_FIELDS` (regression guard for #4188 — the `Boundary risk` field drift).
+9. The JS `required` section-name array in
+   `.github/workflows/issue-pr-governance.yml` and the Python
+   `REQUIRED_SECTIONS` tuple in `scripts/validate_issue_readiness.py` hold the
+   same section names in the same order (regression guard for #4188).
 
 Exit 0 with no output when clean; exit 1 with one error per line otherwise.
 
@@ -30,6 +38,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from typing import Callable
 
 # Canonical label taxonomy. Single source after the `_shared/` extraction
 # (#1809); until then this mirrors the list in docs-to-issue/SKILL.md.
@@ -254,6 +263,129 @@ def check_feature_breakdown_docs_index(skills_root: Path) -> list[str]:
     return errors
 
 
+def _extract_labeled_fields(text: str, start: str, end: str) -> list[str] | None:
+    """Extract `- <Label>:` bullet labels between two markers, in order.
+
+    Returns None when `start` is not found (caller decides whether that means
+    "file/section absent, skip this check" or an error).
+    """
+    match = re.search(
+        re.escape(start) + r"\n(.*?)\n\n" + re.escape(end), text, re.DOTALL
+    )
+    if not match:
+        return None
+    return re.findall(r"^\s*-\s*([^:\n]+):", match.group(1), re.MULTILINE)
+
+
+def _extract_sbs_fields_issue_contract(text: str) -> list[str] | None:
+    return _extract_labeled_fields(text, "## SBS Impact", "##")
+
+
+def _extract_sbs_fields_task_yml(text: str) -> list[str] | None:
+    match = re.search(
+        r"id: sbs_impact.*?placeholder: \|\n(.*?)\n\s*validations:", text, re.DOTALL
+    )
+    if not match:
+        return None
+    return re.findall(r"^\s*-\s*([^:\n]+):", match.group(1), re.MULTILINE)
+
+
+def _extract_sbs_fields_pr_template(text: str) -> list[str] | None:
+    return _extract_labeled_fields(text, "## SBS Impact", "## Owner-Doc Writeback")
+
+
+def _extract_sbs_fields_pr_body_generator(text: str) -> list[str] | None:
+    match = re.search(r"SBS_FIELDS = \(\n(.*?)\n\)", text, re.DOTALL)
+    if not match:
+        return None
+    return re.findall(r'\(\s*"[a-z_]+"\s*,\s*"([^"]+)"\s*\)', match.group(1))
+
+
+SBS_FIELD_SOURCES: tuple[tuple[str, Callable[[str], list[str] | None]], ...] = (
+    (".codex/skills/_shared/ISSUE_CONTRACT.md", _extract_sbs_fields_issue_contract),
+    (".github/ISSUE_TEMPLATE/task.yml", _extract_sbs_fields_task_yml),
+    (".github/pull_request_template.md", _extract_sbs_fields_pr_template),
+    ("scripts/pr_body_generator.py", _extract_sbs_fields_pr_body_generator),
+)
+
+
+def check_sbs_impact_fields_consistent(repo_root: Path) -> list[str]:
+    """Check 8: the SBS Impact field list agrees, in order, across all copies.
+
+    Tolerates a missing source file (synthetic test trees under `.codex/skills/`
+    only) by skipping the check entirely rather than reporting a false defect —
+    this lint's contract is drift *between existing copies*, not file presence.
+    """
+    errors: list[str] = []
+    found: list[tuple[str, list[str]]] = []
+    for rel_path, extractor in SBS_FIELD_SOURCES:
+        path = repo_root / rel_path
+        if not path.is_file():
+            return errors
+        fields = extractor(path.read_text(encoding="utf-8"))
+        if fields is None:
+            errors.append(f"{rel_path}: could not locate the SBS Impact field list")
+            continue
+        found.append((rel_path, fields))
+    if errors:
+        return errors
+    canonical_path, canonical_fields = found[0]
+    for rel_path, fields in found[1:]:
+        if fields != canonical_fields:
+            errors.append(
+                f"{rel_path}: SBS Impact field list ({', '.join(fields)}) does not "
+                f"match {canonical_path} ({', '.join(canonical_fields)})"
+            )
+    return errors
+
+
+def _extract_required_sections_js(text: str) -> list[str] | None:
+    match = re.search(r"const required = \[\n(.*?)\n\s*\];", text, re.DOTALL)
+    if not match:
+        return None
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def _extract_required_sections_python(text: str) -> list[str] | None:
+    match = re.search(
+        r"REQUIRED_SECTIONS: tuple\[str, \.\.\.\] = \(\n(.*?)\n\)", text, re.DOTALL
+    )
+    if not match:
+        return None
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def check_required_sections_consistent(repo_root: Path) -> list[str]:
+    """Check 9: the JS `required` array and Python `REQUIRED_SECTIONS` tuple agree.
+
+    Tolerates missing source files the same way as check 8 (see its docstring).
+    """
+    js_path = repo_root / ".github" / "workflows" / "issue-pr-governance.yml"
+    py_path = repo_root / "scripts" / "validate_issue_readiness.py"
+    if not js_path.is_file() or not py_path.is_file():
+        return []
+    js_sections = _extract_required_sections_js(js_path.read_text(encoding="utf-8"))
+    py_sections = _extract_required_sections_python(py_path.read_text(encoding="utf-8"))
+    errors: list[str] = []
+    if js_sections is None:
+        errors.append(
+            f"{js_path.name}: could not locate the JS `required` sections array"
+        )
+    if py_sections is None:
+        errors.append(
+            f"{py_path.name}: could not locate the Python `REQUIRED_SECTIONS` tuple"
+        )
+    if errors:
+        return errors
+    if js_sections != py_sections:
+        errors.append(
+            "required-sections lists diverge: "
+            f"issue-pr-governance.yml required={js_sections} vs "
+            f"validate_issue_readiness.py REQUIRED_SECTIONS={py_sections}"
+        )
+    return errors
+
+
 def run_lint(repo_root: Path) -> list[str]:
     skills_root = repo_root / ".codex" / "skills"
     if not skills_root.is_dir():
@@ -265,6 +397,8 @@ def run_lint(repo_root: Path) -> list[str]:
     errors += check_label_taxonomy(skills_root)
     errors += check_retired_phrases(skills_root)
     errors += check_feature_breakdown_docs_index(skills_root)
+    errors += check_sbs_impact_fields_consistent(repo_root)
+    errors += check_required_sections_consistent(repo_root)
     return errors
 
 

@@ -142,6 +142,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "vault",
         (
             "app/instance/",
+            "app/knowledge/",
             "app/vault/",
             "tests/instance/",
             "tests/vault/",
@@ -270,6 +271,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/stores/",
             "app/ingest/",
+            # The object-store facade writes canonical objects through the
+            # store provider seam and emits ingest lifecycle events. Keep this
+            # shared producer on the established store/ingest contracts
+            # without claiming the whole app/objects package.
+            "app/objects/__init__.py",
             "tests/stores/",
             "tests/ingest/",
             "docs/DB_SCHEMA.md",
@@ -352,6 +358,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/indexer/consumer.py",
             "app/search/service.py",
             "app/services/indexer.py",
+            # The embedding-event producer writes DB-outbox records consumed
+            # by the indexer. It also remains an outbox-worker producer below.
+            "app/outbox/events.py",
             "tests/agent_memory/",
             "tests/retrieval/",
             "tests/indexer/",
@@ -491,6 +500,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # binding, idempotent writes, ack/bump) that the worker consumes
             # (#3930); its regressions live in tests/services and tests/workers.
             "app/services/outbox.py",
+            # Index embedding events are durable outbox producers; run both
+            # delivery-worker and memory/indexing coverage for this exact seam.
+            "app/outbox/events.py",
             "tests/workers/",
             "tests/worker/",
             "tests/services/test_outbox_idempotency.py",

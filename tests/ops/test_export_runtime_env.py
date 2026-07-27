@@ -1,7 +1,10 @@
+import ast
 import os
 import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 
 def _runtime_env_base(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
@@ -225,6 +228,117 @@ def _runtime_env_with_db(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     repo_root, out_path, env = _runtime_env_base(tmp_path)
     env.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@db:5432/app")
     return repo_root, out_path, env
+
+
+def _install_settings_location_import_failure(
+    tmp_path: Path, env: dict[str, str], *, fail_on_import: int
+) -> None:
+    """Inject a deterministic failure into a child Python process only.
+
+    ``export_runtime_env.sh`` runs Python from the repository root, so shadowing
+    the checked-out ``app`` package is not reliable. ``sitecustomize`` instead
+    adds a narrow import hook for the exact required module while leaving every
+    installed package and the successful path untouched.
+    """
+    hook_dir = tmp_path / "python-hook"
+    hook_dir.mkdir()
+    counter_path = tmp_path / "settings-location-import-count"
+    (hook_dir / "sitecustomize.py").write_text(
+        """\
+import importlib.abc
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+_counter = Path(os.environ["PKM_SETTINGS_LOCATION_IMPORT_COUNTER"])
+_fail_on = int(os.environ["PKM_SETTINGS_LOCATION_IMPORT_FAIL_ON"])
+
+
+class _FailSettingsLocations(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname != "app.settings.locations":
+            return None
+        count = int(_counter.read_text() if _counter.exists() else "0") + 1
+        _counter.write_text(str(count))
+        if count == _fail_on:
+            return importlib.util.spec_from_loader(fullname, self)
+        return None
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        raise ImportError("injected settings-location import failure")
+
+
+sys.meta_path.insert(0, _FailSettingsLocations())
+""",
+        encoding="utf-8",
+    )
+    inherited_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(hook_dir), inherited_pythonpath) if part
+    )
+    env["PKM_SETTINGS_LOCATION_IMPORT_COUNTER"] = str(counter_path)
+    env["PKM_SETTINGS_LOCATION_IMPORT_FAIL_ON"] = str(fail_on_import)
+
+
+@pytest.mark.parametrize(
+    ("fail_on_import", "provider"),
+    [(1, "mock"), (2, "ollama")],
+    ids=("primary-provider-resolution", "ollama-provider-resolution"),
+)
+def test_export_runtime_env_fails_loudly_when_settings_location_import_fails(
+    tmp_path: Path, fail_on_import: int, provider: str
+) -> None:
+    """Each required settings-location import exposes its original failure."""
+    repo_root, _, env = _runtime_env_with_db(tmp_path)
+    env["LLM_PROVIDER"] = provider
+    if provider == "ollama":
+        env["OLLAMA_URL"] = "http://ollama:11434"
+    _install_settings_location_import_failure(tmp_path, env, fail_on_import=fail_on_import)
+
+    result = subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "injected settings-location import failure" in result.stderr
+    assert "NameError: name 'resolve_settings_file' is not defined" not in result.stderr
+    assert "NameError: name 'LEGACY_COMPILED_DIR' is not defined" not in result.stderr
+
+
+def test_export_runtime_env_import_failure_paths_do_not_leave_unbound_location_helpers() -> None:
+    """The two embedded blocks import required location helpers outside fallbacks."""
+    script = (Path(__file__).resolve().parents[2] / "scripts/export_runtime_env.sh").read_text(
+        encoding="utf-8"
+    )
+    blocks = re.findall(r"python3 - <<'PY' >> \"\$runtime_env_path\"\n(.*?)\nPY", script, re.S)
+    assert len(blocks) == 2
+
+    for block in blocks:
+        tree = ast.parse(block)
+        location_imports = [
+            statement
+            for statement in tree.body
+            if isinstance(statement, ast.ImportFrom)
+            and statement.module == "app.settings.locations"
+        ]
+        assert len(location_imports) == 1
+        assert {
+            alias.name for alias in location_imports[0].names
+        } == {"LEGACY_COMPILED_DIR", "resolve_settings_file"}
+        assert all(
+            "app.settings.locations" not in ast.unparse(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Try)
+        )
 
 
 def test_export_runtime_env_derives_openai_base_from_openai_base_url(tmp_path: Path) -> None:

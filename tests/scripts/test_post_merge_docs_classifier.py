@@ -126,6 +126,13 @@ def _neutralized_multi_issue_evidence() -> tuple[dict[str, object], list[dict[st
         },
         pr=pr,
         live_closing_issues=[3820, 3823],
+        merge_readiness={
+            "contract": "verified_issue_set_merge_readiness.v1",
+            "further_commits_anticipated": False,
+            "head_sha": head,
+            "required_checks_green": True,
+            "review_gate_resolved": True,
+        },
     )
     neutralized_pr = {**pr, "body": plan["neutralized_body"]}
     comments = [

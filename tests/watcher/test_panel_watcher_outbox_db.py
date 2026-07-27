@@ -6,9 +6,13 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.knowledge import adapters as knowledge_adapters
 from app.events.schema import OutboxEvent
+from app.knowledge.multiwriter import is_conflict_artifact
+from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.panel_actions import PanelActionMapping
 from app.vault.paths import get_vault_inbox_dir_rel
+import app.watcher.registry as registry
 from app.watcher.registry import _emit_panel_events, _process_panel_note, RegistryConfig, WatcherSpec, _run_spec_tick
 from app.watcher.state import WatcherState
 
@@ -98,6 +102,286 @@ uuid: test-uuid
     assert payloads, "expected payloads in JSONL"
 
 
+def test_process_panel_note_stale_write_has_no_acknowledgement_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note_path = vault / "note.md"
+    note_path.write_text(
+        "---\nuuid: test-uuid\n---\n\n- [x] Do thing\n",
+        encoding="utf-8",
+    )
+    concurrent = "---\nuuid: test-uuid\n---\n\nConcurrent human body\n"
+    event = OutboxEvent(
+        event="promote.intent.created",
+        source="test",
+        payload={"note": {"uuid": "test-uuid"}},
+    )
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+
+    monkeypatch.setattr(
+        registry,
+        "handle_note_update",
+        lambda **kwargs: SimpleNamespace(
+            updated_markdown="Prepared stale output\n",
+            events=[event],
+            executed_action_ids=["action-1"],
+        ),
+    )
+
+    def interleave_human_write(
+        path: Path,
+        content: str,
+        **kwargs: object,
+    ):
+        note_path.write_text(concurrent, encoding="utf-8")
+        return write_note_from_absolute(path, content, **kwargs)
+
+    monkeypatch.setattr(
+        registry,
+        "write_note_from_absolute",
+        interleave_human_write,
+    )
+    monkeypatch.setattr(
+        registry,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "write_outbox_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "_write_jsonl_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    state = WatcherState()
+
+    emitted = _process_panel_note(
+        vault_root=vault,
+        rel_path=note_path.relative_to(vault),
+        outbox_path=tmp_path / "outbox.jsonl",
+        state=state,
+        action_mappings={},
+    )
+
+    assert emitted == 0
+    assert state.errors == 1
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert note_path.read_text(encoding="utf-8") == concurrent
+    artifacts = [
+        path
+        for path in note_path.parent.iterdir()
+        if path != note_path and is_conflict_artifact(path.name)
+    ]
+    assert len(artifacts) == 1
+    assert artifacts[0].read_text(encoding="utf-8") == "Prepared stale output\n"
+
+
+def test_process_panel_note_create_once_source_interleaving_has_no_mutation_or_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    source_dir = vault / "Sources"
+    source_dir.mkdir(parents=True)
+    note_path = source_dir / "panel-source.md"
+    note_path.write_text(
+        "---\nuuid: source-panel\n---\n\n%% AI:Start %%\n- [x] Do thing\n%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    concurrent = "Concurrent human source snapshot\n"
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = registry.watcher_panel_writeback_allowed
+
+    def interleave_before_class_boundary(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        note_path.write_text(concurrent, encoding="utf-8")
+        return real_class_policy(relative_path, **kwargs)
+
+    monkeypatch.setattr(
+        registry,
+        "watcher_panel_writeback_allowed",
+        interleave_before_class_boundary,
+    )
+    monkeypatch.setattr(
+        registry,
+        "_ensure_panel_note_uuid_with_retry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("create-once source must not be healed")
+        ),
+    )
+    monkeypatch.setattr(
+        registry,
+        "handle_note_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("create-once source must not enter panel preparation")
+        ),
+    )
+    monkeypatch.setattr(
+        registry,
+        "write_note_from_absolute",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("create-once source must not reach the write seam")
+        ),
+    )
+    monkeypatch.setattr(
+        registry,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "write_outbox_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "_write_jsonl_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    state = WatcherState()
+
+    emitted = _process_panel_note(
+        vault_root=vault,
+        rel_path=note_path.relative_to(vault),
+        outbox_path=tmp_path / "outbox.jsonl",
+        state=state,
+        action_mappings={},
+    )
+
+    assert emitted == 0
+    assert state.errors == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert note_path.read_text(encoding="utf-8") == concurrent
+    assert not any(is_conflict_artifact(path.name) for path in note_path.parent.iterdir())
+
+
+def test_process_panel_note_rewritten_alias_swap_after_final_policy_has_no_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    first = vault / "Notes" / "a.md"
+    second = vault / "Notes" / "b.md"
+    first.parent.mkdir(parents=True)
+    original = "---\nuuid: rewritten-a\n---\n\n- [x] Do thing\n"
+    first.write_text(original, encoding="utf-8")
+    second.write_text(original, encoding="utf-8")
+    event = OutboxEvent(
+        event="promote.intent.created",
+        source="test",
+        payload={"note": {"uuid": "rewritten-a"}},
+    )
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = registry.watcher_panel_writeback_allowed
+    policy_calls = 0
+    real_exchange = knowledge_adapters._atomic_exchange_at
+    exchanges = 0
+
+    def record_final_policy(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        nonlocal policy_calls
+        allowed = real_class_policy(relative_path, **kwargs)
+        policy_calls += 1
+        return allowed
+
+    def swap_at_linearization(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            first.unlink()
+            first.symlink_to(second.name)
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    monkeypatch.setattr(
+        registry,
+        "watcher_panel_writeback_allowed",
+        record_final_policy,
+    )
+    monkeypatch.setattr(
+        knowledge_adapters,
+        "_atomic_exchange_at",
+        swap_at_linearization,
+    )
+    monkeypatch.setattr(
+        registry,
+        "_ensure_panel_note_uuid_with_retry",
+        lambda *_args, **_kwargs: "rewritten-a",
+    )
+    monkeypatch.setattr(
+        registry,
+        "handle_note_update",
+        lambda **_kwargs: SimpleNamespace(
+            updated_markdown="Prepared stale output\n",
+            events=[event],
+            executed_action_ids=["action-1"],
+        ),
+    )
+    monkeypatch.setattr(
+        registry,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "write_outbox_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "_write_jsonl_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    state = WatcherState()
+
+    emitted = _process_panel_note(
+        vault_root=vault,
+        rel_path=first.relative_to(vault),
+        outbox_path=tmp_path / "outbox.jsonl",
+        state=state,
+        action_mappings={},
+    )
+
+    assert policy_calls == 2
+    assert exchanges == 1
+    assert emitted == 0
+    assert state.errors == 1
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert not first.is_symlink()
+    assert second.read_text(encoding="utf-8") == original
+    assert first.read_text(encoding="utf-8") == "Prepared stale output\n"
+    assert any(
+        path.is_symlink() and path.readlink() == Path(second.name)
+        for path in (first.parent / "_conflicts").glob("*.md.conflict")
+    )
+    conflict_contents = [
+        path.read_text(encoding="utf-8")
+        for path in (first.parent / "_conflicts").rglob("*conflicted copy*")
+        if not path.is_symlink()
+    ]
+    assert "Prepared stale output\n" in conflict_contents
+
+
 def test_process_panel_note_retries_transient_read_failure(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -123,15 +407,15 @@ uuid: test-uuid
     monkeypatch.setattr("app.watcher.registry.write_outbox_event", fake_write_outbox)
 
     attempts = {"count": 0}
-    real_read = Path.read_text
+    real_read = registry.read_note_text_with_version
 
-    def flaky_read(self: Path, *args, **kwargs):
-        if self == note_path and attempts["count"] == 0:
+    def flaky_read(path: Path):
+        if path == note_path and attempts["count"] == 0:
             attempts["count"] += 1
             raise OSError(2, "No such file or directory")
-        return real_read(self, *args, **kwargs)
+        return real_read(path)
 
-    monkeypatch.setattr("pathlib.Path.read_text", flaky_read)
+    monkeypatch.setattr(registry, "read_note_text_with_version", flaky_read)
 
     mappings = {
         "Make this note evergreen": PanelActionMapping(
@@ -153,6 +437,7 @@ uuid: test-uuid
 
     assert written > 0
     assert events
+    assert attempts["count"] == 1
 
 
 def test_process_panel_note_retries_transient_uuid_failure(tmp_path, monkeypatch):

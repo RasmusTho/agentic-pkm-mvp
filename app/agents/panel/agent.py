@@ -277,6 +277,7 @@ def handle_note_update(
     note_path: str | None = None,
     *,
     proactive_assist: bool = False,
+    persist_executed_ids: bool = True,
 ) -> PanelAgentResult:
     base_markdown = new_markdown or ""
     has_ai = contains_ai_panel_fence(base_markdown)
@@ -383,7 +384,7 @@ def handle_note_update(
         clear=clear_status,
         preferred_index=preferred_index,
     )
-    if executed_now:
+    if executed_now and persist_executed_ids:
         # Keep legacy direct callers idempotent even when markdown writeback is skipped.
         from .writeback import upsert_executed_ids
         upsert_executed_ids(note_id, executed_now)

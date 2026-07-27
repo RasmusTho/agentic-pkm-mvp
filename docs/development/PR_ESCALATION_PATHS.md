@@ -59,10 +59,17 @@ Use after merge when shipped behavior, contracts, or architecture may have chang
 Use when review feedback is blocking, repetitive, or clearly requires more than a quick hot-path reply.
 
 - classify the feedback first
-- blocking regression risk -> fix before merge
-- valid non-blocking improvement -> fix if cheap, otherwise follow up
+- P0/P1 correctness, contract, or safety defect -> block merge, fix, and independently re-review
+- P2 real defect accepted for this PR -> leave the PR code unchanged for that finding, route it
+  through `bug-to-issue`, reply on the finding/thread with the Issue reference, and merge without
+  another review round once the durable disposition is live
+- P3 informational advice or non-defect suggestion -> record when useful; do not block, repair, or
+  open defect intake
 - out-of-scope -> short response only
 - incorrect or not applicable -> short response only
+- apply the protected severity floors and dispatcher receipt compatibility rule from
+  `.codex/skills/verification-and-closure/SKILL.md :: Severity routing`; there is no valid
+  `blocking P2`
 - if the loop keeps expanding, stop and classify the PR as blocked rather than dragging the hot path into a governance cycle
 
 ## 7) GitHub Project / Board Cleanup

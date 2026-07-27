@@ -114,6 +114,26 @@ Authority and downstream boundaries:
 - The panel can also surface system-generated suggested actions as unchecked checkbox proposals when the runtime has a plausible action but should keep the human-facing approval step visible. That suggestion path is for proposal quality, not a blanket requirement that every low-risk action wait for manual review.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
+- Panel writeback uses a two-phase acknowledgement boundary. The note-update service and both
+  direct watcher paths derive Markdown/events without persisting executed IDs or dispatching/
+  emitting events; watcher policy first resolves the path against the canonical vault root,
+  rejects symlink aliases, and admits only paths classified `REWRITTEN`, so create-once Sources
+  and append-only paths never enter watcher UUID healing, preparation, writeback, or
+  acknowledgement. The filesystem seam classifies the canonical vault-relative target and rejects
+  any expected-version request for a non-rewritten class or aliased locator before mutation. The
+  expected-version CAS binds the lexical locator through a root-anchored, no-follow parent walk, so
+  a path redirect after the final watcher policy check also fails before acknowledgement. After a rewritten note's canonical version-checked hardened knowledge write
+  succeeds, the watcher persists non-empty executed IDs and then releases eligible effects. A staged conflict leaves the snapshot
+  and acknowledgement effects untouched, and watcher telemetry classifies it as skipped/deferred.
+  Receiptless/other write conflicts propagate as errors because the canonical write may already
+  have landed. The `panel-update` CLI follows the same prepare → write → commit ordering, but its
+  existing helper call remains versionless pending the separate #3570 writer-migration debt; it
+  commits only after that current seam returns successfully and must not be described as CAS.
+  Post-write commit is not a filesystem transaction with the already-durable note: a later
+  persistence or dispatch failure is surfaced as an update error and does not roll back the write.
+- Vault-watcher `--emit-only` is an explicit non-commit branch: it emits only
+  `panel.intent.created`, does not write the prepared Markdown, does not persist executed IDs, and
+  suppresses `panel.intent.executed` plus actionable downstream events.
 
 ## PanelAgent 2.0 (v5.6, accepted)
 
@@ -246,7 +266,16 @@ Make this note evergreen
   - removes executed checkboxes from the panel working set, writes a receipt into the AI status callout, and records the hidden `ai:id` in `executed_action_ids` on the note payload to prevent re-execution.
 - No LangGraph/planner/tool calls; this remains a lightweight runtime loop on top of Reality-MVP.
 - Markdown mutations (panel cleanup, receipts, promotion frontmatter) flow through the note writer; agents emit intents, and the writer/consumer apply deterministic file updates.
-- Auto-run policy (SoT v5.3, watcher-facing): watchers treat any note that contains an AI panel fence (`%% ...ai... %%`, case-insensitive) as a candidate once the global arm switch `WATCHER_AUTO_EXEC=1` is set. The only per-note opt-out is `ai_panel_auto_run: never` (nested `ai_panel: { auto_run: never }` also works); other modes (`watcher`/`manual`) remain metadata for manual CLI contexts but no longer gate watcher eligibility. Manual CLI commands (`panel run`, `panel run-many`) ignore this policy.
+- Auto-run policy (SoT v5.3, watcher-facing): once the global arm switch
+  `WATCHER_AUTO_EXEC=1` is set, watchers treat a note containing an AI panel fence
+  (`%% ...ai... %%`, case-insensitive) as a candidate only when the authoritative multi-writer
+  classifier marks its canonical non-symlink path `REWRITTEN`. Symlink aliases, `CREATE_ONCE`
+  Sources, and append-only paths are a hard watcher exclusion, including emit-only runs; they
+  cannot be made mutation-eligible by an AI
+  fence. Within the rewritten class, the only per-note opt-out is `ai_panel_auto_run: never`
+  (nested `ai_panel: { auto_run: never }` also works); other modes (`watcher`/`manual`) remain
+  metadata for manual CLI contexts but no longer gate watcher eligibility. Manual CLI commands
+  (`panel run`, `panel run-many`) ignore this watcher policy.
 
 Architectural reading note:
 - these event and writer paths describe the current runtime contract,

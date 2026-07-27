@@ -322,8 +322,9 @@ Run this procedure for any non-trivial change. It produces the SBS impact block 
 6. **Decide owner-doc impact.** See §9. → *whether owner docs must be updated*.
 7. **Decide transition-debt impact.** See §10. Every slice either reduces a debt item, adds a bounded one, or states it does not affect debt. → *whether transition debt must be recorded*.
 8. **Decide fitness-rule impact.** See §11. Identify which existing rules apply to the boundary you touched and whether the change strengthens, weakens, or is neutral to enforcement. → *which fitness rules apply*.
+9. **State the boundary risk.** Name the single most important way this change could let something cross a boundary it must not — authority, human-authored content, external egress, persistence, or an enforcement mechanism itself being too strict or too loose — as a concrete must-not (optionally qualified `medium`/`high`/`critical` when the risk is non-trivial), or state `none`. This is not a restatement of another SBS Impact field; it is the reviewer-facing residual risk that would otherwise be silently assumed away. → *what a reviewer must specifically watch for*.
 
-The result of steps 1–8 is the SBS impact block. For issues it is the `SBS Impact` section of `.github/ISSUE_TEMPLATE/task.yml`; for PRs it is the `## SBS Impact` section of `.github/pull_request_template.md`.
+The result of steps 1–9 is the SBS impact block. For issues it is the `SBS Impact` section of `.github/ISSUE_TEMPLATE/task.yml`; for PRs it is the `## SBS Impact` section of `.github/pull_request_template.md`. All four checked-in copies of the field list (`.codex/skills/_shared/ISSUE_CONTRACT.md`, `.github/ISSUE_TEMPLATE/task.yml`, `.github/pull_request_template.md`, `scripts/pr_body_generator.py :: SBS_FIELDS`) must list the same fields in the same order; `scripts/lint_skills_consistency.py` enforces this.
 
 ### Subsystem quick reference
 
@@ -343,6 +344,7 @@ An SBS-relevant issue is Ready (`agent:ready`, Status=Ready) only when its `SBS 
 - **Contract impact** stated: which `docs/contracts/*.md` apply, and whether any is new or changed.
 - **Owner-doc impact** stated (none / will-update-in-PR / follow-up-issue).
 - **Transition-debt impact** stated (reduces #… / adds bounded debt / no effect).
+- **Boundary risk** stated: the single most important way the change could let something cross a boundary it must not, or `none`.
 - **Verification plan** present: each acceptance criterion carries a resolvable `Verify:` target (test pointer, doc writeback anchor, roadmap diff, or runtime receipt), per the issue template.
 
 An issue that cannot resolve these is `agent:needs-human`, not Ready.

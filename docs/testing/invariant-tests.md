@@ -938,19 +938,28 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 ### stale_write_rejected_for_rewritten_notes
 
 - **Purpose:** A writer to a rewritten-class vault note (human prose, `_heimdal/**` control notes,
-  companion notes) must not silently overwrite a version that changed since it was read; the collision
-  is detected and staged as a conflict artifact, never dropped.
+  companion notes) that supplies the raw-byte version it read must not silently overwrite a version
+  that changed since that read; an initially stale proposal is detected and staged as a conflict
+  artifact, never dropped.
 - **Protected principle:** the vault is canonical human-authored store; a collision must be loud, not silent.
 - **Affected boundaries:** WSP, HKA.
-- **Required fixture / data:** generalized `OptimisticWriteGuard` (`app/components/concurrency.py:118-131`)
-  beyond the panel-watcher family; the note-class table from ADR-0055 item 6 (T2 enactment).
-- **Expected failure mode:** two writers (Mac runtime, Obsidian human, or a Bifrost client) edit the same
-  rewritten-class note within the same window and one edit disappears with no trace.
-- **Current enforcement:** `gate` (target, per ADR-0055 item 7); not yet implemented — enactment tracked
-  as T2/T3 in `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §10.
-- **Eventual test path:** `tests/invariants/test_vault_multiwriter.py::test_stale_write_rejected_for_rewritten_notes` (future).
+- **Required fixture / data:** the authoritative note-class table, the public
+  `expected_version` request path, and the descriptor-anchored filesystem adapter exercised by
+  `tests/invariants/test_vault_multiwriter.py`.
+- **Expected failure mode:** an opted-in writer races another writer and either silently replaces the
+  newer canonical bytes, loses its own proposal, or acknowledges a non-canonical outcome as success.
+- **Current enforcement:** `runtime_test` — enforcement is intentionally opt-in during the progressive
+  migration decided on 2026-07-13. A versionless rewritten write still writes and reports its
+  `note_class`; #3570 tracks migration of those remaining callers. When `expected_version` is supplied,
+  a matching write uses the atomic rewritten-note seam, while an initially stale proposal leaves the
+  canonical note unchanged and is durably staged with writer provenance. Receiptless post-linearization
+  races fail without a success acknowledgement and retain scanner-inert recovery evidence.
+- **Runtime test path:**
+  `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam`,
+  `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_uses_atomic_replace_at_filesystem_seam`,
+  `tests/invariants/test_vault_multiwriter.py::test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam`.
 - **Related docs / contracts / ADRs:** ADR-0055, ADR-0053 (superseded); `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW1).
-- **Related issues:** #3114, #3020, #3024.
+- **Related issues:** #3132, #3450, #3451; progressive caller migration #3570 remains open.
 
 ### write_guard_asserted_at_every_write_seam
 
@@ -980,15 +989,20 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Protected principle:** a detected storage-layer conflict must be surfaced, not silently absorbed into
   the knowledge graph as duplicate content.
 - **Affected boundaries:** SIP, WSP.
-- **Required fixture / data:** the vault scan filter (`app/vault/manager.py:241`); a fixture directory
-  containing a synthetic conflicted-copy filename.
+- **Required fixture / data:** the shared conflict-artifact classifier and the production vault
+  Markdown iterator, exercised with both synthetic iCloud and runtime-staged sibling names.
 - **Expected failure mode:** `Note (conflicted copy).md` is ingested as a distinct ordinary note, doubling
   content and confusing search/graph results.
-- **Current enforcement:** `doctor` (target, per ADR-0055 item 3 and item 7's posture for this narrower
-  case); absent today — the only filter is `filename.endswith(".md")`.
-- **Eventual test path:** `tests/invariants/test_vault_multiwriter.py::test_icloud_conflict_artifacts_never_silently_ingested`.
+- **Current enforcement:** `runtime_test` — the production iterator classifies both iCloud conflicted
+  copies and runtime-staged conflict artifacts before ordinary watcher/ingest/index parsing, preserves
+  them on disk, and emits a bounded quarantine receipt. Normal Markdown siblings remain visible.
+- **Runtime test path:**
+  `tests/watcher/test_vault_conflict_quarantine.py::test_conflicted_copy_is_not_yielded_as_ordinary_note`,
+  `tests/watcher/test_vault_conflict_quarantine.py::test_staged_conflict_artifact_is_not_yielded_as_ordinary_note`,
+  `tests/watcher/test_vault_conflict_quarantine.py::test_quarantine_preserves_normal_sibling_note`,
+  `tests/watcher/test_vault_conflict_quarantine.py::test_quarantine_does_not_delete_conflict_artifact`.
 - **Related docs / contracts / ADRs:** ADR-0055; `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW3).
-- **Related issues:** #3114, #3020.
+- **Related issues:** #3132, #3450, #3452.
 
 ## Coverage map (invariant → principle → test)
 
@@ -1031,9 +1045,9 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | staged_drafts_invisible_to_retrieval | #1,#9 | RCA/GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/activation/test_expansion_gate_records.py` |
 | curation_citations_resolve | #3,#9 | GOV/RCA | static + runtime | `tests/invariants/test_curation_invariants.py`, `tests/curation/test_contradiction_citations_resolve.py` |
-| stale_write_rejected_for_rewritten_notes (INV-VW1) | vault canonical + fail-loud | WSP/HKA | gate (target) | `tests/invariants/test_vault_multiwriter.py` (future) |
+| stale_write_rejected_for_rewritten_notes (INV-VW1) | vault canonical + fail-loud | WSP/HKA | runtime (opt-in expected-version seam) | `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam`, `tests/invariants/test_vault_multiwriter.py::test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam` |
 | write_guard_asserted_at_every_write_seam (INV-VW2) | vault canonical + fail-loud | WSP | gate + runtime | `tests/knowledge/test_write_ops.py::test_append_note_relative_rejects_unhealthy_write_guard`, `tests/knowledge/test_write_ops.py::test_append_note_relative_allows_healthy_write_guard` |
-| icloud_conflict_artifacts_never_silently_ingested (INV-VW3) | vault canonical + fail-loud | SIP/WSP | doctor (target) | `tests/invariants/test_vault_multiwriter.py` (future) |
+| icloud_conflict_artifacts_never_silently_ingested (INV-VW3) | vault canonical + fail-loud | SIP/WSP | runtime | `tests/watcher/test_vault_conflict_quarantine.py` |
 
 ## Heimdal invariants (HEIM-1..14) — sibling registry
 

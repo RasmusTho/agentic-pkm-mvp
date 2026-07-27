@@ -15,6 +15,8 @@ The CKM is the Builder System subsystem that continuously constructs and maintai
 
 **MVP scope (OD-K1):** seed → ingest → link → assess → detect gaps → project. **Deferred:** drift detection (FR-8; waits for the Correctness Kernel registry), closed-loop writeback, predictive maturity, cross-repo federation.
 
+**Amended 2026-07-27 (ADR-0057 A1) — what "closed-loop writeback" still defers.** The deferral continues to bind *the CKM*: no CKM component may file or edit an Issue, and the write-class restriction (`analytical`/`projection`/`receipt` only) is unchanged. What is no longer deferred is the *external* path — a builder agent may read CKM-surfaced gaps and drive delivery from them, holding exactly the authority Claude Code and Codex already hold, through the ordinary Issue contract, publication boundary, CI, and review gate. The distinction is the one ADR-0057 §7 always drew: action is an agent's decision outside the knowledge model, never a CKM effect. Drift detection, predictive maturity, and cross-repo federation stay deferred as written.
+
 ## Implementation tasks
 
 | Task file | task_id | What it delivers |

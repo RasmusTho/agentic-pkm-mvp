@@ -53,6 +53,21 @@ def test_instance_registry_change_selects_vault_coverage() -> None:
     )
 
 
+def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/knowledge/adapters.py",
+            "app/knowledge/contracts.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("vault",)
+    assert selection.unowned_paths == ()
+    assert "tests/knowledge" in selection.targets
+    assert "tests/ports" in selection.targets
+
+
 def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci.yml"])
 
@@ -226,7 +241,7 @@ def test_docs_authoring_and_skill_paths_are_owned() -> None:
     assert "tests/architecture/test_openapi_sync.py" in selection.targets
 
 
-def test_unknown_path_is_reported_as_unowned() -> None:
+def test_unknown_app_module_is_unowned() -> None:
     # A genuinely unknown product/runtime path must still fail closed with
     # unowned_paths and exit 2 — the docs-authoring/skill-contract ownership
     # fix above must not weaken this guarantee.
@@ -449,6 +464,18 @@ def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
     assert "tests/architecture" in selection.targets
 
 
+def test_object_store_module_selects_store_ingest_regressions() -> None:
+    """The shared object-store producer belongs to the store/ingest contracts."""
+    selection = select_tests(["app/objects/__init__.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("store_ingest",)
+    assert selection.unowned_paths == ()
+    assert "tests/stores" in selection.targets
+    assert "tests/ingest" in selection.targets
+    assert "tests/architecture" in selection.targets
+
+
 def test_outbox_worker_change_selects_worker_regressions() -> None:
     """Outbox-worker changes must reach pytest, not fail as unowned in CI."""
     selection = select_tests(
@@ -463,6 +490,20 @@ def test_outbox_worker_change_selects_worker_regressions() -> None:
     assert "tests/services/test_outbox_idempotency.py" in selection.targets
     assert "tests/events" in selection.targets
     assert "tests/workers/test_outbox_worker.py" in selection.targets
+
+
+def test_outbox_embedding_events_select_shared_regressions() -> None:
+    """Embedding-event producers require worker delivery and indexer coverage."""
+    selection = select_tests(["app/outbox/events.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("memory_retrieval", "outbox_worker")
+    assert selection.unowned_paths == ()
+    assert "tests/workers" in selection.targets
+    assert "tests/events" in selection.targets
+    assert "tests/indexer" in selection.targets
+    assert "tests/index" in selection.targets
+    assert "tests/services/test_indexer_worker.py" in selection.targets
 
 
 def test_worker_metrics_module_change_has_a_ci_owner() -> None:

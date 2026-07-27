@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.agents.panel_agent.policy import (
     get_auto_run_mode,
     watcher_may_run_panel,
     watcher_panel_candidate,
+    watcher_panel_writeback_allowed,
 )
 
 
@@ -57,3 +60,48 @@ def test_watcher_panel_candidate_needs_panel_fence() -> None:
     frontmatter: dict[str, object] = {}
     markdown = "# No AI fence here\nJust text"
     assert watcher_panel_candidate(frontmatter, markdown) is False
+
+
+def test_watcher_panel_writeback_uses_authoritative_note_class_mapping(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    for relative_path in (
+        Path("Notes/panel.md"),
+        Path("Sources/panel.md"),
+        Path("Acquired/panel.md"),
+    ):
+        target = vault / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("Panel\n", encoding="utf-8")
+
+    assert watcher_panel_writeback_allowed("Notes/panel.md", vault_root=vault) is True
+    assert watcher_panel_writeback_allowed("Sources/panel.md", vault_root=vault) is False
+    assert (
+        watcher_panel_writeback_allowed(
+            "Acquired/panel.md",
+            vault_root=vault,
+            sources_root_rel="Acquired",
+        )
+        is False
+    )
+
+
+def test_watcher_panel_writeback_rejects_same_vault_symlink_alias(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    source = vault / "Sources" / "panel-source.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("Panel\n", encoding="utf-8")
+    alias = vault / "Notes" / "source-alias.md"
+    alias.parent.mkdir()
+    alias.symlink_to(Path("..") / "Sources" / source.name)
+
+    assert (
+        watcher_panel_writeback_allowed(
+            alias.relative_to(vault),
+            vault_root=vault,
+        )
+        is False
+    )

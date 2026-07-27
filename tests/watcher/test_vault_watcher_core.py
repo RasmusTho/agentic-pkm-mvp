@@ -6,6 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.knowledge import adapters as knowledge_adapters
+from app.knowledge.multiwriter import is_conflict_artifact
+from app.knowledge.write_ops import write_note_from_absolute
+from app.settings.panel_actions import PanelActionMapping
+import app.watcher.vault_watcher as watcher_module
 from app.watcher.vault_watcher import VaultWatcher, compute_changes, load_snapshot, run_watcher_tick, save_snapshot
 
 
@@ -124,7 +129,7 @@ def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path:
         vault_root=vault,
         snapshot_path=vault / ".state.json",
         skip_panel=False,
-        emit_only=True,
+        emit_only=False,
         dry_run=False,
         max_notes=10,
         force=False,
@@ -193,7 +198,7 @@ def test_watcher_panel_writeback_uses_canonical_identity_for_retained_uuid(
         vault_root=vault,
         snapshot_path=vault / ".state.json",
         skip_panel=False,
-        emit_only=True,
+        emit_only=False,
         dry_run=False,
         max_notes=10,
         force=False,
@@ -203,3 +208,531 @@ def test_watcher_panel_writeback_uses_canonical_identity_for_retained_uuid(
     assert summary["applied_actions"] == 1
     assert set(rows) == {canonical_id}
     assert rows[canonical_id].payload["executed_action_ids"]
+
+
+def test_vault_watcher_stale_panel_write_has_no_acknowledgement_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    inbox = vault / "Inbox"
+    inbox.mkdir(parents=True)
+    note = inbox / "stale.md"
+    note.write_text(
+        "---\n"
+        "uuid: note-stale-watcher\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "## AI-åtgärder\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    concurrent = "Concurrent human snapshot\n"
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    mapping = PanelActionMapping(
+        text="Do thing",
+        event_type="promote.intent.created",
+        payload_template={"maturity": "evergreen"},
+        action_id="promote.evergreen",
+    )
+
+    class EmptyObjectStore:
+        def get_object(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "load_panel_action_mappings",
+        lambda: {"Do thing": mapping},
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_disallowed_actions",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(watcher_module, "ObjectStore", EmptyObjectStore)
+    panel_agent_module = importlib.import_module("app.agents.panel.agent")
+    monkeypatch.setattr(panel_agent_module, "ObjectStore", EmptyObjectStore)
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    def interleave_human_write(
+        path: Path,
+        content: str,
+        **kwargs: object,
+    ):
+        note.write_text(concurrent, encoding="utf-8")
+        return write_note_from_absolute(path, content, **kwargs)
+
+    monkeypatch.setattr(
+        watcher_module,
+        "write_note_from_absolute",
+        interleave_human_write,
+    )
+
+    summary, messages = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["errors"] == 1
+    assert summary["applied_actions"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert note.read_text(encoding="utf-8") == concurrent
+    assert any("stale write staged" in message for message in messages)
+    artifacts = [
+        path
+        for path in note.parent.iterdir()
+        if path != note and is_conflict_artifact(path.name)
+    ]
+    assert len(artifacts) == 1
+    staged = artifacts[0].read_text(encoding="utf-8")
+    assert "Do thing" in staged
+    assert staged != concurrent
+
+
+def test_vault_watcher_create_once_source_interleaving_has_no_mutation_or_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    sources = vault / "Sources"
+    sources.mkdir(parents=True)
+    note = sources / "panel-source.md"
+    note.write_text(
+        "---\n"
+        "uuid: source-panel\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "## AI-åtgärder\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    concurrent = "Concurrent human source snapshot\n"
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = watcher_module.watcher_panel_writeback_allowed
+
+    def interleave_before_class_boundary(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        note.write_text(concurrent, encoding="utf-8")
+        return real_class_policy(relative_path, **kwargs)
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "watcher_panel_writeback_allowed",
+        interleave_before_class_boundary,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("create-once source must not enter panel preparation")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "write_note_from_absolute",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("create-once source must not reach the write seam")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    summary, messages = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["panel_candidates"] == 0
+    assert summary["panel_skipped_policy"] == 1
+    assert summary["applied_actions"] == 0
+    assert summary["errors"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert note.read_text(encoding="utf-8") == concurrent
+    assert not any(is_conflict_artifact(path.name) for path in note.parent.iterdir())
+    assert any("Watcher policy denies auto-run" in message for message in messages)
+
+
+def test_vault_watcher_symlinked_source_interleaving_has_no_mutation_or_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    target = vault / "Sources" / "panel-source.md"
+    target.parent.mkdir(parents=True)
+    original = (
+        "---\n"
+        "uuid: source-panel\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n"
+    )
+    target.write_text(original, encoding="utf-8")
+    alias = vault / "Notes" / "source-alias.md"
+    alias.parent.mkdir()
+    alias.symlink_to(Path("..") / "Sources" / target.name)
+    snapshot_path = vault / ".state.json"
+    save_snapshot(
+        snapshot_path,
+        {"Sources/panel-source.md": target.stat().st_mtime},
+    )
+    concurrent = "Concurrent human source snapshot\n"
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = watcher_module.watcher_panel_writeback_allowed
+
+    def interleave_before_class_boundary(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        if relative_path == Path("Notes/source-alias.md"):
+            target.write_text(concurrent, encoding="utf-8")
+        return real_class_policy(relative_path, **kwargs)
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "watcher_panel_writeback_allowed",
+        interleave_before_class_boundary,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("symlinked source must not enter panel preparation")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "write_note_from_absolute",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("symlinked source must not reach the write seam")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["panel_candidates"] == 0
+    assert summary["panel_skipped_policy"] == 1
+    assert summary["applied_actions"] == 0
+    assert summary["errors"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert target.read_text(encoding="utf-8") == concurrent
+    assert alias.read_text(encoding="utf-8") == concurrent
+    assert not any(is_conflict_artifact(path.name) for path in target.parent.iterdir())
+
+
+def test_vault_watcher_rewritten_alias_swap_after_final_policy_has_no_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    first = vault / "Notes" / "a.md"
+    second = vault / "Notes" / "b.md"
+    first.parent.mkdir(parents=True)
+    original = (
+        "---\n"
+        "uuid: rewritten-a\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n"
+    )
+    first.write_text(original, encoding="utf-8")
+    second.write_text(original, encoding="utf-8")
+    snapshot_path = vault / ".state.json"
+    save_snapshot(snapshot_path, {"Notes/b.md": second.stat().st_mtime})
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = watcher_module.watcher_panel_writeback_allowed
+    policy_calls = 0
+    real_exchange = knowledge_adapters._atomic_exchange_at
+    exchanges = 0
+
+    def record_final_policy(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        nonlocal policy_calls
+        allowed = real_class_policy(relative_path, **kwargs)
+        if relative_path == Path("Notes/a.md"):
+            policy_calls += 1
+        return allowed
+
+    def swap_at_linearization(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            first.unlink()
+            first.symlink_to(second.name)
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    prepared = SimpleNamespace(
+        state=SimpleNamespace(
+            actions=[SimpleNamespace(checked=True, text="Do thing")]
+        ),
+        intents=[SimpleNamespace(kind="action_triggered")],
+        events=[
+            SimpleNamespace(event="panel.intent.created"),
+            SimpleNamespace(event="promote.intent.created"),
+        ],
+        updated_markdown="Prepared stale output\n",
+        executed_action_ids=["action-1"],
+    )
+
+    class EmptyObjectStore:
+        def get_object(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "watcher_panel_writeback_allowed",
+        record_final_policy,
+    )
+    monkeypatch.setattr(
+        knowledge_adapters,
+        "_atomic_exchange_at",
+        swap_at_linearization,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *_args, **_kwargs: prepared,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_disallowed_actions",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_hydrate_store_with_markdown",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(watcher_module, "ObjectStore", EmptyObjectStore)
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    summary, messages = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert policy_calls == 3
+    assert exchanges == 1
+    assert summary["errors"] == 1
+    assert summary["applied_actions"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert not first.is_symlink()
+    assert second.read_text(encoding="utf-8") == original
+    assert first.read_text(encoding="utf-8") == "Prepared stale output\n"
+    assert any(
+        path.is_symlink() and path.readlink() == Path(second.name)
+        for path in (first.parent / "_conflicts").glob("*.md.conflict")
+    )
+    assert any("indeterminate panel write" in message for message in messages)
+    conflict_contents = [
+        path.read_text(encoding="utf-8")
+        for path in (first.parent / "_conflicts").rglob("*conflicted copy*")
+        if not path.is_symlink()
+    ]
+    assert "Prepared stale output\n" in conflict_contents
+
+
+def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    inbox = vault / "Inbox"
+    inbox.mkdir(parents=True)
+    note = inbox / "emit-only.md"
+    original = (
+        "---\n"
+        "uuid: note-emit-only\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n"
+    )
+    note.write_text(original, encoding="utf-8")
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    events = [
+        SimpleNamespace(event="panel.intent.created"),
+        SimpleNamespace(event="panel.intent.executed"),
+        SimpleNamespace(event="promote.intent.created"),
+    ]
+    prepared = SimpleNamespace(
+        state=SimpleNamespace(actions=[]),
+        intents=[SimpleNamespace(kind="action_triggered")],
+        events=events,
+        updated_markdown="Prepared but intentionally not written\n",
+        executed_action_ids=["action-1"],
+    )
+
+    class EmptyObjectStore:
+        def get_object(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *args, **kwargs: prepared,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_disallowed_actions",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(watcher_module, "ObjectStore", EmptyObjectStore)
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, selected: emitted_events.extend(selected),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("emit-only must not write canonical Markdown")
+        ),
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["applied_actions"] == 0
+    assert persisted_ids == []
+    assert [event.event for event in emitted_events] == ["panel.intent.created"]
+    assert note.read_text(encoding="utf-8") == original

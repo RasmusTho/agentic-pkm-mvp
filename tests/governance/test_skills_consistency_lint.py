@@ -175,6 +175,107 @@ def test_lint_detects_retired_phrase(tmp_path: Path) -> None:
     assert any("retired phrase" in e for e in errors), errors
 
 
+def test_sbs_impact_fields_consistent_on_real_repo() -> None:
+    """The four real SBS Impact copies must agree (issue #4188)."""
+    errors = run_lint(REPO_ROOT)
+    sbs_errors = [e for e in errors if "SBS Impact field list" in e]
+    assert sbs_errors == [], sbs_errors
+
+
+def test_required_sections_consistent_on_real_repo() -> None:
+    """The JS `required` array and Python `REQUIRED_SECTIONS` tuple must agree (issue #4188)."""
+    errors = run_lint(REPO_ROOT)
+    section_errors = [e for e in errors if "required-sections lists diverge" in e]
+    assert section_errors == [], section_errors
+
+
+def test_sbs_impact_lint_fails_when_one_copy_edited_alone(tmp_path: Path) -> None:
+    """Editing exactly one SBS Impact copy (dropping `Boundary risk`) must fail the lint.
+
+    This is the regression this issue closes: agent-authored issues silently
+    omitted `Boundary risk` because only one of the four copies drifted.
+    """
+    root = _seed_tree(tmp_path)
+
+    issue_contract = REPO_ROOT / ".codex" / "skills" / "_shared" / "ISSUE_CONTRACT.md"
+    task_yml = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "task.yml"
+    pr_template = REPO_ROOT / ".github" / "pull_request_template.md"
+    pr_body_generator = REPO_ROOT / "scripts" / "pr_body_generator.py"
+
+    dest_shared = root / ".codex" / "skills" / "_shared"
+    dest_shared.mkdir(parents=True, exist_ok=True)
+    (dest_shared / "ISSUE_CONTRACT.md").write_text(
+        issue_contract.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    dest_github_templates = root / ".github" / "ISSUE_TEMPLATE"
+    dest_github_templates.mkdir(parents=True, exist_ok=True)
+    (dest_github_templates / "task.yml").write_text(
+        task_yml.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (root / ".github" / "pull_request_template.md").write_text(
+        pr_template.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    dest_scripts = root / "scripts"
+    dest_scripts.mkdir(parents=True, exist_ok=True)
+    (dest_scripts / "pr_body_generator.py").write_text(
+        pr_body_generator.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    # Sanity: the unmodified copies (seeded verbatim from the real repo) are consistent.
+    baseline_errors = run_lint(root)
+    assert not any("SBS Impact field list" in e for e in baseline_errors), baseline_errors
+
+    # Now drift exactly one copy alone: drop `Boundary risk` from ISSUE_CONTRACT.md only.
+    (dest_shared / "ISSUE_CONTRACT.md").write_text(
+        issue_contract.read_text(encoding="utf-8").replace(
+            "- Boundary risk: <the one thing that must not cross a boundary "
+            "because of this change, or none>\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    errors = run_lint(root)
+    assert any(
+        "ISSUE_CONTRACT.md" in e and "SBS Impact field list" in e for e in errors
+    ), errors
+
+
+def test_required_sections_lint_fails_when_one_copy_edited_alone(tmp_path: Path) -> None:
+    """Reordering the Python `REQUIRED_SECTIONS` tuple alone must fail the lint."""
+    root = _seed_tree(tmp_path)
+
+    workflow = REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
+    validate = REPO_ROOT / "scripts" / "validate_issue_readiness.py"
+
+    dest_workflows = root / ".github" / "workflows"
+    dest_workflows.mkdir(parents=True, exist_ok=True)
+    (dest_workflows / "issue-pr-governance.yml").write_text(
+        workflow.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    dest_scripts = root / "scripts"
+    dest_scripts.mkdir(parents=True, exist_ok=True)
+
+    # Baseline: verbatim copies agree.
+    (dest_scripts / "validate_issue_readiness.py").write_text(
+        validate.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    baseline_errors = run_lint(root)
+    assert not any("required-sections lists diverge" in e for e in baseline_errors), (
+        baseline_errors
+    )
+
+    # Drift the Python copy alone: swap two section names' order.
+    drifted = validate.read_text(encoding="utf-8").replace(
+        '    "Context",\n    "Scope",\n',
+        '    "Scope",\n    "Context",\n',
+    )
+    assert drifted != validate.read_text(encoding="utf-8"), "fixture swap did not apply"
+    (dest_scripts / "validate_issue_readiness.py").write_text(drifted, encoding="utf-8")
+
+    errors = run_lint(root)
+    assert any("required-sections lists diverge" in e for e in errors), errors
+
+
 def test_planned_marker_allows_unknown_reference(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     skills_root = root / ".codex" / "skills"

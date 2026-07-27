@@ -9,6 +9,8 @@ depends_on: [FIX_CANDIDATE_TRUTH_SURFACES.md]
 can_parallelize_with: []
 ---
 
+State: Implemented. Delivered by PR #4142 (issue #4110, 2026-07-27).
+
 # Compose Review-Required Proposal Note
 
 ## Purpose
@@ -53,4 +55,4 @@ Claims, durable extractions, transcript files, module routing, and applying D6 t
 
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:high`, `agent:blocked` pending YSNV2-02. SBS class: Product/Runtime. Recommended capability: Terra/high; template/rendering work with authority-sensitive regression tests.
+Delivery record: Issue #4110 (`type:task`, `prio:high`) was delivered by PR #4142. SBS class: Product/Runtime. Recommended capability: Terra/high; template/rendering work with authority-sensitive regression tests.

@@ -44,25 +44,32 @@ Default rule:
 
 ## PR Body Preparation
 
-Before opening a PR, generate or preflight the body from lane inputs instead of reconstructing the
-template by hand:
+`.codex/skills/publish-pr/SKILL.md :: Step 6` is the authoritative source of the four PR-body
+templates (implementation, docs-authoring, governance, direct-repair) actually used at publication
+time. Copy the template for the chosen lane directly from that step. Each template already carries
+the fields the `pr-contract` gate requires — a single `Final-Review-Rounds: 1` (or `2`) line, a
+filled `## BuilderOps Routing` section with no `<...>` placeholder, and, for direct repair, the
+complete `Type:` / `Reason:` / `Validation:` / `Issue required: no` block — so an agent that copies
+one of them and fills in the bracketed content satisfies the gate by construction.
 
-```bash
-python3 scripts/pr_body_generator.py --input-json /path/to/pr-body-inputs.json > /tmp/pr-body.md
-```
-
-Use the generator for implementation, docs-authoring, governance, and direct-repair lanes when a PR
-touches governance surfaces, closes an issue, or needs BuilderOps routing evidence. The generated
-body remains editable before PR creation, but required lane inputs fail locally before any PR is
-opened:
+`scripts/pr_body_generator.py` implements the same field contract as a standalone generator
+(`--input-json` in, a complete body out) and is available for ad hoc preflight or drift-checking
+against these templates, but no skill invokes it as part of the publication path. Wiring
+`publish-pr` to the generator is deliberately out of scope for now: the generator hard-enforces the
+full 16-field `SBS Impact` block (`docs/architecture/SBS_OPERATING_MODEL.md`), and that block's
+contract is under an open owner ruling tracked outside this doc — wiring the generator in before
+that ruling lands would cement a contract that may be about to change. Revisit this section once
+the ruling lands. Whichever source is used — skill template or generator — required lane inputs must
+be concrete before any PR is opened:
 
 - implementation lane requires a linked issue;
 - every body requires concrete SBS impact, validation, and owner-doc writeback resolution;
 - issue-backed and direct-repair bodies require concrete BuilderOps routing lines;
 - direct repair requires `Type`, `Reason`, `Validation`, and `Issue required: no`.
 
-The generator does not weaken `pr-contract`, infer issues silently, open PRs, or write to GitHub. CI
-remains the authority for whether the final PR body satisfies the repository contract.
+Neither the skill templates nor the generator weaken `pr-contract`, infer issues silently, open PRs,
+or write to GitHub. CI remains the authority for whether the final PR body satisfies the repository
+contract.
 
 ## Multi-Issue PR Scope
 
@@ -163,10 +170,25 @@ poll GitHub. GitHub check conclusions and the PR head SHA remain the authority.
 - branch protection is not the process gate: an unprotected branch or absent required-status-check rule does not waive the current-checks and review-feedback wait before merge
 - do not run GraphQL `reviewThreads` closure sweeps by default
 - run GraphQL review-thread closure checks only when triggered by a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback
-- blocking regression risk -> fix before merge
-- valid non-blocking improvement -> fix if cheap, otherwise file a follow-up
+- P0/P1 correctness, contract, or safety defect -> block merge, fix, and independently re-review
+- P2 real defect accepted for this PR -> leave the PR code unchanged for that finding, route it
+  through `bug-to-issue`, reply on the finding/thread with the Issue reference, and merge without
+  another review round once the durable disposition is live
+- P3 informational advice or non-defect suggestion -> record when useful; do not block, repair, or
+  open defect intake
 - out-of-scope -> short response; follow-up only if useful
 - incorrect or not applicable -> short response
+
+The protected severity floors and dispatcher receipt compatibility rule are normative in
+`.codex/skills/verification-and-closure/SKILL.md :: Severity routing`. There is no valid
+`blocking P2`.
+
+Compatibility for the current `pr-integration` consumer: its legacy `cheap fix` bucket is not a
+fifth severity and does not include P2/P3. Read `cheap fix`, `review-feedback repair`, and
+`fixing commit` there as P0/P1 blocking-repair concepts only. `pr-integration` requires
+classification with this hot path first, so a true P2 follows the Issue/thread disposition above
+and never requires a fixing commit; P3 remains informational. A secondary skill's abbreviated
+bucket list cannot override this canonical routing.
 
 4. Minimal delivery receipt
 - record PR number, issue number(s), current head SHA, lane, risk, checks run, review classification, and next handoff
@@ -270,6 +292,10 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
   truth, and resumes a crashed post-merge sequence idempotently without resetting attempts or the
   2+2 repair budget. Explicit expected-issue closes require a null closer plus the delivery actor/time
   fence; automatic closes require the exact target PR/repository/merge SHA
+- a neutralized PR body may not outlive its merge attempt: neutralization requires a head-bound
+  readiness statement that CI and review are green and no further commits are anticipated, and a head
+  change while the body is still neutralized requires restoring the canonical body before further
+  repair work
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

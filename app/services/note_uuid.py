@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import uuid
-import hashlib
 from pathlib import Path
 
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -26,7 +25,7 @@ def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str 
     resolved = Path(path).resolve()
     root = Path(vault_root).expanduser().resolve()
     resolved.relative_to(root)
-    text = resolved.read_text(encoding="utf-8")
+    text, expected_version = read_note_text_with_version(resolved)
     frontmatter, body = load_frontmatter(text)
     existing = str(frontmatter.get("uuid") or "").strip()
     if existing:
@@ -41,7 +40,7 @@ def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str 
         resolved,
         dump_frontmatter(frontmatter, body),
         vault_root=root,
-        expected_version=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        expected_version=expected_version,
     )
     return candidate
 

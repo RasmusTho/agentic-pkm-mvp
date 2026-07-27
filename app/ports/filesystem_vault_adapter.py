@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import hashlib
 import uuid
 from pathlib import Path
 from typing import Any
 
-from app.knowledge.write_ops import advanced_uri_from_vault_path, write_note_from_absolute
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import (
+    advanced_uri_from_vault_path,
+    read_note_text_with_version,
+    write_note_from_absolute,
+)
 from app.ports.vault_port import EnsureUuidResult, NoteRead
 from app.services.inbox import append_change
 from app.services.vault_sync import active_edit, delete_note, update_path, upsert_object_from_note
@@ -21,9 +25,15 @@ class FilesystemVaultAdapter:
 
     def read_note(self, path: Path) -> NoteRead:
         resolved = Path(path).resolve()
-        text = resolved.read_text(encoding="utf-8")
+        text, version = read_note_text_with_version(resolved)
         frontmatter, body = load_frontmatter(text)
-        return NoteRead(path=resolved, frontmatter=frontmatter, body=body, mtime_ns=resolved.stat().st_mtime_ns)
+        return NoteRead(
+            path=resolved,
+            frontmatter=frontmatter,
+            body=body,
+            mtime_ns=resolved.stat().st_mtime_ns,
+            version=version,
+        )
 
     def ensure_uuid(
         self,
@@ -41,14 +51,21 @@ class FilesystemVaultAdapter:
                 uri=self._make_uri(note.path),
             )
             return EnsureUuidResult(deferred=True, wrote=False, uuid_value=None, reason="active_edit")
+        had_uuid_key = "uuid" in note.frontmatter
+        previous_uuid = note.frontmatter.get("uuid")
         note.frontmatter["uuid"] = uuid.uuid4().hex
         wrote = self.write_frontmatter(
             note.path,
             note.frontmatter,
             note.body,
             expected_mtime_ns=expected_mtime_ns,
+            expected_version=note.version,
         )
         if not wrote:
+            if had_uuid_key:
+                note.frontmatter["uuid"] = previous_uuid
+            else:
+                note.frontmatter.pop("uuid", None)
             self.append_inbox_item(
                 f"Deferred UUID injection for {note.path.name} (concurrent edit detected)",
                 vault_path=note.path,
@@ -65,28 +82,30 @@ class FilesystemVaultAdapter:
         body: str,
         *,
         expected_mtime_ns: int | None = None,
+        expected_version: str | None = None,
     ) -> bool:
         resolved = Path(path).resolve()
-        expected_version: str | None = None
         if resolved.exists():
             current_mtime_ns = resolved.stat().st_mtime_ns
             if expected_mtime_ns is not None and current_mtime_ns != expected_mtime_ns:
                 return False
-            # The watcher's own staleness guard is mtime-based, but the shared
-            # knowledge-write seam (#3450) classifies most watcher-owned paths
-            # as REWRITTEN and requires a content-hash expected_version before
-            # it will overwrite an existing note. Compute it from the bytes we
-            # just confirmed are current so a legitimate mtime-fresh write
-            # (e.g. ensure_uuid injecting a uuid) is not rejected as a
-            # would-be silent overwrite.
-            expected_version = hashlib.sha256(resolved.read_bytes()).hexdigest()
+            # The token must describe the same raw snapshot that produced
+            # ``frontmatter`` and ``body``. Hashing here would let later bytes B
+            # authorize a stale render derived from earlier bytes A.
+            if expected_version is None:
+                return False
         rendered = dump_frontmatter(frontmatter, body)
-        write_note_from_absolute(
-            resolved,
-            rendered,
-            vault_root=self.vault_root,
-            expected_version=expected_version,
-        )
+        try:
+            write_note_from_absolute(
+                resolved,
+                rendered,
+                vault_root=self.vault_root,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict as exc:
+            if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
+                raise
+            return False
         return True
 
     def rename_note(self, uuid_value: str, new_path: Path) -> None:

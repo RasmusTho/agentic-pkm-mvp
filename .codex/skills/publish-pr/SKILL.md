@@ -160,9 +160,10 @@ EOF
 ```
 
 Commit message must:
-- Start with imperative verb (Fix, Add, Update, Rebuild, etc.)
+- Start with imperative verb (Add, Update, Rebuild, etc.)
 - Summarize the bounded outcome, not the mechanical changes
 - Be truthful about scope
+- Never use `Fix`, `Fixes`, `Fixed`, `Close`, `Closes`, `Closed`, `Resolve`, `Resolves`, or `Resolved` as an issue-closing reference in the commit subject or body. Ordinary non-target prose such as `Fix runtime env` is allowed. The workflow owns the supported separator, target, case, and malformed-reference recognition; see `.github/workflows/issue-pr-governance.yml :: pr-contract closing authority`. Use evidence-only `Refs #<id>` when an Issue reference is useful; authenticated closing keywords belong only in the PR body.
 - Replace `<agent identity> <agent noreply address>` in the `Co-Authored-By` trailer with the actual agent identity and its own noreply address producing the commit (e.g. Claude's `noreply@anthropic.com`, Codex/ChatGPT's own noreply domain); do not copy a hardcoded model name or a different agent's domain from this template
 
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
@@ -250,7 +251,13 @@ Any overlap with your staged file set => STOP: keep the earlier compliant PR, cl
 
 ### Step 6: Create or Update PR
 
-Execute based on lane classification:
+Execute based on lane classification. Every template below includes the required
+`Final-Review-Rounds: 1` line (the `pr-contract` gate rejects a body with zero or more than one
+match of `/^Final-Review-Rounds:[ \t]*[12][ \t]*$/`; use `2` only when a second final review round
+is actually planned) and concrete `## BuilderOps Routing` defaults instead of `<...>` placeholders
+(the gate rejects any routing value matching `^<.*>$`). The `none` / reason defaults shown match what
+`scripts/pr_body_generator.py` emits (`_builderops_section`) — replace them with the actual
+records/projections/receipts and reason whenever BuilderOps material was in fact routed.
 
 **Implementation Lane (Fixes an Issue):**
 ```bash
@@ -261,16 +268,17 @@ Governing-Issue: #<ISSUE_NUMBER>
 
 Fixes #<ISSUE_NUMBER>
 
+Final-Review-Rounds: 1
+
 ## Summary
 <1-2 sentence summary of the bounded change>
 
-## Validation
-<What validation actually ran>
-
 ## BuilderOps Routing
-- Records/projections/receipts: <ids or "none">
-- Reason: <why no BuilderOps material was created, or what was routed>
+- Records/projections/receipts: none
+- Reason: Tier 1 lane with no BuilderOps material routed.
 
+## Notes
+Validation: <What validation actually ran>
 ---
 EOF
 )"
@@ -283,19 +291,20 @@ gh pr create \
   --body "$(cat <<'EOF'
 - [x] Docs authoring lane
 
+Final-Review-Rounds: 1
+
 ## Summary
 <Summary of documentation changes>
 
 ## Changes
 <What surfaces were updated>
 
-## Validation
-<Docs validation that ran>
-
 ## BuilderOps Routing
-- Records/projections/receipts: <ids or "none">
-- Reason: <why no BuilderOps material was created, or what was routed>
+- Records/projections/receipts: none
+- Reason: Tier 1 lane with no BuilderOps material routed.
 
+## Notes
+Validation: <Docs validation that ran>
 ---
 EOF
 )"
@@ -308,23 +317,55 @@ gh pr create \
   --body "$(cat <<'EOF'
 - [x] Governance lane
 
+Final-Review-Rounds: 1
+
 ## Summary
 <Summary of governance/workflow change>
 
 ## Changes
 <What surfaces were updated>
 
-## Validation
-<Governance validation that ran>
-
 ## BuilderOps Routing
-- Records/projections/receipts: <ids or "none">
-- Reason: <why no BuilderOps material was created, or what was routed>
+- Records/projections/receipts: none
+- Reason: Tier 1 lane with no BuilderOps material routed.
 
+## Notes
+Validation: <Governance validation that ran>
 ---
 EOF
 )"
 ```
+
+**Direct Repair Lane (bounded immediate fix, no governing Issue):**
+```bash
+gh pr create \
+  --title "<bounded repair outcome>" \
+  --body "$(cat <<'EOF'
+## Direct Repair
+Type: governance
+Reason: state why this qualifies as a bounded, immediate direct repair
+Validation: state the checks that were actually run
+Issue required: no
+
+Final-Review-Rounds: 1
+
+## Summary
+<1-2 sentence summary of the bounded repair>
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: Tier 1 lane with no BuilderOps material routed.
+
+## Notes
+Validation: <What validation actually ran>
+---
+EOF
+)"
+```
+
+`Type:` must be exactly one of `docs`, `governance`, or `code` (`docs/development/PR_HOT_PATH.md ::
+Direct Repair`). No lane checkbox and no `Governing-Issue`/closing-keyword line are needed when this
+block is complete — the gate accepts the `## Direct Repair` block as the standalone contract.
 
 **Update Existing PR:**
 ```bash
@@ -343,8 +384,12 @@ Pre-push PR-body contract gate:
   - governance lane: `- [x] Governance lane`
   - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
+- Verify exactly one `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` line is present — every
+  lane requires it, including direct repair.
 - Verify BuilderOps Routing per tier — see the `## Core rules` PR-body machinery rule above
-  (`docs/development/GOVERNANCE_PROPORTIONALITY.md`); never leave the section present but unfilled.
+  (`docs/development/GOVERNANCE_PROPORTIONALITY.md`); never leave the section present but unfilled,
+  and never leave a `<...>` placeholder in a value the gate reads (`Records/projections/receipts:`
+  or `Reason:`).
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
 
@@ -360,6 +405,13 @@ echo "Handing off to pr-integration skill"
 **Do not force this as an immediate publication step.** PR integration resolves merge conflicts, verifies CI, and prepares the PR for verification/merge when the PR needs that readiness path.
 
 ## PR body requirements
+
+Every lane, with no exception:
+
+- include exactly one `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` line
+- include a `## BuilderOps Routing` section with concrete `Records/projections/receipts:` and
+  `Reason:` values (never a `<...>` placeholder) unless the Tier 1 omission rule in `## Core rules`
+  applies
 
 Implementation lane:
 
@@ -378,6 +430,13 @@ Governance lane:
 
 - mark `Governance lane`
 - confirm the change stays within approved governance surfaces
+
+Direct repair lane:
+
+- include a complete `## Direct Repair` block: `Type:` (one of `docs`, `governance`, `code`),
+  `Reason:`, `Validation:`, and `Issue required: no`
+- no lane checkbox and no `Governing-Issue`/closing-keyword line — the Direct Repair block is the
+  standalone contract
 
 
 ## Capturing learning

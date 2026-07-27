@@ -37,7 +37,6 @@ headings can follow legitimate engine relabels without fabricating a human edit.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +51,7 @@ from app.episodes.notes import (
 from app.episodes.schema import validate_episode_note_fields
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 logger = logging.getLogger(__name__)
@@ -104,7 +103,7 @@ def cut_snapshot(fields: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> tuple[str, bytes] | None:
+def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> tuple[str, str] | None:
     """Best-effort read of the CURRENT on-disk text at ``rel_path``, or ``None`` when no note
     exists there yet (a brand-new episode_id, never terminal). Reads the filesystem directly
     (mirrors ``app.episodes.segmenter._emit_proposal``'s existence check) rather than through the
@@ -117,8 +116,7 @@ def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> tuple[
     if not note_path.exists():
         return None
     try:
-        raw_bytes = note_path.read_bytes()
-        return raw_bytes.decode("utf-8"), raw_bytes
+        return read_note_text_with_version(note_path)
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -201,11 +199,7 @@ def write_episode_note(
     # mutation is rejected here and the note is left byte-for-byte untouched.
     existing_document = _read_existing_episode_note(rel_path, vault_root)
     existing_text = existing_document[0] if existing_document is not None else None
-    current_version = (
-        hashlib.sha256(existing_document[1]).hexdigest()
-        if existing_document is not None
-        else None
-    )
+    current_version = existing_document[1] if existing_document is not None else None
     if (
         expected_existing_version is not None
         and current_version != expected_existing_version

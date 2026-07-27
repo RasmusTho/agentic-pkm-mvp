@@ -9,16 +9,25 @@ from pathlib import Path
 
 import pytest
 
-from app.dispatcher.verification_contract import IssueAuthority, MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import (
+    IssueAuthority,
+    MAX_CLOSING_ISSUES,
+    has_neutralized_closing_marker,
+    resolve_neutralized_issue_authority,
+)
 from app.dispatcher.verified_merge import (
+    NEUTRALIZED_BODY_RESTORATION_CONTRACT,
     VERIFIED_MERGE_AUTHORITY_CONTRACT,
     build_verified_merge_phase,
+    classify_neutralized_body_state,
     plan_post_merge_reconciliation,
     prepare_verified_merge,
+    resolve_neutralized_body_restoration,
     resolve_post_merge_governing_issue,
     resolve_post_merge_issue_authority,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
+    restored_body_matches_authority,
 )
 
 
@@ -47,6 +56,16 @@ def _context() -> dict[str, object]:
                 }
             ],
         },
+    }
+
+
+def _readiness(head_sha: str = HEAD) -> dict[str, object]:
+    return {
+        "contract": "verified_issue_set_merge_readiness.v1",
+        "further_commits_anticipated": False,
+        "head_sha": head_sha,
+        "required_checks_green": True,
+        "review_gate_resolved": True,
     }
 
 
@@ -93,6 +112,7 @@ def test_prepare_verified_merge_neutralizes_closers_and_preserves_authority() ->
             {"number": 3823, "repository": REPOSITORY},
             {"number": 3820, "repository": REPOSITORY},
         ],
+        merge_readiness=_readiness(),
     )
 
     assert "Fixes #3820" not in plan["neutralized_body"]
@@ -123,10 +143,16 @@ def test_verified_merge_body_digest_canonicalizes_terminal_newline() -> None:
     without_terminal_lf = with_terminal_lf[:-1]
 
     with_lf_plan = prepare_verified_merge(
-        context=_context(), pr=_pr(with_terminal_lf), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(with_terminal_lf),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     without_lf_plan = prepare_verified_merge(
-        context=_context(), pr=_pr(without_terminal_lf), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(without_terminal_lf),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
 
     assert (
@@ -141,7 +167,10 @@ def test_verified_merge_body_digest_canonicalizes_terminal_newline() -> None:
 
 def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -161,7 +190,10 @@ def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> No
 
 def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -176,7 +208,10 @@ def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() 
 
 def _legacy_authority_fixture() -> tuple[dict[str, object], dict[str, object], str, str]:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = copy.deepcopy(plan["authority_receipt"])
     assert isinstance(authority, dict)
@@ -377,7 +412,10 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
 def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() -> None:
     original = _body() + "\n"
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(original), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(original),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -436,6 +474,7 @@ def test_prepare_verified_merge_fails_closed_on_mutable_authority_races(
             context=context,
             pr=pr,
             live_closing_issues=closing,
+            merge_readiness=_readiness(),
         )
 
 
@@ -457,6 +496,7 @@ def test_prepare_verified_merge_rejects_noncanonical_closure_attempts(
             context=_context(),
             pr=_pr(_body() + suffix),
             live_closing_issues=[3820, 3823],
+            merge_readiness=_readiness(),
         )
 
 
@@ -472,6 +512,7 @@ def test_prepare_verified_merge_keeps_ten_issue_limit() -> None:
         context=context,
         pr=_pr(body),
         live_closing_issues=closing,
+        merge_readiness=_readiness(),
     )
     assert plan["authority_receipt"]["closing_issues"] == closing
 
@@ -483,6 +524,7 @@ def test_prepare_verified_merge_keeps_ten_issue_limit() -> None:
             context=over_limit,
             pr=_pr(body + "\nFixes #5000"),
             live_closing_issues=[*closing, 5000],
+            merge_readiness=_readiness(),
         )
 
 
@@ -490,35 +532,52 @@ def test_prepare_verified_merge_cli_uses_production_planner(tmp_path: Path) -> N
     context_path = tmp_path / "context.json"
     pr_path = tmp_path / "pr.json"
     closing_path = tmp_path / "closing.json"
+    readiness_path = tmp_path / "readiness.json"
     output_path = tmp_path / "plan.json"
     context_path.write_text(json.dumps(_context()), encoding="utf-8")
     pr_path.write_text(json.dumps(_pr()), encoding="utf-8")
     closing_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
+    readiness_path.write_text(json.dumps(_readiness()), encoding="utf-8")
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "scripts.prepare_verified_issue_set_merge",
-            "--context-json",
-            str(context_path),
-            "--pr-json",
-            str(pr_path),
-            "--live-closing-json",
-            str(closing_path),
-            "--output-json",
-            str(output_path),
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    def _run(readiness: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.prepare_verified_issue_set_merge",
+                "--context-json",
+                str(context_path),
+                "--pr-json",
+                str(pr_path),
+                "--live-closing-json",
+                str(closing_path),
+                "--merge-readiness-json",
+                str(readiness),
+                "--output-json",
+                str(output_path),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    completed = _run(readiness_path)
 
     assert completed.returncode == 0, completed.stderr
     plan = json.loads(output_path.read_text(encoding="utf-8"))
     assert plan["authority_receipt"]["closing_issues"] == [3820, 3823]
     assert "Refs #3820" in plan["neutralized_body"]
+
+    unmet_path = tmp_path / "unmet-readiness.json"
+    unmet = _readiness()
+    unmet["further_commits_anticipated"] = True
+    unmet_path.write_text(json.dumps(unmet), encoding="utf-8")
+
+    refused = _run(unmet_path)
+
+    assert refused.returncode != 0
+    assert "neutralization precondition is unmet" in refused.stderr
 
 
 def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comments() -> None:
@@ -526,6 +585,7 @@ def test_authority_receipt_resolver_rejects_forged_stale_and_conflicting_comment
         context=_context(),
         pr=_pr(),
         live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     original_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
     neutral_pr = _pr(str(plan["neutralized_body"]))
@@ -629,6 +689,7 @@ def test_authority_receipt_requires_exact_live_supporting_body_authority(
         context=_context(),
         pr=_pr(),
         live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     receipt = copy.deepcopy(plan["authority_receipt"])
     assert isinstance(receipt, dict)
@@ -651,7 +712,10 @@ def test_authority_receipt_requires_exact_live_supporting_body_authority(
 
 def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -722,7 +786,10 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
 
 def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -751,7 +818,10 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
 
 def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -799,7 +869,10 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
 
 def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -873,6 +946,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         context=raced_context,
         pr=_pr(str(raced_pr["body"])),
         live_closing_issues=[4999],
+        merge_readiness=_readiness(),
     )
     body_matching_conflict_comment = _trusted_comment(
         str(body_matching_conflict["authority_receipt_comment"])
@@ -917,7 +991,10 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
 
 def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
     plan = prepare_verified_merge(
-        context=_context(), pr=_pr(), live_closing_issues=[3820, 3823]
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
     )
     merged_pr = {
         **_pr(str(plan["original_body"])),
@@ -996,3 +1073,827 @@ def test_post_merge_reconciliation_requires_complete_issue_evidence() -> None:
                 {"number": 3820, "state": "closed", "closed_by_pull_requests": [3822]}
             ],
         )
+
+
+NEXT_HEAD = "b" * 40
+
+
+def _authority_comment(receipt: dict[str, object]) -> dict[str, object]:
+    payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    return _trusted_comment(
+        "verified issue-set merge authority:\n```json\n" + payload + "\n```"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "unmet"),
+    [
+        ("further_commits_anticipated", True),
+        ("required_checks_green", False),
+        ("review_gate_resolved", False),
+    ],
+)
+def test_neutralization_is_refused_until_the_head_is_final(
+    field: str, unmet: bool
+) -> None:
+    readiness = _readiness()
+    readiness[field] = unmet
+
+    with pytest.raises(ValueError, match="neutralization precondition is unmet"):
+        prepare_verified_merge(
+            context=_context(),
+            pr=_pr(),
+            live_closing_issues=[3820, 3823],
+            merge_readiness=readiness,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda readiness: readiness.update(head_sha=NEXT_HEAD),
+            id="readiness-bound-to-another-head",
+        ),
+        pytest.param(
+            lambda readiness: readiness.update(contract="unknown.v1"),
+            id="unknown-contract",
+        ),
+        pytest.param(
+            lambda readiness: readiness.update(further_commits_anticipated="false"),
+            id="non-boolean-assertion",
+        ),
+        pytest.param(
+            lambda readiness: readiness.pop("review_gate_resolved"),
+            id="missing-assertion",
+        ),
+        pytest.param(
+            lambda readiness: readiness.update(merged_by="agent"),
+            id="unknown-field",
+        ),
+    ],
+)
+def test_neutralization_readiness_fails_closed_on_malformed_statements(
+    mutate,
+) -> None:
+    readiness = _readiness()
+    mutate(readiness)
+
+    with pytest.raises(ValueError, match="readiness is malformed"):
+        prepare_verified_merge(
+            context=_context(),
+            pr=_pr(),
+            live_closing_issues=[3820, 3823],
+            merge_readiness=readiness,
+        )
+
+
+def test_neutralized_body_outliving_its_head_is_surfaced_as_restorable() -> None:
+    """Reproduce PR #4021: neutralize at head A, then push head B.
+
+    There, the body stayed neutralized across six later heads for about seven
+    hours because nothing detected that it had outlived the merge attempt that
+    justified it, so `pr-contract` failed deterministically on every head.
+    """
+
+    original_body = _body()
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(original_body),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority_receipt = plan["authority_receipt"]
+    assert isinstance(authority_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    neutralized_body = str(plan["neutralized_body"])
+    head_a_pr = _pr(neutralized_body)
+
+    # Inside the merge attempt the receipt covers the live head; nothing to restore.
+    assert (
+        resolve_verified_merge_authority_receipt(
+            comments, pr=head_a_pr, repository=REPOSITORY
+        )
+        == authority_receipt
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_a_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+    # A further commit lands. The exact-head binding is unchanged, so the
+    # receipt stops resolving while the body still advertises neutralization.
+    head_b_pr = {**head_a_pr, "head": {"sha": NEXT_HEAD}}
+    assert (
+        resolve_verified_merge_authority_receipt(
+            comments, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+    restoration = resolve_neutralized_body_restoration(
+        comments, pr=head_b_pr, repository=REPOSITORY
+    )
+    assert restoration == {
+        "closing_issues": [3820, 3823],
+        "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
+        "governing_issue": 3821,
+        "head_sha": NEXT_HEAD,
+        "matching_attempts": 1,
+        "neutralized_body_sha256": authority_receipt["neutralized_body_sha256"],
+        "neutralized_head_sha": HEAD,
+        "pr_number": 3822,
+        "reason": "neutralized-body-outlived-merge-attempt",
+        "repository": REPOSITORY,
+        "restore_body_sha256": authority_receipt["body_sha256"],
+        "run_id": "vrun-authority",
+    }
+
+    # Only the authenticated original body is an accepted restoration, and the
+    # durable authority trail stays untouched evidence.
+    assert restored_body_matches_authority(original_body, restoration=restoration)
+    assert not restored_body_matches_authority(
+        neutralized_body, restoration=restoration
+    )
+    assert not restored_body_matches_authority(
+        original_body.replace("Refs #3900", "Refs #3901"), restoration=restoration
+    )
+    assert comments == [_trusted_comment(str(plan["authority_receipt_comment"]))]
+
+    # A restored-then-reneutralized body still resumes normally on the new head.
+    restored_pr = {**head_b_pr, "body": original_body}
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=restored_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    next_plan = prepare_verified_merge(
+        context={**_context(), "head_sha": NEXT_HEAD},
+        pr=restored_pr,
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(NEXT_HEAD),
+    )
+    next_comments = [
+        *comments,
+        _trusted_comment(str(next_plan["authority_receipt_comment"])),
+    ]
+    reneutralized_pr = {**restored_pr, "body": str(next_plan["neutralized_body"])}
+    assert (
+        resolve_verified_merge_authority_receipt(
+            next_comments, pr=reneutralized_pr, repository=REPOSITORY
+        )
+        == next_plan["authority_receipt"]
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            next_comments, pr=reneutralized_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+
+def test_neutralized_body_restoration_cli_uses_production_resolver(
+    tmp_path: Path,
+) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    pr_path = tmp_path / "pr.json"
+    comments_path = tmp_path / "comments.json"
+    output_path = tmp_path / "restoration.json"
+    comments_path.write_text(
+        json.dumps([_trusted_comment(str(plan["authority_receipt_comment"]))]),
+        encoding="utf-8",
+    )
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.resolve_neutralized_body_restoration",
+                "--pr-json",
+                str(pr_path),
+                "--comments-json",
+                str(comments_path),
+                "--repository",
+                REPOSITORY,
+                "--output-json",
+                str(output_path),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    pr_path.write_text(
+        json.dumps(_pr(str(plan["neutralized_body"]))), encoding="utf-8"
+    )
+    inside_attempt = _run()
+
+    assert inside_attempt.returncode == 0, inside_attempt.stderr
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "restoration": None,
+        "restoration_required": False,
+        "status": "no_restoration_required",
+    }
+
+    pr_path.write_text(json.dumps(_pr()), encoding="utf-8")
+    canonical = _run()
+
+    assert canonical.returncode == 0, canonical.stderr
+    assert (
+        json.loads(output_path.read_text(encoding="utf-8"))["status"]
+        == "no_restoration_required"
+    )
+
+    pr_path.write_text(
+        json.dumps(
+            {
+                **_pr(str(plan["neutralized_body"])),
+                "head": {"sha": NEXT_HEAD},
+            }
+        ),
+        encoding="utf-8",
+    )
+    outlived = _run()
+
+    assert outlived.returncode == 2, outlived.stderr
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "restoration_required"
+    assert payload["restoration_required"] is True
+    assert payload["restoration"]["neutralized_head_sha"] == HEAD
+    assert payload["restoration"]["head_sha"] == NEXT_HEAD
+
+    # A neutralized body whose evidence cannot prove a restore target is
+    # indeterminate, never a safe exit 0.
+    comments_path.write_text(json.dumps([]), encoding="utf-8")
+    ambiguous = _run()
+
+    assert ambiguous.returncode == 3, ambiguous.stderr
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "restoration": None,
+        "restoration_required": False,
+        "status": "ambiguous_neutralized_body",
+    }
+
+
+def test_neutralized_body_restoration_fails_closed_without_unambiguous_evidence() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority_receipt = plan["authority_receipt"]
+    assert isinstance(authority_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    head_b_pr = {**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}}
+
+    # No receipt at all: the restore target cannot be proven.
+    assert (
+        resolve_neutralized_body_restoration([], pr=head_b_pr, repository=REPOSITORY)
+        is None
+    )
+
+    # Untrusted authorship never names a restore target.
+    untrusted = [{**comments[0], "author_association": "NONE"}]
+    assert (
+        resolve_neutralized_body_restoration(
+            untrusted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+    # A canonical body is not a restorable state.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments,
+            pr={**head_b_pr, "body": _body()},
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+    # A merged PR stays owned by the `restored` phase of its own attempt.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments,
+            pr={
+                **head_b_pr,
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-07-27T08:18:08Z",
+            },
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+    # Foreign repository, foreign run, and conflicting restore targets fail closed.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_b_pr, repository="RasmusTho/other"
+        )
+        is None
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            comments,
+            pr=head_b_pr,
+            repository=REPOSITORY,
+            expected_run_id="vrun-other",
+        )
+        is None
+    )
+    conflicting = dict(authority_receipt)
+    conflicting["body_sha256"] = "c" * 64
+    assert (
+        resolve_neutralized_body_restoration(
+            [*comments, _authority_comment(conflicting)],
+            pr=head_b_pr,
+            repository=REPOSITORY,
+        )
+        is None
+    )
+
+    # Every one of those `None` outcomes is still an indeterminate live
+    # neutralized body, distinct from a canonical or already-merged body.
+    def _status(pr: dict[str, object]) -> object:
+        return classify_neutralized_body_state(
+            comments, pr=pr, repository=REPOSITORY
+        )["status"]
+
+    assert _status(head_b_pr) == "restoration_required"
+    assert _status({**head_b_pr, "body": _body()}) == "no_restoration_required"
+    assert (
+        _status(
+            {
+                **head_b_pr,
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-07-27T08:18:08Z",
+            }
+        )
+        == "no_restoration_required"
+    )
+
+
+def test_neutralized_body_state_never_reports_ambiguity_as_safe() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    neutralized_body = str(plan["neutralized_body"])
+    head_a_pr = _pr(neutralized_body)
+    head_b_pr = {**head_a_pr, "head": {"sha": NEXT_HEAD}}
+
+    def _status(
+        candidate_comments: list[dict[str, object]],
+        pr: dict[str, object],
+    ) -> object:
+        return classify_neutralized_body_state(
+            candidate_comments, pr=pr, repository=REPOSITORY
+        )["status"]
+
+    # In flight on the head the receipt covers, and a canonical body, are both
+    # positively safe.
+    assert _status(comments, head_a_pr) == "no_restoration_required"
+    assert _status(comments, _pr()) == "no_restoration_required"
+    assert _status([], _pr()) == "no_restoration_required"
+
+    # Outlived its attempt with a provable restore target.
+    assert _status(comments, head_b_pr) == "restoration_required"
+
+    # Neutralized with unusable evidence is indeterminate, not safe.
+    assert _status([], head_b_pr) == "ambiguous_neutralized_body"
+    assert (
+        _status(
+            [{**comments[0], "author_association": "NONE"}],
+            head_b_pr,
+        )
+        == "ambiguous_neutralized_body"
+    )
+    assert (
+        classify_neutralized_body_state(
+            comments,
+            pr=head_b_pr,
+            repository=REPOSITORY,
+            expected_run_id="vrun-other",
+        )["status"]
+        == "ambiguous_neutralized_body"
+    )
+    assert classify_neutralized_body_state(
+        comments, pr=head_a_pr, repository=REPOSITORY
+    ) == {
+        "restoration": None,
+        "restoration_required": False,
+        "status": "no_restoration_required",
+    }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        pytest.param({}, "restoration_required", id="positively-open"),
+        pytest.param(
+            {
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-07-27T08:18:08Z",
+            },
+            "no_restoration_required",
+            id="positively-merged",
+        ),
+        pytest.param({"state": None}, "ambiguous_neutralized_body", id="no-state"),
+        pytest.param(
+            {"state": "unknown"}, "ambiguous_neutralized_body", id="unknown-state"
+        ),
+        pytest.param(
+            {"state": "open", "merged": True},
+            "ambiguous_neutralized_body",
+            id="open-but-merged",
+        ),
+        pytest.param(
+            {"state": "closed", "merged": True, "merged_at": None},
+            "ambiguous_neutralized_body",
+            id="merged-without-timestamp",
+        ),
+        pytest.param(
+            {"state": "closed"}, "ambiguous_neutralized_body", id="closed-unmerged"
+        ),
+    ],
+)
+def test_incomplete_or_contradictory_snapshots_are_never_reported_safe(
+    overrides: dict[str, object], expected: str
+) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    pr = {
+        **_pr(str(plan["neutralized_body"])),
+        "head": {"sha": NEXT_HEAD},
+        **overrides,
+    }
+    if overrides.get("state") is None and "state" in overrides:
+        del pr["state"]
+
+    result = classify_neutralized_body_state(
+        comments, pr=pr, repository=REPOSITORY
+    )
+
+    assert result["status"] == expected
+    if expected != "restoration_required":
+        assert result["restoration"] is None
+        assert (
+            resolve_neutralized_body_restoration(
+                comments, pr=pr, repository=REPOSITORY
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(
+            lambda body: body + "Governing-Issue: #3821\n",
+            id="second-governing-issue-line",
+        ),
+        pytest.param(
+            # Drops the evidence line for a closing issue, so the marker's
+            # closing set is no longer a subset of governing + supporting.
+            lambda body: body.replace("Refs #3820\n", ""),
+            id="deleted-closing-evidence-line",
+        ),
+        pytest.param(
+            lambda body: body + "Verified-Closing-Issues: #3820, #3823\n",
+            id="duplicated-marker-line",
+        ),
+        pytest.param(lambda body: body + "\ra\n", id="lone-carriage-return"),
+        pytest.param(
+            lambda body: body.replace("Governing-Issue: #3821", "Governing-Issue: x"),
+            id="unparseable-governing-issue",
+        ),
+    ],
+)
+def test_a_marker_that_no_longer_parses_is_stranded_not_canonical(damage) -> None:
+    """A body can keep its marker while its grammar stops resolving.
+
+    `resolve_neutralized_issue_authority` answers `None` for a canonical body and
+    for a damaged one alike. Treating that shared `None` as "canonical" strands a
+    neutralization that carries no closing authority at all, so `pr-contract`
+    fails on every head — issue #4185 reproduced by its own fix. The realistic
+    source is an agent re-pasting the PR template after a merge hard stop.
+    """
+
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    damaged = damage(str(plan["neutralized_body"]))
+    pr = {**_pr(damaged), "head": {"sha": NEXT_HEAD}}
+
+    # Precondition: the damage really did break the strict grammar, so this test
+    # exercises the conflation rather than an intact body.
+    assert resolve_neutralized_issue_authority(damaged) is None
+    assert has_neutralized_closing_marker(damaged)
+
+    assert (
+        classify_neutralized_body_state(comments, pr=pr, repository=REPOSITORY)[
+            "status"
+        ]
+        == "ambiguous_neutralized_body"
+    )
+
+
+def test_a_snapshot_without_a_body_is_never_reported_safe() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    pr = {**_pr(), "head": {"sha": NEXT_HEAD}}
+    del pr["body"]
+
+    assert (
+        classify_neutralized_body_state(comments, pr=pr, repository=REPOSITORY)[
+            "status"
+        ]
+        == "ambiguous_neutralized_body"
+    )
+
+
+def test_restored_body_proof_binds_contract_identities_and_lf_equivalence() -> None:
+    original_body = _body()
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(original_body),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    restoration = resolve_neutralized_body_restoration(
+        comments,
+        pr={**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}},
+        repository=REPOSITORY,
+    )
+    assert restoration is not None
+
+    assert restored_body_matches_authority(original_body, restoration=restoration)
+    # GitHub may return the same body without its single terminal LF.
+    assert original_body.endswith("\n")
+    assert restored_body_matches_authority(
+        original_body[:-1], restoration=restoration
+    )
+
+    # A payload that is not this contract proves nothing, even with a digest hit.
+    assert not restored_body_matches_authority(
+        original_body,
+        restoration={**restoration, "contract": "some_other_contract.v1"},
+    )
+    # Digest and identities must agree; neither alone is sufficient.
+    assert not restored_body_matches_authority(
+        original_body,
+        restoration={**restoration, "governing_issue": 4185},
+    )
+    assert not restored_body_matches_authority(
+        original_body,
+        restoration={**restoration, "closing_issues": [3820]},
+    )
+    assert not restored_body_matches_authority(
+        original_body + "trailing drift\n", restoration=restoration
+    )
+    assert not restored_body_matches_authority(None, restoration=restoration)
+
+
+def test_conflicting_current_head_authority_never_falls_back_to_a_stale_head() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    stale_receipt = plan["authority_receipt"]
+    assert isinstance(stale_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    head_b_pr = {
+        **_pr(str(plan["neutralized_body"])),
+        "head": {"sha": NEXT_HEAD},
+    }
+
+    # Baseline: the stale head alone names a restore target.
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_b_pr, repository=REPOSITORY
+        )
+        is not None
+    )
+
+    # Two conflicting trusted receipts for the live head. The exact-head resolver
+    # correctly refuses to pick one, so a merge for this attempt may still be in
+    # flight and restoration must not race it.
+    current_a = {**stale_receipt, "head_sha": NEXT_HEAD}
+    current_b = {**current_a, "run_id": "vrun-other"}
+    conflicted = [
+        *comments,
+        _authority_comment(current_a),
+        _authority_comment(current_b),
+    ]
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            conflicted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            conflicted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        classify_neutralized_body_state(
+            conflicted, pr=head_b_pr, repository=REPOSITORY
+        )["status"]
+        == "ambiguous_neutralized_body"
+    )
+
+
+@pytest.mark.parametrize(
+    "live_head_evidence",
+    [
+        pytest.param(
+            lambda receipt: [_authority_comment({**receipt, "surprise": True})],
+            id="extra-key",
+        ),
+        pytest.param(
+            lambda receipt: [
+                _authority_comment(
+                    {
+                        field: value
+                        for field, value in receipt.items()
+                        if field != "repair_budget"
+                    }
+                )
+            ],
+            id="missing-repair-budget",
+        ),
+        pytest.param(
+            lambda receipt: [
+                _trusted_comment(
+                    2
+                    * (
+                        "verified issue-set merge authority:\n```json\n"
+                        + json.dumps(
+                            receipt, sort_keys=True, separators=(",", ":")
+                        )
+                        + "\n```\n"
+                    )
+                )
+            ],
+            id="two-receipt-blocks-in-one-comment",
+        ),
+    ],
+)
+def test_malformed_live_head_evidence_still_blocks_a_stale_fallback(
+    live_head_evidence,
+) -> None:
+    """A structural filter must not be able to discard the race guard.
+
+    Each of these receipts is invalid as authority, so the exact-head resolver
+    ignores it. But it is still trusted evidence that a merge attempt exists on
+    the live head, and answering from an older head there is the merge race the
+    restore contract forbids.
+    """
+
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    stale_receipt = plan["authority_receipt"]
+    assert isinstance(stale_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    head_b_pr = {**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}}
+
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_b_pr, repository=REPOSITORY
+        )
+        is not None
+    )
+
+    guarded = [
+        *comments,
+        *live_head_evidence({**stale_receipt, "head_sha": NEXT_HEAD}),
+    ]
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            guarded, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            guarded, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        classify_neutralized_body_state(
+            guarded, pr=head_b_pr, repository=REPOSITORY
+        )["status"]
+        == "ambiguous_neutralized_body"
+    )
+
+    # Untrusted authorship is not evidence and must not block a real restore.
+    untrusted = [
+        *comments,
+        *[
+            {**comment, "author_association": "NONE"}
+            for comment in live_head_evidence(
+                {**stale_receipt, "head_sha": NEXT_HEAD}
+            )
+        ],
+    ]
+    assert (
+        resolve_neutralized_body_restoration(
+            untrusted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is not None
+    )
+
+
+def test_restored_body_proof_cli_uses_production_verifier(tmp_path: Path) -> None:
+    original_body = _body()
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(original_body),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    restoration = resolve_neutralized_body_restoration(
+        comments,
+        pr={**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}},
+        repository=REPOSITORY,
+    )
+    restoration_path = tmp_path / "restoration.json"
+    body_path = tmp_path / "candidate.md"
+    # The resolver CLI's wrapper shape must be accepted directly.
+    restoration_path.write_text(
+        json.dumps({"restoration": restoration, "restoration_required": True}),
+        encoding="utf-8",
+    )
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.verify_restored_pr_body",
+                "--restoration-json",
+                str(restoration_path),
+                "--restored-body-file",
+                str(body_path),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    body_path.write_text(original_body, encoding="utf-8")
+    accepted = _run()
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert json.loads(accepted.stdout)["restored_body_matches_authority"] is True
+
+    body_path.write_text(str(plan["neutralized_body"]), encoding="utf-8")
+    refused = _run()
+
+    assert refused.returncode == 1
+    assert json.loads(refused.stdout)["restored_body_matches_authority"] is False

@@ -8,6 +8,8 @@ import pytest
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.health_contract import WRITE_BLOCKED_STATES
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.multiwriter import is_conflict_artifact
 from app.write_guard import WriteGuard, WritesBlockedError
 
 
@@ -46,6 +48,21 @@ def test_apply_edit_writes_body_to_vault(tmp_path: Path) -> None:
 
     content = note.read_text(encoding="utf-8")
     assert "New body content." in content
+
+
+def test_apply_edit_uses_raw_byte_version_for_crlf_note(tmp_path: Path) -> None:
+    note = tmp_path / "notes" / "crlf.md"
+    note.parent.mkdir(parents=True)
+    note.write_bytes(
+        b"---\r\ntype: note\r\nmaturity: draft\r\n---\r\n\r\nOriginal body.\r\n"
+    )
+    session = _open_session(tmp_path, note)
+    writer = CanvasWriter(vault_root=tmp_path, log_writer=_log_writer(tmp_path))
+
+    writer.apply_edit(session, "Updated body.", "rewrote CRLF note")
+
+    assert "Updated body." in note.read_text(encoding="utf-8")
+    assert not any(is_conflict_artifact(path.name) for path in note.parent.iterdir())
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +150,29 @@ def test_apply_edit_records_turn_in_session_log(tmp_path: Path) -> None:
 
     log_content = session.log_path.read_text(encoding="utf-8")
     assert "added three paragraphs" in log_content
+
+
+def test_staged_conflict_does_not_append_provenance_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note = _note(tmp_path)
+    lw = _log_writer(tmp_path)
+    session = lw.open_session(note, "stale-edit")
+    writer = CanvasWriter(vault_root=tmp_path, log_writer=lw)
+    log_before = session.log_path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        "app.chat.canvas_writer.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict staged"):
+        writer.apply_edit(session, "Stale proposal.", "must not be acknowledged")
+
+    assert session.log_path.read_text(encoding="utf-8") == log_before
+    assert "Original body." in note.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

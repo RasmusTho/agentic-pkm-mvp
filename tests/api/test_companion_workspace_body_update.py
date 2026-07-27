@@ -20,8 +20,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
+import app.api.routes.companion as companion_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
+from app.knowledge.contracts import NoteLocator, WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from tests.api._vault_test_helpers import bind_initialized_vault
 
 
@@ -85,6 +88,35 @@ def test_body_update_writes_new_body(
     _patch_body(client, "notes/note.md", "# Test Note\n\nNew content here.\n")
     content = vault_note.read_text(encoding="utf-8")
     assert "New content here." in content
+
+
+def test_body_update_staged_rewritten_conflict_returns_409(
+    client: TestClient,
+    vault_note: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = vault_note.read_text(encoding="utf-8")
+    receipt = WriteReceipt(
+        operation="write_note",
+        locator=NoteLocator(vault="Vault", path="notes/note.md"),
+        adapter="fs_vault",
+        outcome="conflict_staged",
+        conflict_artifact="notes/note.concurrent-save-test.md",
+    )
+    monkeypatch.setattr(
+        companion_module,
+        "write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged", receipt=receipt)
+        ),
+    )
+
+    resp = _patch_body(client, "notes/note.md", "# Test Note\n\nStale proposal.\n")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "write_conflict_staged"
+    assert resp.json()["detail"]["state"] == "conflict_staged"
+    assert vault_note.read_text(encoding="utf-8") == before
 
 
 def test_body_update_preserves_frontmatter(

@@ -50,10 +50,13 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
-import yaml
-
 from app.knowledge.write_ops import write_note_relative
 from app.knowledge_acquisition.extraction_registry import ExtractionResult, run_extractor
+from app.knowledge_acquisition.note_renderer import (
+    NoteRenderError,
+    ProposalSection,
+    render_review_required_note,
+)
 from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
@@ -220,9 +223,7 @@ def candidate_note_path(candidate: Candidate, *, sources_dir: str = DEFAULT_SOUR
 
 
 def render_candidate_note(candidate: Candidate) -> str:
-    """Render the candidate note per the shipped template shape (Concretely block):
-    About / AI summary (non-authoritative) / Human takeaways (empty).
-    """
+    """Compose the candidate into explicit owner/proposal/evidence bands."""
     now = _iso(datetime.now(timezone.utc))
     frontmatter: dict[str, Any] = {
         "artifact_class": ARTIFACT_CLASS,
@@ -250,44 +251,48 @@ def render_candidate_note(candidate: Candidate) -> str:
         "created": now,
         "updated": now,
     }
-    yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
 
     summary = candidate.summary_text()
     confidence = candidate.summary_confidence()
+    proposal_sections: list[ProposalSection] = []
     if summary is not None and confidence is not None and candidate.transcript_segment_count > 0:
-        segment_count = candidate.transcript_segment_count
-        summary_section = (
-            f"> **Model confidence (non-authoritative):** {confidence:g}\n"
-            f"> **Coverage:** {segment_count}/{segment_count} normalized segments "
-            "(100%; complete transcript)\n"
-            ">\n"
-            f"> {summary}"
+        proposal_sections.append(
+            ProposalSection(
+                module_id="summary",
+                title="Summary",
+                content=(
+                    f"**Model confidence (non-authoritative):** {confidence:g}\n"
+                    "\n"
+                    f"{summary}"
+                ),
+            )
         )
-    else:
-        summary_section = "> _AI summary goes here if generated. This is not human knowledge._"
 
-    body = f"""
-## About
-
-{candidate.title}
-
-## AI summary
-
-<!-- [AI-suggested summary — non-authoritative. Do not promote into knowledge without review.] -->
-
-{summary_section}
-
-## Human takeaways
-
-<!-- Add your own notes here as you watch. These are the first human-authored content in this note. -->
-
----
-
-_The YouTube video URL is the authoritative source. The AI summary above is non-authoritative.
-Promotion into durable knowledge (evergreen or synthesis notes) requires human review and creates
-a distinct artifact; this source note is retained as provenance._
-"""
-    return f"---\n{yaml_block}\n---\n{body}"
+    coverage = (
+        f"{candidate.transcript_segment_count}/{candidate.transcript_segment_count} "
+        "normalized segments (100%; complete transcript)"
+        if candidate.transcript_available and candidate.transcript_segment_count > 0
+        else "0 normalized segments; no transcript evidence"
+    )
+    return render_review_required_note(
+        frontmatter=frontmatter,
+        proposal_sections=proposal_sections,
+        evidence=(
+            ("Title", candidate.title),
+            ("Source URL", candidate.url),
+            ("Content identity", candidate.content_identity),
+            ("Acquisition method", candidate.acquisition_method),
+            (
+                "Transcript",
+                (
+                    f"available; {candidate.transcript_segment_count} normalized segments"
+                    if candidate.transcript_available
+                    else "unavailable"
+                ),
+            ),
+            ("Coverage", coverage),
+        ),
+    )
 
 
 def write_candidate_note(
@@ -325,7 +330,13 @@ def write_candidate_note(
             content_identity=candidate.content_identity,
         )
 
-    content = render_candidate_note(candidate)
+    try:
+        content = render_candidate_note(candidate)
+    except NoteRenderError as exc:
+        raise CandidateWritebackError(
+            f"candidate note render failed for content_identity="
+            f"{candidate.content_identity!r}: {exc}"
+        ) from exc
 
     try:
         write_guard.assert_writes_allowed(CANDIDATE_WRITE_ACTION)

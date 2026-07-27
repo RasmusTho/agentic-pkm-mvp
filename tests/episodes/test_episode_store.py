@@ -27,6 +27,7 @@ from app.episodes.store import (
     write_episode_note,
 )
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import WriteGuard, WritesBlockedError
 
 pytestmark = pytest.mark.not_pg
@@ -115,6 +116,32 @@ def test_episode_write_succeeds_when_guard_allows(tmp_path: Path) -> None:
     assert isinstance(result.receipt, WriteReceipt)
     note_path = vault_root / "episodes" / f"{result.episode_id}.md"
     assert note_path.exists()
+
+
+def test_episode_rewrite_staged_conflict_emits_no_success_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    first = _write(vault_root, _allow_guard())
+    note_path = vault_root / "episodes" / f"{first.episode_id}.md"
+    before = note_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        episode_store,
+        "write_note_relative",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict staged"):
+        _write(
+            vault_root,
+            _allow_guard(),
+            episode_id=first.episode_id,
+            title="Stale proposal",
+        )
+
+    assert note_path.read_text(encoding="utf-8") == before
 
 
 # ---------------------------------------------------------------------------

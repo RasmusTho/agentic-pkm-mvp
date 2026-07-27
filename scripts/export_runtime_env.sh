@@ -144,8 +144,9 @@ if not (_operator_provider or "").strip():
     # Importing app.* enforces the runtime provider contract. This short-lived
     # exporter process must inspect settings before it can derive that value.
     os.environ["LLM_PROVIDER"] = "mock"
+from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
+
 try:
-    from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
     from app.settings.compiler import compile_file, merge
     from app.settings.models import Providers
 except Exception:
@@ -356,8 +357,9 @@ from pathlib import Path
 _operator_provider = os.environ.get("LLM_PROVIDER")
 if not (_operator_provider or "").strip():
     os.environ["LLM_PROVIDER"] = "mock"
+from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
+
 try:
-    from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
     from app.settings.compiler import compile_file, merge
     from app.settings.models import Providers
 except Exception:

@@ -182,12 +182,15 @@ Use this lane only when:
   - `scripts/verify_runtime_chain.sh`
   - `scripts/validate_source_anchors.py`
   - `scripts/validate_issue_readiness.py`
+  - `scripts/lint_skills_consistency.py`
   - `companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`
   - `tests/ops/test_git_hygiene.py`
   - `tests/architecture/test_agent_skill_entrypoints.py`
   - `tests/architecture/test_pr_hot_path_governance.py`
   - `tests/governance/test_codex_agents_contract.py`
   - `tests/governance/test_issue_pr_governance.py`
+  - `tests/governance/test_known_defects_registry.py`
+  - `tests/governance/test_skills_consistency_lint.py`
   - `tests/ops/test_project_status_reconcile.py`
   - `tests/ops/test_review_before_ci_gate.py`
   - `tests/ops/test_host_global_lease.py`

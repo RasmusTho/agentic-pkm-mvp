@@ -2,16 +2,27 @@ version: 1
 issues:
   source_of_truth: GitHub Issues
   required_template: .github/ISSUE_TEMPLATE/task.yml
-  required_sections:
-    - Context
-    - Scope
-    - Source Anchors
-    - SBS Impact
-    - Constraints
-    - Acceptance Criteria
-    - Out of Scope
-    - Suggested Validation
-    - Source Docs
+  # Required-section enforcement lives in code, not here: the JS `required` array in
+  # `.github/workflows/issue-pr-governance.yml` and the Python `REQUIRED_SECTIONS` tuple in
+  # `scripts/validate_issue_readiness.py` are the two live, cross-checked copies (#4188).
+  special_containers:
+    known_defects_registry:
+      selector_label: state:known-defect
+      canonical_title: "Known Defects Registry (rolling)"
+      authoritative_discovery_since: "2026-07-27T00:00:00Z"
+      authoritative_identity_sources:
+        - issue_surfaces
+        - trusted_schema_comments
+      authoritative_consecutive_scans: 2
+      authoritative_max_passes: 4
+      authoritative_identity_cache: monotonic_issue_numbers
+      exact_labels:
+        - type:bug
+        - state:known-defect
+      canonical_body_marker: "<!-- known-defects-registry:v1 -->"
+      normal_required_sections_exempt: true
+      agent_labels_forbidden: true
+      locked_required: true
 labels:
   type:
     - type:task
@@ -25,10 +36,16 @@ labels:
     - agent:ready
     - agent:blocked
     - agent:needs-human
+  state:
+    - state:known-defect
+  lane:
+    - lane:governance
   interpretation:
     agent:ready: strictly validated queue-eligible work; Project Status is optional projection
     agent:blocked: blocked by dependency or setup; normally non-active backlog work
     agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
+    state:known-defect: rolling confirmed-defect registry container; Backlog, no agent-state label, never pickup-eligible
+    lane:governance: narrow additive label for governance-lane Issues and PRs
 project:
   name: Agent Delivery Control Plane
   type: github-project-v2
@@ -137,6 +154,7 @@ pull_requests:
       - scripts/await_pr_checks.sh
       - tests/ops/test_git_hygiene.py
       - tests/ops/test_project_status_reconcile.py
+      - tests/governance/test_known_defects_registry.py
 rules:
   pr_must_reference_issue_for_implementation: true
   docs_authoring_prs_may_skip_issue_reference: true

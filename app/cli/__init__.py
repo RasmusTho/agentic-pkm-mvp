@@ -54,7 +54,7 @@ from app.cli.uat import (
 from app.cli.latency_harness import LatencyHarnessTimeoutError, run_latency_harness
 from app.stores import get_object_store, get_vector_index, resolve_store_backend
 from app.agents.classifier.agent import run as classify_run
-from app.agents.panel.integration import handle_panel_update
+from app.agents.panel.integration import commit_panel_update, prepare_panel_update
 from app.services.note_update import NoteUpdateResult, process_note_update
 from app.services.note_watcher import NoteWatcherService
 from app.events.models import new_event
@@ -1213,15 +1213,16 @@ def panel_update(note_path: Path, old_path: Path | None) -> None:
         old_markdown = old_path.read_text(encoding="utf-8")
 
     ctx = OrchestratorContext(settings={"origin": "cli.panel"})
-    result = handle_panel_update(
+    prepared = prepare_panel_update(
         note_id=str(note_path),
         old_markdown=old_markdown,
         new_markdown=new_markdown,
         ctx=ctx,
     )
 
-    if result.panel.updated_markdown != new_markdown:
-        _write_note_via_knowledge_port(note_path, result.panel.updated_markdown)
+    if prepared.panel.updated_markdown != new_markdown:
+        _write_note_via_knowledge_port(note_path, prepared.panel.updated_markdown)
+    result = commit_panel_update(prepared, ctx=ctx)
 
     click.echo(f"Note: {note_path}")
     click.echo(f"Panel intents: {len(result.panel.intents)}")

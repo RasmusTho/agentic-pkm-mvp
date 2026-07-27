@@ -117,25 +117,3 @@ body:
         - docs/ROADMAP.md
     validations:
       required: true
-  - type: dropdown
-    id: priority
-    attributes:
-      label: Priority
-      options:
-        - prio:high
-        - prio:med
-        - prio:low
-      default: 1
-    validations:
-      required: true
-  - type: dropdown
-    id: agent_state
-    attributes:
-      label: Agent State
-      options:
-        - agent:needs-human
-        - agent:ready
-        - agent:blocked
-      default: 0
-    validations:
-      required: true

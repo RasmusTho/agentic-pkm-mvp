@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -11,6 +12,7 @@ class NoteRead:
     frontmatter: dict[str, Any]
     body: str
     mtime_ns: int
+    version: str
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,7 @@ class VaultPort(Protocol):
         body: str,
         *,
         expected_mtime_ns: int | None = None,
+        expected_version: str | None = None,
     ) -> bool: ...
 
     def rename_note(self, uuid_value: str, new_path: Path) -> None: ...
@@ -68,7 +71,8 @@ class DummyVaultPort:
         self.messages: list[tuple[str, str | None]] = []
 
     def read_note(self, path: Path) -> NoteRead:
-        text = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
         import yaml
 
         if text.startswith("---"):
@@ -79,7 +83,13 @@ class DummyVaultPort:
         else:
             frontmatter = {}
             body = text
-        return NoteRead(path=path, frontmatter=frontmatter, body=body, mtime_ns=path.stat().st_mtime_ns)
+        return NoteRead(
+            path=path,
+            frontmatter=frontmatter,
+            body=body,
+            mtime_ns=path.stat().st_mtime_ns,
+            version=hashlib.sha256(raw).hexdigest(),
+        )
 
     def ensure_uuid(
         self,
@@ -101,9 +111,13 @@ class DummyVaultPort:
         body: str,
         *,
         expected_mtime_ns: int | None = None,
+        expected_version: str | None = None,
     ) -> bool:
         if expected_mtime_ns is not None and path.exists():
             if path.stat().st_mtime_ns != expected_mtime_ns:
+                return False
+        if expected_version is not None and path.exists():
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected_version:
                 return False
         import yaml
 

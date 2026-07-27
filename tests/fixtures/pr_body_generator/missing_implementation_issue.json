@@ -22,9 +22,6 @@
     "boundary_risk": "low"
   },
   "owner_doc_resolution": "none",
-  "validation": [
-    "pytest -q"
-  ],
   "builderops_records": "none",
   "builderops_reason": "implementation fixture"
 }
