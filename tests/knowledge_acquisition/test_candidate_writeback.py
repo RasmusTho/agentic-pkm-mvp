@@ -8,12 +8,14 @@ real vault path.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
 import pytest
 import yaml
 
+import app.knowledge_acquisition.candidate_writeback as candidate_writeback
 from app.knowledge_acquisition.candidate_writeback import (
     ARTIFACT_CLASS,
     CANDIDATE_WRITE_ACTION,
@@ -181,11 +183,15 @@ def test_note_shape_and_posture_markers(tmp_path: Path) -> None:
     assert provenance["content_identity"] == RAW_RECORD_FIXTURE["content_identity"]
     assert provenance["acquisition_method"] == "captions_manual"
 
-    # Template shape: About / AI summary (non-authoritative) / Human takeaways.
-    assert "## About" in body
-    assert "## AI summary" in body
+    # Authority-banded template shape: owner notes / one proposal wrapper /
+    # deterministic evidence and lineage.
+    assert "## Owner notes" in body
+    assert "### Takeaways" in body
+    assert "### Open threads" in body
+    assert body.count("## Proposals (non-authoritative)") == 1
+    assert "### Summary" in body
+    assert "## Evidence and lineage" in body
     assert "non-authoritative" in body
-    assert "## Human takeaways" in body
     assert "A deterministic test summary." in body
 
     # The source video remains the authoritative source; the note itself is not authoritative.
@@ -213,7 +219,12 @@ def test_candidate_transcript_availability_reflects_usable_evidence() -> None:
     assert candidate.summary_text() is None
     assert yaml.safe_load(fm_text)["transcript_available"] is False
     assert "Model confidence" not in body
-    assert "Coverage:" not in body
+    assert "**Coverage:** 0 normalized segments; no transcript evidence" in body
+    proposals = body.split("## Proposals (non-authoritative)", 1)[1].split(
+        "## Evidence and lineage",
+        1,
+    )[0]
+    assert "Coverage:" not in proposals
 
 
 def test_rendered_summary_preserves_model_confidence() -> None:
@@ -328,6 +339,90 @@ def test_rerun_same_candidate_is_idempotent_not_duplicated(tmp_path: Path) -> No
     assert len(all_notes) == 1
 
 
+def test_composer_preserves_human_authored_band_on_rerun(tmp_path: Path) -> None:
+    """A replay never regenerates or rewrites the owner-authored authority band."""
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    candidate = _assembled_candidate()
+
+    first = write_candidate_note(candidate, vault_context=vault, write_guard=_allowing_guard())
+    assert first.status == "written"
+    note_path = vault_root / first.artifact_path
+    initial = note_path.read_text(encoding="utf-8")
+    assert "## Owner notes" in initial
+    assert "### Takeaways" in initial
+    assert "### Open threads" in initial
+
+    human_takeaway = "The owner keeps this exact takeaway."
+    human_thread = "The owner keeps this exact open thread."
+    edited = initial.replace(
+        "<!-- Add owner-authored takeaways here. -->",
+        human_takeaway,
+    ).replace(
+        "<!-- Add owner-authored open threads here. -->",
+        human_thread,
+    )
+    note_path.write_text(edited, encoding="utf-8")
+    edited_bytes = note_path.read_bytes()
+
+    drifted = replace(
+        candidate,
+        extractions=(
+            ExtractionResult(
+                extractor_id="summary",
+                extractor_version=2,
+                source_content_identity=candidate.content_identity,
+                output={"summary": "A later generated summary.", "confidence": 0.9},
+                model_identity={"provider": "mock", "model": "mock"},
+            ),
+        ),
+    )
+    second = write_candidate_note(drifted, vault_context=vault, write_guard=_allowing_guard())
+
+    assert second.status == "already_exists"
+    assert note_path.read_bytes() == edited_bytes
+    assert human_takeaway in note_path.read_text(encoding="utf-8")
+    assert human_thread in note_path.read_text(encoding="utf-8")
+    assert "A later generated summary." not in note_path.read_text(encoding="utf-8")
+
+
+def test_composer_wraps_proposals_and_omits_absent_modules() -> None:
+    candidate = _assembled_candidate()
+
+    rendered = render_candidate_note(candidate)
+
+    assert rendered.count("## Proposals (non-authoritative)") == 1
+    assert rendered.count("### Summary") == 1
+    assert "## AI summary" not in rendered
+    assert rendered.index("## Owner notes") < rendered.index(
+        "## Proposals (non-authoritative)"
+    )
+    assert rendered.index("### Summary") < rendered.index("## Evidence and lineage")
+    assert rendered.index("A deterministic test summary.") < rendered.index(
+        "## Evidence and lineage"
+    )
+    proposals_start = rendered.index("## Proposals (non-authoritative)")
+    evidence_start = rendered.index("## Evidence and lineage")
+    coverage_start = rendered.index("**Coverage:**")
+    assert proposals_start < evidence_start < coverage_start
+    assert "**Coverage:**" not in rendered[proposals_start:evidence_start]
+
+    no_transcript = replace(
+        candidate,
+        transcript_available=False,
+        extractions=(),
+        transcript_segment_count=0,
+    )
+    degraded = render_candidate_note(no_transcript)
+
+    assert degraded.count("## Proposals (non-authoritative)") == 1
+    assert "### Summary" not in degraded
+    assert "## AI summary" not in degraded
+    assert "AI summary goes here" not in degraded
+    assert "_No proposal modules were produced._" in degraded
+    assert "**Coverage:** 0 normalized segments; no transcript evidence" in degraded
+
+
 # ---------------------------------------------------------------------------
 # AC4: blocked write (WriteGuard denial fixture) is loud, item-scoped,
 # retryable; candidate is not terminal.
@@ -358,6 +453,25 @@ def test_blocked_write_is_loud_and_retryable(tmp_path: Path) -> None:
     retried_result = write_candidate_note(candidate, vault_context=vault, write_guard=_allowing_guard())
     assert retried_result.status == "written"
     assert retried_result.artifact_path == expected_path
+
+
+def test_candidate_is_terminal_only_after_note_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    candidate = _assembled_candidate()
+
+    def _fail_materialization(*_args, **_kwargs) -> None:
+        raise OSError("test materialization failure")
+
+    monkeypatch.setattr(candidate_writeback, "write_note_relative", _fail_materialization)
+
+    with pytest.raises(candidate_writeback.CandidateWritebackError, match="materialization failure"):
+        write_candidate_note(candidate, vault_context=vault, write_guard=_allowing_guard())
+
+    assert not (vault_root / candidate_note_path(candidate)).exists()
 
 
 def test_blocked_write_raises_writesblockederror_is_catchable() -> None:
