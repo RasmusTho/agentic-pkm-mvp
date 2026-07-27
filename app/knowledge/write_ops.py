@@ -95,10 +95,29 @@ def write_note_from_absolute(
 
     guard = write_guard or DEFAULT_WRITE_GUARD
     guard.assert_writes_allowed(action)
-    resolved_path = Path(os.path.realpath(os.path.expanduser(os.fspath(path))))
     resolved_root = Path(os.path.realpath(os.path.expanduser(os.fspath(vault_root))))
-    resolved_path.relative_to(resolved_root)
-    locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
+    if expected_version is None:
+        resolved_path = Path(os.path.realpath(os.path.expanduser(os.fspath(path))))
+        resolved_path.relative_to(resolved_root)
+        locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
+    else:
+        # Preserve the caller-authorized lexical vault-relative path. Resolving
+        # the leaf here would let a symlink swap between the final caller policy
+        # check and this helper silently retarget a matching content token to a
+        # different note. The filesystem adapter rejects an aliased
+        # expected-version locator, while its descriptor/no-follow CAS protects
+        # replacements after that check.
+        lexical_path = Path(
+            os.path.abspath(os.path.expanduser(os.fspath(path)))
+        )
+        try:
+            relative_path = lexical_path.relative_to(resolved_root)
+        except ValueError:
+            lexical_root = Path(
+                os.path.abspath(os.path.expanduser(os.fspath(vault_root)))
+            )
+            relative_path = lexical_path.relative_to(lexical_root)
+        locator = make_note_locator(relative_path.as_posix())
     # Absolute path writes target the local filesystem boundary directly.
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
     kwargs: dict[str, str] = {}

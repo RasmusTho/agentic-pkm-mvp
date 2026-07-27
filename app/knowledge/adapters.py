@@ -105,6 +105,45 @@ def _entry_has_identity(
     return _same_file_identity(current, expected)
 
 
+def _open_directory_from_root(
+    root_fd: int,
+    relative_path: PurePosixPath,
+) -> int:
+    """Open a vault-relative directory without following any path component."""
+
+    current_fd = os.dup(root_fd)
+    try:
+        for part in relative_path.parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                raise KnowledgeCapabilityError("note path escapes vault root")
+            next_fd = os.open(
+                part,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def _open_anchored_parent(
+    root_path: Path,
+    relative_parent: PurePosixPath,
+) -> tuple[int, int]:
+    root_fd = os.open(root_path, _DIRECTORY_OPEN_FLAGS)
+    try:
+        parent_fd = _open_directory_from_root(root_fd, relative_parent)
+    except Exception:
+        os.close(root_fd)
+        raise
+    return root_fd, parent_fd
+
+
 def _open_conflict_directory(parent_fd: int) -> int:
     try:
         os.mkdir("_conflicts", mode=0o700, dir_fd=parent_fd)
@@ -258,33 +297,44 @@ def _read_handle(handle) -> bytes:  # type: ignore[no-untyped-def]
 
 
 def _require_anchored_directory_identity(
+    root_fd: int,
+    root_path: Path,
+    relative_parent: PurePosixPath,
     parent_fd: int,
-    parent_path: Path,
     conflict_fd: int,
     locator: NoteLocator,
 ) -> None:
+    current_parent_fd = -1
     try:
-        current_parent = os.stat(parent_path, follow_symlinks=False)
+        current_root = os.stat(root_path, follow_symlinks=False)
+        anchored_root = os.fstat(root_fd)
+        current_parent_fd = _open_directory_from_root(root_fd, relative_parent)
+        current_parent = os.fstat(current_parent_fd)
         anchored_parent = os.fstat(parent_fd)
         current_conflict = os.stat(
             "_conflicts", dir_fd=parent_fd, follow_symlinks=False
         )
         anchored_conflict = os.fstat(conflict_fd)
+        if (
+            not stat.S_ISDIR(current_root.st_mode)
+            or not _same_file_identity(current_root, anchored_root)
+            or not stat.S_ISDIR(current_parent.st_mode)
+            or not _same_file_identity(current_parent, anchored_parent)
+            or not stat.S_ISDIR(current_conflict.st_mode)
+            or not _same_file_identity(current_conflict, anchored_conflict)
+        ):
+            raise KnowledgeWriteConflict(
+                f"version mismatch for rewritten note {locator.path}: "
+                "anchored write directory changed"
+            )
     except OSError as exc:
         raise KnowledgeWriteConflict(
             f"version mismatch for rewritten note {locator.path}: "
             "anchored write directory changed"
         ) from exc
-    if (
-        not stat.S_ISDIR(current_parent.st_mode)
-        or not _same_file_identity(current_parent, anchored_parent)
-        or not stat.S_ISDIR(current_conflict.st_mode)
-        or not _same_file_identity(current_conflict, anchored_conflict)
-    ):
-        raise KnowledgeWriteConflict(
-            f"version mismatch for rewritten note {locator.path}: "
-            "anchored write directory changed"
-        )
+    finally:
+        if current_parent_fd >= 0:
+            os.close(current_parent_fd)
 
 
 class FsVaultAdapter:
@@ -319,7 +369,17 @@ class FsVaultAdapter:
         expected_version: str | None = None,
         writer_identity: str | None = None,
     ) -> WriteReceipt:
+        root = self.vault_root.resolve()
+        lexical_target = root / locator.path
+        try:
+            lexical_target.relative_to(root)
+        except ValueError as exc:
+            raise KnowledgeCapabilityError("note path escapes vault root") from exc
         target = self._absolute_path(locator)
+        if expected_version is not None and target != lexical_target:
+            raise KnowledgeWriteConflict(
+                f"expected-version write rejects aliased note locator {locator.path}"
+            )
         note_class = self._classify_target(target, WriteOperation.WRITE)
         effective_writer_identity = writer_identity or "mimer.runtime"
         written_at = datetime.now(UTC)
@@ -340,6 +400,7 @@ class FsVaultAdapter:
         # Races after this initial comparison retain the hardened atomic exchange,
         # rollback, displaced-inode, and fail-closed behavior.
         if expected_version is not None and note_class is NoteClass.REWRITTEN:
+            root_fd = -1
             parent_fd = -1
             conflict_fd = -1
             staged_fd = -1
@@ -350,7 +411,11 @@ class FsVaultAdapter:
             staged_stat: os.stat_result | None = None
             staged_cleanup_stat: os.stat_result | None = None
             try:
-                parent_fd = os.open(target.parent, _DIRECTORY_OPEN_FLAGS)
+                relative_parent = PurePosixPath(locator.path).parent
+                root_fd, parent_fd = _open_anchored_parent(
+                    root,
+                    relative_parent,
+                )
                 conflict_fd = _open_conflict_directory(parent_fd)
                 staged_dir_fd = parent_fd
                 staged_fd = os.open(
@@ -390,7 +455,12 @@ class FsVaultAdapter:
                     if current_version != expected_version:
                         preserve_staged_conflict = True
                         _require_anchored_directory_identity(
-                            parent_fd, target.parent, conflict_fd, locator
+                            root_fd,
+                            root,
+                            relative_parent,
+                            parent_fd,
+                            conflict_fd,
+                            locator,
                         )
                         artifact_rel = _stage_initial_stale_proposal(
                             parent_fd,
@@ -406,7 +476,12 @@ class FsVaultAdapter:
                         staged_dir_fd = parent_fd
                         staged_is_artifact = True
                         _require_anchored_directory_identity(
-                            parent_fd, target.parent, conflict_fd, locator
+                            root_fd,
+                            root,
+                            relative_parent,
+                            parent_fd,
+                            conflict_fd,
+                            locator,
                         )
                         return WriteReceipt(
                             operation="write_note",
@@ -456,7 +531,12 @@ class FsVaultAdapter:
                     opened_mode = stat.S_IMODE(opened_stat.st_mode)
 
                 _require_anchored_directory_identity(
-                    parent_fd, target.parent, conflict_fd, locator
+                    root_fd,
+                    root,
+                    relative_parent,
+                    parent_fd,
+                    conflict_fd,
+                    locator,
                 )
                 try:
                     _atomic_exchange_at(
@@ -476,7 +556,12 @@ class FsVaultAdapter:
                 staged_cleanup_stat = opened_stat
                 os.fsync(parent_fd)
                 _require_anchored_directory_identity(
-                    parent_fd, target.parent, conflict_fd, locator
+                    root_fd,
+                    root,
+                    relative_parent,
+                    parent_fd,
+                    conflict_fd,
+                    locator,
                 )
                 artifact_name = _conflict_artifact_name(locator)
                 os.rename(
@@ -548,7 +633,12 @@ class FsVaultAdapter:
                             "target content changed after atomic exchange"
                         )
                 _require_anchored_directory_identity(
-                    parent_fd, target.parent, conflict_fd, locator
+                    root_fd,
+                    root,
+                    relative_parent,
+                    parent_fd,
+                    conflict_fd,
+                    locator,
                 )
             except (FileNotFoundError, NotADirectoryError) as exc:
                 raise KnowledgeWriteConflict(
@@ -614,6 +704,8 @@ class FsVaultAdapter:
                     os.close(conflict_fd)
                 if parent_fd >= 0:
                     os.close(parent_fd)
+                if root_fd >= 0:
+                    os.close(root_fd)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")

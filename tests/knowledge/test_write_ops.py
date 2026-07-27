@@ -125,7 +125,7 @@ def test_absolute_helper_rejects_expected_version_through_source_symlink_alias(
 
     with pytest.raises(
         KnowledgeWriteConflict,
-        match="expected-version write requires a rewritten note class",
+        match="expected-version write rejects aliased note locator",
     ):
         write_ops.write_note_from_absolute(
             alias,
@@ -153,7 +153,7 @@ def test_relative_helper_rejects_expected_version_through_source_symlink_alias(
 
     with pytest.raises(
         KnowledgeWriteConflict,
-        match="expected-version write requires a rewritten note class",
+        match="expected-version write rejects aliased note locator",
     ):
         write_ops.write_note_relative(
             "Notes/source-alias.md",
@@ -164,6 +164,34 @@ def test_relative_helper_rejects_expected_version_through_source_symlink_alias(
 
     assert target.read_text(encoding="utf-8") == "concurrent human source"
     assert alias.read_text(encoding="utf-8") == "concurrent human source"
+
+
+def test_absolute_helper_rejects_rewritten_leaf_alias_swap(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    first = vault / "Notes" / "a.md"
+    second = vault / "Notes" / "b.md"
+    first.parent.mkdir(parents=True)
+    first.write_text("same content", encoding="utf-8")
+    second.write_text("same content", encoding="utf-8")
+    _, expected_version = write_ops.read_note_text_with_version(first)
+    first.unlink()
+    first.symlink_to(second.name)
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="expected-version write rejects aliased note locator",
+    ):
+        write_ops.write_note_from_absolute(
+            first,
+            "stale proposal",
+            vault_root=vault,
+            expected_version=expected_version,
+        )
+
+    assert second.read_text(encoding="utf-8") == "same content"
+    assert first.read_text(encoding="utf-8") == "same content"
 
 
 def test_write_note_relative_uses_make_note_locator(monkeypatch, tmp_path: Path) -> None:

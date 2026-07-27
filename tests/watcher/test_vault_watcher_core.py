@@ -502,6 +502,122 @@ def test_vault_watcher_symlinked_source_interleaving_has_no_mutation_or_acknowle
     assert not any(is_conflict_artifact(path.name) for path in target.parent.iterdir())
 
 
+def test_vault_watcher_rewritten_alias_swap_after_final_policy_has_no_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    first = vault / "Notes" / "a.md"
+    second = vault / "Notes" / "b.md"
+    first.parent.mkdir(parents=True)
+    original = (
+        "---\n"
+        "uuid: rewritten-a\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n"
+    )
+    first.write_text(original, encoding="utf-8")
+    second.write_text(original, encoding="utf-8")
+    snapshot_path = vault / ".state.json"
+    save_snapshot(snapshot_path, {"Notes/b.md": second.stat().st_mtime})
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = watcher_module.watcher_panel_writeback_allowed
+    policy_calls = 0
+
+    def swap_after_final_policy(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        nonlocal policy_calls
+        allowed = real_class_policy(relative_path, **kwargs)
+        if relative_path == Path("Notes/a.md"):
+            policy_calls += 1
+            if policy_calls == 3:
+                first.unlink()
+                first.symlink_to(second.name)
+        return allowed
+
+    prepared = SimpleNamespace(
+        state=SimpleNamespace(
+            actions=[SimpleNamespace(checked=True, text="Do thing")]
+        ),
+        intents=[SimpleNamespace(kind="action_triggered")],
+        events=[
+            SimpleNamespace(event="panel.intent.created"),
+            SimpleNamespace(event="promote.intent.created"),
+        ],
+        updated_markdown="Prepared stale output\n",
+        executed_action_ids=["action-1"],
+    )
+
+    class EmptyObjectStore:
+        def get_object(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "watcher_panel_writeback_allowed",
+        swap_after_final_policy,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *_args, **_kwargs: prepared,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_disallowed_actions",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_hydrate_store_with_markdown",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(watcher_module, "ObjectStore", EmptyObjectStore)
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    summary, messages = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert policy_calls == 3
+    assert summary["errors"] == 1
+    assert summary["applied_actions"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert second.read_text(encoding="utf-8") == original
+    assert first.read_text(encoding="utf-8") == original
+    assert any("indeterminate panel write" in message for message in messages)
+
+
 def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(
     tmp_path: Path,
     monkeypatch,

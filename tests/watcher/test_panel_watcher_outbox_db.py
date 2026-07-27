@@ -266,6 +266,92 @@ def test_process_panel_note_create_once_source_interleaving_has_no_mutation_or_a
     assert not any(is_conflict_artifact(path.name) for path in note_path.parent.iterdir())
 
 
+def test_process_panel_note_rewritten_alias_swap_after_final_policy_has_no_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    first = vault / "Notes" / "a.md"
+    second = vault / "Notes" / "b.md"
+    first.parent.mkdir(parents=True)
+    original = "---\nuuid: rewritten-a\n---\n\n- [x] Do thing\n"
+    first.write_text(original, encoding="utf-8")
+    second.write_text(original, encoding="utf-8")
+    event = OutboxEvent(
+        event="promote.intent.created",
+        source="test",
+        payload={"note": {"uuid": "rewritten-a"}},
+    )
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = registry.watcher_panel_writeback_allowed
+    policy_calls = 0
+
+    def swap_after_final_policy(
+        relative_path: Path,
+        **kwargs: object,
+    ) -> bool:
+        nonlocal policy_calls
+        allowed = real_class_policy(relative_path, **kwargs)
+        policy_calls += 1
+        if policy_calls == 2:
+            first.unlink()
+            first.symlink_to(second.name)
+        return allowed
+
+    monkeypatch.setattr(
+        registry,
+        "watcher_panel_writeback_allowed",
+        swap_after_final_policy,
+    )
+    monkeypatch.setattr(
+        registry,
+        "_ensure_panel_note_uuid_with_retry",
+        lambda *_args, **_kwargs: "rewritten-a",
+    )
+    monkeypatch.setattr(
+        registry,
+        "handle_note_update",
+        lambda **_kwargs: SimpleNamespace(
+            updated_markdown="Prepared stale output\n",
+            events=[event],
+            executed_action_ids=["action-1"],
+        ),
+    )
+    monkeypatch.setattr(
+        registry,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "write_outbox_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "_write_jsonl_event",
+        lambda *args, **kwargs: emitted_events.append((args, kwargs)),
+    )
+    state = WatcherState()
+
+    emitted = _process_panel_note(
+        vault_root=vault,
+        rel_path=first.relative_to(vault),
+        outbox_path=tmp_path / "outbox.jsonl",
+        state=state,
+        action_mappings={},
+    )
+
+    assert policy_calls == 2
+    assert emitted == 0
+    assert state.errors == 1
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert second.read_text(encoding="utf-8") == original
+    assert first.read_text(encoding="utf-8") == original
+
+
 def test_process_panel_note_retries_transient_read_failure(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     vault.mkdir()

@@ -103,7 +103,7 @@ def test_adapter_classifies_canonical_target_before_expected_version_write(
 
     with pytest.raises(
         KnowledgeWriteConflict,
-        match="expected-version write requires a rewritten note class",
+        match="expected-version write rejects aliased note locator",
     ):
         adapter.write_note(
             locator,
@@ -114,6 +114,46 @@ def test_adapter_classifies_canonical_target_before_expected_version_write(
 
     assert target.read_bytes() == b"canonical source"
     assert alias.read_bytes() == b"canonical source"
+
+
+def test_expected_version_parent_walk_rejects_ancestor_symlink_redirect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    original = tmp_path / "Notes" / "Sub" / "a.md"
+    redirected = tmp_path / "Other" / "Sub" / "a.md"
+    original.parent.mkdir(parents=True)
+    redirected.parent.mkdir(parents=True)
+    original.write_bytes(b"same content")
+    redirected.write_bytes(b"same content")
+    expected_version = hashlib.sha256(b"same content").hexdigest()
+    locator = NoteLocator(vault="Vault", path="Notes/Sub/a.md")
+    real_open_parent = adapters_module._open_anchored_parent
+
+    def redirect_ancestor_before_walk(
+        root_path: Path,
+        relative_parent: PurePosixPath,
+    ) -> tuple[int, int]:
+        (tmp_path / "Notes").rename(tmp_path / "Notes-original")
+        (tmp_path / "Notes").symlink_to("Other")
+        return real_open_parent(root_path, relative_parent)
+
+    monkeypatch.setattr(
+        adapters_module,
+        "_open_anchored_parent",
+        redirect_ancestor_before_walk,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict):
+        adapter.write_note(
+            locator,
+            "stale proposal",
+            expected_version=expected_version,
+        )
+
+    assert redirected.read_bytes() == b"same content"
+    assert (tmp_path / "Notes-original" / "Sub" / "a.md").read_bytes() == b"same content"
 
 
 def test_rewritten_write_uses_atomic_replace_at_filesystem_seam(
