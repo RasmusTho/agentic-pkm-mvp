@@ -295,6 +295,34 @@ def _same_authority_state(
     )
 
 
+def _claim_transition_is_truthful(
+    expected: AuthoritySnapshot,
+    *,
+    authority_id: str,
+    content_hash: str,
+    observed_state: str,
+    observed_labels: tuple[str, ...],
+) -> bool:
+    """Require an exact ready-to-claimed authority transition."""
+
+    if (
+        authority_id != expected.authority_id
+        or content_hash != expected.content_hash
+        or observed_state != expected.observed_state
+        or "agent:ready" not in expected.observed_labels
+    ):
+        return False
+    expected_labels = {
+        label for label in expected.observed_labels if label != "agent:ready"
+    }
+    live_labels = set(observed_labels)
+    return (
+        "agent:ready" not in live_labels
+        and expected_labels.issubset(live_labels)
+        and live_labels <= expected_labels.union({"agent:in-progress"})
+    )
+
+
 def _effect_result_subject_is_truthful(
     effect: ReducerEffect,
     *,
@@ -321,18 +349,12 @@ def _effect_result_subject_is_truthful(
     if event_type == "effect_failed":
         return _same_authority_state(subject, expected)
     if effect.effect_class == "claim_issue":
-        if "agent:ready" not in expected.observed_labels:
-            return False
-        expected_labels = {
-            label for label in expected.observed_labels if label != "agent:ready"
-        }
-        observed_labels = set(subject.observed_labels)
-        return (
-            subject.observed_state == expected.observed_state
-            and "agent:ready" not in observed_labels
-            and expected_labels.issubset(observed_labels)
-            and observed_labels
-            <= expected_labels.union({"agent:in-progress"})
+        return _claim_transition_is_truthful(
+            expected,
+            authority_id=subject.authority_id,
+            content_hash=subject.content_hash,
+            observed_state=subject.observed_state,
+            observed_labels=subject.observed_labels,
         )
     if effect.effect_class == "close_issue":
         return (
@@ -2085,6 +2107,7 @@ class RecoveryAuthorityReadback(_StrictFrozenModel):
     pull_request_number: PositiveInt | None
     exact_head_sha: GitSha | None
     observed_state: Literal[
+        "open",
         "merged",
         "closed",
         "recorded",
@@ -2854,7 +2877,20 @@ def validate_delivery_receipt_evidence(
                 or (
                     recovery_step.effect_class == "claim_issue"
                     and any(
-                        "agent:ready" in readback.observed_labels
+                        not _claim_transition_is_truthful(
+                            next(
+                                authority
+                                for authority in (
+                                    recovery_effect.expected_authorities
+                                )
+                                if authority.authority_id
+                                == recovery_effect.issue.authority_id
+                            ),
+                            authority_id=readback.authority_id,
+                            content_hash=readback.issue.contract_hash,
+                            observed_state=readback.observed_state,
+                            observed_labels=readback.observed_labels,
+                        )
                         for readback in recovery_step.authority_readbacks
                     )
                 )

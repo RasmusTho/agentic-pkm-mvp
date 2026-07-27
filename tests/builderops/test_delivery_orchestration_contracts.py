@@ -138,7 +138,11 @@ def _budget() -> DeliveryBudget:
     )
 
 
-def _initiation(issue: IssueScope) -> DeliveryInitiation:
+def _initiation(
+    issue: IssueScope,
+    *,
+    source_authority: AuthoritySnapshot | None = None,
+) -> DeliveryInitiation:
     exclusions = (
         ScopeExclusion(
             scope_key="durable-carrier-selection",
@@ -148,7 +152,7 @@ def _initiation(issue: IssueScope) -> DeliveryInitiation:
     requested_scope = (issue,)
     policy_profile = _policy()
     budget = _budget()
-    source_authorities = (_authority(issue),)
+    source_authorities = (source_authority or _authority(issue),)
     provenance = _provenance("initiation-4165")
     approval_id = "approval-4165"
     approver = _actor()
@@ -193,7 +197,7 @@ def _plan(issue: IssueScope, initiation: DeliveryInitiation) -> DeliveryPlan:
             contract_id=initiation.initiation_id,
             content_hash=initiation.content_hash,
         ),
-        input_authorities=(_authority(issue),),
+        input_authorities=initiation.source_authorities,
         final_scope=(issue,),
         exclusions=initiation.exclusions,
         dependency_waves=(DependencyWave(wave_index=0, issues=(issue,)),),
@@ -358,6 +362,114 @@ def _recovery_effect(
         input_hash=input_hash,
         provenance=_provenance("effect-merge-4165"),
     )
+
+
+def _claim_effect(
+    issue: IssueScope,
+    plan: DeliveryPlan,
+) -> ReducerEffect:
+    plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    authorities = plan.input_authorities
+    expected_outcome_keys = delivery_effect_expected_outcome_keys(
+        effect_class="claim_issue",
+        run_id="run-4165",
+        issue=issue,
+        pull_request_number=None,
+        required_check_names=plan.policy_profile.required_check_names,
+    )
+    input_hash = delivery_effect_input_hash(
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        effect_class="claim_issue",
+        issue=issue,
+        pull_request_number=None,
+        exact_head_sha=None,
+        expected_authorities=authorities,
+        expected_outcome_keys=expected_outcome_keys,
+    )
+    idempotency_key = delivery_effect_idempotency_key(input_hash)
+    return ReducerEffect(
+        effect_id=idempotency_key,
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        causal_event=_run_started_event(plan),
+        sequence=1,
+        effect_class="claim_issue",
+        issue=issue,
+        pull_request_number=None,
+        exact_head_sha=None,
+        expected_authorities=authorities,
+        expected_outcome_keys=expected_outcome_keys,
+        idempotency_key=idempotency_key,
+        input_hash=input_hash,
+        provenance=_provenance("effect-claim-4165"),
+    )
+
+
+def _claim_recovery_receipt(
+    issue: IssueScope,
+    initiation: DeliveryInitiation,
+    plan: DeliveryPlan,
+    worker: StructuredWorkerResult,
+    review: ReviewResult,
+    claim_effect: ReducerEffect,
+) -> DeliveryReceipt:
+    receipt = _receipt(issue, initiation, plan, worker, review)
+    exception = DeliveryException(
+        kind="external_state_unknown",
+        code="claim-timeout-reconciled",
+        message="Claim call timed out and was reconciled from live authority.",
+        retryable=False,
+        evidence_refs=("github-issue:4165:claimed",),
+    )
+    payload = receipt.model_dump(mode="json")
+    payload["exceptions"] = [exception.model_dump(mode="json")]
+    payload["recovery_history"] = [
+        RecoveryStep(
+            step_index=0,
+            exception_kind=exception.kind,
+            exception_code=exception.code,
+            exception_hash=canonical_hash(exception),
+            effect_ref=ContractRef(
+                schema_version=claim_effect.schema_version,
+                contract_id=claim_effect.effect_id,
+                content_hash=claim_effect.content_hash,
+            ),
+            effect_class="claim_issue",
+            issue=issue,
+            action="read_live_claim_authority",
+            authority_readbacks=(
+                RecoveryAuthorityReadback(
+                    effect_idempotency_key=claim_effect.idempotency_key,
+                    authority_id=issue.authority_id,
+                    issue=issue,
+                    pull_request_number=None,
+                    exact_head_sha=None,
+                    observed_state="open",
+                    observed_labels=("type:task",),
+                    observed_at=TS,
+                    evidence_ref="github-issue:4165:claimed",
+                ),
+            ),
+            outcome_evidence=EffectOutcomeEvidence(
+                effect_class="claim_issue",
+                effect_idempotency_key=claim_effect.idempotency_key,
+                outcome_state="claimed",
+                outcome_keys=claim_effect.expected_outcome_keys,
+                observed_at=TS,
+                evidence_refs=("github-issue:4165:claimed",),
+            ),
+            outcome="reconciled",
+            occurred_at=TS,
+        ).model_dump(mode="json")
+    ]
+    parsed = parse_delivery_contract(payload)
+    assert isinstance(parsed, DeliveryReceipt)
+    return parsed
 
 
 def _known_defect_effect(
@@ -1030,7 +1142,6 @@ def test_contracts_round_trip_canonically() -> None:
             plan=plan,
             effect=effect,
         )
-
     stale_readback_effect_payload = effect.model_dump(mode="json")
     stale_readback_effect_payload["provenance"]["created_at"] = (
         "2026-07-27T10:00:01Z"
@@ -1525,6 +1636,67 @@ def test_contracts_round_trip_canonically() -> None:
     invalid_timestamp["provenance"]["created_at"] = "2026-99-99T99:99:99Z"
     with pytest.raises(ValidationError, match="real UTC calendar"):
         parse_delivery_contract(invalid_timestamp)
+
+
+def test_claim_recovery_requires_ready_to_absent_transition() -> None:
+    issue = _issue(4165, SHA_A)
+    ready_authority = _authority(
+        issue,
+        labels=("agent:ready", "type:task"),
+    )
+    ready_initiation = _initiation(
+        issue,
+        source_authority=ready_authority,
+    )
+    ready_plan = _plan(issue, ready_initiation)
+    ready_worker = _worker_result(issue, ready_plan)
+    ready_review = _review_result(issue, ready_plan)
+    ready_claim_effect = _claim_effect(issue, ready_plan)
+    ready_receipt = _claim_recovery_receipt(
+        issue,
+        ready_initiation,
+        ready_plan,
+        ready_worker,
+        ready_review,
+        ready_claim_effect,
+    )
+    assert (
+        validate_delivery_receipt_evidence(
+            ready_receipt,
+            initiation=ready_initiation,
+            plan=ready_plan,
+            worker_results=(ready_worker,),
+            review_results=(ready_review,),
+            reducer_effects=(ready_claim_effect,),
+        )
+        is ready_receipt
+    )
+
+    unready_initiation = _initiation(issue)
+    unready_plan = _plan(issue, unready_initiation)
+    unready_worker = _worker_result(issue, unready_plan)
+    unready_review = _review_result(issue, unready_plan)
+    unready_claim_effect = _claim_effect(issue, unready_plan)
+    unready_receipt = _claim_recovery_receipt(
+        issue,
+        unready_initiation,
+        unready_plan,
+        unready_worker,
+        unready_review,
+        unready_claim_effect,
+    )
+    with pytest.raises(
+        ValueError,
+        match="effect-specific outcome",
+    ):
+        validate_delivery_receipt_evidence(
+            unready_receipt,
+            initiation=unready_initiation,
+            plan=unready_plan,
+            worker_results=(unready_worker,),
+            review_results=(unready_review,),
+            reducer_effects=(unready_claim_effect,),
+        )
 
 
 def test_initiation_is_evidence_not_execution_authority() -> None:
