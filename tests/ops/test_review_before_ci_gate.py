@@ -407,7 +407,7 @@ def test_final_review_rounds_are_proportionate_to_runtime_or_low_convergence() -
     )
     dispatcher = DISPATCHER_CONTRACT.read_text(encoding="utf-8")
 
-    assert "One clean,\n  independent final review is the default" in verification
+    assert "One independent final passing review is the default" in verification
     assert "changes a runtime surface on a declared high-risk TCD category" in verification
     assert "same mechanism/domain key" in verification
     assert "One clean independent final review is the default" in contract

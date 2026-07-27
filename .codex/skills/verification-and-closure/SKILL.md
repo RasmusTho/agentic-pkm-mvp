@@ -101,7 +101,10 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
   this skill's explicit commands and verification steps.
 - Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
 - Run GitHub GraphQL `reviewThreads` closure checks only when a review-thread closure trigger is present: a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback. Preserve the lightweight hot path for ordinary PRs with no trigger. [review-thread-closure]
-- When a review-thread closure trigger applies and the work addresses earlier review feedback, reply to and resolve the original review thread with the fixing PR or merge commit before final closure. [review-thread-closure]
+- When a review-thread closure trigger applies, reply on and resolve or explicitly disposition the
+  original review thread before final closure: P0/P1 repairs name the fixing PR or merge commit, P2
+  deferrals name their durable defect Issue, and P3 observations may be closed as informational.
+  [review-thread-closure]
 - On resume or recovery, re-check branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, reimplementation, or closure. [post-resume-current-state-gate]
 - If the work is a slice under a larger feature, keep post-merge validation evidence on the parent issue
 - If post-merge validation advanced but acceptance is still pending, record the new evidence on the parent issue body or comments
@@ -146,9 +149,14 @@ Prerequisites for merge:
 - current SHA truth is intact
 - required checks and repo-standard checks that cover the changed surface are green on the current head SHA
 - any red check that covers the changed surface is a hard stop until fixed, rerun green, or explicitly classified as unrelated by evidence; this includes `Unit tests (not pg)` even when branch protection does not require it
-- no unresolved blocking review comments remain
-- the local review gate is resolved (see `Running the local review gate` below, including `Re-triggering after a fix`) — only a clean run, or a run whose findings are all fixed-and-re-verified, is a pass; any unresolved finding blocks until addressed; a fix alone, without the required re-verification, does not satisfy this prerequisite
-- when a review-thread closure trigger applies, no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
+- no unresolved P0/P1 blocking review comments remain
+- the local review gate is resolved (see `Running the local review gate` below, including
+  `Severity routing` and `Re-triggering after a fix`) — P0/P1 findings must be fixed and
+  re-verified, every P2 must carry its durable deferred-defect reference and review-thread
+  disposition, and P3 observations may remain informational; a fix alone, without the required
+  re-verification, does not satisfy a P0/P1 prerequisite
+- when a review-thread closure trigger applies, no addressed review thread remains unresolved or
+  lacks the required reply: a fixing PR/merge commit for P0/P1, or the deferred-defect Issue for P2
 - no scope drift remains
 - the PR fits one of the two verification modes above
 - if issue-backed, every exact closing issue's acceptance criteria and `Verify:` targets are
@@ -183,12 +191,12 @@ external GitHub-native reviewer bot. Run it once the PR's required and relevant 
 
 Resolve the verdict:
 
-- **Pass** — the run reports no findings, or every finding it reported has since been fixed and
-  re-verified per `Re-triggering after a fix` below.
-- **Blocking** — any unresolved finding from the run blocks merge until addressed and
-  fixed-and-reverified.
-- Record the run's outcome (clean / findings-fixed) in the delivery receipt so the gate is auditable
-  after merge.
+- **Pass** — the run reports no findings, or it has no unresolved P0/P1 finding and every P2/P3
+  finding has been dispositioned per `Severity routing` below.
+- **Blocking** — at least one P0/P1 finding remains unresolved. Only P0/P1 findings block merge or
+  enter repair and re-review.
+- Record the run's outcome (clean / findings-fixed / nonblocking-findings-dispositioned) in the
+  delivery receipt so the gate is auditable after merge.
 - Do not block indefinitely on a stalled or failed review run: if the reviewer subagent cannot complete
   (tool failure, timeout, repeated crash), classify the stop under
   `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, use bounded backoff or a
@@ -196,19 +204,53 @@ Resolve the verdict:
   CI/review/merge waiver. Route through `owner-decision-brief` only when the classifier finds an
   explicit authority category; that decision does not relax the gate.
 
+#### Severity routing
+
+Every review finding must be assigned exactly one severity before merge routing. Severity controls
+the disposition; there is no valid `blocking P2` category.
+
+- **P0** — critical correctness or safety failure with immediate, severe impact. It blocks merge and
+  enters the repair/re-review loop.
+- **P1** — material correctness, contract, or safety failure. It blocks merge and enters the
+  repair/re-review loop.
+- **P2** — a real defect whose risk is accepted for this PR and deferred to bounded follow-up. Leave
+  the PR code unchanged for that finding, invoke the existing
+  `.codex/skills/bug-to-issue/SKILL.md` intake path to create or update durable defect evidence,
+  mark the finding `deferred` in the review receipt, and reply on the original review finding/thread
+  with the Issue reference. Once that reference is live, the finding is non-blocking and allows
+  merge for that finding without another review round.
+- **P3** — informational advice, style guidance, or a non-defect suggestion. Record it when useful;
+  it does not block merge, require defect intake, or trigger another review round.
+
+The following protected findings must be P0 or P1, never P2: data loss or corruption; source,
+vault, or authority-integrity violations; secrets, authentication, or authorization failures;
+migration durability failures; concurrency or multi-writer safety failures; irreversible or
+external side effects without the required authority; false-green CI, receipts, merge, or closure
+evidence; and any failed governing acceptance criterion, `Verify:` target, contract, or closure
+gate. When the evidence is insufficient to distinguish a protected failure from a true P2, the
+review is inconclusive and the merge block remains while evidence is recovered.
+
+P2/P3 findings never consume repair attempts, trigger mechanism convergence, or count toward the
+low-convergence circuit breaker. A reviewer remains independent, current-SHA CI remains mandatory,
+and issue acceptance/`Verify:`, authority, verified-merge, and closure gates remain fail-closed
+regardless of finding severity.
+
 #### Re-triggering after a fix
 
-One round is not sufficient once a finding leads to a code change — a fix can introduce a defect the
-original round never looked for, and self-verification by the same agent that wrote the fix is weaker
-than independent re-review.
+One round is not sufficient once a P0/P1 finding leads to a code change — a fix can introduce a
+defect the original round never looked for, and self-verification by the same agent that wrote the
+fix is weaker than independent re-review. P2/P3 disposition leaves the code unchanged for that
+finding and does not re-trigger review.
 
-- After a **substantive** fix (anything beyond a one-line wording/doc/formatting change with no logic
-  change), re-run the local review gate scoped to the diff since the last review round before treating
-  that finding as resolved. Do not rely on the fixing agent's own read of the diff as the verdict.
-- A **trivial** fix (single-line wording/doc/formatting, no logic change) may be self-verified against
-  the current head SHA without a full re-run.
-- **Stop condition:** the gate passes once a round comes back clean (no new findings). One clean,
-  independent final review is the default. Require a second consecutive clean round only when either
+- After a **substantive** P0/P1 fix (anything beyond a one-line wording/doc/formatting change with no
+  logic change), re-run the local review gate scoped to the diff since the last review round before
+  treating that finding as resolved. Do not rely on the fixing agent's own read of the diff as the
+  verdict.
+- A **trivial** P0/P1 fix (single-line wording/doc/formatting, no logic change) may be self-verified
+  against the current head SHA without a full re-run.
+- **Stop condition:** the gate passes once a round has no new P0/P1 finding and all P2/P3 findings
+  are dispositioned. One independent final passing review is the default. Require a second
+  consecutive passing round only when either
   (a) the PR changes a runtime surface on a declared high-risk TCD category (security, data,
   migration, auth, concurrency, external-API, credential-durability, or explicit state-machine surfaces),
   or (b) the
@@ -220,19 +262,21 @@ than independent re-review.
   case above. The verification-dispatch producer authenticates this v3 field from the live PR and
   every normal, post-launch, and crash-recovery live-truth fence must match it before the durable
   closure ledger can proceed; changing prose or coordinator output cannot lower it.
-- **Low-convergence circuit breaker:** if one round reports two or more blockers in the same
-  stateful mechanism, or a later round finds an adjacent blocker in a mechanism already repaired,
-  stop point-fixing and do not start another expensive validation or publish another head. Build the mechanism
-  convergence packet and run the independent pre-expensive-gate review defined in
+- **Low-convergence circuit breaker:** if one round reports two or more P0/P1 blockers in the same
+  stateful mechanism, or a later round finds an adjacent P0/P1 blocker in a mechanism already
+  repaired, stop point-fixing and do not start another expensive validation or publish another
+  head. P2/P3 observations do not count. Build the mechanism convergence packet and run the
+  independent pre-expensive-gate review defined in
   `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
   sequence only after that review is clean. Preserve the existing mechanism/domain binding and
   attempt count; this replan does not reset budget and requires the second final clean round only
   for that triggered mechanism/domain key.
-- Repair budget is per stable failure mechanism and failure domain: two standard repair attempts
-  followed, when needed, by two strongest-capability repair attempts for that same key. The closed
-  domains are review/code correctness, static-quality, lease/concurrency, and
-  deployment/model-schema compatibility. Multiple findings may share one mechanism; the same
-  finding must not be rebound to another mechanism or domain to reset accounting.
+- Repair budget applies only to blocking P0/P1 findings and is per stable failure mechanism and
+  failure domain: two standard repair attempts followed, when needed, by two strongest-capability
+  repair attempts for that same key. The closed domains are review/code correctness,
+  static-quality, lease/concurrency, and deployment/model-schema compatibility. Multiple blocking
+  findings may share one mechanism; the same finding must not be rebound to another mechanism or
+  domain to reset accounting. P2/P3 findings consume no budget.
 - Once 2 standard fix attempts have been spent on one mechanism/domain key and a blocking finding
   for that key remains or reappears, treat that as a **capability-escalation trigger**, not an
   automatic owner escalation.
@@ -272,7 +316,9 @@ supports it. The surfaces remain:
 - Reactions (primary): `gh api repos/<owner>/<repo>/issues/<pr>/reactions --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .content'`
   - 👍 `+1` (also `heart` ❤️, `hooray` 🎉, `rocket` 🚀, `laugh` 😄) → reviewed, no blocking findings → **pass**.
   - 👎 `-1` or `confused` 😕 → **blocking**: treat as requested changes until addressed.
-- Reviews: `gh api repos/<owner>/<repo>/pulls/<pr>/reviews` — a `CHANGES_REQUESTED` from Codex blocks; `COMMENTED` with substantive findings blocks until each is addressed or replied to.
+- Reviews: `gh api repos/<owner>/<repo>/pulls/<pr>/reviews` — triage every
+  `CHANGES_REQUESTED`/`COMMENTED` finding through `Severity routing`; only P0/P1 findings block,
+  while P2/P3 findings require their non-blocking dispositions.
 - Comments: `gh api repos/<owner>/<repo>/issues/<pr>/comments` and `/pulls/<pr>/comments` — Codex posts detailed findings here when it has them.
 
 Rules:

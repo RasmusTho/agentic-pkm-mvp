@@ -5,8 +5,8 @@ Owner: Builder System governance
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-20
-Last verified against: issue #3211, issue #3224, issue #3225, the 2026-07-20 human session RCA, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
+Last reviewed: 2026-07-27
+Last verified against: 2026-07-27 current main, issue #3211, issue #3224, issue #3225, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/bug-to-issue/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
 
 # Autonomous Review and Repair Gate Contracts
 
@@ -90,8 +90,9 @@ Optional inputs:
 
 The review gate must emit one of these outputs:
 
-- `pass`: no blocking finding remains for the current head SHA.
-- `blocking`: at least one actionable finding blocks closure or merge.
+- `pass`: no P0/P1 finding remains for the current head SHA and all P2/P3
+  findings have their required dispositions.
+- `blocking`: at least one P0/P1 finding blocks closure or merge.
 - `inconclusive`: the gate cannot complete with enough evidence to pass or
   block.
 
@@ -102,7 +103,8 @@ The output must include:
 - Evidence summary covering checks, changed files, issue acceptance criteria,
   and required docs consulted.
 - For each finding: severity, path and line when applicable, triggering
-  contract/rule, impact, expected fix or proof, and whether it is blocking.
+  contract/rule, impact, expected fix or proof, blocking status, disposition,
+  and any deferred-defect Issue reference.
 - Explicit statement when no owner-doc writeback is implied.
 
 ### Pass and Blocking Verdicts
@@ -112,12 +114,15 @@ A `pass` verdict is valid only when:
 - The reviewed head SHA matches the current PR head.
 - Required CI and governance checks are current and successful.
 - Every issue acceptance criterion and `Verify:` marker has evidence.
-- No unresolved blocking review thread or machine finding remains.
+- No unresolved P0/P1 review thread or machine finding remains.
+- Every P2 finding has durable defect evidence and a linked deferred disposition;
+  P3 findings are recorded as informational when useful.
 - No forbidden mutation or out-of-scope behavior is present in the diff.
 
-A `blocking` verdict is required when:
+A `blocking` verdict is required when any condition below is present; each such
+condition is a P0/P1 finding:
 
-- The diff violates the issue contract, source docs, required skills, or
+- A P0/P1 finding shows that the diff violates the issue contract, source docs, required skills, or
   repository safety constraints.
 - Required validation is missing, stale, or tied to a different head SHA.
 - The PR introduces unapproved runtime/product behavior, GitHub-state mutation,
@@ -146,6 +151,33 @@ A finding is actionable only when it is:
 
 Non-actionable observations may be reported as suggestions, but they must not
 block closure.
+
+### Severity Routing
+
+Actionable does not mean blocking. Every finding must receive exactly one
+severity and one disposition:
+
+| Severity | Meaning | Required disposition |
+| --- | --- | --- |
+| `P0` | Critical correctness or safety defect with immediate severe impact. | Block merge; repair and independently re-review. |
+| `P1` | Material correctness, contract, or safety defect. | Block merge; repair and independently re-review. |
+| `P2` | Real defect accepted for this PR and deferred to bounded follow-up. | Leave the PR code unchanged for the finding; create or update durable defect evidence through `.codex/skills/bug-to-issue/SKILL.md`; mark the finding deferred and reply on the original review finding/thread with the Issue reference; allow merge without another review round. |
+| `P3` | Informational advice, style guidance, or non-defect suggestion. | Record when useful; no merge block, defect intake, repair, or re-review. |
+
+There is no valid `blocking P2`. A finding involving any of the following is
+protected and must be P0 or P1: data loss or corruption; source, vault, or
+authority integrity; secrets, authentication, or authorization; migration
+durability; concurrency or multi-writer safety; irreversible or external
+effects without required authority; false-green CI, receipts, merge, or closure
+evidence; or a failed governing acceptance criterion, `Verify:` target,
+contract, or closure gate. If available evidence cannot distinguish a protected
+failure from a true P2, the result is `inconclusive`, not a downgraded finding.
+
+Only P0/P1 findings enter repair/re-review, mechanism convergence, repeated
+repair budgets, or low-convergence accounting. Ordinary P2/P3 observations
+consume no attempt budget and cannot trigger those loops. This routing does not
+relax independent review, current-head-SHA CI, issue acceptance/`Verify:`
+evidence, authority checks, verified-merge controls, or closure gates.
 
 ## CI Repair Gate Contract
 
@@ -208,11 +240,12 @@ Retry budget:
 
 - One CI rerun is allowed for a suspected flake when logs support a flaky or
   infrastructure classification and the governing workflow allows reruns.
-- Repair budget is per stable failure mechanism and failure domain: two standard
-  repair attempts followed, when needed, by two strongest-capability repair attempts.
+- Repair budget is per stable blocking failure mechanism and failure domain: two
+  standard repair attempts followed, when needed, by two strongest-capability repair attempts.
 - A new mechanism receives a separate budget only after the gate records a stable,
   materially different mechanism identity. A finding may not be rebound to another
-  mechanism or domain to reset accounting.
+  mechanism or domain to reset accounting. P2/P3 review observations never consume
+  this budget.
 
 Frontier-rescue stop conditions:
 
@@ -244,8 +277,11 @@ and explicit state machines. It is enacted by `issue-to-code`, `publish-pr`, and
 Trigger it:
 
 - before the first expensive local validation for a high-risk stateful slice;
-- after one review round reports two or more blocking findings in the same mechanism; or
-- when a later review round finds an adjacent blocker in a mechanism already repaired.
+- after one review round reports two or more blocking P0/P1 findings in the same mechanism; or
+- when a later review round finds an adjacent P0/P1 blocker in a mechanism already repaired.
+
+P2/P3 findings never trigger mechanism convergence or contribute to its
+low-convergence threshold.
 
 The implementation agent must stop point-fixing and build one convergence packet containing:
 
@@ -275,11 +311,11 @@ a new owner-doc authority surface.
 
 ## Review Repair Loop
 
-The review repair loop connects blocking findings back to implementation.
+The review repair loop connects blocking P0/P1 findings back to implementation.
 
 Required loop:
 
-1. Review gate emits blocking findings with actionable criteria.
+1. Review gate emits blocking P0/P1 findings with actionable criteria.
 2. Implementation agent fixes only the scoped findings on the PR branch.
 3. Agent reruns the validation required by the issue and by the finding.
 4. Agent posts or records a repair receipt with changed files, validation
@@ -292,6 +328,8 @@ Maximum attempts:
   and failure domain before capability escalation. At most two strongest-capability
   repair attempts then remain for that same key. Exhaustion triggers classifier-based
   repair triage; it does not create a Human Exception.
+- P2/P3 findings do not enter this loop, consume attempts, trigger capability
+  escalation, or require another review round.
 - One clean independent final review is the default. A second clean round is required only for a
   PR that changes a runtime surface on a declared high-risk category, or after the low-convergence
   circuit breaker has triggered for the same mechanism/domain key. A governance, docs, skill, or
@@ -334,14 +372,16 @@ repair counter is updated. A retry counter alone must never select
 | `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
 | `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
 
-Repair accounting is per stable failure mechanism and failure domain. The closed
-domains are review/code correctness, static-quality, lease/concurrency, and
-deployment/model-schema compatibility. A failure in one domain or mechanism does
-not consume another key's budget. Multiple findings may bind to the same mechanism,
-but one finding may never rebind to reset accounting. Repeatedly identical findings
-still hit a circuit breaker: it triggers stronger autonomous diagnosis and a bounded
-replan, not an owner interruption, unless that replan crosses a `needs_owner`
-authority category. Budget exhaustion by itself does not create a Human Exception.
+Repair accounting applies only to blocking failures and is per stable failure
+mechanism and failure domain. The closed domains are review/code correctness,
+static-quality, lease/concurrency, and deployment/model-schema compatibility. A
+failure in one domain or mechanism does not consume another key's budget.
+Multiple blocking findings may bind to the same mechanism, but one finding may
+never rebind to reset accounting. P2/P3 findings consume no budget. Repeatedly
+identical blocking findings still hit a circuit breaker: it triggers stronger
+autonomous diagnosis and a bounded replan, not an owner interruption, unless
+that replan crosses a `needs_owner` authority category. Budget exhaustion by
+itself does not create a Human Exception.
 
 Deployment/model-schema compatibility is a control-plane concern. It must be
 checked in a non-mutating preflight before a dispatcher claim or pilot; a
@@ -408,8 +448,10 @@ Closure prerequisites:
 - All issue acceptance criteria and `Verify:` markers have evidence.
 - Required owner-doc writeback is complete, or a no-owner-doc-change receipt is
   present and justified.
-- No unresolved blocking human review thread, machine finding, CI failure, or
+- No unresolved blocking P0/P1 human review thread, P0/P1 machine finding, CI failure, or
   Human Exception packet remains.
+- Every P2 review finding has a durable defect Issue reference and deferred
+  reply/disposition; P3 findings remain informational.
 - BuilderOps routing and delivery receipts are current when the issue contract
   requires them.
 
