@@ -31,8 +31,9 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   the selected CI result as database-path evidence.
 - The exact shared producer `app/objects/__init__.py` uses the same `store_ingest` selection: its
   canonical object-store facade writes through the store provider seam and emits ingest lifecycle
-  events. The exact `app/outbox/events.py` producer belongs to both `outbox_worker` and
-  `memory_retrieval`, so its selection unions delivery-worker/event and indexer coverage. Other
+  events, and its selection includes the exact ObjectStore outbox-emission regression. The exact
+  `app/outbox/events.py` producer belongs to both `outbox_worker` and `memory_retrieval`, so its
+  selection unions delivery-worker/event, indexer, and event-envelope contract coverage. Other
   `app/objects/**` and `app/outbox/**` paths remain unowned unless explicitly mapped.
 - E2E tests under `tests/e2e/` run after merge and in the nightly suite, not on ordinary PRs. Opt-in classes (live LLM, browser, human UAT, eval) remain in their dedicated post-merge or nightly lanes.
 

@@ -281,7 +281,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "docs/DB_SCHEMA.md",
             "docs/RUNTIME_CORRECTNESS_KERNEL/",
         ),
-        ("tests/stores", "tests/ingest", "tests/architecture"),
+        (
+            "tests/stores",
+            "tests/ingest",
+            "tests/architecture",
+            "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event",
+        ),
     ),
     (
         "relevance",
@@ -377,6 +382,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/services/test_indexer_worker.py",
             "tests/cli/test_index_rebuild_resilience.py",
             "tests/cli/test_index_doctor_mixed_identity.py",
+            "tests/architecture/test_events_outbox_contracts.py",
             *E2E_TARGETS["memory_retrieval"],
         ),
     ),
