@@ -163,6 +163,7 @@ Commit message must:
 - Start with imperative verb (Fix, Add, Update, Rebuild, etc.)
 - Summarize the bounded outcome, not the mechanical changes
 - Be truthful about scope
+- Never include `Fixes`, `Closes`, or `Resolves` issue-closing keywords in the commit subject or body. Use evidence-only `Refs #<id>` when an Issue reference is useful; authenticated closing keywords belong only in the PR body.
 - Replace `<agent identity> <agent noreply address>` in the `Co-Authored-By` trailer with the actual agent identity and its own noreply address producing the commit (e.g. Claude's `noreply@anthropic.com`, Codex/ChatGPT's own noreply domain); do not copy a hardcoded model name or a different agent's domain from this template
 
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
