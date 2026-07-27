@@ -280,6 +280,47 @@ def test_promotion_links_only_a_canonical_normal_bug_issue() -> None:
     assert promoted["registry_issue"] == intake["registry_issue"]
 
 
+@pytest.mark.parametrize(
+    ("state", "agent_labels"),
+    [
+        ("open", []),
+        ("closed", []),
+    ],
+)
+def test_promotion_retry_converges_after_target_claim_or_closure(
+    state: str,
+    agent_labels: list[dict[str, str]],
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+    promoted = known_defects.promote_defect(defect.defect_id, 901, gateway)
+    gateway.issues[901]["state"] = state
+    gateway.issues[901]["labels"] = [
+        {"name": "type:bug"},
+        {"name": "prio:med"},
+        *agent_labels,
+    ]
+
+    duplicate = known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert promoted["status"] == "promoted"
+    assert duplicate == {
+        **promoted,
+        "status": "promotion_duplicate",
+    }
+
+
 def test_promotion_rejects_another_registry_or_incomplete_issue() -> None:
     gateway = FakeGateway()
     defect = _defect()

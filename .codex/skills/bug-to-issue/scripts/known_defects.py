@@ -782,12 +782,6 @@ def promote_defect(
     if found is None:
         raise KnownDefectsError(f"known defect {defect_id} was not found")
     registry, _entry_comment = found
-    target = gateway.get_issue(issue_number)
-    _validate_promotion_issue(target)
-    marker = PROMOTION_MARKER_TEMPLATE.format(
-        defect_id=defect_id,
-        issue_number=issue_number,
-    )
     targets, evidence = _promotion_targets(
         gateway.list_comments(int(registry["number"])),
         defect_id,
@@ -811,6 +805,12 @@ def promote_defect(
         raise KnownDefectsError(
             f"{defect_id} is already linked to promotion Issue #{existing_target}"
         )
+    target = gateway.get_issue(issue_number)
+    _validate_promotion_issue(target)
+    marker = PROMOTION_MARKER_TEMPLATE.format(
+        defect_id=defect_id,
+        issue_number=issue_number,
+    )
     comment = gateway.add_comment(
         int(registry["number"]),
         "\n".join(
