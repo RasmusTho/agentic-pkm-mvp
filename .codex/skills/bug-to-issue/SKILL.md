@@ -95,11 +95,15 @@ If multiple open registry Issues are ever found, intake fails closed instead of 
 the duplicate registry state before retrying; `--registry-issue <N>` can select the already-verified
 single open registry but cannot override ambiguous registry authority.
 
-Registry discovery unions the mutable `state:known-defect` selector with an exact-title GitHub Issue
-identity search. Title-discovered Issue numbers are cached only as identities and reread live when
-the selector query no longer returns them. The title search is refreshed monotonically at the final
-pre-create boundary. Removing the selector label therefore becomes explicit, fail-closed registry
-drift instead of hiding committed comments or permitting duplicate authority.
+Normal registry discovery unions the mutable `state:known-defect` selector with an exact-title
+GitHub Issue search. Discovered Issue numbers are cached only as identities and reread live when the
+selector query no longer returns them. Search freshness never authorizes creation: at the rare final
+pre-create boundary, the helper authoritatively enumerates repository Issues in descending creation
+order back through Issue `#4162`, the first possible registry identity after this feature's PR. Any
+candidate found by selector label, canonical title, or canonical body marker is reread and strictly
+validated, including its exact title. Removing or renaming identity surfaces therefore becomes
+explicit, fail-closed registry drift instead of hiding committed comments or permitting duplicate
+authority.
 
 Registry creation is crash-convergent across the create/lock boundary. Intake may lock and reuse
 exactly one structurally canonical open bootstrap Issue, then rereads the Issue and all comments

@@ -72,6 +72,11 @@ jobs:
                 ];
                 const expectedBody = knownDefectsRegistryBodyLines.join("\n");
                 const errors = [];
+                if (issue.title !== "Known Defects Registry (rolling)") {
+                  errors.push(
+                    "Known Defects registry title must match the exact v1 identity"
+                  );
+                }
                 if (JSON.stringify(actualLabels) !== JSON.stringify(expectedLabels)) {
                   errors.push(
                     "Known Defects registry must carry exactly type:bug and state:known-defect"

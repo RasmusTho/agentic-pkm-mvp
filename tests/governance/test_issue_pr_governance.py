@@ -134,6 +134,12 @@ def test_issue_shape_workflow_accepts_only_exact_known_defects_container() -> No
     assert _js_issue_shape_errors(
         {
             **canonical,
+            "title": "Renamed registry",
+        }
+    ) == ["Known Defects registry title must match the exact v1 identity"]
+    assert _js_issue_shape_errors(
+        {
+            **canonical,
             "labels": [{"name": "type:bug"}],
         }
     ) == [

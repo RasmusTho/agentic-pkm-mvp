@@ -2773,14 +2773,15 @@ def test_rest_selector_discovery_is_cached_before_label_loss(
         known_defects._select_registry(gateway, None)
 
 
-def test_rest_precreate_refresh_finds_late_title_identity(
+def test_rest_precreate_enumeration_finds_stale_search_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
     search_reads = 0
+    authoritative_reads = 0
     unlabeled = {
-        "number": 900,
-        "title": known_defects.REGISTRY_TITLE,
+        "number": 4200,
+        "title": "Renamed registry",
         "state": "open",
         "locked": True,
         "body": known_defects.render_registry_body(),
@@ -2792,7 +2793,7 @@ def test_rest_precreate_refresh_finds_late_title_identity(
         endpoint: str,
         _payload: dict[str, Any] | None = None,
     ) -> Any:
-        nonlocal search_reads
+        nonlocal authoritative_reads, search_reads
         assert method == "GET"
         if endpoint.startswith(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
@@ -2802,28 +2803,26 @@ def test_rest_precreate_refresh_finds_late_title_identity(
             search_reads += 1
             return {
                 "incomplete_results": False,
-                "items": (
-                    []
-                    if search_reads == 1
-                    else [
-                        {
-                            "number": 900,
-                            "title": known_defects.REGISTRY_TITLE,
-                        }
-                    ]
-                ),
+                "items": [],
             }
-        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/900":
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all"
+            "&sort=created&direction=desc"
+        ):
+            authoritative_reads += 1
+            return [unlabeled]
+        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/4200":
             return unlabeled
         raise AssertionError(endpoint)
 
     monkeypatch.setattr(gateway, "_request", request)
 
-    with pytest.raises(known_defects.KnownDefectsError, match="canonical label"):
+    with pytest.raises(known_defects.KnownDefectsError, match="registry title"):
         known_defects._select_registry(gateway, None)
 
-    assert search_reads == 2
-    assert gateway._registry_identity_numbers == {900}
+    assert search_reads == 1
+    assert authoritative_reads == 1
+    assert gateway._registry_identity_numbers == {4200}
 
 
 def test_known_defect_label_is_canonical_and_registry_only() -> None:

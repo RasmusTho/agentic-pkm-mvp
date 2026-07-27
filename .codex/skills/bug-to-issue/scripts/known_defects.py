@@ -38,6 +38,7 @@ REGISTRY_LABEL_DESCRIPTION = (
 )
 REGISTRY_TITLE = "Known Defects Registry (rolling)"
 REGISTRY_MARKER = "<!-- known-defects-registry:v1 -->"
+REGISTRY_ROLLOUT_MIN_ISSUE = 4162
 ENTRY_MARKER_TEMPLATE = (
     "<!-- known-defect-entry:v1 id={defect_id} phase={phase} -->"
 )
@@ -355,12 +356,8 @@ class GhRegistryGateway:
                 return rows
         raise KnownDefectsError(f"pagination bound exceeded for {endpoint}")
 
-    def _search_registry_identity_numbers(
-        self,
-        *,
-        force_refresh: bool = False,
-    ) -> set[int]:
-        if self._registry_identity_numbers is not None and not force_refresh:
+    def _search_registry_identity_numbers(self) -> set[int]:
+        if self._registry_identity_numbers is not None:
             return set(self._registry_identity_numbers)
         query = quote(
             f'repo:{self.repo} is:issue in:title "{REGISTRY_TITLE}"',
@@ -402,7 +399,53 @@ class GhRegistryGateway:
         raise KnownDefectsError("pagination bound exceeded for registry identity search")
 
     def refresh_registry_identities(self) -> None:
-        self._search_registry_identity_numbers(force_refresh=True)
+        numbers = set(self._registry_identity_numbers or ())
+        endpoint = (
+            f"repos/{self.repo}/issues?state=all"
+            "&sort=created&direction=desc"
+        )
+        separator = "&"
+        for page in range(1, 101):
+            batch = self._request(
+                "GET",
+                f"{endpoint}{separator}per_page=100&page={page}",
+            )
+            if not isinstance(batch, list):
+                raise KnownDefectsError(
+                    "expected list response from authoritative registry discovery"
+                )
+            reached_rollout_boundary = False
+            for issue in batch:
+                if not isinstance(issue, dict):
+                    raise KnownDefectsError(
+                        "authoritative registry discovery returned a malformed Issue"
+                    )
+                number = int(issue.get("number") or 0)
+                if number <= 0:
+                    raise KnownDefectsError(
+                        "authoritative registry discovery returned an invalid "
+                        "Issue number"
+                    )
+                if number < REGISTRY_ROLLOUT_MIN_ISSUE:
+                    reached_rollout_boundary = True
+                    continue
+                labels = _label_names(issue)
+                body = str(issue.get("body") or "")
+                if (
+                    "pull_request" not in issue
+                    and (
+                        REGISTRY_LABEL in labels
+                        or issue.get("title") == REGISTRY_TITLE
+                        or body.startswith(f"{REGISTRY_MARKER}\n")
+                    )
+                ):
+                    numbers.add(number)
+            if reached_rollout_boundary or len(batch) < 100:
+                self._registry_identity_numbers = numbers
+                return
+        raise KnownDefectsError(
+            "pagination bound exceeded for authoritative registry discovery"
+        )
 
     def ensure_registry_label(self) -> None:
         encoded = quote(REGISTRY_LABEL, safe="")
@@ -533,6 +576,10 @@ def _validate_registry_issue(
     require_open: bool,
     require_locked: bool = True,
 ) -> None:
+    if issue.get("title") != REGISTRY_TITLE:
+        raise KnownDefectsError(
+            f"Issue #{issue.get('number')} has a malformed Known Defects registry title"
+        )
     if (issue.get("body") or "") != render_registry_body():
         raise KnownDefectsError(
             f"Issue #{issue.get('number')} has a malformed Known Defects registry body"
@@ -770,6 +817,7 @@ def _registry_candidates_for_read(
         if (
             REGISTRY_LABEL not in labels
             or "type:bug" not in labels
+            or issue.get("title") != REGISTRY_TITLE
             or not body.startswith(f"{REGISTRY_MARKER}\n")
         ):
             raise KnownDefectsError(
