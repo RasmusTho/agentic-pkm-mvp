@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.write_ops import write_note_relative
@@ -31,8 +31,31 @@ _SYSTEM_OWNED_FIELDS = frozenset(
 )
 _IMMUTABLE_FIELDS = frozenset({"question_id", "scope", "created_at", "registered_via"})
 _QUESTION_ID_RE = re.compile(r"^sq-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+_RFC3339_DATETIME_RE = re.compile(
+    r"^(?P<date>\d{4}-(?:0[1-9]|1[0-2])-\d{2})"
+    r"T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d"
+    r"(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$",
+    re.ASCII | re.IGNORECASE,
+)
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "question-note.schema.json"
 _LOGGER = logging.getLogger(__name__)
+_QUESTION_NOTE_FORMAT_CHECKER = FormatChecker()
+
+
+@_QUESTION_NOTE_FORMAT_CHECKER.checks("date-time")
+def _is_rfc3339_datetime(value: object) -> bool:
+    """Validate the schema's RFC 3339 boundary without optional package imports."""
+    if not isinstance(value, str):
+        # JSON Schema's format assertion only applies after the type keyword.
+        return True
+    match = _RFC3339_DATETIME_RE.fullmatch(value)
+    if match is None:
+        return False
+    try:
+        datetime.strptime(match.group("date"), "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
 
 
 class HumanOwnedFieldMutationError(ValueError):
@@ -59,10 +82,9 @@ def _utc_now() -> str:
 
 def _schema_validator() -> Draft202012Validator:
     schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-    # format_checker enforces "format": "date-time" (created_at/matched_at/...) at write
-    # time. Without it a bad timestamp string passes schema validation silently and only
-    # explodes later at projection INSERT (TIMESTAMPTZ), aborting the whole rebuild.
-    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+    # This seam owns its checker instead of relying on jsonschema's optional dependency
+    # discovery. A stale host environment must not turn "format: date-time" into a no-op.
+    return Draft202012Validator(schema, format_checker=_QUESTION_NOTE_FORMAT_CHECKER)
 
 
 def validate_question_note(note: Mapping[str, Any]) -> dict[str, Any]:
@@ -112,7 +134,7 @@ class QuestionStore:
             "scope": scope,
             "text": text,
             "status": "open",
-            "created_at": created_at or _utc_now(),
+            "created_at": created_at if created_at is not None else _utc_now(),
             "registered_via": registered_via,
             "standing_answer_ref": None,
             "candidate_answer_ref": None,

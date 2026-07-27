@@ -29,7 +29,9 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    `evidence` (system-owned, bounded, **append-only** list: `{artifact_ref, source_stream, matched_at,
    confidence_class, provenance_ref, quoted_span}`), `last_matched_at` / `last_refreshed_at`
    (system-owned bounded timestamps). Prose-mirror-of-schema section in this capability's README,
-   consistent with `docs/architecture/*` contract style.
+   consistent with `docs/architecture/*` contract style. The production validation seam enforces
+   every non-null `format: date-time` value as RFC 3339 before guarded note writes and when notes are
+   parsed for projection rebuild; enforcement does not depend on optional host checker registration.
 2. **Ownership split, enforced not just documented** (`docs/FRONTMATTER.md :: Ownership: human vs
    system`): `text` and `status` are human-owned — the store's write path refuses any engine-authored
    mutation of these two fields at the seam, full stop, regardless of caller. `evidence`,

@@ -102,18 +102,52 @@ def _minimal_valid_note(**overrides: object) -> dict[str, object]:
     return note
 
 
-def test_validate_question_note_rejects_bad_created_at_format() -> None:
+def test_validate_question_note_rejects_bad_created_at_format(tmp_path: Path) -> None:
     """Review finding #3: format_checker must actually enforce "format": "date-time" at
     write time, not just parse. A bad timestamp string must never reach the projection
     INSERT (TIMESTAMPTZ) undetected."""
-    note = _minimal_valid_note(created_at="not-a-timestamp")
-    with pytest.raises(jsonschema.ValidationError):
-        validate_question_note(note)
+    guard_calls: list[str] = []
+
+    def _healthy_snapshot() -> dict[str, str]:
+        guard_calls.append("called")
+        return {"state": "healthy"}
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = QuestionStore(vault, write_guard=WriteGuard(snapshot_fn=_healthy_snapshot))
+
+    for invalid_created_at in ("not-a-timestamp", ""):
+        with pytest.raises(jsonschema.ValidationError):
+            store.create_question(
+                text="Will this invalid timestamp write?",
+                scope="work",
+                registered_via="explicit",
+                created_at=invalid_created_at,
+            )
+
+    assert guard_calls == []
+    assert not (vault / "questions").exists()
 
 
 def test_validate_question_note_accepts_well_formed_created_at() -> None:
     note = _minimal_valid_note()
     assert validate_question_note(note)["created_at"] == "2026-07-11T10:00:00Z"
+    lowercase = _minimal_valid_note(created_at="2026-07-11t10:00:00z")
+    assert validate_question_note(lowercase)["created_at"] == "2026-07-11t10:00:00z"
+
+
+def test_datetime_validation_does_not_depend_on_optional_global_checker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        jsonschema.Draft202012Validator,
+        "FORMAT_CHECKER",
+        jsonschema.FormatChecker(formats=[]),
+    )
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_question_note(_minimal_valid_note(created_at="not-a-timestamp"))
+    assert validate_question_note(_minimal_valid_note())["created_at"] == "2026-07-11T10:00:00Z"
 
 
 def test_serialize_parse_round_trips_non_ascii_text() -> None:
