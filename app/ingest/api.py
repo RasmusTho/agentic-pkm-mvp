@@ -35,10 +35,15 @@ def _requested_embedding_identity() -> Dict[str, Any]:
     #   - artifact_metadata imports app.ingest.chunk_policy, which initializes
     #     app.ingest and re-enters this module — a genuine cycle.
     #   - the llm fabric pulls in app.services.llm and the whole HTTP client
-    #     stack (httpx/requests/urllib3/...). At module scope that cost lands on
-    #     every importer of app.ingest — including app/watcher/vault_watcher.py
-    #     — for a value only this function needs. Measured: +313 modules and
-    #     ~3s on `import app.ingest`.
+    #     stack (httpx/requests/urllib3/...). At module scope that cost landed on
+    #     every importer of app.ingest, for a value only this function needs.
+    #     Measured on `import app.ingest`: 610 modules at module scope vs 228
+    #     here (+382), with httpx/requests/urllib3 absent in the latter.
+    #     This defers the cost rather than removing it — the first
+    #     ingest_object() call still pays it. It does not help importers that
+    #     reach the HTTP stack another way (app.ingest.vault_alpha ->
+    #     app.search.service already pulls it, so app/watcher/vault_watcher.py
+    #     is unaffected); it keeps the cost off everyone else.
     from app.components.embeddings import get_embedding_identity
     from app.components.llm.fabric import get_embeddings_client
     from app.components.llm.router import LLMTaskIntent

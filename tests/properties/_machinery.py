@@ -92,15 +92,17 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "normalizer test flows and the memory-backend CLI path; the object's creation "
         "event is emitted by the caller (ingest API / vault_alpha) that invokes normalize."
     ),
-    ("app/ingest/api.py", 162): (
-        "Programmatic ingest helper (app.ingest.api.ingest_object -- NOT the POST /ingest "
-        "route, which goes through app/api/routes/ingest.py::insert_object_and_outbox; the "
-        "two ingest_object functions are distinct, see also app.search.service.ingest_object): "
-        "insert_object_and_outbox already emitted "
-        "ingest.object.created for this same logical ingest (T-ingest-api splits "
-        "event-emission and object-materialization -- see formal-model.md T-materialize); "
-        "this call is the eventual T-materialize-equivalent write for the API path. "
-        "Line drifted 118 -> 162 (site unchanged); re-pinned by #4178, which replaced the "
+    ("app/ingest/api.py", 167): (
+        "Programmatic ingest helper app.ingest.api.ingest_object. This is NOT the POST /ingest "
+        "route -- that goes through app/api/routes/ingest.py::insert_object_and_outbox, and "
+        "app.search.service.ingest_object is a third, distinct function that every real call "
+        "site uses. This helper has no caller in app/ outside the app/ingest/__init__.py "
+        "re-export; the earlier justification here claimed the API path and was wrong "
+        "(corrected by #4178). emit_outbox=False is correct on its own terms: this helper "
+        "models no creation event at all -- it emits index.embedding.requested itself and "
+        "leaves object creation unannounced, so there is no duplicate ingest.object.created "
+        "to suppress. "
+        "Line drifted 118 -> 167 (site unchanged); re-pinned by #4178, which replaced the "
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
@@ -1490,10 +1492,10 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_vector_index directly (bypasses the build_indexed_unit_payload choke); explicit "
         "'unbound'."
     ),
-    ("app/ingest/api.py", 162): (
+    ("app/ingest/api.py", 167): (
         "carries_unbound_default: programmatic ingest helper builds a fresh frontmatter-less "
         "store_objects payload; episode_ref normalized to 'unbound' via the {**...} rebuild; "
-        "save_object -> store_objects. Line drifted 118 -> 162 (site unchanged); re-pinned "
+        "save_object -> store_objects. Line drifted 118 -> 167 (site unchanged); re-pinned "
         "by #4178."
     ),
     ("app/reasoning/multi.py", 51): (
