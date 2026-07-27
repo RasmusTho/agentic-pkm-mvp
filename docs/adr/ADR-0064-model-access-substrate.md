@@ -130,14 +130,30 @@ That line was written when CKM was a peripheral consumer. **It is amended:** CKM
 its dependencies allow, requiring only credential resolution and the adapter contract.
 
 Through the migration window CKM continues to route Builder inference through Product policy — the
-authority leakage ADR-0063 rejected Option A to prevent. Two conditions make that tolerable and both
-must hold: CKM does not orchestrate during the window, and the leak is made visible by an
-`importlinter` rule with a single named, dated exemption. If orchestration must start first, CKM's
-migration precedes model inquiry.
+authority leakage ADR-0063 rejected Option A to prevent.
 
-Whether CKM may orchestrate at all is **not decided here**. ADR-0057 locks CKM projection-only with a
-candidate lifecycle and human confirmation; orchestration exceeds that scope and requires its own
-amendment.
+**Amended 2026-07-27, superseding this section's original interim conditions.** When this ADR was
+accepted, whether CKM might orchestrate was undecided, so tolerability was made conditional on CKM
+not orchestrating during the window, with a migration-order swap if it did. The owner has since
+ruled (ADR-0057 A1) that delivery may be orchestrated from the CKM by a builder agent. Both the
+original condition and the conditional swap are therefore withdrawn, and the tolerability argument is
+restated on the correct grounds:
+
+- **The order does not swap.** The CKM migration stays at step 5. The original swap was justified by
+  a concern that turned out to be misdirected: orchestration is performed by an agent reading the
+  CKM, and the CKM has no agency of its own (ADR-0057 A1), so an orchestrator is not fed analysis by
+  a mock route.
+- **What the leak actually risks is the evidence graph, not the orchestrator.** The single
+  LLM-assisted step, `builderops ckm associate`, is operator-invoked rather than automatic. If it
+  silently resolves to a mock route it writes fabricated edges that are correctly labelled
+  `candidate` yet indistinguishable from genuine candidate output. That is a data-integrity defect,
+  and it grows more expensive as the map becomes load-bearing for planning — but it does not gate
+  orchestration.
+- **The visibility condition stands and is now the only one.** The `app.builderops -> app.components.llm`
+  leak must be made visible by an `importlinter` rule carrying a single named, dated exemption, so an
+  invisible violation becomes a countdown that step 5 closes.
+
+Whether CKM may orchestrate is decided in ADR-0057 A1, not here.
 
 ## Options considered
 
