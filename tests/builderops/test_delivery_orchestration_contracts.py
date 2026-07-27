@@ -511,6 +511,53 @@ def test_contracts_round_trip_canonically() -> None:
     with pytest.raises(ValidationError, match="idempotency key"):
         parse_delivery_contract(invalid_effect)
 
+    fresh_authority = _authority(issue).model_copy(
+        update={"observed_at": "2026-07-27T10:00:01Z"}
+    )
+    fresh_input_hash = delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence,
+        effect_class=effect.effect_class,
+        issue=effect.issue,
+        pull_request_number=effect.pull_request_number,
+        exact_head_sha=effect.exact_head_sha,
+        expected_authorities=(fresh_authority,),
+    )
+    assert fresh_input_hash == effect.input_hash
+    assert (
+        delivery_effect_idempotency_key(fresh_input_hash)
+        == effect.idempotency_key
+    )
+    fresh_effect_payload = effect.model_dump(mode="json")
+    fresh_effect_payload["expected_authorities"] = [
+        fresh_authority.model_dump(mode="json")
+    ]
+    fresh_effect = parse_delivery_contract(fresh_effect_payload)
+    assert isinstance(fresh_effect, ReducerEffect)
+    assert validate_reducer_effect_evidence(fresh_effect, plan=plan) is fresh_effect
+
+    second_authority = _authority(_issue(4166, SHA_C))
+    assert delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence,
+        effect_class=effect.effect_class,
+        issue=effect.issue,
+        pull_request_number=effect.pull_request_number,
+        exact_head_sha=effect.exact_head_sha,
+        expected_authorities=(_authority(issue), second_authority),
+    ) == delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence,
+        effect_class=effect.effect_class,
+        issue=effect.issue,
+        pull_request_number=effect.pull_request_number,
+        exact_head_sha=effect.exact_head_sha,
+        expected_authorities=(second_authority, _authority(issue)),
+    )
+
     with pytest.raises(ValidationError, match="canonical sorted order"):
         _authority(issue, labels=("type:task", "agent:ready"))
 
@@ -879,6 +926,16 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["closure"]["repository"] = "Other/repository"
     with pytest.raises(ValidationError, match="proof repository"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["merge_identity"]["merged_at"] = (
+        "2026-07-27T10:10:00Z"
+    )
+    payload["issue_proofs"][0]["closure"]["closed_at"] = (
+        "2026-07-27T09:00:00Z"
+    )
+    with pytest.raises(ValidationError, match="lifecycle chronology"):
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")

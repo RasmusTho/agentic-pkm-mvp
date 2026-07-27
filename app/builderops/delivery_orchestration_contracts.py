@@ -729,6 +729,19 @@ def delivery_effect_input_hash(
 ) -> str:
     """Hash the complete semantic input to one proposed reducer effect."""
 
+    authority_semantics = sorted(
+        (
+            {
+                "authority_type": item.authority_type,
+                "authority_id": item.authority_id,
+                "content_hash": item.content_hash,
+                "observed_state": item.observed_state,
+                "observed_labels": list(item.observed_labels),
+            }
+            for item in expected_authorities
+        ),
+        key=canonical_json,
+    )
     return canonical_hash(
         {
             "run_id": run_id,
@@ -738,9 +751,7 @@ def delivery_effect_input_hash(
             "issue": issue.model_dump(mode="json"),
             "pull_request_number": pull_request_number,
             "exact_head_sha": exact_head_sha,
-            "expected_authorities": [
-                item.model_dump(mode="json") for item in expected_authorities
-            ],
+            "expected_authorities": authority_semantics,
         }
     )
 
@@ -1484,6 +1495,31 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             raise ValueError("TCD P2 dispositions must match receipt defect evidence")
         if self.started_at > self.completed_at:
             raise ValueError("receipt completion must not precede start")
+        for proof in self.issue_proofs:
+            merge_identity = proof.merge_identity
+            closure = proof.closure
+            if merge_identity is not None and not (
+                self.started_at
+                <= merge_identity.merged_at
+                <= self.completed_at
+            ):
+                raise ValueError(
+                    "merge evidence must fall within receipt lifecycle chronology"
+                )
+            if closure is not None and not (
+                self.started_at <= closure.closed_at <= self.completed_at
+            ):
+                raise ValueError(
+                    "closure evidence must fall within receipt lifecycle chronology"
+                )
+            if (
+                merge_identity is not None
+                and closure is not None
+                and merge_identity.merged_at > closure.closed_at
+            ):
+                raise ValueError(
+                    "closure evidence must not precede merge chronology"
+                )
         return self
 
 
