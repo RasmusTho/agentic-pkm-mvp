@@ -419,6 +419,74 @@ def test_final_review_rounds_are_proportionate_to_runtime_or_low_convergence() -
     assert "no-repair delivery still requires two distinct clean review sessions" not in dispatcher
 
 
+def test_review_severity_routing_blocks_only_p0_and_p1() -> None:
+    contract = REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8")
+    closure_skill = VERIFICATION_SKILL.read_text(encoding="utf-8")
+
+    for surface in (contract, closure_skill):
+        normalized = " ".join(surface.split())
+        normalized_lower = normalized.lower()
+        assert "no valid `blocking p2`" in normalized_lower
+        assert "only p0/p1 findings" in normalized_lower
+        assert ".codex/skills/bug-to-issue/SKILL.md" in surface
+        assert "leave the pr code unchanged" in normalized_lower
+        assert (
+            "reply on the original review finding/thread with the issue reference"
+            in normalized_lower
+        )
+        assert "without another review round" in normalized_lower
+        assert "P3" in surface and "informational" in normalized_lower
+
+
+def test_protected_review_invariants_cannot_be_downgraded_to_p2() -> None:
+    contract = " ".join(REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8").split())
+    closure_skill = " ".join(VERIFICATION_SKILL.read_text(encoding="utf-8").split())
+
+    for surface in (contract, closure_skill):
+        assert "must be P0 or P1" in surface
+        for protected_fragment in (
+            "data loss or corruption",
+            "source, vault, or authority",
+            "secrets, authentication, or authorization",
+            "migration durability",
+            "concurrency or multi-writer safety",
+            "irreversible or external",
+            "false-green CI",
+            "failed governing acceptance criterion",
+            "`Verify:`",
+            "closure gate",
+        ):
+            assert protected_fragment in surface
+
+
+def test_nonblocking_findings_do_not_consume_repair_or_convergence_budget() -> None:
+    contract = " ".join(REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8").split())
+    closure_skill = " ".join(VERIFICATION_SKILL.read_text(encoding="utf-8").split())
+
+    for surface in (contract, closure_skill):
+        assert "P2/P3 findings" in surface
+        assert "consume no" in surface
+        assert "trigger mechanism convergence" in surface
+        assert "low-convergence" in surface
+
+
+def test_severity_routing_preserves_fail_closed_delivery_gates() -> None:
+    contract = " ".join(REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8").split())
+    closure_skill = " ".join(VERIFICATION_SKILL.read_text(encoding="utf-8").split())
+
+    assert "independent review" in contract
+    assert "current-head-SHA CI" in contract
+    assert "issue acceptance/`Verify:` evidence" in contract
+    assert "verified-merge controls" in contract
+    assert "closure gates" in contract
+
+    assert "reviewer remains independent" in closure_skill
+    assert "current-SHA CI remains mandatory" in closure_skill
+    assert "issue acceptance/`Verify:`" in closure_skill
+    assert "verified-merge" in closure_skill
+    assert "closure gates remain fail-closed" in closure_skill
+
+
 def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> None:
     hot_path = (REPO_ROOT / "docs/development/PR_HOT_PATH.md").read_text(
         encoding="utf-8"
