@@ -61,6 +61,20 @@ def test_default_scope_glob_from_layout(tmp_path: Path, monkeypatch) -> None:
 
 def test_import_does_not_mutate_env(monkeypatch) -> None:
     monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
-    sys.modules.pop("app.watcher.registry", None)
-    importlib.import_module("app.watcher.registry")
-    assert os.getenv("VAULT_INBOX_DIR_REL") is None
+    module_name = "app.watcher.registry"
+    watcher_package = importlib.import_module("app.watcher")
+    original_registry = sys.modules[module_name]
+
+    try:
+        sys.modules.pop(module_name, None)
+        importlib.import_module(module_name)
+        assert os.getenv("VAULT_INBOX_DIR_REL") is None
+    finally:
+        # This test deliberately reloads the module to exercise import-time
+        # environment behavior. Restore both Python's module cache and the
+        # package attribute so later tests and string-based monkeypatches keep
+        # referring to the original module identity.
+        sys.modules[module_name] = original_registry
+        setattr(watcher_package, "registry", original_registry)
+
+    assert importlib.import_module(module_name) is original_registry
