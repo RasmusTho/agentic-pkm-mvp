@@ -295,6 +295,64 @@ def _same_authority_state(
     )
 
 
+def _effect_result_subject_is_truthful(
+    effect: ReducerEffect,
+    *,
+    event_type: str,
+    subject: AuthoritySnapshot,
+) -> bool:
+    """Require effect-result authority to express the effect's live semantics."""
+
+    expected = next(
+        (
+            item
+            for item in effect.expected_authorities
+            if item.authority_id == effect.issue.authority_id
+        ),
+        None,
+    )
+    if (
+        expected is None
+        or subject.authority_type != expected.authority_type
+        or subject.authority_id != expected.authority_id
+        or subject.content_hash != expected.content_hash
+    ):
+        return False
+    if event_type == "effect_failed":
+        return _same_authority_state(subject, expected)
+    if effect.effect_class == "claim_issue":
+        expected_labels = {
+            label for label in expected.observed_labels if label != "agent:ready"
+        }
+        observed_labels = set(subject.observed_labels)
+        return (
+            subject.observed_state == expected.observed_state
+            and "agent:ready" not in observed_labels
+            and expected_labels.issubset(observed_labels)
+            and observed_labels
+            <= expected_labels.union({"agent:in-progress"})
+        )
+    if effect.effect_class == "close_issue":
+        return (
+            subject.observed_state == "closed"
+            and {
+                label
+                for label in subject.observed_labels
+                if not label.startswith("agent:")
+            }
+            == {
+                label
+                for label in expected.observed_labels
+                if not label.startswith("agent:")
+            }
+            and not any(
+                label.startswith("agent:")
+                for label in subject.observed_labels
+            )
+        )
+    return _same_authority_state(subject, expected)
+
+
 class PolicyProfile(_StrictFrozenModel):
     profile_id: NonEmptyStr
     profile_version: NonEmptyStr
@@ -1663,6 +1721,11 @@ def validate_reducer_event_evidence(
             != effect.issue.authority_id
             or event.subject_authority.content_hash
             != effect.issue.contract_hash
+            or not _effect_result_subject_is_truthful(
+                effect,
+                event_type=event.event_type,
+                subject=event.subject_authority,
+            )
             or event.subject_authority.observed_at
             < effect.provenance.created_at
             or outcome.effect_class != effect.effect_class
@@ -2019,7 +2082,13 @@ class RecoveryAuthorityReadback(_StrictFrozenModel):
     issue: IssueScope
     pull_request_number: PositiveInt | None
     exact_head_sha: GitSha | None
-    observed_state: Literal["merged", "closed", "unchanged", "unknown"]
+    observed_state: Literal[
+        "merged",
+        "closed",
+        "recorded",
+        "unchanged",
+        "unknown",
+    ]
     observed_labels: tuple[NonEmptyStr, ...]
     observed_at: UtcTimestamp
     evidence_ref: NonEmptyStr
@@ -2355,7 +2424,8 @@ class DeliveryReceipt(CanonicalDeliveryContract):
             if (
                 step.outcome != "reconciled"
                 and any(
-                    readback.observed_state in {"merged", "closed"}
+                    readback.observed_state
+                    in {"merged", "closed", "recorded"}
                     for readback in matching_readbacks
                 )
             ):
@@ -2537,6 +2607,31 @@ def validate_delivery_receipt_evidence(
         ):
             raise ValueError(
                 "recovery outcome must exactly cover the logical effect"
+            )
+        if effect.effect_class == "record_known_defect" and (
+            any(
+                readback.authority_id
+                != effect.known_defect_registry_ref
+                for readback in step.authority_readbacks
+            )
+            or (
+                step.outcome == "reconciled"
+                and any(
+                    readback.observed_state != "recorded"
+                    for readback in step.authority_readbacks
+                )
+            )
+            or (
+                step.outcome != "reconciled"
+                and any(
+                    readback.observed_state
+                    not in {"unchanged", "unknown"}
+                    for readback in step.authority_readbacks
+                )
+            )
+        ):
+            raise ValueError(
+                "known-defect recovery readback must bind exact registry authority"
             )
         used_effects.add(effect.effect_id)
     if used_effects != set(effects):

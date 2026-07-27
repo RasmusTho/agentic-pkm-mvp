@@ -417,6 +417,53 @@ def _known_defect_effect(
     )
 
 
+def _effect_result_event(
+    effect: ReducerEffect,
+    *,
+    subject: AuthoritySnapshot,
+    outcome_state: str,
+    correlation_id: str,
+) -> ReducerEvent:
+    effect_ref = ContractRef(
+        schema_version=effect.schema_version,
+        contract_id=effect.effect_id,
+        content_hash=effect.content_hash,
+    )
+    outcome = EffectOutcomeEvidence(
+        effect_class=effect.effect_class,
+        effect_idempotency_key=effect.idempotency_key,
+        outcome_state=outcome_state,
+        outcome_keys=effect.expected_outcome_keys,
+        observed_at=TS,
+        evidence_refs=(f"effect-outcome:{correlation_id}",),
+    )
+    input_hash = delivery_event_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence + 1,
+        event_type="effect_succeeded",
+        subject_authority=subject,
+        effect_ref=effect_ref,
+        result_ref=None,
+        exception=None,
+        effect_outcome=outcome,
+    )
+    return ReducerEvent(
+        event_id=delivery_event_id(input_hash),
+        input_hash=input_hash,
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=effect.sequence + 1,
+        event_type="effect_succeeded",
+        subject_authority=subject,
+        effect_ref=effect_ref,
+        result_ref=None,
+        exception=None,
+        effect_outcome=outcome,
+        provenance=_provenance(correlation_id),
+    )
+
+
 def _receipt(
     issue: IssueScope,
     initiation: DeliveryInitiation,
@@ -818,6 +865,68 @@ def test_contracts_round_trip_canonically() -> None:
             effect=effect,
         )
         is effect_event
+    )
+    claim_outcome_keys = delivery_effect_expected_outcome_keys(
+        effect_class="claim_issue",
+        run_id=effect.run_id,
+        issue=issue,
+        pull_request_number=None,
+        required_check_names=plan.policy_profile.required_check_names,
+    )
+    claim_effect_hash = delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        effect_class="claim_issue",
+        issue=issue,
+        pull_request_number=None,
+        exact_head_sha=None,
+        expected_authorities=(_authority(issue),),
+        expected_outcome_keys=claim_outcome_keys,
+    )
+    claim_effect_key = delivery_effect_idempotency_key(
+        claim_effect_hash
+    )
+    claim_effect = ReducerEffect(
+        effect_id=claim_effect_key,
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        causal_event=run_started_event,
+        sequence=1,
+        effect_class="claim_issue",
+        issue=issue,
+        pull_request_number=None,
+        exact_head_sha=None,
+        expected_authorities=(_authority(issue),),
+        expected_outcome_keys=claim_outcome_keys,
+        idempotency_key=claim_effect_key,
+        input_hash=claim_effect_hash,
+        provenance=_provenance("effect-claim"),
+    )
+    contradictory_claim_event = _effect_result_event(
+        claim_effect,
+        subject=_authority(
+            issue,
+            labels=("agent:ready", "type:task"),
+        ),
+        outcome_state="claimed",
+        correlation_id="event-claim-ready-retained",
+    )
+    with pytest.raises(ValueError, match="typed post-effect outcome"):
+        validate_reducer_event_evidence(
+            contradictory_claim_event,
+            plan=plan,
+            effect=claim_effect,
+        )
+    valid_claim_event = _effect_result_event(
+        claim_effect,
+        subject=_authority(issue),
+        outcome_state="claimed",
+        correlation_id="event-claim-ready-removed",
+    )
+    assert validate_reducer_event_evidence(
+        valid_claim_event,
+        plan=plan,
+        effect=claim_effect,
     )
     wrong_outcome_payload = effect_event.model_dump(mode="json")
     wrong_outcome_payload["effect_outcome"]["outcome_state"] = "merged"
@@ -2087,6 +2196,29 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         input_hash=close_effect_hash,
         provenance=_provenance("effect-close-failed"),
     )
+    contradictory_close_event = _effect_result_event(
+        close_effect,
+        subject=_authority(issue),
+        outcome_state="closed",
+        correlation_id="event-close-still-open",
+    )
+    with pytest.raises(ValueError, match="typed post-effect outcome"):
+        validate_reducer_event_evidence(
+            contradictory_close_event,
+            plan=plan,
+            effect=close_effect,
+        )
+    valid_close_event = _effect_result_event(
+        close_effect,
+        subject=_authority(issue, "closed"),
+        outcome_state="closed",
+        correlation_id="event-close-confirmed",
+    )
+    assert validate_reducer_event_evidence(
+        valid_close_event,
+        plan=plan,
+        effect=close_effect,
+    )
     failed_close_recovery = RecoveryStep(
         step_index=0,
         exception_kind=closure_exception.kind,
@@ -2296,6 +2428,25 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         )
         is pending_registry_receipt
     )
+    arbitrary_pending_payload = pending_registry_receipt.model_dump(
+        mode="json"
+    )
+    arbitrary_pending_payload["recovery_history"][0][
+        "authority_readbacks"
+    ][0]["authority_id"] = issue.authority_id
+    arbitrary_pending_receipt = parse_delivery_contract(
+        arbitrary_pending_payload
+    )
+    assert isinstance(arbitrary_pending_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="exact registry authority"):
+        validate_delivery_receipt_evidence(
+            arbitrary_pending_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(pending_registry_review,),
+            reducer_effects=(pending_defect_effect,),
+        )
     unrelated_pending_effect = _known_defect_effect(
         issue,
         plan,
@@ -2337,6 +2488,132 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             worker_results=(worker,),
             review_results=(pending_registry_review,),
             reducer_effects=(unrelated_pending_effect,),
+        )
+
+    recorded_review_ref = ContractRef(
+        schema_version=review.schema_version,
+        contract_id=review.result_id,
+        content_hash=review.content_hash,
+    )
+    recorded_review_event_hash = delivery_event_input_hash(
+        run_id="run-4165",
+        plan_ref=recovery_effect.plan_ref,
+        sequence=5,
+        event_type="review_result_recorded",
+        subject_authority=_authority(issue),
+        effect_ref=None,
+        result_ref=recorded_review_ref,
+        exception=None,
+    )
+    recorded_review_event = ReducerEvent(
+        event_id=delivery_event_id(recorded_review_event_hash),
+        input_hash=recorded_review_event_hash,
+        run_id="run-4165",
+        plan_ref=recovery_effect.plan_ref,
+        sequence=5,
+        event_type="review_result_recorded",
+        subject_authority=_authority(issue),
+        effect_ref=None,
+        result_ref=recorded_review_ref,
+        exception=None,
+        provenance=_provenance("event-recorded-p2-review"),
+    )
+    recorded_defect_effect = _known_defect_effect(
+        issue,
+        plan,
+        registry_ref=pending_defect_ref,
+        finding_hash=canonical_hash(review.findings[0]),
+        sequence=6,
+        causal_event=recorded_review_event,
+    )
+    recorded_defect_exception = DeliveryException(
+        kind="external_state_unknown",
+        code="known-defect-timeout-reconciled",
+        message="The exact P2 disposition was confirmed after timeout.",
+        retryable=False,
+        evidence_refs=("known-defect-registry:recorded",),
+    )
+    recorded_defect_recovery = RecoveryStep(
+        step_index=0,
+        exception_kind=recorded_defect_exception.kind,
+        exception_code=recorded_defect_exception.code,
+        exception_hash=canonical_hash(recorded_defect_exception),
+        effect_ref=ContractRef(
+            schema_version=recorded_defect_effect.schema_version,
+            contract_id=recorded_defect_effect.effect_id,
+            content_hash=recorded_defect_effect.content_hash,
+        ),
+        effect_class="record_known_defect",
+        issue=issue,
+        action="confirm_known_defect_registry",
+        authority_readbacks=(
+            RecoveryAuthorityReadback(
+                effect_idempotency_key=(
+                    recorded_defect_effect.idempotency_key
+                ),
+                authority_id=pending_defect_ref,
+                issue=issue,
+                pull_request_number=4200,
+                exact_head_sha=SHA_D,
+                observed_state="recorded",
+                observed_labels=(),
+                observed_at=TS,
+                evidence_ref="known-defect-registry:recorded",
+            ),
+        ),
+        outcome_evidence=EffectOutcomeEvidence(
+            effect_class="record_known_defect",
+            effect_idempotency_key=(
+                recorded_defect_effect.idempotency_key
+            ),
+            outcome_state="known_defect_recorded",
+            outcome_keys=recorded_defect_effect.expected_outcome_keys,
+            observed_at=TS,
+            evidence_refs=("known-defect-registry:recorded",),
+        ),
+        outcome="reconciled",
+        occurred_at=TS,
+    )
+    recorded_registry_payload = receipt.model_dump(mode="json")
+    recorded_registry_payload["exceptions"] = [
+        recorded_defect_exception.model_dump(mode="json")
+    ]
+    recorded_registry_payload["recovery_history"] = [
+        recorded_defect_recovery.model_dump(mode="json")
+    ]
+    recorded_registry_receipt = parse_delivery_contract(
+        recorded_registry_payload
+    )
+    assert isinstance(recorded_registry_receipt, DeliveryReceipt)
+    assert (
+        validate_delivery_receipt_evidence(
+            recorded_registry_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recorded_defect_effect,),
+        )
+        is recorded_registry_receipt
+    )
+    unrecorded_registry_payload = recorded_registry_receipt.model_dump(
+        mode="json"
+    )
+    unrecorded_registry_payload["recovery_history"][0][
+        "authority_readbacks"
+    ][0]["observed_state"] = "unchanged"
+    unrecorded_registry_receipt = parse_delivery_contract(
+        unrecorded_registry_payload
+    )
+    assert isinstance(unrecorded_registry_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="exact registry authority"):
+        validate_delivery_receipt_evidence(
+            unrecorded_registry_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recorded_defect_effect,),
         )
 
     payload = receipt.model_dump(mode="json")
