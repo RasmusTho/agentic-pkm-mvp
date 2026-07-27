@@ -8,6 +8,8 @@ parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-02, DDO-05]
 depends_on: [DEFINE_CARRIER_NEUTRAL_DELIVERY_CONTRACTS.md, BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md]
 can_parallelize_with: []
+recommended_capability: "Codex Sol / high"
+capability_rationale: "Authenticated external boundary plus CKM authority separation and cross-system integration."
 ---
 
 # Connect CKM Initiation and Delivery Receipts

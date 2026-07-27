@@ -8,6 +8,8 @@ parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-02]
 depends_on: [DEFINE_CARRIER_NEUTRAL_DELIVERY_CONTRACTS.md]
 can_parallelize_with: []
+recommended_capability: "Codex Terra / high"
+capability_rationale: "Pure compiler with clear inputs and property tests, but non-trivial dependency and refusal semantics."
 ---
 
 # Compile Immutable Delivery Plans

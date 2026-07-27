@@ -8,6 +8,8 @@ parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-01, DDO-02, DDO-03, DDO-04, DDO-05, DDO-06]
 depends_on: [RUN_INDEPENDENT_ISSUE_FAST_LANE.md, DEFINE_CARRIER_NEUTRAL_DELIVERY_CONTRACTS.md, COMPILE_IMMUTABLE_DELIVERY_PLANS.md, ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md, BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md, CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md]
 can_parallelize_with: []
+recommended_capability: "Codex Sol / high"
+capability_rationale: "Cross-system acceptance, fault injection, and quality/TCD non-regression judgment."
 ---
 
 # Validate TCD and Recovery

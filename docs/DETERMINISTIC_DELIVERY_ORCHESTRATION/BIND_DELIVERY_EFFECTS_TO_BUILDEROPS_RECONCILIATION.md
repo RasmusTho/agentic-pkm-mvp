@@ -8,6 +8,8 @@ parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-04]
 depends_on: [ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md]
 can_parallelize_with: []
+recommended_capability: "Codex Sol / xhigh"
+capability_rationale: "Data, concurrency, crash recovery, fencing, and external-effect reconciliation."
 ---
 
 # Bind Delivery Effects to BuilderOps Reconciliation

@@ -164,8 +164,25 @@ coordination:
 7. [Validate TCD and Recovery](VALIDATE_TCD_AND_RECOVERY.md) ([#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170)) — final pilot, failure proof,
    acceptance, and owner-doc promotion.
 
-Only tasks 1 and 2 are intended to become initially `agent:ready`. Tasks 3–7 remain
-dependency-blocked until their named predecessors deliver.
+DDO-02 becomes initially `agent:ready` after this specification is merged. DDO-01 is the other
+initial execution slice, but remains blocked until the separately owned known-defect contract in
+PR #4161 is merged; review-severity PR #4159 is already merged. Tasks 3–7 remain dependency-blocked until
+their named predecessors deliver.
+
+### Per-child TCD capability routing
+
+These are non-binding pickup hints. `issue-to-code` re-derives the route from live risk and artifact
+scope.
+
+| Task | Cheapest acceptable capability | Rationale |
+| --- | --- | --- |
+| DDO-01 | Codex Terra / high | Multi-file delivery-workflow change with bounded tests and moderate coordination-policy risk. |
+| DDO-02 | Codex Sol / high | Architecture and versioned contract seam whose mistakes would multiply across every later module. |
+| DDO-03 | Codex Terra / high | Pure compiler with clear inputs and property tests, but non-trivial dependency and refusal semantics. |
+| DDO-04 | Codex Sol / high | Explicit state machine spanning claims, workers, CI, review, merge, and closure. |
+| DDO-05 | Codex Sol / xhigh | Data, concurrency, crash recovery, fencing, and external-effect reconciliation. |
+| DDO-06 | Codex Sol / high | Authenticated external boundary plus CKM authority separation and cross-system integration. |
+| DDO-07 | Codex Sol / high | Cross-system acceptance, fault injection, and quality/TCD non-regression judgment. |
 
 ## Pilot defaults
 
@@ -238,7 +255,7 @@ bounded residual work, and triggers owner-doc promotion only when the capability
 | Role | Issue | Initial lifecycle |
 | --- | --- | --- |
 | Parent validation hub | [#4163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4163) | `agent:blocked`; never a pickup Issue |
-| DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | becomes `agent:ready` after this specification is on `main` |
+| DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | blocked until this specification and remaining prerequisite PR #4161 are merged; #4159 is delivered |
 | DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | becomes `agent:ready` after this specification is on `main` |
 | DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | blocked on #4165 |
 | DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | blocked on #4164 and #4166 |

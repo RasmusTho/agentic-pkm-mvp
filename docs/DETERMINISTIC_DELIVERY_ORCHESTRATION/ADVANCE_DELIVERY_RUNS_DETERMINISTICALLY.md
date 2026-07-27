@@ -8,6 +8,8 @@ parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-01, DDO-03]
 depends_on: [RUN_INDEPENDENT_ISSUE_FAST_LANE.md, COMPILE_IMMUTABLE_DELIVERY_PLANS.md]
 can_parallelize_with: []
+recommended_capability: "Codex Sol / high"
+capability_rationale: "Explicit state machine spanning claims, workers, CI, review, merge, and closure."
 ---
 
 # Advance Delivery Runs Deterministically

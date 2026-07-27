@@ -5,9 +5,11 @@ task_id: DDO-01
 github_issue: 4164
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Immediate value
 parent_capability: Deterministic Delivery Orchestration
-prerequisites: []
+prerequisites: ["PR #4161"]
 depends_on: []
 can_parallelize_with: [Define Carrier-Neutral Delivery Contracts]
+recommended_capability: "Codex Terra / high"
+capability_rationale: "Multi-file delivery-workflow change with bounded tests and moderate coordination-policy risk."
 ---
 
 # Run Independent Issues Through a Fast Lane
@@ -83,5 +85,7 @@ coordinator. This slice removes that tax without waiting for new durability or C
 
 ## Related GitHub Issues
 
-Live task: [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164). It is one of two
-initial ready slices and may run in parallel with DDO-02 (#4165).
+Live task: [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164). It is an initial
+execution slice but remains blocked until the specification plus remaining prerequisite PR #4161
+are merged. Review-severity PR #4159 is already delivered.
+It may then run in parallel with DDO-02 (#4165) if that task is still active.

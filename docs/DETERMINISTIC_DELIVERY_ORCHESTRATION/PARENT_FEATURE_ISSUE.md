@@ -97,7 +97,7 @@ reconciliation, and receipts.
 
 | Task | Issue | Initial lifecycle | Dependency |
 | --- | --- | --- | --- |
-| DDO-01 — independent-Issue fast lane | #4164 | ready after specification merge | none |
+| DDO-01 — independent-Issue fast lane | #4164 | blocked until specification and #4161 merge; #4159 delivered | #4161 |
 | DDO-02 — carrier-neutral delivery contracts | #4165 | ready after specification merge | none |
 | DDO-03 — immutable plan compiler | #4166 | blocked | #4165 |
 | DDO-04 — deterministic reducer | #4167 | blocked | #4164 and #4166 |

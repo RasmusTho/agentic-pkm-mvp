@@ -8,6 +8,8 @@ parent_capability: Deterministic Delivery Orchestration
 prerequisites: []
 depends_on: []
 can_parallelize_with: [Run Independent Issues Through a Fast Lane]
+recommended_capability: "Codex Sol / high"
+capability_rationale: "Architecture and versioned contract seam whose mistakes would multiply across every later module."
 ---
 
 # Define Carrier-Neutral Delivery Contracts
