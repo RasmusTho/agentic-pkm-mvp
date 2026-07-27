@@ -22,9 +22,6 @@
     "boundary_risk": "low"
   },
   "owner_doc_resolution": "none",
-  "validation": [
-    "python3 scripts/docs_guard.py"
-  ],
   "builderops_records": "none",
   "builderops_reason": "Bounded direct repair; no BuilderOps material routed.",
   "direct_repair_type": "governance",

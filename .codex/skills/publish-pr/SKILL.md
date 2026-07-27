@@ -265,13 +265,12 @@ Fixes #<ISSUE_NUMBER>
 ## Summary
 <1-2 sentence summary of the bounded change>
 
-## Validation
-<What validation actually ran>
-
 ## BuilderOps Routing
 - Records/projections/receipts: <ids or "none">
 - Reason: <why no BuilderOps material was created, or what was routed>
 
+## Notes
+Validation: <What validation actually ran>
 ---
 EOF
 )"
@@ -290,13 +289,12 @@ gh pr create \
 ## Changes
 <What surfaces were updated>
 
-## Validation
-<Docs validation that ran>
-
 ## BuilderOps Routing
 - Records/projections/receipts: <ids or "none">
 - Reason: <why no BuilderOps material was created, or what was routed>
 
+## Notes
+Validation: <Docs validation that ran>
 ---
 EOF
 )"
@@ -315,13 +313,12 @@ gh pr create \
 ## Changes
 <What surfaces were updated>
 
-## Validation
-<Governance validation that ran>
-
 ## BuilderOps Routing
 - Records/projections/receipts: <ids or "none">
 - Reason: <why no BuilderOps material was created, or what was routed>
 
+## Notes
+Validation: <Governance validation that ran>
 ---
 EOF
 )"

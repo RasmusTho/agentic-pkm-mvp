@@ -21,10 +21,6 @@ TEMPLATE_SECTION_HEADINGS = (
     "SBS Impact",
     "Owner-Doc Writeback",
     "Summary",
-    "Implementation Scope Check",
-    "Docs Authoring Check",
-    "Governance Lane Check",
-    "Validation",
     "BuilderOps Routing",
     "Notes",
 )
@@ -59,7 +55,6 @@ class PRBodyInputs:
     summary: tuple[str, ...]
     sbs_impact: Mapping[str, str]
     owner_doc_resolution: str
-    validation: tuple[str, ...]
     final_review_rounds: int = 1
     issue_number: int | None = None
     builderops_records: str | None = None
@@ -84,10 +79,6 @@ def generate_pr_body(inputs: PRBodyInputs) -> str:
         _sbs_impact_section(inputs.sbs_impact),
         _owner_doc_section(inputs),
         _summary_section(inputs.summary),
-        _implementation_scope_section(inputs),
-        _docs_authoring_section(inputs.lane),
-        _governance_lane_section(inputs.lane),
-        _validation_section(inputs),
         _builderops_section(inputs),
         f"## Notes\n{inputs.notes.strip()}",
     ])
@@ -100,11 +91,8 @@ def generate_pr_body_from_mapping(data: Mapping[str, Any]) -> str:
 
 def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
     summary = data.get("summary", ())
-    validation = data.get("validation", ())
     if isinstance(summary, str):
         summary = [summary]
-    if isinstance(validation, str):
-        validation = [validation]
     issue_number = data.get("issue_number")
     if issue_number is not None:
         issue_number = int(issue_number)
@@ -115,7 +103,6 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
         sbs_impact=_string_mapping(data.get("sbs_impact", {}), "sbs_impact"),
         owner_doc_resolution=str(data.get("owner_doc_resolution", "")),
         owner_doc_followup_issue=_optional_text(data.get("owner_doc_followup_issue")),
-        validation=tuple(str(item) for item in validation),
         final_review_rounds=int(data.get("final_review_rounds", 1)),
         builderops_records=_optional_text(data.get("builderops_records")),
         builderops_reason=_optional_text(data.get("builderops_reason")),
@@ -144,8 +131,6 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
         _require_text(inputs.direct_repair_validation, "direct_repair_validation")
     if not inputs.summary or any(not item.strip() for item in inputs.summary):
         raise PRBodyGeneratorError("summary must contain at least one non-empty item")
-    if not inputs.validation or any(not item.strip() for item in inputs.validation):
-        raise PRBodyGeneratorError("validation must contain at least one non-empty item")
     if inputs.owner_doc_resolution not in OWNER_DOC_RESOLUTIONS:
         raise PRBodyGeneratorError(
             "owner_doc_resolution must be one of: none, updated, follow-up"
@@ -166,7 +151,6 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
 def _change_lane_section(lane: str, final_review_rounds: int) -> str:
     return "\n".join([
         "## Change Lane",
-        f"- [{'x' if lane == 'implementation' else ' '}] Implementation lane",
         f"- [{'x' if lane == 'docs-authoring' else ' '}] Docs authoring lane",
         f"- [{'x' if lane == 'governance' else ' '}] Governance lane",
         "",
@@ -208,50 +192,6 @@ def _owner_doc_section(inputs: PRBodyInputs) -> str:
 
 def _summary_section(summary: Sequence[str]) -> str:
     return "\n".join(["## Summary", *[f"- {item.strip()}" for item in summary]])
-
-
-def _implementation_scope_section(inputs: PRBodyInputs) -> str:
-    checked = inputs.issue_number is not None
-    return "\n".join([
-        "## Implementation Scope Check",
-        f"- [{'x' if checked else ' '}] Change stays within the linked Issue scope.",
-        f"- [{'x' if checked else ' '}] Constraints from the linked Issue were followed.",
-        f"- [{'x' if checked else ' '}] Acceptance Criteria from the linked Issue are satisfied.",
-        f"- [{'x' if checked else ' '}] Docs were updated in the same change when behavior/contracts changed.",
-        f"- [{'x' if checked else ' '}] Owner docs and roadmap/plan wording were updated when this PR turns a tracked backlog item into shipped reality.",
-    ])
-
-
-def _docs_authoring_section(lane: str) -> str:
-    checked = lane == "docs-authoring"
-    return "\n".join([
-        "## Docs Authoring Check",
-        f"- [{'x' if checked else ' '}] This PR only changes approved docs-authoring surfaces.",
-        f"- [{'x' if checked else ' '}] No code, runtime behavior, contracts, or shipped reality changed.",
-        f"- [{'x' if checked else ' '}] This PR prepares or clarifies authoritative docs/specification and may later feed `docs-to-issue` extraction.",
-    ])
-
-
-def _governance_lane_section(lane: str) -> str:
-    checked = lane == "governance"
-    return "\n".join([
-        "## Governance Lane Check",
-        f"- [{'x' if checked else ' '}] This PR only changes approved governance surfaces.",
-        f"- [{'x' if checked else ' '}] The change is limited to repo governance, agent workflow, or lightweight enforcement.",
-        f"- [{'x' if checked else ' '}] No product/runtime implementation or shipped feature behavior changed.",
-    ])
-
-
-def _validation_section(inputs: PRBodyInputs) -> str:
-    lane_labels = {
-        "implementation": "Implementation lane",
-        "docs-authoring": "Docs authoring lane",
-        "governance": "Governance lane",
-        "direct-repair": "Direct repair",
-    }
-    lines = ["## Validation", f"{lane_labels[inputs.lane]}:"]
-    lines.extend(f"- [x] {item.strip()}" for item in inputs.validation)
-    return "\n".join(lines)
 
 
 def _builderops_section(inputs: PRBodyInputs) -> str:
@@ -319,7 +259,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sbs", action="append", default=[], help="SBS field as key=value.")
     parser.add_argument("--owner-doc-resolution", choices=sorted(OWNER_DOC_RESOLUTIONS))
     parser.add_argument("--owner-doc-followup-issue")
-    parser.add_argument("--validation", action="append", default=[])
     parser.add_argument("--final-review-rounds", type=int, choices=(1, 2), default=1)
     parser.add_argument("--builderops-records")
     parser.add_argument("--builderops-reason")
@@ -345,7 +284,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sbs_impact=_parse_sbs(args.sbs),
                 owner_doc_resolution=args.owner_doc_resolution or "",
                 owner_doc_followup_issue=args.owner_doc_followup_issue,
-                validation=tuple(args.validation),
                 final_review_rounds=args.final_review_rounds,
                 builderops_records=args.builderops_records,
                 builderops_reason=args.builderops_reason,
