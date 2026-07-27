@@ -12,7 +12,7 @@ from app.standing_questions.projection import (
     iter_question_notes,
     rebuild_standing_questions_projection,
 )
-from app.standing_questions.question_store import QuestionStore
+from app.standing_questions.question_store import QuestionStore, parse_rfc3339_datetime
 from app.write_guard import WriteGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -71,6 +71,10 @@ def test_iter_question_notes_ignores_non_question_markdown(tmp_path: Path) -> No
     assert [source for source, _ in notes] == [f"questions/{note['question_id']}.md"]
 
 
+#: Marks a source string the write/parse seam refuses, so the projection never sees it.
+SEAM_REJECTS = "<rejected-by-the-write-seam>"
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
@@ -85,12 +89,27 @@ def test_iter_question_notes_ignores_non_question_markdown(tmp_path: Path) -> No
         ("2016-12-31T23:59:60Z", "2016-12-31 23:59:60+00"),
         ("1990-12-31T15:59:60-08:00", "1990-12-31 23:59:60+00"),
         ("2017-01-01T00:59:60+01:00", "2016-12-31 23:59:60+00"),
+        ("1972-06-30T23:59:60Z", "1972-06-30 23:59:60+00"),
+        # Unannounced ":60" values never reach the projection: the seam rejects them,
+        # so the adapter must fail loud rather than invent a PostgreSQL instant.
+        ("1973-06-30T23:59:60Z", SEAM_REJECTS),
+        ("1999-06-30T23:59:60Z", SEAM_REJECTS),
+        ("2026-06-30T23:59:60Z", SEAM_REJECTS),
+        ("2000-01-01T00:59:60+01:00", SEAM_REJECTS),
     ],
 )
 def test_postgres_timestamp_adapter_preserves_rfc3339_instant(
     source: str | None,
     expected: str | None,
 ) -> None:
+    if expected == SEAM_REJECTS:
+        assert parse_rfc3339_datetime(source) is None
+        with pytest.raises(ValueError, match="invalid RFC 3339 timestamp"):
+            _postgres_timestamptz_value(source)
+        return
+    if source is not None:
+        # Every value the seam still accepts must project without a late failure.
+        assert parse_rfc3339_datetime(source) is not None
     assert _postgres_timestamptz_value(source) == expected
 
 

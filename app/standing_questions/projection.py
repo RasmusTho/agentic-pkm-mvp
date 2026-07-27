@@ -91,6 +91,12 @@ def _postgres_timestamptz_value(value: str | None) -> str | None:
     rejects valid RFC 3339 offsets at and above 16 hours and does not accept year
     ``0000`` directly, so the query-only projection receives an equivalent UTC
     instant, with astronomical year zero rendered as PostgreSQL ``0001 BC``.
+
+    Leap seconds reach this adapter only on the announced UTC dates admitted by
+    ``question_store.ANNOUNCED_LEAP_SECOND_UTC_DATES``: the same
+    :func:`parse_rfc3339_datetime` boundary decides write validation and projection,
+    so the two seams cannot drift apart. Anything the write seam rejects raises here
+    rather than being coerced into a PostgreSQL instant.
     """
     if value is None:
         return None

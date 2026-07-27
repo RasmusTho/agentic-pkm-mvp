@@ -208,7 +208,24 @@ def test_datetime_schema_type_and_nullable_field_semantics() -> None:
     "field_name",
     ["created_at", "evidence.matched_at", "last_matched_at", "last_refreshed_at"],
 )
-def test_all_schema_datetime_fields_use_the_same_rfc3339_boundary(field_name: str) -> None:
+@pytest.mark.parametrize(
+    "invalid_value",
+    [
+        # ":60" outside the UTC leap-second minute is never a leap second.
+        "2016-12-31T23:58:60Z",
+        # Month-end 23:59:60 UTC, but no leap second was ever announced there.
+        "1973-06-30T23:59:60Z",
+        "1999-06-30T23:59:60Z",
+        "2026-06-30T23:59:60Z",
+        "2026-12-31T23:59:60Z",
+        # Offset-adjusted to an unannounced month-end UTC leap-second position.
+        "1999-06-30T15:59:60-08:00",
+        "not-a-timestamp",
+    ],
+)
+def test_all_schema_datetime_fields_use_the_same_rfc3339_boundary(
+    field_name: str, invalid_value: str
+) -> None:
     valid_note = _minimal_valid_note()
     invalid_note = _minimal_valid_note()
     if field_name == "evidence.matched_at":
@@ -220,14 +237,69 @@ def test_all_schema_datetime_fields_use_the_same_rfc3339_boundary(field_name: st
             "quoted_span": "evidence",
         }
         valid_note["evidence"] = [{**evidence, "matched_at": "2016-12-31T23:59:60Z"}]
-        invalid_note["evidence"] = [{**evidence, "matched_at": "2016-12-31T23:58:60Z"}]
+        invalid_note["evidence"] = [{**evidence, "matched_at": invalid_value}]
     else:
         valid_note[field_name] = "2016-12-31T23:59:60Z"
-        invalid_note[field_name] = "2016-12-31T23:58:60Z"
+        invalid_note[field_name] = invalid_value
 
     assert validate_question_note(valid_note)
     with pytest.raises(jsonschema.ValidationError):
         validate_question_note(invalid_note)
+
+
+# --- Announced-leap-second policy (#4204) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "created_at",
+    [
+        # First and last announced leap seconds, at UTC and via a legal offset.
+        "1972-06-30T23:59:60Z",
+        "1972-12-31T23:59:60Z",
+        "2016-12-31T23:59:60Z",
+        "2016-12-31t23:59:60.123z",
+        "1990-12-31T15:59:60-08:00",
+        "2017-01-01T00:59:60+01:00",
+        "2015-06-30T23:59:60Z",
+        "2012-07-01T07:59:60+08:00",
+    ],
+)
+def test_leap_second_policy_accepts_announced_leap_seconds(created_at: str) -> None:
+    assert validate_question_note(_minimal_valid_note(created_at=created_at))["created_at"] == created_at
+
+
+@pytest.mark.parametrize(
+    "created_at",
+    [
+        # Month-end 23:59 UTC positions where no leap second was ever announced.
+        "1971-12-31T23:59:60Z",
+        "1973-06-30T23:59:60Z",
+        "1999-06-30T23:59:60Z",
+        "2016-06-30T23:59:60Z",
+        "2020-12-31T23:59:60Z",
+        "2026-06-30T23:59:60Z",
+        "2026-12-31T23:59:60Z",
+        # Offset-adjusted onto an unannounced month-end UTC leap-second position.
+        "1999-06-30T15:59:60-08:00",
+        "2000-01-01T00:59:60+01:00",
+    ],
+)
+def test_leap_second_policy_rejects_unannounced_leap_seconds(created_at: str) -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate_question_note(_minimal_valid_note(created_at=created_at))
+
+
+def test_leap_second_policy_table_is_dated_and_month_end_only() -> None:
+    """The announced-leap-second table is repo-local, dated, and manually maintained."""
+    table = question_store_module.ANNOUNCED_LEAP_SECOND_UTC_DATES
+    assert isinstance(table, frozenset)
+    # IERS has announced 27 leap seconds, from 1972-06-30 through 2016-12-31.
+    assert len(table) == 27
+    assert min(table) == (1972, 6, 30)
+    assert max(table) == (2016, 12, 31)
+    assert all((month, day) in {(6, 30), (12, 31)} for _year, month, day in table)
+    # A dated review marker keeps the maintenance obligation visible in code.
+    assert question_store_module.ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED == "2026-07-28"
 
 
 def test_datetime_validation_does_not_depend_on_optional_global_checker(

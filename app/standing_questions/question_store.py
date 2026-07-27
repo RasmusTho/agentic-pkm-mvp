@@ -39,6 +39,49 @@ _RFC3339_DATETIME_RE = re.compile(
     r"(?P<offset_hour>[01][0-9]|2[0-3]):(?P<offset_minute>[0-5][0-9]))$",
     re.ASCII,
 )
+#: UTC dates (year, month, day) on which a leap second was actually announced and
+#: inserted at ``23:59:60Z``, per the IERS Bulletin C leap-second announcements.
+#:
+#: MAINTENANCE: this table is repo-local and hand-maintained on purpose — validation
+#: must never perform a network lookup, and a durable-write seam must not depend on an
+#: external service being reachable. When IERS announces a new leap second, add its UTC
+#: date here and bump ``ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED``. Until then, a ``:60``
+#: second at any other instant is rejected, not stored. See
+#: ``docs/STANDING_QUESTIONS/STORE_QUESTION_NOTES_AND_PROJECTION.md :: What This Task Does``.
+ANNOUNCED_LEAP_SECOND_UTC_DATES: frozenset[tuple[int, int, int]] = frozenset(
+    {
+        (1972, 6, 30),
+        (1972, 12, 31),
+        (1973, 12, 31),
+        (1974, 12, 31),
+        (1975, 12, 31),
+        (1976, 12, 31),
+        (1977, 12, 31),
+        (1978, 12, 31),
+        (1979, 12, 31),
+        (1981, 6, 30),
+        (1982, 6, 30),
+        (1983, 6, 30),
+        (1985, 6, 30),
+        (1987, 12, 31),
+        (1989, 12, 31),
+        (1990, 12, 31),
+        (1992, 6, 30),
+        (1993, 6, 30),
+        (1994, 6, 30),
+        (1995, 12, 31),
+        (1997, 6, 30),
+        (1998, 12, 31),
+        (2005, 12, 31),
+        (2008, 12, 31),
+        (2012, 6, 30),
+        (2015, 6, 30),
+        (2016, 12, 31),
+    }
+)
+#: Date this repo-local table was last reconciled against the IERS announcements.
+#: No leap second has been announced since 2016-12-31.
+ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED = "2026-07-28"
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "question-note.schema.json"
 _LOGGER = logging.getLogger(__name__)
 _QUESTION_NOTE_FORMAT_CHECKER = FormatChecker()
@@ -105,12 +148,17 @@ def _shift_gregorian_date(
     return year + 1, 1, 1
 
 
-def _is_rfc3339_leap_second(timestamp: Rfc3339DateTime) -> bool:
-    """Check whether a local ``:60`` maps to an RFC 3339 UTC leap-second point."""
-    _utc_year, utc_month, utc_day, utc_hour, utc_minute = timestamp.utc_date_and_minute()
+def _is_announced_leap_second(timestamp: Rfc3339DateTime) -> bool:
+    """Check whether a local ``:60`` maps to an announced UTC leap second.
+
+    RFC 3339 permits ``:60`` only where a leap second was actually announced, so a
+    legal *position* (a June/December month-end ``23:59`` UTC) is not sufficient.
+    Acceptance is decided against :data:`ANNOUNCED_LEAP_SECOND_UTC_DATES`.
+    """
+    utc_year, utc_month, utc_day, utc_hour, utc_minute = timestamp.utc_date_and_minute()
     return (
-        (utc_month, utc_day) in {(6, 30), (12, 31)}
-        and (utc_hour, utc_minute) == (23, 59)
+        (utc_hour, utc_minute) == (23, 59)
+        and (utc_year, utc_month, utc_day) in ANNOUNCED_LEAP_SECOND_UTC_DATES
     )
 
 
@@ -143,9 +191,9 @@ def parse_rfc3339_datetime(value: str) -> Rfc3339DateTime | None:
         fraction=match.group("fraction") or "",
         offset_minutes=offset_minutes,
     )
-    # A format checker validates legal leap-second positions. Whether a producer
-    # may emit a particular announced leap second is a separate clock policy.
-    if timestamp.second == 60 and not _is_rfc3339_leap_second(timestamp):
+    # RFC 3339 admits ":60" only where a leap second was announced, so a legal
+    # position is not enough; the value is checked against the announced table.
+    if timestamp.second == 60 and not _is_announced_leap_second(timestamp):
         return None
     return timestamp
 
@@ -296,6 +344,8 @@ class QuestionStore:
 
 
 __all__ = [
+    "ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED",
+    "ANNOUNCED_LEAP_SECOND_UTC_DATES",
     "HumanOwnedFieldMutationError",
     "QUESTION_DIRECTORY",
     "QuestionStore",
