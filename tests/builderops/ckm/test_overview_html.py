@@ -7,7 +7,6 @@ import shutil
 import sqlite3
 import subprocess
 from dataclasses import replace
-from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -1979,8 +1978,74 @@ def _proposal_section(rendered: str) -> str:
     return rendered.split('<section class="cockpit-proposals"', 1)[1].split("</section>", 1)[0]
 
 
+class _VisibleHtmlTextParser(HTMLParser):
+    """Collect authored text while ignoring non-visible style and script bodies."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._ignored_elements: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized in {"style", "script"}:
+            self._ignored_elements.append(normalized)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        if self._ignored_elements and normalized == self._ignored_elements[-1]:
+            self._ignored_elements.pop()
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_elements:
+            self.parts.append(data)
+
+    def close(self) -> None:
+        super().close()
+        assert not self._ignored_elements, (
+            "malformed style/script close would make the authored-text scan incomplete"
+        )
+
+
 def _visible_html_text(markup: str) -> str:
-    return unescape(re.sub(r"<[^>]+>", "", markup))
+    parser = _VisibleHtmlTextParser()
+    parser.feed(markup)
+    parser.close()
+    return "".join(parser.parts)
+
+
+def test_visible_html_text_ignores_non_visible_bodies_without_double_decoding() -> None:
+    assert (
+        _visible_html_text(
+            "<p>before</p><style>hidden-style</style   >"
+            "<script>hidden-script</script\t\n><p>after</p>"
+            "<p>&amp;lt;script&amp;gt;visible&amp;lt;/script&amp;gt;</p>"
+            "<p>&amp;lt;style&amp;gt;visible&amp;lt;/style&amp;gt;</p>"
+        )
+        == (
+            "beforeafter"
+            "&lt;script&gt;visible&lt;/script&gt;"
+            "&lt;style&gt;visible&lt;/style&gt;"
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        "<p>before</p><script>hidden</script arbitrary=\"x\"><p>after</p>",
+        "<p>before</p><style>hidden",
+    ],
+)
+def test_visible_html_text_fails_closed_on_malformed_ignored_element(
+    markup: str,
+) -> None:
+    with pytest.raises(
+        AssertionError,
+        match="malformed style/script close would make the authored-text scan incomplete",
+    ):
+        _visible_html_text(markup)
 
 
 def _finding_with(
@@ -2634,15 +2699,9 @@ def test_cockpit_answers_fixed_owner_questions_without_authority(
         assert safety.script_count == 1
         assert safety.script_sources == [] and safety.inline_handlers == []
         source_values_removed = re.sub(
-            r"<(?:style|script)\b[^>]*>.*?</(?:style|script)\s*>",
-            "",
-            rendered,
-            flags=re.S | re.I,
-        )
-        source_values_removed = re.sub(
             r'<span class="proposal-source-value">.*?</span>',
             "",
-            source_values_removed,
+            rendered,
             flags=re.S,
         )
         source_values_removed = re.sub(
