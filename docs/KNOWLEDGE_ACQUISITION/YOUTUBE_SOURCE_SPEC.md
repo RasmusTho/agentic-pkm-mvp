@@ -1,4 +1,4 @@
-State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, rendered summary confidence, and complete normalized-transcript summary input. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. Liked Videos, multi-playlist product sync, scheduling, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
+State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, rendered summary confidence, complete normalized-transcript summary input, and authority-banded review-required proposal rendering. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. Liked Videos, multi-playlist product sync, scheduling, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
@@ -80,18 +80,21 @@ discovery remains deferred even where the underlying fetch path can acquire an e
 ## Writeback
 
 The candidate stage writes a `youtube_source_note` companion artifact based on the shipped
-template (`docs/examples/vault-templates/youtube-source-note.md`): metadata + provenance
-frontmatter, `transcript_available`, AI summary section marked non-authoritative, extraction
-results as suggestion content.
+template (`docs/examples/vault-templates/youtube-source-note.md`). Metadata, provenance, and
+`transcript_available` remain in frontmatter. The body has exactly three authority bands:
+owner-authored takeaways/open threads, one `Proposals (non-authoritative)` wrapper for registered
+extraction output, and deterministic evidence/lineage. The delivered `summary@2` output is the
+only current proposal module; blank optional modules are omitted. Generated content never enters
+the owner band, and first-write-wins replay leaves every byte of an existing note unchanged.
 
-The slice **extends** the template frontmatter with the initial non-authoritative posture markers
-triage policy §3 mandates for AI-generated content: `authority.requires_review: true` plus
-`review_state: draft`. The shipped template carries no `review_state` field today and defaults
-`requires_review` to `false`, so this is a template change delivered with the slice — not an
-already-existing field. Vocabulary: resolved by the #2793 owner decision (2026-07-02) — the triage
-policy's former `unreviewed`/`queued` tokens map to the canonical `draft`/`provisional` values
-owned by `STATE_AXES_CONTRACT.md`. Human takeaways and any promotion remain human acts per triage
-policy §4.3.
+Every runtime candidate carrying generated content receives the initial non-authoritative posture
+markers mandated by triage policy §3: `authority.requires_review: true` plus
+`review_state: draft`. The checked-in template documents that posture and its authority bands; the
+runtime writer, rather than a template default, owns the generated candidate values. Vocabulary was
+resolved by the #2793 owner decision (2026-07-02): the triage policy's former
+`unreviewed`/`queued` tokens map to the canonical `draft`/`provisional` values owned by
+`STATE_AXES_CONTRACT.md`. Human takeaways and any promotion remain human acts per triage policy
+§4.3.
 
 Raw and normalized artifacts are machine-side records, not vault notes; the note references them
 via provenance. **Raw retention:** `raw` records are retained as rebuildable machine-side records
@@ -109,14 +112,20 @@ The shipped candidate writeback now corrects the three confirmed V1 truth defect
 - summary input contains every normalized segment, and the rendered note reports the complete
   segment count rather than hiding a partial window.
 
-Process-local extraction results, fixed rendering, and title-bearing candidate paths are V1
-limitations or deliberate choices, not retroactive defects. They may change only through the
-bounded YouTube Source Note v2 child contracts. Those contracts preserve immutable raw evidence,
-first-write-wins candidate notes, and the rule that a candidate is terminal only after its note has
-materialized. Re-extraction or upgrade must create a versioned proposal companion rather than
-overwrite the original candidate or human-authored content. This bounded correction does not ship
-the later v2 modules, change title-bearing paths or persistence, alter D1–D6, or introduce
-ProfileAgent behavior.
+The delivered YSNV2-03 renderer replaces the fixed About/Summary/Takeaways body with the three
+authority bands above. It fails closed when visible generated Markdown claims the owner's belief,
+decision, takeaway, or approval; impersonates a reserved band; contains a Unicode bidi control; or
+uses an active Obsidian embed that could materialize unvalidated content. This is a finite
+authority lint, not a semantic claims-quality classifier.
+
+Process-local extraction results, the single delivered `summary@2` module, and title-bearing
+candidate paths remain V1 limitations or deliberate choices, not retroactive defects. They may
+change only through the bounded YouTube Source Note v2 child contracts. Those contracts preserve
+immutable raw evidence, first-write-wins candidate notes, and the rule that a candidate is terminal
+only after its note has materialized. Re-extraction or upgrade must create a versioned proposal
+companion rather than overwrite the original candidate or human-authored content. These bounded
+deliveries do not ship the later v2 modules, change title-bearing paths or persistence, alter
+D1–D6, or introduce ProfileAgent behavior.
 
 ## Phase 2 vertical slice (TCD milestone)
 

@@ -28,36 +28,37 @@ created: "{{date}}"
 updated: "{{date}}"
 ---
 
-## About
+## Owner notes
 
-{{One-sentence description: what the video is and why it was saved.}}
+### Takeaways
 
-## AI summary
-
-<!-- [AI-suggested summary — non-authoritative. Do not promote into knowledge without review.] -->
-
-> _AI summary goes here if generated. This is not human knowledge._
-
-## Human takeaways
-
-<!-- Add your own notes here as you watch. These are the first human-authored content in this note. -->
+<!-- Add owner-authored takeaways here. -->
 
 - {{What you understood, think, or want to remember.}}
 
-## Candidate evergreen ideas
+### Open threads
 
-<!-- Ideas that might become evergreen notes after further review. These are drafts, not knowledge. -->
+<!-- Add owner-authored open threads here. -->
 
-- [ ] {{Candidate claim or concept — to be written up as an evergreen note after review}}
+- {{Question or unresolved thread to revisit.}}
 
-## Related
+## Proposals (non-authoritative)
 
-- [[{{Literature note derived from this video}}]]
-- [[{{Evergreen note promoted from this source}}]]
-- [[{{Project or area link}}]]
+<!-- Generated module sections appear only below this wrapper and remain review material. -->
+
+> _No proposal modules were produced._
+
+## Evidence and lineage
+
+- **Title:** {{video title}}
+- **Source URL:** {{https://youtube.com/watch?v=...}}
+- **Content identity:** {{sha256:...}}
+- **Acquisition method:** {{captions_manual | captions_auto | asr}}
+- **Transcript:** {{available; N normalized segments | unavailable}}
+- **Coverage:** {{N/N normalized segments (100%; complete transcript) | 0 normalized segments; no transcript evidence}}
 
 ---
 
-_The YouTube video URL is the authoritative source. The AI summary above is non-authoritative.
-Promotion into durable knowledge (evergreen or synthesis notes) requires human review and creates
-a distinct artifact; this source note is retained as provenance._
+_The source URL remains authoritative. Generated proposals are non-authoritative review
+material. Promotion into durable knowledge requires human review and creates a distinct
+artifact; this source note remains provenance._
