@@ -2,6 +2,7 @@
 name: Connect CKM Initiation and Delivery Receipts
 description: Let CKM draft and display delivery initiation and receipts through a separate governed boundary.
 task_id: DDO-06
+github_issue: 4169
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: CKM bridge
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-02, DDO-05]
@@ -78,4 +79,6 @@ authorization, execution, and evidence remain separate.
 
 ## Related GitHub Issues
 
-Create one Builder System/CKM boundary task blocked on DDO-02 and DDO-05.
+Live task: [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169), blocked on DDO-02
+[#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) and DDO-05
+[#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168).

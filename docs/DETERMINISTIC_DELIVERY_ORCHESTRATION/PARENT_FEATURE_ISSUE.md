@@ -1,4 +1,4 @@
-State: Pre-filing parent feature Issue draft.
+State: Filed as GitHub parent Issue #4163.
 Doc role: Parent validation-hub contract
 Authority: The capability README owns stable decomposition. The live GitHub parent owns backlog and validation state after filing.
 
@@ -95,8 +95,18 @@ reconciliation, and receipts.
 
 ## Implementation Tasks
 
-The live Issue links will be added immediately after filing. Stable task order is DDO-01 through
-DDO-07 as defined in the capability README.
+| Task | Issue | Initial lifecycle | Dependency |
+| --- | --- | --- | --- |
+| DDO-01 — independent-Issue fast lane | #4164 | ready after specification merge | none |
+| DDO-02 — carrier-neutral delivery contracts | #4165 | ready after specification merge | none |
+| DDO-03 — immutable plan compiler | #4166 | blocked | #4165 |
+| DDO-04 — deterministic reducer | #4167 | blocked | #4164 and #4166 |
+| DDO-05 — BuilderOps reconciliation binding | #4168 | blocked | #4167; reconcile timing with #3793 |
+| DDO-06 — CKM initiation/receipt bridge | #4169 | blocked | #4165 and #4168 |
+| DDO-07 — TCD/recovery acceptance | #4170 | blocked | #4164 through #4169 |
+
+Live lifecycle and receipt state is maintained on parent
+[#4163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4163).
 
 ## Verification Path
 

@@ -2,6 +2,7 @@
 name: Run Independent Issues Through a Fast Lane
 description: Deliver immediate coordination savings for explicit independent issue sets using existing primitives.
 task_id: DDO-01
+github_issue: 4164
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Immediate value
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: []
@@ -82,5 +83,5 @@ coordinator. This slice removes that tax without waiting for new durability or C
 
 ## Related GitHub Issues
 
-Create one high-priority Builder System task. It is one of two initial ready slices and may run in
-parallel with DDO-02.
+Live task: [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164). It is one of two
+initial ready slices and may run in parallel with DDO-02 (#4165).

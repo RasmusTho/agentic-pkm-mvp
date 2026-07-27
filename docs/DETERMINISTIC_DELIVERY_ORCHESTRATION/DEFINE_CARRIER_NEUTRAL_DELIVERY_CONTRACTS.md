@@ -2,6 +2,7 @@
 name: Define Carrier-Neutral Delivery Contracts
 description: Define immutable initiation, plan, reducer, and receipt contracts without choosing a durable intent carrier prematurely.
 task_id: DDO-02
+github_issue: 4165
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Full capability
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: []
@@ -81,4 +82,5 @@ make the fast lane wait for the full control surface.
 
 ## Related GitHub Issues
 
-Create one high-priority Builder System contract task. It is one of two initial ready slices.
+Live task: [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165). It is one of two
+initial ready slices and may run in parallel with DDO-01 (#4164).

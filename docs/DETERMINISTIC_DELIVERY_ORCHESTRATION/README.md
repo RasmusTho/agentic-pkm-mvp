@@ -1,4 +1,4 @@
-State: Authored target-state specification. GitHub issue set not yet filed.
+State: Filed target-state specification. Parent #4163 owns live validation state; child Issues #4164–#4170 own executable task state.
 Doc role: Builder System capability specification
 Authority: Owns the bounded target, decomposition, cross-task invariants, verification path, and acceptance path for deterministic issue-set delivery. GitHub Issues own executable task state after filing.
 Owner: Builder System governance
@@ -150,18 +150,18 @@ coordination:
 
 ## Implementation tasks and execution order
 
-1. [Run Independent Issues Through a Fast Lane](RUN_INDEPENDENT_ISSUE_FAST_LANE.md) — immediate
+1. [Run Independent Issues Through a Fast Lane](RUN_INDEPENDENT_ISSUE_FAST_LANE.md) ([#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164)) — immediate
    value using existing primitives.
-2. [Define Carrier-Neutral Delivery Contracts](DEFINE_CARRIER_NEUTRAL_DELIVERY_CONTRACTS.md) —
+2. [Define Carrier-Neutral Delivery Contracts](DEFINE_CARRIER_NEUTRAL_DELIVERY_CONTRACTS.md) ([#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165)) —
    contract seam; may run in parallel with task 1.
-3. [Compile Immutable Delivery Plans](COMPILE_IMMUTABLE_DELIVERY_PLANS.md) — depends on task 2.
-4. [Advance Delivery Runs Deterministically](ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md) — depends
+3. [Compile Immutable Delivery Plans](COMPILE_IMMUTABLE_DELIVERY_PLANS.md) ([#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166)) — depends on task 2.
+4. [Advance Delivery Runs Deterministically](ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md) ([#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167)) — depends
    on tasks 1 and 3.
 5. [Bind Delivery Effects to BuilderOps Reconciliation](BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md)
-   — depends on task 4 and reuses #3792.
-6. [Connect CKM Initiation and Delivery Receipts](CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md) —
+   ([#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168)) — depends on task 4 and reuses #3792.
+6. [Connect CKM Initiation and Delivery Receipts](CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md) ([#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169)) —
    depends on tasks 2 and 5.
-7. [Validate TCD and Recovery](VALIDATE_TCD_AND_RECOVERY.md) — final pilot, failure proof,
+7. [Validate TCD and Recovery](VALIDATE_TCD_AND_RECOVERY.md) ([#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170)) — final pilot, failure proof,
    acceptance, and owner-doc promotion.
 
 Only tasks 1 and 2 are intended to become initially `agent:ready`. Tasks 3–7 remain
@@ -235,9 +235,20 @@ bounded residual work, and triggers owner-doc promotion only when the capability
 
 ## Relationship to GitHub Issues
 
-The issue set has not yet been filed. After filing, this section and
-`PARENT_FEATURE_ISSUE.md` must be updated with the parent/child identities in the same publication
-pass. The parent is a blocked validation hub, never a pickup Issue.
+| Role | Issue | Initial lifecycle |
+| --- | --- | --- |
+| Parent validation hub | [#4163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4163) | `agent:blocked`; never a pickup Issue |
+| DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | becomes `agent:ready` after this specification is on `main` |
+| DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | becomes `agent:ready` after this specification is on `main` |
+| DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | blocked on #4165 |
+| DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | blocked on #4164 and #4166 |
+| DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | blocked on #4167; timing reconciles with #3793 |
+| DDO-06 CKM bridge | [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169) | blocked on #4165 and #4168 |
+| DDO-07 acceptance | [#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170) | blocked on #4164–#4169 |
+
+The live Issues own executable state. This directory owns the stable decomposition and interaction
+contract. PR [#4162](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4162) is the initial
+specification publication.
 
 ## Source docs
 

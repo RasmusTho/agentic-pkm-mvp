@@ -2,6 +2,7 @@
 name: Validate TCD and Recovery
 description: Prove staged coordination savings, recovery convergence, and quality non-regression before capability acceptance.
 task_id: DDO-07
+github_issue: 4170
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Capability acceptance
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-01, DDO-02, DDO-03, DDO-04, DDO-05, DDO-06]
@@ -76,5 +77,6 @@ cost or risk elsewhere.
 
 ## Related GitHub Issues
 
-Create one final validation task blocked on DDO-01 through DDO-06. It owns the parent-closure
-handoff and final owner-doc promotion decision.
+Live task: [#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170), blocked on DDO-01
+through DDO-06 (#4164–#4169). It owns the parent-closure handoff and final owner-doc promotion
+decision.

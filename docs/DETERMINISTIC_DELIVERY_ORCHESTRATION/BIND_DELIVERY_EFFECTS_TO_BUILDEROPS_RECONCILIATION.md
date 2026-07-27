@@ -2,6 +2,7 @@
 name: Bind Delivery Effects to BuilderOps Reconciliation
 description: Bind reducer effects to the existing fenced transaction/outbox substrate and prove restart convergence.
 task_id: DDO-05
+github_issue: 4168
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: BuilderOps journal/outbox binding
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-04]
@@ -80,5 +81,6 @@ comments, merges, or closures after a crash.
 
 ## Related GitHub Issues
 
-Create one high-risk Builder System task blocked on DDO-04. Reconcile its execution timing with open
-BCP cutover work; do not duplicate #3793.
+Live task: [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168), blocked on DDO-04
+[#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167). Reconcile its execution timing
+with open BCP cutover #3793; do not duplicate that work.

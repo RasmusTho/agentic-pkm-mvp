@@ -2,6 +2,7 @@
 name: Compile Immutable Delivery Plans
 description: Compile approved initiation payloads and live snapshots into immutable plans or typed refusals without side effects.
 task_id: DDO-03
+github_issue: 4166
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Plan compiler
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-02]
@@ -70,4 +71,5 @@ explainable before effects begin.
 
 ## Related GitHub Issues
 
-Create one high-priority task blocked on DDO-02.
+Live task: [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166), blocked on DDO-02
+[#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165).

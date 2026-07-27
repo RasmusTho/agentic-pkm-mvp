@@ -2,6 +2,7 @@
 name: Advance Delivery Runs Deterministically
 description: Add a reducer and bounded adapters that advance compiled delivery plans without routine model coordination.
 task_id: DDO-04
+github_issue: 4167
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Delivery reducer
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-01, DDO-03]
@@ -77,4 +78,6 @@ full durable outbox binding.
 
 ## Related GitHub Issues
 
-Create one high-priority state-machine task blocked on DDO-01 and DDO-03.
+Live task: [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167), blocked on DDO-01
+[#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) and DDO-03
+[#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166).
