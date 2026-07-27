@@ -208,6 +208,24 @@ def neutralize_closing_issue_references(
     return result
 
 
+def has_neutralized_closing_marker(pr_body: object) -> bool:
+    """Return whether a body still advertises a neutralized closing marker.
+
+    This is the deliberately loose companion to
+    :func:`resolve_neutralized_issue_authority`, and the same predicate
+    :func:`neutralize_closing_issue_references` uses to refuse re-neutralizing an
+    already-neutralized body. The strict resolver returns ``None`` both for a
+    canonical body and for a body whose marker survives but whose grammar no
+    longer parses; only this predicate separates those, so a stranded
+    neutralization is never mistaken for a clean body.
+    """
+
+    return (
+        isinstance(pr_body, str)
+        and _NEUTRALIZED_CLOSING_LINE_PATTERN.search(pr_body) is not None
+    )
+
+
 def resolve_neutralized_issue_authority(pr_body: object) -> IssueAuthority | None:
     """Resolve the bounded non-closing authority used only during exact-head merge."""
     if not isinstance(pr_body, str) or re.search(r"\r(?!\n)|[\u2028\u2029]", pr_body):
