@@ -17,6 +17,7 @@ from typing import Annotated, Any, ClassVar, Final, Literal, TypeAlias, cast
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
@@ -60,6 +61,22 @@ def _validate_utc_timestamp(value: str) -> str:
 
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def _normalize_repository_id(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.strip().casefold()
+    return value
+
+
+RepositoryId = Annotated[
+    str,
+    BeforeValidator(_normalize_repository_id),
+    StringConstraints(
+        strip_whitespace=True,
+        pattern=r"^[a-z0-9_.-]+/[a-z0-9_.-]+$",
+    ),
+]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 GitSha = Annotated[
     str,
@@ -89,6 +106,17 @@ ExceptionKind: TypeAlias = Literal[
     "review_blocking",
     "execution_failed",
     "cancelled",
+]
+EffectOutcomeState: TypeAlias = Literal[
+    "claimed",
+    "worker_launched",
+    "checks_passed",
+    "review_recorded",
+    "merged",
+    "closed",
+    "known_defect_recorded",
+    "receipt_recorded",
+    "failed",
 ]
 
 
@@ -196,13 +224,7 @@ class ContractRef(_StrictFrozenModel):
 
 
 class IssueScope(_StrictFrozenModel):
-    repository: Annotated[
-        str,
-        StringConstraints(
-            strip_whitespace=True,
-            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-        ),
-    ]
+    repository: RepositoryId
     issue_number: PositiveInt
     authority_id: NonEmptyStr
     contract_hash: Sha256
@@ -751,6 +773,43 @@ class DeliveryException(_StrictFrozenModel):
         return self
 
 
+_SUCCESS_OUTCOME_BY_EFFECT: dict[EffectClass, EffectOutcomeState] = {
+    "claim_issue": "claimed",
+    "launch_worker": "worker_launched",
+    "await_ci": "checks_passed",
+    "request_review": "review_recorded",
+    "merge_pull_request": "merged",
+    "close_issue": "closed",
+    "record_known_defect": "known_defect_recorded",
+    "record_delivery_receipt": "receipt_recorded",
+}
+
+
+class EffectOutcomeEvidence(_StrictFrozenModel):
+    effect_class: EffectClass
+    effect_idempotency_key: NonEmptyStr
+    outcome_state: EffectOutcomeState
+    outcome_keys: tuple[NonEmptyStr, ...]
+    observed_at: UtcTimestamp
+    evidence_refs: tuple[NonEmptyStr, ...]
+
+    @model_validator(mode="after")
+    def _validate_outcome(self) -> EffectOutcomeEvidence:
+        if not self.outcome_keys or not self.evidence_refs:
+            raise ValueError("effect outcome must carry keys and evidence")
+        _require_unique(self.outcome_keys, "effect outcome keys")
+        _require_unique(self.evidence_refs, "effect outcome evidence refs")
+        if self.outcome_keys != tuple(sorted(self.outcome_keys)):
+            raise ValueError(
+                "effect outcome keys must use canonical sorted order"
+            )
+        if self.evidence_refs != tuple(sorted(self.evidence_refs)):
+            raise ValueError(
+                "effect outcome evidence refs must use canonical sorted order"
+            )
+        return self
+
+
 def delivery_event_input_hash(
     *,
     run_id: str,
@@ -761,6 +820,7 @@ def delivery_event_input_hash(
     effect_ref: ContractRef | None,
     result_ref: ContractRef | None,
     exception: DeliveryException | None,
+    effect_outcome: EffectOutcomeEvidence | None = None,
 ) -> str:
     """Hash the complete semantic input to one reducer event."""
 
@@ -797,6 +857,11 @@ def delivery_event_input_hash(
                 if exception is not None
                 else None
             ),
+            "effect_outcome": (
+                effect_outcome.model_dump(mode="json")
+                if effect_outcome is not None
+                else None
+            ),
         }
     )
 
@@ -831,6 +896,7 @@ class ReducerEvent(CanonicalDeliveryContract):
     effect_ref: ContractRef | None
     result_ref: ContractRef | None
     exception: DeliveryException | None
+    effect_outcome: EffectOutcomeEvidence | None = None
     provenance: Provenance
 
     @model_validator(mode="after")
@@ -893,6 +959,14 @@ class ReducerEvent(CanonicalDeliveryContract):
             raise ValueError(
                 f"{self.event_type} typed exception does not match event contract"
             )
+        is_effect_result = self.event_type in {
+            "effect_succeeded",
+            "effect_failed",
+        }
+        if (self.effect_outcome is not None) != is_effect_result:
+            raise ValueError(
+                "effect result events must carry typed outcome evidence"
+            )
         if (
             self.subject_authority is not None
             and self.subject_authority.observed_at
@@ -910,6 +984,7 @@ class ReducerEvent(CanonicalDeliveryContract):
             effect_ref=self.effect_ref,
             result_ref=self.result_ref,
             exception=self.exception,
+            effect_outcome=self.effect_outcome,
         )
         if self.input_hash != expected_input_hash:
             raise ValueError("reducer event input hash must bind semantic input")
@@ -924,12 +999,12 @@ def delivery_effect_input_hash(
     *,
     run_id: str,
     plan_ref: ContractRef,
-    run_started_event_ref: ContractRef,
     effect_class: EffectClass,
     issue: IssueScope,
     pull_request_number: int | None,
     exact_head_sha: str | None,
     expected_authorities: tuple[AuthoritySnapshot, ...],
+    expected_outcome_keys: tuple[str, ...],
 ) -> str:
     """Hash the complete semantic input to one proposed reducer effect."""
 
@@ -950,12 +1025,12 @@ def delivery_effect_input_hash(
         {
             "run_id": run_id,
             "plan_ref": plan_ref.model_dump(mode="json"),
-            "run_started_event_ref": run_started_event_ref.model_dump(mode="json"),
             "effect_class": effect_class,
             "issue": issue.model_dump(mode="json"),
             "pull_request_number": pull_request_number,
             "exact_head_sha": exact_head_sha,
             "expected_authorities": authority_semantics,
+            "expected_outcome_keys": list(expected_outcome_keys),
         }
     )
 
@@ -974,13 +1049,14 @@ class ReducerEffect(CanonicalDeliveryContract):
     effect_id: NonEmptyStr
     run_id: NonEmptyStr
     plan_ref: ContractRef
-    run_started_event: ReducerEvent
+    causal_event: ReducerEvent
     sequence: PositiveInt
     effect_class: EffectClass
     issue: IssueScope
     pull_request_number: PositiveInt | None
     exact_head_sha: GitSha | None
     expected_authorities: tuple[AuthoritySnapshot, ...]
+    expected_outcome_keys: tuple[NonEmptyStr, ...]
     idempotency_key: NonEmptyStr
     input_hash: Sha256
     requires_live_authority_check: Literal[True] = True
@@ -992,12 +1068,11 @@ class ReducerEffect(CanonicalDeliveryContract):
         if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
             raise ValueError("reducer effect must bind DeliveryPlan.v1")
         if (
-            self.run_started_event.event_type != "run_started"
-            or self.run_started_event.sequence != 0
-            or self.run_started_event.run_id != self.run_id
-            or self.run_started_event.plan_ref != self.plan_ref
+            self.causal_event.run_id != self.run_id
+            or self.causal_event.plan_ref != self.plan_ref
+            or self.causal_event.sequence >= self.sequence
         ):
-            raise ValueError("reducer effect must embed its run-started event")
+            raise ValueError("reducer effect must embed an earlier causal event")
         if not self.expected_authorities:
             raise ValueError("reducer effect must bind expected live authority")
         if any(
@@ -1011,6 +1086,10 @@ class ReducerEffect(CanonicalDeliveryContract):
             tuple(item.authority_id for item in self.expected_authorities),
             "effect expected authority IDs",
         )
+        _require_unique(
+            self.expected_outcome_keys,
+            "effect expected outcome keys",
+        )
         if tuple(
             item.authority_id for item in self.expected_authorities
         ) != tuple(
@@ -1019,12 +1098,28 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError(
                 "effect expected authorities must use canonical sorted order"
             )
+        if self.expected_outcome_keys != tuple(
+            sorted(self.expected_outcome_keys)
+        ):
+            raise ValueError(
+                "effect expected outcome keys must use canonical sorted order"
+            )
         if not any(
             authority.authority_id == self.issue.authority_id
             and authority.content_hash == self.issue.contract_hash
             for authority in self.expected_authorities
         ):
             raise ValueError("effect authority snapshots must bind the issue")
+        causal_subject = self.causal_event.subject_authority
+        if causal_subject is None:
+            if self.causal_event.event_type != "run_started":
+                raise ValueError(
+                    "subjectless effect cause must be the run-started event"
+                )
+        elif self.expected_authorities != (causal_subject,):
+            raise ValueError(
+                "effect authority must bind the current causal event state"
+            )
         requires_pull_request = self.effect_class in {
             "await_ci",
             "request_review",
@@ -1048,16 +1143,12 @@ class ReducerEffect(CanonicalDeliveryContract):
         expected_input_hash = delivery_effect_input_hash(
             run_id=self.run_id,
             plan_ref=self.plan_ref,
-            run_started_event_ref=ContractRef(
-                schema_version=self.run_started_event.schema_version,
-                contract_id=self.run_started_event.event_id,
-                content_hash=self.run_started_event.content_hash,
-            ),
             effect_class=self.effect_class,
             issue=self.issue,
             pull_request_number=self.pull_request_number,
             exact_head_sha=self.exact_head_sha,
             expected_authorities=self.expected_authorities,
+            expected_outcome_keys=self.expected_outcome_keys,
         )
         if self.input_hash != expected_input_hash:
             raise ValueError("reducer effect input hash must bind exact semantic input")
@@ -1066,6 +1157,10 @@ class ReducerEffect(CanonicalDeliveryContract):
         ):
             raise ValueError(
                 "reducer effect idempotency key must derive from semantic input"
+            )
+        if self.effect_id != self.idempotency_key:
+            raise ValueError(
+                "reducer effect identity must equal its logical idempotency key"
             )
         return self
 
@@ -1276,18 +1371,19 @@ def validate_reducer_effect_evidence(
     if effect.plan_ref != expected_plan_ref:
         raise ValueError("reducer effect does not bind the supplied plan")
     if (
-        effect.run_started_event.run_id != effect.run_id
-        or effect.run_started_event.plan_ref != expected_plan_ref
+        effect.causal_event.run_id != effect.run_id
+        or effect.causal_event.plan_ref != expected_plan_ref
     ):
         raise ValueError(
             "reducer effect must resolve the exact run-started event"
         )
-    validate_reducer_event_evidence(effect.run_started_event, plan=plan)
+    if effect.causal_event.event_type == "run_started":
+        validate_reducer_event_evidence(effect.causal_event, plan=plan)
     if effect.provenance.created_at < plan.provenance.created_at:
         raise ValueError("reducer effect must follow plan provenance")
     if (
         effect.provenance.created_at
-        < effect.run_started_event.provenance.created_at
+        < effect.causal_event.provenance.created_at
     ):
         raise ValueError("reducer effect must follow the run-started event")
     planned_scope = {item.scope_key: item for item in plan.final_scope}
@@ -1308,6 +1404,7 @@ def validate_reducer_effect_evidence(
         for authority in effect.expected_authorities
         if authority.authority_id == effect.issue.authority_id
     )
+    causal_subject = effect.causal_event.subject_authority
     planned_authorities = tuple(
         authority
         for authority in plan.input_authorities
@@ -1317,16 +1414,22 @@ def validate_reducer_effect_evidence(
         expected_state is None
         or len(matching_authorities) != 1
         or len(planned_authorities) != 1
-        or not _same_authority_state(
-            matching_authorities[0],
-            planned_authorities[0],
-        )
-        or any(
-            not any(
-                _same_authority_state(authority, planned)
-                for planned in plan.input_authorities
+        or (
+            causal_subject is None
+            and (
+                len(planned_authorities) != 1
+                or not _same_authority_state(
+                    matching_authorities[0],
+                    planned_authorities[0],
+                )
             )
-            for authority in effect.expected_authorities
+        )
+        or (
+            causal_subject is not None
+            and not _same_authority_state(
+                matching_authorities[0],
+                causal_subject,
+            )
         )
     ):
         raise ValueError("reducer effect lacks the plan's expected live authority")
@@ -1365,6 +1468,13 @@ def validate_reducer_event_evidence(
         if event.effect_ref != expected_effect_ref:
             raise ValueError("reducer event effect ref does not resolve")
         validate_reducer_effect_evidence(effect, plan=plan)
+        outcome = event.effect_outcome
+        assert outcome is not None
+        expected_outcome_state = (
+            _SUCCESS_OUTCOME_BY_EFFECT[effect.effect_class]
+            if event.event_type == "effect_succeeded"
+            else "failed"
+        )
         if (
             effect.run_id != event.run_id
             or event.sequence <= effect.sequence
@@ -1376,10 +1486,16 @@ def validate_reducer_event_evidence(
             != effect.issue.contract_hash
             or event.subject_authority.observed_at
             < effect.provenance.created_at
+            or outcome.effect_class != effect.effect_class
+            or outcome.effect_idempotency_key != effect.idempotency_key
+            or outcome.outcome_state != expected_outcome_state
+            or outcome.outcome_keys != effect.expected_outcome_keys
+            or outcome.observed_at < effect.provenance.created_at
+            or outcome.observed_at > event.provenance.created_at
         ):
             raise ValueError(
                 "reducer effect-result event must match run and carry "
-                "post-effect authority evidence"
+                "exact typed post-effect outcome evidence"
             )
         referenced_issue = effect.issue
     elif event.event_type == "worker_result_recorded":
@@ -1496,13 +1612,7 @@ def validate_reducer_event_evidence(
 
 class CheckEvidence(_StrictFrozenModel):
     check_name: NonEmptyStr
-    repository: Annotated[
-        str,
-        StringConstraints(
-            strip_whitespace=True,
-            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-        ),
-    ]
+    repository: RepositoryId
     check_run_id: NonEmptyStr
     authority_id: NonEmptyStr
     pull_request_number: PositiveInt
@@ -1524,13 +1634,7 @@ class CheckEvidence(_StrictFrozenModel):
 
 
 class KnownDefectRef(_StrictFrozenModel):
-    repository: Annotated[
-        str,
-        StringConstraints(
-            strip_whitespace=True,
-            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-        ),
-    ]
+    repository: RepositoryId
     issue_number: PositiveInt
     defect_id: Annotated[
         str,
@@ -1554,13 +1658,7 @@ class KnownDefectRef(_StrictFrozenModel):
 
 
 class MergeIdentity(_StrictFrozenModel):
-    repository: Annotated[
-        str,
-        StringConstraints(
-            strip_whitespace=True,
-            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-        ),
-    ]
+    repository: RepositoryId
     authority_id: NonEmptyStr
     pull_request_number: PositiveInt
     exact_head_sha: GitSha
@@ -1583,13 +1681,7 @@ class MergeIdentity(_StrictFrozenModel):
 
 class ClosureEvidence(_StrictFrozenModel):
     authority_id: NonEmptyStr
-    repository: Annotated[
-        str,
-        StringConstraints(
-            strip_whitespace=True,
-            pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-        ),
-    ]
+    repository: RepositoryId
     issue_number: PositiveInt
     pull_request_number: PositiveInt
     exact_head_sha: GitSha
@@ -1773,6 +1865,7 @@ class RecoveryStep(_StrictFrozenModel):
     issue: IssueScope
     action: NonEmptyStr
     authority_readbacks: tuple[RecoveryAuthorityReadback, ...]
+    outcome_evidence: EffectOutcomeEvidence
     outcome: Literal["reconciled", "retry_scheduled", "blocked", "failed"]
     occurred_at: UtcTimestamp
 
@@ -1780,6 +1873,20 @@ class RecoveryStep(_StrictFrozenModel):
     def _validate_readbacks(self) -> RecoveryStep:
         if self.effect_ref.schema_version != REDUCER_EFFECT_VERSION:
             raise ValueError("recovery step must bind a reducer effect")
+        expected_outcome_state = (
+            _SUCCESS_OUTCOME_BY_EFFECT[self.effect_class]
+            if self.outcome == "reconciled"
+            else "failed"
+        )
+        if (
+            self.outcome_evidence.effect_class != self.effect_class
+            or self.outcome_evidence.outcome_state
+            != expected_outcome_state
+            or self.outcome_evidence.observed_at > self.occurred_at
+        ):
+            raise ValueError(
+                "recovery step must carry typed effect outcome evidence"
+            )
         if not self.authority_readbacks:
             raise ValueError("recovery step must carry authority readback evidence")
         _require_unique(
@@ -2153,10 +2260,12 @@ def validate_delivery_receipt_evidence(
     workers = {item.result_id: item for item in worker_results}
     reviews = {item.result_id: item for item in review_results}
     effects = {item.effect_id: item for item in reducer_effects}
+    effect_keys = {item.idempotency_key for item in reducer_effects}
     if (
         len(workers) != len(worker_results)
         or len(reviews) != len(review_results)
         or len(effects) != len(reducer_effects)
+        or len(effect_keys) != len(reducer_effects)
     ):
         raise ValueError("structured result and effect IDs must be unique")
     proof_by_scope = {
@@ -2216,6 +2325,17 @@ def validate_delivery_receipt_evidence(
         ):
             raise ValueError(
                 "recovery readbacks must bind the exact effect and follow it"
+            )
+        if (
+            step.outcome_evidence.effect_idempotency_key
+            != effect.idempotency_key
+            or step.outcome_evidence.outcome_keys
+            != effect.expected_outcome_keys
+            or step.outcome_evidence.observed_at
+            < effect.provenance.created_at
+        ):
+            raise ValueError(
+                "recovery outcome must exactly cover the logical effect"
             )
         used_effects.add(effect.effect_id)
     if used_effects != set(effects):
@@ -2336,8 +2456,8 @@ def validate_delivery_receipt_evidence(
                 )
         elif proof.review_disposition is not None or proof.known_defects:
             raise ValueError("receipt proof carries review evidence without a review")
-        effect_authorities: dict[str, set[str]] = {
-            "claim_issue": {proof.issue.authority_id},
+        effect_outcome_keys: dict[str, set[str]] = {
+            "claim_issue": {f"{proof.issue.authority_id}#claimed"},
             "launch_worker": {
                 f"{worker.schema_version}:{worker.result_id}"
             },
@@ -2355,7 +2475,7 @@ def validate_delivery_receipt_evidence(
                 else set()
             ),
             "close_issue": (
-                {proof.closure.authority_id}
+                {f"{proof.closure.authority_id}#closed"}
                 if proof.closure is not None
                 else set()
             ),
@@ -2371,15 +2491,13 @@ def validate_delivery_receipt_evidence(
             for item in receipt.recovery_history
             if item.issue == proof.issue
         ):
-            expected_authorities = effect_authorities[
+            expected_outcome_keys = effect_outcome_keys[
                 recovery_step.effect_class
             ]
             if (
-                not expected_authorities
-                or any(
-                    readback.authority_id not in expected_authorities
-                    for readback in recovery_step.authority_readbacks
-                )
+                not expected_outcome_keys
+                or set(recovery_step.outcome_evidence.outcome_keys)
+                != expected_outcome_keys
                 or (
                     recovery_step.effect_class == "claim_issue"
                     and any(
@@ -2587,6 +2705,7 @@ __all__ = [
     "DeliveryReceipt",
     "DependencyWave",
     "ExpectedAuthorityState",
+    "EffectOutcomeEvidence",
     "IssueDeliveryProof",
     "IssueScope",
     "KnownDefectRef",

@@ -19,6 +19,7 @@ from app.builderops.delivery_orchestration_contracts import (
     DeliveryReceipt,
     DependencyWave,
     ExpectedAuthorityState,
+    EffectOutcomeEvidence,
     IssueDeliveryProof,
     IssueScope,
     KnownDefectRef,
@@ -63,7 +64,7 @@ def _actor(actor_id: str = "owner:RasmusTho") -> ActorIdentity:
     return ActorIdentity(
         actor_type="human",
         actor_id=actor_id,
-        authority_scope="RasmusTho/agentic-pkm-mvp",
+        authority_scope="rasmustho/agentic-pkm-mvp",
     )
 
 
@@ -83,16 +84,16 @@ def _provenance(
     return Provenance(
         created_at=created_at,
         created_by=_actor("builder:codex-root-4165"),
-        source_refs=(_source("RasmusTho/agentic-pkm-mvp#4165"),),
+        source_refs=(_source("rasmustho/agentic-pkm-mvp#4165"),),
         correlation_id=correlation_id,
     )
 
 
 def _issue(number: int, content_hash: str) -> IssueScope:
     return IssueScope(
-        repository="RasmusTho/agentic-pkm-mvp",
+        repository="rasmustho/agentic-pkm-mvp",
         issue_number=number,
-        authority_id=f"github:RasmusTho/agentic-pkm-mvp/issues/{number}",
+        authority_id=f"github:rasmustho/agentic-pkm-mvp/issues/{number}",
         contract_hash=content_hash,
     )
 
@@ -147,7 +148,7 @@ def _initiation(issue: IssueScope) -> DeliveryInitiation:
     approval_id = "approval-4165"
     approver = _actor()
     approval_source_refs = (
-        _source("RasmusTho/agentic-pkm-mvp#4165", SHA_C),
+        _source("rasmustho/agentic-pkm-mvp#4165", SHA_C),
     )
     return DeliveryInitiation(
         initiation_id="init-4165",
@@ -272,7 +273,7 @@ def _review_result(issue: IssueScope, plan: DeliveryPlan) -> ReviewResult:
             ),
         ),
         known_defect_refs=(
-            "registry:RasmusTho/agentic-pkm-mvp/issues/4300:"
+            "registry:rasmustho/agentic-pkm-mvp/issues/4300:"
             "KD-AAAAAAAAAAAA",
         ),
         provenance=_provenance("review-result-4165"),
@@ -321,32 +322,33 @@ def _recovery_effect(
     )
     run_started_event = _run_started_event(plan)
     authorities = (_authority(issue),)
+    expected_outcome_keys = (
+        f"github:{issue.repository}/pulls/4200",
+    )
     input_hash = delivery_effect_input_hash(
         run_id="run-4165",
         plan_ref=plan_ref,
-        run_started_event_ref=ContractRef(
-            schema_version=run_started_event.schema_version,
-            contract_id=run_started_event.event_id,
-            content_hash=run_started_event.content_hash,
-        ),
         effect_class="merge_pull_request",
         issue=issue,
         pull_request_number=4200,
         exact_head_sha=SHA_D,
         expected_authorities=authorities,
+        expected_outcome_keys=expected_outcome_keys,
     )
+    idempotency_key = delivery_effect_idempotency_key(input_hash)
     return ReducerEffect(
-        effect_id="effect-merge-4165",
+        effect_id=idempotency_key,
         run_id="run-4165",
         plan_ref=plan_ref,
-        run_started_event=run_started_event,
+        causal_event=run_started_event,
         sequence=8,
         effect_class="merge_pull_request",
         issue=issue,
         pull_request_number=4200,
         exact_head_sha=SHA_D,
         expected_authorities=authorities,
-        idempotency_key=delivery_effect_idempotency_key(input_hash),
+        expected_outcome_keys=expected_outcome_keys,
+        idempotency_key=idempotency_key,
         input_hash=input_hash,
         provenance=_provenance("effect-merge-4165"),
     )
@@ -497,6 +499,16 @@ def _receipt(
                         evidence_ref="github-pr:4200:merged",
                     ),
                 ),
+                outcome_evidence=EffectOutcomeEvidence(
+                    effect_class="merge_pull_request",
+                    effect_idempotency_key=(
+                        recovery_effect.idempotency_key
+                    ),
+                    outcome_state="merged",
+                    outcome_keys=recovery_effect.expected_outcome_keys,
+                    observed_at=TS,
+                    evidence_refs=("github-pr:4200:merged",),
+                ),
                 outcome="reconciled",
                 occurred_at=TS,
             ),
@@ -533,6 +545,14 @@ def _receipt(
 
 def test_contracts_round_trip_canonically() -> None:
     issue = _issue(4165, SHA_A)
+    case_alias_issue = IssueScope(
+        repository="RasmusTho/Agentic-PKM-MVP",
+        issue_number=issue.issue_number,
+        authority_id=issue.authority_id,
+        contract_hash=issue.contract_hash,
+    )
+    assert case_alias_issue == issue
+    assert canonical_hash(case_alias_issue) == canonical_hash(issue)
     initiation = _initiation(issue)
     plan = _plan(issue, initiation)
     worker = _worker_result(issue, plan)
@@ -573,34 +593,34 @@ def test_contracts_round_trip_canonically() -> None:
     )
     effect_plan_ref = event.plan_ref
     run_started_event = _run_started_event(plan)
-    run_started_ref = ContractRef(
-        schema_version=run_started_event.schema_version,
-        contract_id=run_started_event.event_id,
-        content_hash=run_started_event.content_hash,
-    )
     effect_authorities = (_authority(issue),)
+    effect_outcome_keys = ("check-name:Unit tests (not pg)",)
     effect_input_hash = delivery_effect_input_hash(
         run_id="run-4165",
         plan_ref=effect_plan_ref,
-        run_started_event_ref=run_started_ref,
         effect_class="await_ci",
         issue=issue,
         pull_request_number=4200,
         exact_head_sha=SHA_D,
         expected_authorities=effect_authorities,
+        expected_outcome_keys=effect_outcome_keys,
+    )
+    effect_idempotency_key = delivery_effect_idempotency_key(
+        effect_input_hash
     )
     effect = ReducerEffect(
-        effect_id="effect-1",
+        effect_id=effect_idempotency_key,
         run_id="run-4165",
         plan_ref=effect_plan_ref,
-        run_started_event=run_started_event,
+        causal_event=run_started_event,
         sequence=2,
         effect_class="await_ci",
         issue=issue,
         pull_request_number=4200,
         exact_head_sha=SHA_D,
         expected_authorities=effect_authorities,
-        idempotency_key=delivery_effect_idempotency_key(effect_input_hash),
+        expected_outcome_keys=effect_outcome_keys,
+        idempotency_key=effect_idempotency_key,
         input_hash=effect_input_hash,
         provenance=_provenance("effect-1"),
     )
@@ -645,6 +665,14 @@ def test_contracts_round_trip_canonically() -> None:
         contract_id=effect.effect_id,
         content_hash=effect.content_hash,
     )
+    effect_outcome = EffectOutcomeEvidence(
+        effect_class=effect.effect_class,
+        effect_idempotency_key=effect.idempotency_key,
+        outcome_state="checks_passed",
+        outcome_keys=effect.expected_outcome_keys,
+        observed_at=TS,
+        evidence_refs=("github-check:9001",),
+    )
     effect_event_input_hash = delivery_event_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
@@ -654,6 +682,7 @@ def test_contracts_round_trip_canonically() -> None:
         effect_ref=effect_ref,
         result_ref=None,
         exception=None,
+        effect_outcome=effect_outcome,
     )
     effect_event = ReducerEvent(
         event_id=delivery_event_id(effect_event_input_hash),
@@ -666,6 +695,7 @@ def test_contracts_round_trip_canonically() -> None:
         effect_ref=effect_ref,
         result_ref=None,
         exception=None,
+        effect_outcome=effect_outcome,
         provenance=_provenance("effect-event"),
     )
     assert (
@@ -676,6 +706,33 @@ def test_contracts_round_trip_canonically() -> None:
         )
         is effect_event
     )
+    wrong_outcome_payload = effect_event.model_dump(mode="json")
+    wrong_outcome_payload["effect_outcome"]["outcome_state"] = "merged"
+    wrong_outcome_hash = delivery_event_input_hash(
+        run_id=effect_event.run_id,
+        plan_ref=effect_event.plan_ref,
+        sequence=effect_event.sequence,
+        event_type=effect_event.event_type,
+        subject_authority=effect_event.subject_authority,
+        effect_ref=effect_event.effect_ref,
+        result_ref=effect_event.result_ref,
+        exception=effect_event.exception,
+        effect_outcome=EffectOutcomeEvidence.model_validate_json(
+            json.dumps(wrong_outcome_payload["effect_outcome"])
+        ),
+    )
+    wrong_outcome_payload["input_hash"] = wrong_outcome_hash
+    wrong_outcome_payload["event_id"] = delivery_event_id(
+        wrong_outcome_hash
+    )
+    wrong_outcome_event = parse_delivery_contract(wrong_outcome_payload)
+    assert isinstance(wrong_outcome_event, ReducerEvent)
+    with pytest.raises(ValueError, match="typed post-effect outcome"):
+        validate_reducer_event_evidence(
+            wrong_outcome_event,
+            plan=plan,
+            effect=effect,
+        )
 
     early_effect_event_hash = delivery_event_input_hash(
         run_id=effect.run_id,
@@ -686,6 +743,7 @@ def test_contracts_round_trip_canonically() -> None:
         effect_ref=effect_ref,
         result_ref=None,
         exception=None,
+        effect_outcome=effect_outcome,
     )
     early_effect_event = effect_event.model_copy(
         update={
@@ -694,7 +752,7 @@ def test_contracts_round_trip_canonically() -> None:
             "sequence": effect.sequence,
         }
     )
-    with pytest.raises(ValueError, match="post-effect authority"):
+    with pytest.raises(ValueError, match="post-effect outcome"):
         validate_reducer_event_evidence(
             early_effect_event,
             plan=plan,
@@ -723,6 +781,13 @@ def test_contracts_round_trip_canonically() -> None:
         effect_ref=stale_readback_ref,
         result_ref=None,
         exception=None,
+        effect_outcome=effect_outcome.model_copy(
+            update={
+                "effect_idempotency_key": (
+                    stale_readback_effect.idempotency_key
+                )
+            }
+        ),
     )
     stale_readback_event = ReducerEvent(
         event_id=delivery_event_id(stale_readback_hash),
@@ -735,12 +800,19 @@ def test_contracts_round_trip_canonically() -> None:
         effect_ref=stale_readback_ref,
         result_ref=None,
         exception=None,
+        effect_outcome=effect_outcome.model_copy(
+            update={
+                "effect_idempotency_key": (
+                    stale_readback_effect.idempotency_key
+                )
+            }
+        ),
         provenance=_provenance(
             "stale-effect-readback",
             created_at="2026-07-27T10:00:02Z",
         ),
     )
-    with pytest.raises(ValueError, match="post-effect authority"):
+    with pytest.raises(ValueError, match="post-effect outcome"):
         validate_reducer_event_evidence(
             stale_readback_event,
             plan=plan,
@@ -799,12 +871,12 @@ def test_contracts_round_trip_canonically() -> None:
     fresh_input_hash = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
         exact_head_sha=effect.exact_head_sha,
         expected_authorities=(fresh_authority,),
+        expected_outcome_keys=effect.expected_outcome_keys,
     )
     assert fresh_input_hash == effect.input_hash
     assert (
@@ -822,25 +894,108 @@ def test_contracts_round_trip_canonically() -> None:
     assert isinstance(fresh_effect, ReducerEffect)
     assert validate_reducer_effect_evidence(fresh_effect, plan=plan) is fresh_effect
 
+    fresh_start_payload = run_started_event.model_dump(mode="json")
+    fresh_start_payload["provenance"]["created_at"] = (
+        "2026-07-27T10:00:01Z"
+    )
+    fresh_start_payload["provenance"]["correlation_id"] = (
+        "fresh-run-start-provenance"
+    )
+    fresh_start = parse_delivery_contract(fresh_start_payload)
+    assert isinstance(fresh_start, ReducerEvent)
+    assert fresh_start.event_id == run_started_event.event_id
+    reprovenanced_effect = effect.model_copy(
+        update={
+            "causal_event": fresh_start,
+            "provenance": effect.provenance.model_copy(
+                update={"created_at": "2026-07-27T10:00:01Z"}
+            ),
+        }
+    )
+    assert reprovenanced_effect.input_hash == effect.input_hash
+    assert reprovenanced_effect.idempotency_key == effect.idempotency_key
+    assert (
+        validate_reducer_effect_evidence(reprovenanced_effect, plan=plan)
+        is reprovenanced_effect
+    )
+
+    current_authority = _authority(
+        issue,
+        labels=("agent:in-progress", "type:task"),
+    )
+    causal_event_hash = delivery_event_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=1,
+        event_type="authority_changed",
+        subject_authority=current_authority,
+        effect_ref=None,
+        result_ref=None,
+        exception=None,
+    )
+    causal_event = ReducerEvent(
+        event_id=delivery_event_id(causal_event_hash),
+        input_hash=causal_event_hash,
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        sequence=1,
+        event_type="authority_changed",
+        subject_authority=current_authority,
+        effect_ref=None,
+        result_ref=None,
+        exception=None,
+        provenance=_provenance("post-claim-authority"),
+    )
+    current_effect_hash = delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        effect_class=effect.effect_class,
+        issue=effect.issue,
+        pull_request_number=effect.pull_request_number,
+        exact_head_sha=effect.exact_head_sha,
+        expected_authorities=(current_authority,),
+        expected_outcome_keys=effect.expected_outcome_keys,
+    )
+    current_effect_key = delivery_effect_idempotency_key(
+        current_effect_hash
+    )
+    current_effect = effect.model_copy(
+        update={
+            "effect_id": current_effect_key,
+            "causal_event": causal_event,
+            "sequence": 2,
+            "expected_authorities": (current_authority,),
+            "idempotency_key": current_effect_key,
+            "input_hash": current_effect_hash,
+        }
+    )
+    assert validate_reducer_effect_evidence(current_effect, plan=plan)
+    stale_current_effect_payload = current_effect.model_dump(mode="json")
+    stale_current_effect_payload["expected_authorities"] = [
+        _authority(issue).model_dump(mode="json")
+    ]
+    with pytest.raises(ValidationError, match="current causal event"):
+        parse_delivery_contract(stale_current_effect_payload)
+
     second_authority = _authority(_issue(4166, SHA_C))
     assert delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
         exact_head_sha=effect.exact_head_sha,
         expected_authorities=(_authority(issue), second_authority),
+        expected_outcome_keys=effect.expected_outcome_keys,
     ) == delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
         exact_head_sha=effect.exact_head_sha,
         expected_authorities=(second_authority, _authority(issue)),
+        expected_outcome_keys=effect.expected_outcome_keys,
     )
     reordered_authorities_payload = effect.model_dump(mode="json")
     reordered_authorities = (second_authority, _authority(issue))
@@ -850,12 +1005,12 @@ def test_contracts_round_trip_canonically() -> None:
     reordered_authorities_payload["input_hash"] = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
         exact_head_sha=effect.exact_head_sha,
         expected_authorities=reordered_authorities,
+        expected_outcome_keys=effect.expected_outcome_keys,
     )
     reordered_authorities_payload["idempotency_key"] = (
         delivery_effect_idempotency_key(
@@ -948,16 +1103,19 @@ def test_contracts_round_trip_canonically() -> None:
     stale_effect_payload["input_hash"] = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
         exact_head_sha=effect.exact_head_sha,
         expected_authorities=(stale_authority,),
+        expected_outcome_keys=effect.expected_outcome_keys,
     )
     stale_effect_payload["idempotency_key"] = delivery_effect_idempotency_key(
         stale_effect_payload["input_hash"]
     )
+    stale_effect_payload["effect_id"] = stale_effect_payload[
+        "idempotency_key"
+    ]
     stale_effect = parse_delivery_contract(stale_effect_payload)
     assert isinstance(stale_effect, ReducerEffect)
     with pytest.raises(ValueError, match="expected live authority"):
@@ -971,17 +1129,20 @@ def test_contracts_round_trip_canonically() -> None:
     missing_label_effect_payload["input_hash"] = delivery_effect_input_hash(
         run_id=effect.run_id,
         plan_ref=effect.plan_ref,
-        run_started_event_ref=run_started_ref,
         effect_class=effect.effect_class,
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
         exact_head_sha=effect.exact_head_sha,
         expected_authorities=(missing_label_authority,),
+        expected_outcome_keys=effect.expected_outcome_keys,
     )
     missing_label_effect_payload["idempotency_key"] = (
         delivery_effect_idempotency_key(
             missing_label_effect_payload["input_hash"]
         )
+    )
+    missing_label_effect_payload["effect_id"] = (
+        missing_label_effect_payload["idempotency_key"]
     )
     missing_label_effect = parse_delivery_contract(
         missing_label_effect_payload
@@ -1277,7 +1438,7 @@ def test_plan_binds_scope_and_expected_authority() -> None:
         match="canonical omitted-Issue identity",
     ):
         ScopeExclusion(
-            scope_key="RasmusTho/agentic-pkm-mvp#4166",
+            scope_key="rasmustho/agentic-pkm-mvp#9999",
             reason="Uses a noncanonical identity.",
             omitted_issue=expanded_issue,
         )
@@ -1329,7 +1490,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
-    payload["issue_proofs"][0]["closure"]["repository"] = "Other/repository"
+    payload["issue_proofs"][0]["closure"]["repository"] = "other/repository"
     with pytest.raises(ValidationError, match="proof repository"):
         parse_delivery_contract(payload)
 
@@ -1368,6 +1529,9 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         payload = receipt.model_dump(mode="json")
         payload["recovery_history"][0]["occurred_at"] = occurred_at
         payload["recovery_history"][0]["authority_readbacks"][0][
+            "observed_at"
+        ] = occurred_at
+        payload["recovery_history"][0]["outcome_evidence"][
             "observed_at"
         ] = occurred_at
         with pytest.raises(ValidationError, match="lifecycle chronology"):
@@ -1425,6 +1589,16 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
                     observed_at="2026-07-27T10:05:00Z",
                     evidence_ref="github-issue:4165:closed",
                 ),
+            ),
+            outcome_evidence=EffectOutcomeEvidence(
+                effect_class="close_issue",
+                effect_idempotency_key=(
+                    "builderops.delivery-effect.v1:" + SHA_B
+                ),
+                outcome_state="closed",
+                outcome_keys=(f"{issue.authority_id}#closed",),
+                observed_at="2026-07-27T10:05:00Z",
+                evidence_refs=("github-issue:4165:closed",),
             ),
             outcome="reconciled",
             occurred_at="2026-07-27T10:05:00Z",
@@ -1514,9 +1688,9 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["known_defects"][0][
         "repository"
-    ] = "OtherOrg/other-repo"
+    ] = "otherorg/other-repo"
     payload["issue_proofs"][0]["known_defects"][0]["registry_ref"] = (
-        "registry:OtherOrg/other-repo/issues/4300:KD-AAAAAAAAAAAA"
+        "registry:otherorg/other-repo/issues/4300:KD-AAAAAAAAAAAA"
     )
     with pytest.raises(ValidationError, match="proof repository"):
         parse_delivery_contract(payload)
@@ -1524,7 +1698,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
     payload = receipt.model_dump(mode="json")
     payload["recovery_history"][0]["authority_readbacks"][0][
         "authority_id"
-    ] = "github:RasmusTho/agentic-pkm-mvp/pulls/9999"
+    ] = "github:rasmustho/agentic-pkm-mvp/pulls/9999"
     with pytest.raises(ValidationError, match="bind observed merge"):
         parse_delivery_contract(payload)
 
@@ -1542,6 +1716,32 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             worker_results=(worker,),
             review_results=(review,),
             reducer_effects=(recovery_effect,),
+        )
+
+    payload = receipt.model_dump(mode="json")
+    payload["recovery_history"][0]["outcome_evidence"][
+        "outcome_keys"
+    ] = ["github:rasmustho/agentic-pkm-mvp/pulls/9999"]
+    wrong_outcome_coverage_receipt = parse_delivery_contract(payload)
+    assert isinstance(wrong_outcome_coverage_receipt, DeliveryReceipt)
+    with pytest.raises(ValueError, match="exactly cover"):
+        validate_delivery_receipt_evidence(
+            wrong_outcome_coverage_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recovery_effect,),
+        )
+
+    with pytest.raises(ValueError, match="IDs must be unique"):
+        validate_delivery_receipt_evidence(
+            receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(review,),
+            reducer_effects=(recovery_effect, recovery_effect),
         )
 
     unordered_exception_a = DeliveryException(
@@ -1646,7 +1846,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
 
     payload = receipt.model_dump(mode="json")
     payload["recovery_history"][0]["effect_class"] = "close_issue"
-    with pytest.raises(ValidationError, match="bind observed closure"):
+    with pytest.raises(ValidationError, match="typed effect outcome"):
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
