@@ -207,9 +207,9 @@ they start from. The value must be absolute (`~` expansion is applied, but a rel
 resolved against any stable base): a relative `BUILDEROPS_STATE_DIR` or `BUILDEROPS_DB_PATH` is
 interpreted against each process working directory and silently produces a separate database per
 worktree, which is the exact failure this posture exists to prevent. Record the choice in a
-host-local operator note; that note is host state, not repo authority. Worked example: the primary development laptop was consolidated onto the explicit
-`BUILDEROPS_STATE_DIR` posture on 2026-07-27, with the reasoning kept host-locally in
-`~/.local/state/builderops/HOST_POSTURE.md` on that machine.
+host-local operator note; that note is host state, not repo authority. Worked example: the primary
+development laptop was consolidated onto the explicit `BUILDEROPS_STATE_DIR` posture on 2026-07-27,
+with the reasoning kept host-locally in `~/.local/state/builderops/HOST_POSTURE.md` on that machine.
 
 Either posture yields the same host-stable store. The override does not weaken the SQLite
 separation check or the vault-confinement guard; it only bypasses the receipt gate during store
