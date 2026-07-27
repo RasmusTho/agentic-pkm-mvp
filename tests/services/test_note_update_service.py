@@ -353,7 +353,10 @@ def test_process_note_update_adds_uuid_without_frontmatter(
 
 def test_process_note_update_adds_uuid_to_frontmatter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     generated = uuid.UUID("00000000-0000-0000-0000-00000000B002")
-    monkeypatch.setattr("app.services.note_uuid.uuid.uuid4", lambda: generated)
+    monkeypatch.setattr(
+        "app.services.note_uuid._new_note_uuid",
+        lambda: str(generated),
+    )
     monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
     note_path = tmp_path / "note.md"
     note_path.write_text(
@@ -423,7 +426,10 @@ def test_process_note_update_handles_malformed_frontmatter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     generated = uuid.UUID("00000000-0000-0000-0000-00000000C003")
-    monkeypatch.setattr("app.services.note_uuid.uuid.uuid4", lambda: generated)
+    monkeypatch.setattr(
+        "app.services.note_uuid._new_note_uuid",
+        lambda: str(generated),
+    )
     monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
     note_path = tmp_path / "note.md"
     note_path.write_text(
