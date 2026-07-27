@@ -2800,7 +2800,7 @@ def test_rest_precreate_enumeration_finds_hidden_identity(
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
             )
-            and "&sort=updated&direction=desc" in endpoint
+            and "&sort=updated&direction=asc" in endpoint
         ):
             authoritative_reads += 1
             return [unlabeled]
@@ -2813,7 +2813,7 @@ def test_rest_precreate_enumeration_finds_hidden_identity(
     with pytest.raises(known_defects.KnownDefectsError, match="registry title"):
         known_defects._select_registry(gateway, None)
 
-    assert authoritative_reads == 1
+    assert authoritative_reads == 2
     assert gateway._registry_identity_numbers == {4200}
 
 
@@ -2841,7 +2841,7 @@ def test_authoritative_enumeration_exhausts_pages_without_numeric_cutoff(
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
             )
-            and "&sort=updated&direction=desc" in endpoint
+            and "&sort=updated&direction=asc" in endpoint
         ):
             raise AssertionError(endpoint)
         page = int(endpoint.rsplit("page=", 1)[1])
@@ -2865,8 +2865,105 @@ def test_authoritative_enumeration_exhausts_pages_without_numeric_cutoff(
 
     gateway.refresh_registry_identities()
 
-    assert pages == [1, 2]
+    assert pages == [1, 2, 1, 2]
     assert gateway._registry_identity_numbers == {4200}
+
+
+def test_precreate_convergence_replays_interpage_identity_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    candidate = {
+        "number": 4200,
+        "title": "Renamed registry",
+        "state": "open",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [{"name": "type:bug"}],
+    }
+    pass_number = 0
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        nonlocal pass_number
+        assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
+        ):
+            return []
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+            )
+            and "&sort=updated&direction=asc" in endpoint
+        ):
+            page = int(endpoint.rsplit("page=", 1)[1])
+            if page == 1:
+                pass_number += 1
+                ordinary = [
+                    {
+                        "number": number,
+                        "title": f"Ordinary Issue {number}",
+                        "state": "closed",
+                        "body": "",
+                        "labels": [],
+                    }
+                    for number in range(1, 101)
+                ]
+                if pass_number >= 2:
+                    return [candidate, *ordinary[:99]]
+                return ordinary
+            if page == 2:
+                return []
+        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/4200":
+            return candidate
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="registry title"):
+        known_defects._select_registry(gateway, None)
+
+    assert pass_number == 3
+    assert gateway._registry_identity_numbers == {4200}
+
+
+def test_authoritative_identity_nonconvergence_fails_without_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    passes = 0
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        nonlocal passes
+        assert method == "GET"
+        passes += 1
+        if passes % 2 == 0:
+            return []
+        return [
+            {
+                "number": 4200,
+                "title": known_defects.REGISTRY_TITLE,
+                "state": "open",
+                "body": known_defects.render_registry_body(),
+                "labels": [{"name": known_defects.REGISTRY_LABEL}],
+            }
+        ]
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="did not converge"):
+        gateway.refresh_registry_identities()
+
+    assert passes == known_defects.REGISTRY_DISCOVERY_MAX_PASSES
+    assert gateway._registry_identity_numbers is None
 
 
 def test_rest_public_lookup_enumerates_hidden_prior_generation(
@@ -2906,7 +3003,7 @@ def test_rest_public_lookup_enumerates_hidden_prior_generation(
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
             )
-            and "&sort=updated&direction=desc" in endpoint
+            and "&sort=updated&direction=asc" in endpoint
         ):
             authoritative_reads += 1
             return [current, hidden]
@@ -2924,7 +3021,7 @@ def test_rest_public_lookup_enumerates_hidden_prior_generation(
     with pytest.raises(known_defects.KnownDefectsError, match="registry container"):
         known_defects.lookup_defect(_defect().defect_id, gateway)
 
-    assert authoritative_reads == 1
+    assert authoritative_reads == 2
     assert hidden_reads == 1
     assert gateway._registry_identity_numbers == {4200, 4201}
 
@@ -2956,6 +3053,11 @@ def test_known_defect_label_is_canonical_and_registry_only() -> None:
     assert (
         registry_contract["authoritative_discovery_since"]
         == known_defects.REGISTRY_ROLLOUT_SINCE
+    )
+    assert registry_contract["authoritative_consecutive_scans"] == 2
+    assert (
+        registry_contract["authoritative_max_passes"]
+        == known_defects.REGISTRY_DISCOVERY_MAX_PASSES
     )
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"

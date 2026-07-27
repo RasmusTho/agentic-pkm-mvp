@@ -39,6 +39,7 @@ REGISTRY_LABEL_DESCRIPTION = (
 REGISTRY_TITLE = "Known Defects Registry (rolling)"
 REGISTRY_MARKER = "<!-- known-defects-registry:v1 -->"
 REGISTRY_ROLLOUT_SINCE = "2026-07-27T00:00:00Z"
+REGISTRY_DISCOVERY_MAX_PASSES = 4
 ENTRY_MARKER_TEMPLATE = (
     "<!-- known-defect-entry:v1 id={defect_id} phase={phase} -->"
 )
@@ -356,12 +357,12 @@ class GhRegistryGateway:
                 return rows
         raise KnownDefectsError(f"pagination bound exceeded for {endpoint}")
 
-    def refresh_registry_identities(self) -> None:
-        numbers = set(self._registry_identity_numbers or ())
+    def _authoritative_registry_identity_pass(self) -> set[int]:
+        numbers: set[int] = set()
         encoded_since = quote(REGISTRY_ROLLOUT_SINCE, safe="")
         endpoint = (
             f"repos/{self.repo}/issues?state=all"
-            f"&since={encoded_since}&sort=updated&direction=desc"
+            f"&since={encoded_since}&sort=updated&direction=asc"
         )
         separator = "&"
         for page in range(1, 101):
@@ -396,10 +397,23 @@ class GhRegistryGateway:
                 ):
                     numbers.add(number)
             if len(batch) < 100:
-                self._registry_identity_numbers = numbers
-                return
+                return numbers
         raise KnownDefectsError(
             "pagination bound exceeded for authoritative registry discovery"
+        )
+
+    def refresh_registry_identities(self) -> None:
+        previous: set[int] | None = None
+        for _attempt in range(REGISTRY_DISCOVERY_MAX_PASSES):
+            discovered = self._authoritative_registry_identity_pass()
+            if previous is not None and discovered == previous:
+                if self._registry_identity_numbers is None:
+                    self._registry_identity_numbers = set()
+                self._registry_identity_numbers.update(discovered)
+                return
+            previous = discovered
+        raise KnownDefectsError(
+            "authoritative registry discovery did not converge"
         )
 
     def ensure_registry_label(self) -> None:
