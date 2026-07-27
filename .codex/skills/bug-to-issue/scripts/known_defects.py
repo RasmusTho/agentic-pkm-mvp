@@ -73,6 +73,7 @@ NORMAL_AGENT_STATES = {
     "agent:needs-human",
 }
 PRIORITY_LABELS = {"prio:high", "prio:med", "prio:low"}
+ALLOWED_LANE_LABELS = {"lane:governance"}
 TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 REQUIRED_ISSUE_SECTIONS = (
     "Context",
@@ -203,6 +204,15 @@ class KnownDefect:
             raise KnownDefectsError(
                 "review_url must link to the source PR or review thread on github.com"
             )
+        canonical_review_url = parsed._replace(
+            scheme="https",
+            netloc="github.com",
+        ).geturl()
+        if re.fullmatch(r"https://github\.com/[^()\s]+", canonical_review_url) is None:
+            raise KnownDefectsError(
+                "review_url contains characters that cannot round-trip through "
+                "the registry schema"
+            )
         normalized_key = (
             _require_text("defect_key", defect_key, max_length=256)
             if defect_key is not None
@@ -212,7 +222,7 @@ class KnownDefect:
             repo=repo,
             source_pr=source_pr,
             source_sha=source_sha.lower(),
-            review_url=review_url,
+            review_url=canonical_review_url,
             symptom=_require_text("symptom", symptom),
             evidence=_require_text("evidence", evidence),
             severity=severity,
@@ -1009,6 +1019,25 @@ def _intake_defect(
             )
         raise
     finalized = _finalize_pending_entry(gateway, issue, comment)
+    post_finalize_issue: dict[str, Any] | None = None
+    try:
+        post_finalize_issue = gateway.get_issue(int(issue["number"]))
+        _validate_registry_issue(post_finalize_issue, require_open=True)
+    except KnownDefectsError:
+        _compensate_comment(gateway, int(issue["number"]), finalized)
+        if (
+            post_finalize_issue is not None
+            and registry_issue is None
+            and allow_lifecycle_retry
+            and _closed_canonical_registry(post_finalize_issue)
+        ):
+            return _intake_defect(
+                defect,
+                gateway,
+                registry_issue=None,
+                allow_lifecycle_retry=False,
+            )
+        raise
     return {
         "schema": "known-defect-receipt.v1",
         "status": "created",
@@ -1234,7 +1263,8 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
         raise KnownDefectsError(
             "promotion target must carry exactly one canonical priority label"
         )
-    canonical_labels = {"type:bug"} | agent_states | priorities
+    lane_labels = labels & ALLOWED_LANE_LABELS
+    canonical_labels = {"type:bug"} | agent_states | priorities | lane_labels
     unexpected_labels = sorted(labels - canonical_labels)
     if unexpected_labels:
         raise KnownDefectsError(
@@ -1342,6 +1372,7 @@ def _promotion_target_authority_sha256(issue: dict[str, Any]) -> str:
     priority = next(iter(labels & PRIORITY_LABELS), "")
     payload = {
         "body": issue.get("body") or "",
+        "lanes": sorted(labels & ALLOWED_LANE_LABELS),
         "priority": priority,
         "title": issue.get("title") or "",
         "type": "type:bug",
@@ -1362,11 +1393,12 @@ def _validate_promoted_target_snapshot(
     type_labels = {label for label in labels if label.startswith("type:")}
     priorities = {label for label in labels if label.startswith("prio:")}
     agent_states = {label for label in labels if label.startswith("agent:")}
+    lane_labels = labels & ALLOWED_LANE_LABELS
     if type_labels != {"type:bug"} or len(priorities) != 1 or not priorities <= PRIORITY_LABELS:
         raise KnownDefectsError("promoted target type or priority authority drifted")
     if len(agent_states) > 1 or not agent_states <= NORMAL_AGENT_STATES:
         raise KnownDefectsError("promoted target agent state is noncanonical")
-    allowed_labels = {"type:bug"} | priorities | agent_states
+    allowed_labels = {"type:bug"} | priorities | agent_states | lane_labels
     if labels != allowed_labels:
         raise KnownDefectsError("promoted target label authority drifted")
     if _promotion_target_authority_sha256(issue) != authority_sha256:
@@ -1611,6 +1643,14 @@ def promote_defect(
         issue_number,
         authority_sha256,
     )
+    try:
+        final_registry = gateway.get_issue(registry_number)
+        _validate_registry_issue(final_registry, require_open=True)
+        final_target = gateway.get_issue(issue_number)
+        _validate_promoted_target_snapshot(final_target, authority_sha256)
+    except KnownDefectsError:
+        _compensate_comment(gateway, registry_number, canonical_comment)
+        raise
     targets, _evidence, authority_digests, authority_counts = _promotion_targets(
         gateway.list_comments(int(registry["number"])),
         defect_id,

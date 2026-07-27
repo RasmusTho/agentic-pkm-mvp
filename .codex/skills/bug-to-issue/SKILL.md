@@ -111,10 +111,11 @@ its just-created comment and fails closed for explicit reconciliation. This keep
 silently appending durable entries to stale registry authority. An ambiguous comment-create response
 is immediately reconciled from live Issue/comment inventories. New entry comments begin with
 `phase=pending`, which is never registry authority; only after the live registry is revalidated does
-the helper update the marker to `phase=final`. A failed or ambiguous create/update can therefore
-leave only a non-authoritative pending comment for the next retry to finalize or compensate. An open
-canonical registry completes the receipt, while closure or authority drift compensates the pending
-comment before retry/failure.
+the helper update the marker to `phase=final`, then reread registry authority once more before
+returning success. A failed or ambiguous create/update can therefore leave only a non-authoritative
+pending comment for the next retry to finalize or compensate. Closure or authority drift across the
+final PATCH compensates the new final comment; only an open canonical registry completes the
+receipt.
 
 ### Promotion
 
@@ -145,8 +146,10 @@ closure transitions may change only lifecycle state and the canonical agent labe
 retries revalidate the digest before returning the existing receipt. Ambiguous marker creation is
 resolved from the full comment inventory before any success receipt. Promotion comments likewise
 move from non-authoritative `phase=pending` to `phase=final` only after both registry and target
-authority validate; failed or ambiguous transport responses cannot turn an unverified pending
-comment into promotion authority. Stale closed-registry pending markers are compensated.
+authority validate. The helper rereads both authorities after the final PATCH before returning
+success, so drift across that boundary compensates the new final marker. Failed or ambiguous
+transport responses cannot turn an unverified pending comment into promotion authority. Stale
+closed-registry pending markers are compensated.
 The promoted Issue owns implementation scope and closure; the registry entry remains durable source
 evidence.
 

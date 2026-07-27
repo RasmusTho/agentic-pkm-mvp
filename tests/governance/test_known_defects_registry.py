@@ -237,6 +237,38 @@ def test_explicit_defect_key_keeps_id_stable_across_new_evidence() -> None:
     assert first.defect_id == later.defect_id
 
 
+def test_review_url_host_is_canonicalized_before_schema_rendering() -> None:
+    defect = _defect(
+        review_url=(
+            "https://GitHub.com/RasmusTho/agentic-pkm-mvp/"
+            "pull/4321#discussion_r123"
+        )
+    )
+
+    receipt = known_defects.intake_defect(defect, FakeGateway())
+
+    assert receipt["status"] == "created"
+    assert defect.review_url.startswith("https://github.com/")
+
+
+def test_review_url_must_round_trip_through_the_entry_schema() -> None:
+    gateway = FakeGateway()
+
+    with pytest.raises(known_defects.KnownDefectsError, match="round-trip"):
+        known_defects.KnownDefect.validated(
+            **{
+                **_defect().__dict__,
+                "review_url": (
+                    "https://github.com/RasmusTho/agentic-pkm-mvp/"
+                    "pull/4321/(invalid)"
+                ),
+            }
+        )
+
+    assert gateway.issues == {}
+    assert gateway.comments == {}
+
+
 @pytest.mark.parametrize("classification", ["maintainability", "unproven"])
 def test_non_defects_are_excluded_before_github_mutation(
     classification: str,
@@ -1057,6 +1089,111 @@ def test_failed_entry_finalize_leaves_nonauthoritative_pending_for_retry() -> No
     assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
 
 
+class RegistryCloseDuringEntryFinalizeGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed_once = False
+
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        updated = super().update_comment(comment_id, body)
+        if (
+            not self.closed_once
+            and body.startswith("<!-- known-defect-entry:")
+            and "phase=final" in body.splitlines()[0]
+        ):
+            self.issues[900]["state"] = "closed"
+            self.closed_once = True
+        return updated
+
+
+def test_registry_close_during_entry_finalize_is_compensated_and_retried() -> None:
+    gateway = RegistryCloseDuringEntryFinalizeGateway()
+
+    receipt = known_defects.intake_defect(_defect(), gateway)
+
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 901
+    assert gateway.comments[900] == []
+    assert len(gateway.comments[901]) == 1
+    assert "phase=final" in gateway.comments[901][0]["body"].splitlines()[0]
+
+
+class RegistryDriftDuringEntryFinalizeGateway(FakeGateway):
+    def __init__(self, transition: str) -> None:
+        super().__init__()
+        self.transition = transition
+        self.transitioned = False
+
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        updated = super().update_comment(comment_id, body)
+        if (
+            not self.transitioned
+            and body.startswith("<!-- known-defect-entry:")
+            and "phase=final" in body.splitlines()[0]
+        ):
+            if self.transition == "unlock":
+                self.issues[900]["locked"] = False
+            elif self.transition == "body":
+                self.issues[900]["body"] += "\nDrifted."
+            elif self.transition == "label":
+                self.issues[900]["labels"].append({"name": "agent:blocked"})
+            self.transitioned = True
+        return updated
+
+
+@pytest.mark.parametrize(
+    ("transition", "expected"),
+    [
+        ("unlock", "must be locked"),
+        ("body", "malformed"),
+        ("label", "agent state"),
+    ],
+)
+def test_registry_drift_during_entry_finalize_is_compensated(
+    transition: str,
+    expected: str,
+) -> None:
+    gateway = RegistryDriftDuringEntryFinalizeGateway(transition)
+
+    with pytest.raises(known_defects.KnownDefectsError, match=expected):
+        known_defects.intake_defect(_defect(), gateway)
+
+    assert gateway.comments[900] == []
+
+
+class PostFinalizeReadFailureGateway(FakeGateway):
+    def __init__(self, marker_type: str) -> None:
+        super().__init__()
+        self.marker_type = marker_type
+        self.fail_next_get = False
+
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        updated = super().update_comment(comment_id, body)
+        if (
+            body.startswith(f"<!-- known-defect-{self.marker_type}:")
+            and "phase=final" in body.splitlines()[0]
+        ):
+            self.fail_next_get = True
+        return updated
+
+    def get_issue(self, number: int) -> dict[str, Any]:
+        if self.fail_next_get:
+            self.fail_next_get = False
+            raise known_defects.KnownDefectsError(
+                "indeterminate post-finalization authority read"
+            )
+        return super().get_issue(number)
+
+
+def test_indeterminate_entry_post_finalize_read_compensates_final_comment() -> None:
+    gateway = PostFinalizeReadFailureGateway("entry")
+
+    with pytest.raises(known_defects.KnownDefectsError, match="indeterminate"):
+        known_defects.intake_defect(_defect(), gateway)
+
+    assert gateway.comments[900] == []
+
+
 def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     gateway = FakeGateway()
     defect = _defect()
@@ -1108,6 +1245,30 @@ def test_promotion_rejects_unknown_labels_on_canonical_axes(
     expected = "priority" if extra_label.startswith("prio:") else "agent-state"
     with pytest.raises(known_defects.KnownDefectsError, match=expected):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+def test_promotion_accepts_the_canonical_governance_lane_exception() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: repair governance behavior",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+            {"name": "lane:governance"},
+        ],
+    }
+
+    promoted = known_defects.promote_defect(defect.defect_id, 901, gateway)
+    duplicate = known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert promoted["status"] == "promoted"
+    assert duplicate["status"] == "promotion_duplicate"
 
 
 class ConflictingPromotionGateway(FakeGateway):
@@ -1421,6 +1582,84 @@ def test_ambiguous_promotion_finalize_is_retry_safe(
 
     assert duplicate["status"] == "promotion_duplicate"
     assert "phase=final" in gateway.comments[900][-1]["body"].splitlines()[0]
+
+
+class AuthorityDriftDuringPromotionFinalizeGateway(FakeGateway):
+    def __init__(self, transition: str) -> None:
+        super().__init__()
+        self.transition = transition
+        self.transitioned = False
+
+    def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        updated = super().update_comment(comment_id, body)
+        if (
+            not self.transitioned
+            and body.startswith("<!-- known-defect-promotion:")
+            and "phase=final" in body.splitlines()[0]
+        ):
+            if self.transition == "target_body":
+                self.issues[901]["body"] += "\n\nDrifted during finalization."
+            elif self.transition == "registry_close":
+                self.issues[900]["state"] = "closed"
+            self.transitioned = True
+        return updated
+
+
+@pytest.mark.parametrize(
+    ("transition", "expected"),
+    [
+        ("target_body", "authority drifted"),
+        ("registry_close", "not open"),
+    ],
+)
+def test_authority_drift_during_promotion_finalize_is_compensated(
+    transition: str,
+    expected: str,
+) -> None:
+    gateway = AuthorityDriftDuringPromotionFinalizeGateway(transition)
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: fence promotion finalization",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match=expected):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert len(gateway.comments[intake["registry_issue"]]) == 1
+    assert known_defects.lookup_defect(defect.defect_id, gateway)[
+        "promotion_issue"
+    ] is None
+
+
+def test_indeterminate_promotion_post_finalize_read_compensates_final_marker() -> None:
+    gateway = PostFinalizeReadFailureGateway("promotion")
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: fence promotion finalization reads",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="indeterminate"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert len(gateway.comments[intake["registry_issue"]]) == 1
 
 
 def test_duplicate_final_promotion_markers_remain_a_conflict_after_drift() -> None:
