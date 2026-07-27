@@ -42,6 +42,7 @@ from app.builderops.delivery_orchestration_contracts import (
     delivery_event_id,
     delivery_event_input_hash,
     delivery_effect_idempotency_key,
+    delivery_effect_expected_outcome_keys,
     delivery_effect_input_hash,
     delivery_initiation_approval_hash,
     parse_delivery_contract,
@@ -210,6 +211,7 @@ def _plan(issue: IssueScope, initiation: DeliveryInitiation) -> DeliveryPlan:
             "launch_worker",
             "merge_pull_request",
             "record_delivery_receipt",
+            "record_known_defect",
             "request_review",
         ),
         provenance=_provenance("plan-4165"),
@@ -351,6 +353,62 @@ def _recovery_effect(
         idempotency_key=idempotency_key,
         input_hash=input_hash,
         provenance=_provenance("effect-merge-4165"),
+    )
+
+
+def _known_defect_effect(
+    issue: IssueScope,
+    plan: DeliveryPlan,
+    *,
+    registry_ref: str,
+    finding_hash: str,
+    sequence: int,
+) -> ReducerEffect:
+    plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    authorities = (_authority(issue),)
+    expected_outcome_keys = delivery_effect_expected_outcome_keys(
+        effect_class="record_known_defect",
+        run_id="run-4165",
+        issue=issue,
+        pull_request_number=4200,
+        required_check_names=plan.policy_profile.required_check_names,
+        known_defect_registry_ref=registry_ref,
+        known_defect_finding_hash=finding_hash,
+    )
+    input_hash = delivery_effect_input_hash(
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        effect_class="record_known_defect",
+        issue=issue,
+        pull_request_number=4200,
+        exact_head_sha=SHA_D,
+        expected_authorities=authorities,
+        expected_outcome_keys=expected_outcome_keys,
+        known_defect_registry_ref=registry_ref,
+        known_defect_finding_hash=finding_hash,
+    )
+    idempotency_key = delivery_effect_idempotency_key(input_hash)
+    return ReducerEffect(
+        effect_id=idempotency_key,
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        causal_event=_run_started_event(plan),
+        sequence=sequence,
+        effect_class="record_known_defect",
+        issue=issue,
+        pull_request_number=4200,
+        exact_head_sha=SHA_D,
+        expected_authorities=authorities,
+        expected_outcome_keys=expected_outcome_keys,
+        known_defect_registry_ref=registry_ref,
+        known_defect_finding_hash=finding_hash,
+        idempotency_key=idempotency_key,
+        input_hash=input_hash,
+        provenance=_provenance(f"effect-known-defect-{sequence}"),
     )
 
 
@@ -623,6 +681,25 @@ def test_contracts_round_trip_canonically() -> None:
         idempotency_key=effect_idempotency_key,
         input_hash=effect_input_hash,
         provenance=_provenance("effect-1"),
+    )
+    result_causal_effect = effect.model_copy(
+        update={"causal_event": event}
+    )
+    with pytest.raises(
+        ValueError,
+        match="worker event requires supplied worker-result evidence",
+    ):
+        validate_reducer_effect_evidence(
+            result_causal_effect,
+            plan=plan,
+        )
+    assert (
+        validate_reducer_effect_evidence(
+            result_causal_effect,
+            plan=plan,
+            worker_results=(worker,),
+        )
+        is result_causal_effect
     )
     receipt = _receipt(issue, initiation, plan, worker, review)
 
@@ -918,6 +995,40 @@ def test_contracts_round_trip_canonically() -> None:
         validate_reducer_effect_evidence(reprovenanced_effect, plan=plan)
         is reprovenanced_effect
     )
+
+    first_defect_effect = _known_defect_effect(
+        issue,
+        plan,
+        registry_ref=(
+            "registry:rasmustho/agentic-pkm-mvp/issues/4300:"
+            "KD-AAAAAAAAAAAA"
+        ),
+        finding_hash=canonical_hash(review.findings[0]),
+        sequence=6,
+    )
+    second_defect_effect = _known_defect_effect(
+        issue,
+        plan,
+        registry_ref=(
+            "registry:rasmustho/agentic-pkm-mvp/issues/4301:"
+            "KD-BBBBBBBBBBBB"
+        ),
+        finding_hash=SHA_C,
+        sequence=7,
+    )
+    assert first_defect_effect.effect_id != second_defect_effect.effect_id
+    assert (
+        first_defect_effect.expected_outcome_keys
+        != second_defect_effect.expected_outcome_keys
+    )
+    assert validate_reducer_effect_evidence(
+        first_defect_effect,
+        plan=plan,
+    )
+    missing_defect_target = first_defect_effect.model_dump(mode="json")
+    missing_defect_target["known_defect_registry_ref"] = None
+    with pytest.raises(ValidationError, match="exact defect target"):
+        parse_delivery_contract(missing_defect_target)
 
     current_authority = _authority(
         issue,
@@ -1293,6 +1404,7 @@ def test_plan_binds_scope_and_expected_authority() -> None:
         "launch_worker",
         "merge_pull_request",
         "record_delivery_receipt",
+        "record_known_defect",
         "request_review",
     )
     assert validate_delivery_plan_evidence(plan, initiation=initiation) is plan
@@ -1904,12 +2016,79 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         retryable=False,
         evidence_refs=("github-issue:4165:still-open",),
     )
+    close_outcome_keys = (f"{issue.authority_id}#closed",)
+    close_effect_hash = delivery_effect_input_hash(
+        run_id="run-4165",
+        plan_ref=recovery_effect.plan_ref,
+        effect_class="close_issue",
+        issue=issue,
+        pull_request_number=4200,
+        exact_head_sha=SHA_D,
+        expected_authorities=(_authority(issue),),
+        expected_outcome_keys=close_outcome_keys,
+    )
+    close_effect_key = delivery_effect_idempotency_key(close_effect_hash)
+    close_effect = ReducerEffect(
+        effect_id=close_effect_key,
+        run_id="run-4165",
+        plan_ref=recovery_effect.plan_ref,
+        causal_event=_run_started_event(plan),
+        sequence=9,
+        effect_class="close_issue",
+        issue=issue,
+        pull_request_number=4200,
+        exact_head_sha=SHA_D,
+        expected_authorities=(_authority(issue),),
+        expected_outcome_keys=close_outcome_keys,
+        idempotency_key=close_effect_key,
+        input_hash=close_effect_hash,
+        provenance=_provenance("effect-close-failed"),
+    )
+    failed_close_recovery = RecoveryStep(
+        step_index=0,
+        exception_kind=closure_exception.kind,
+        exception_code=closure_exception.code,
+        exception_hash=canonical_hash(closure_exception),
+        effect_ref=ContractRef(
+            schema_version=close_effect.schema_version,
+            contract_id=close_effect.effect_id,
+            content_hash=close_effect.content_hash,
+        ),
+        effect_class="close_issue",
+        issue=issue,
+        action="preserve_failed_closure_readback",
+        authority_readbacks=(
+            RecoveryAuthorityReadback(
+                effect_idempotency_key=close_effect.idempotency_key,
+                authority_id=issue.authority_id,
+                issue=issue,
+                pull_request_number=4200,
+                exact_head_sha=SHA_D,
+                observed_state="unchanged",
+                observed_labels=("type:task",),
+                observed_at=TS,
+                evidence_ref="github-issue:4165:still-open",
+            ),
+        ),
+        outcome_evidence=EffectOutcomeEvidence(
+            effect_class="close_issue",
+            effect_idempotency_key=close_effect.idempotency_key,
+            outcome_state="failed",
+            outcome_keys=close_effect.expected_outcome_keys,
+            observed_at=TS,
+            evidence_refs=("github-issue:4165:still-open",),
+        ),
+        outcome="failed",
+        occurred_at=TS,
+    )
     partial_payload = receipt.model_dump(mode="json")
     partial_payload["terminal_outcome"] = "partially_delivered"
     partial_payload["exceptions"] = [
         closure_exception.model_dump(mode="json")
     ]
-    partial_payload["recovery_history"] = []
+    partial_payload["recovery_history"] = [
+        failed_close_recovery.model_dump(mode="json")
+    ]
     partial_payload["issue_proofs"][0]["delivery_stage"] = "merged"
     partial_payload["issue_proofs"][0]["closure"] = None
     partial_payload["issue_proofs"][0]["exceptions"] = [
@@ -1924,7 +2103,7 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
             plan=plan,
             worker_results=(worker,),
             review_results=(review,),
-            reducer_effects=(),
+            reducer_effects=(close_effect,),
         )
         is partial_receipt
     )
@@ -1946,8 +2125,33 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
 
     payload = review.model_dump(mode="json")
     payload["known_defect_refs"] = []
-    with pytest.raises(ValidationError, match="known-defect refs"):
-        parse_delivery_contract(payload)
+    pending_registry_review = parse_delivery_contract(payload)
+    assert isinstance(pending_registry_review, ReviewResult)
+    pending_registry_payload = partial_receipt.model_dump(mode="json")
+    pending_registry_payload["issue_proofs"][0]["review_result_ref"] = (
+        ContractRef(
+            schema_version=pending_registry_review.schema_version,
+            contract_id=pending_registry_review.result_id,
+            content_hash=pending_registry_review.content_hash,
+        ).model_dump(mode="json")
+    )
+    pending_registry_payload["issue_proofs"][0]["known_defects"] = []
+    pending_registry_payload["tcd_metrics"]["known_p2_dispositions"] = 0
+    pending_registry_receipt = parse_delivery_contract(
+        pending_registry_payload
+    )
+    assert isinstance(pending_registry_receipt, DeliveryReceipt)
+    assert (
+        validate_delivery_receipt_evidence(
+            pending_registry_receipt,
+            initiation=initiation,
+            plan=plan,
+            worker_results=(worker,),
+            review_results=(pending_registry_review,),
+            reducer_effects=(close_effect,),
+        )
+        is pending_registry_receipt
+    )
 
     payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["known_defects"][0]["finding_hash"] = SHA_C

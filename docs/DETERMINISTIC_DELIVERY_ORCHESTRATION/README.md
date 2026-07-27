@@ -119,7 +119,10 @@ envelope but no transport or storage shape becomes contract authority.
   cross-worker coordination.
 - **INV-DDO-6 — effects are idempotent and fenced.** Every external effect has a stable identity,
   expected-state guard, read-before-write check, durable worker/run correlation, and reconciliation
-  path. Duplicate delivery events produce one logical effect.
+  path. Duplicate delivery events produce one logical effect. Every non-start causal event must
+  resolve its referenced effect or structured result before it can authorize a later effect; a
+  known-defect write additionally binds the exact registry reference and finding hash so distinct
+  P2 dispositions cannot collapse into one effect identity.
 - **INV-DDO-7 — exact-head evidence.** CI, review, merge eligibility, and closure evidence bind the
   exact current PR head. New commits invalidate prior evidence.
 - **INV-DDO-8 — severity routing is fail-closed.** P0/P1, protected risk, false-green evidence,
@@ -145,7 +148,9 @@ envelope but no transport or storage shape becomes contract authority.
   correlation before starting another worker.
 - A provider returns malformed review output: classify it as blocking; do not infer a severity.
 - A valid P2 registry write is unavailable: preserve the review evidence and stop the terminal
-  delivery transition that requires a durable P2 disposition; never emit a false clean receipt.
+  delivery transition that requires a durable P2 disposition. Preserve the failed effect's exact
+  logical outcome keys and live readback without claiming the absent success artifact; never emit a
+  false clean receipt.
 - An external effect times out: mark it unknown, read live GitHub/dispatcher state, and reconcile
   before retrying.
 - BuilderOps is unavailable: ordinary manual repo work may continue under existing skills, but the

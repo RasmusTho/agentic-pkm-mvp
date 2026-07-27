@@ -1005,6 +1005,8 @@ def delivery_effect_input_hash(
     exact_head_sha: str | None,
     expected_authorities: tuple[AuthoritySnapshot, ...],
     expected_outcome_keys: tuple[str, ...],
+    known_defect_registry_ref: str | None = None,
+    known_defect_finding_hash: str | None = None,
 ) -> str:
     """Hash the complete semantic input to one proposed reducer effect."""
 
@@ -1031,6 +1033,8 @@ def delivery_effect_input_hash(
             "exact_head_sha": exact_head_sha,
             "expected_authorities": authority_semantics,
             "expected_outcome_keys": list(expected_outcome_keys),
+            "known_defect_registry_ref": known_defect_registry_ref,
+            "known_defect_finding_hash": known_defect_finding_hash,
         }
     )
 
@@ -1048,6 +1052,8 @@ def delivery_effect_expected_outcome_keys(
     issue: IssueScope,
     pull_request_number: int | None,
     required_check_names: tuple[str, ...],
+    known_defect_registry_ref: str | None = None,
+    known_defect_finding_hash: str | None = None,
 ) -> tuple[str, ...]:
     """Derive carrier-neutral logical outcome identities for an effect."""
 
@@ -1068,7 +1074,17 @@ def delivery_effect_expected_outcome_keys(
     if effect_class == "close_issue":
         return (f"{issue.authority_id}#closed",)
     if effect_class == "record_known_defect":
-        return (f"builderops:known-defect:{run_id}:{issue.authority_id}",)
+        if (
+            known_defect_registry_ref is None
+            or known_defect_finding_hash is None
+        ):
+            raise ValueError(
+                "known-defect effect requires exact registry and finding identity"
+            )
+        return (
+            "builderops:known-defect:"
+            f"{known_defect_registry_ref}:{known_defect_finding_hash}",
+        )
     return (f"builderops:receipt:{run_id}:{issue.authority_id}",)
 
 
@@ -1088,6 +1104,8 @@ class ReducerEffect(CanonicalDeliveryContract):
     exact_head_sha: GitSha | None
     expected_authorities: tuple[AuthoritySnapshot, ...]
     expected_outcome_keys: tuple[NonEmptyStr, ...]
+    known_defect_registry_ref: NonEmptyStr | None = None
+    known_defect_finding_hash: Sha256 | None = None
     idempotency_key: NonEmptyStr
     input_hash: Sha256
     requires_live_authority_check: Literal[True] = True
@@ -1171,6 +1189,20 @@ class ReducerEffect(CanonicalDeliveryContract):
             raise ValueError(
                 f"{self.effect_class} must not carry pull request or exact head"
             )
+        known_defect_target_fields = (
+            self.known_defect_registry_ref is not None,
+            self.known_defect_finding_hash is not None,
+        )
+        if (
+            self.effect_class == "record_known_defect"
+            and known_defect_target_fields != (True, True)
+        ) or (
+            self.effect_class != "record_known_defect"
+            and known_defect_target_fields != (False, False)
+        ):
+            raise ValueError(
+                "only known-defect effects require an exact defect target"
+            )
         expected_input_hash = delivery_effect_input_hash(
             run_id=self.run_id,
             plan_ref=self.plan_ref,
@@ -1180,6 +1212,8 @@ class ReducerEffect(CanonicalDeliveryContract):
             exact_head_sha=self.exact_head_sha,
             expected_authorities=self.expected_authorities,
             expected_outcome_keys=self.expected_outcome_keys,
+            known_defect_registry_ref=self.known_defect_registry_ref,
+            known_defect_finding_hash=self.known_defect_finding_hash,
         )
         if self.input_hash != expected_input_hash:
             raise ValueError("reducer effect input hash must bind exact semantic input")
@@ -1377,12 +1411,9 @@ class ReviewResult(CanonicalDeliveryContract):
         p2_findings = sum(
             finding.severity == "P2" for finding in self.findings
         )
-        if (
-            self.disposition == "accept_with_risk"
-            and len(self.known_defect_refs) < p2_findings
-        ):
+        if len(self.known_defect_refs) > p2_findings:
             raise ValueError(
-                "accept_with_risk requires durable known-defect refs for every P2"
+                "review cannot carry more known-defect refs than P2 findings"
             )
         return self
 
@@ -1391,6 +1422,9 @@ def validate_reducer_effect_evidence(
     effect: ReducerEffect,
     *,
     plan: DeliveryPlan,
+    prior_effects: tuple[ReducerEffect, ...] = (),
+    worker_results: tuple[StructuredWorkerResult, ...] = (),
+    review_results: tuple[ReviewResult, ...] = (),
 ) -> ReducerEffect:
     """Resolve an effect proposal against its immutable plan and exact scope."""
 
@@ -1408,8 +1442,58 @@ def validate_reducer_effect_evidence(
         raise ValueError(
             "reducer effect must resolve the exact run-started event"
         )
-    if effect.causal_event.event_type == "run_started":
-        validate_reducer_event_evidence(effect.causal_event, plan=plan)
+    causal_event = effect.causal_event
+    causal_effect = (
+        next(
+            (
+                item
+                for item in prior_effects
+                if causal_event.effect_ref is not None
+                and item.effect_id == causal_event.effect_ref.contract_id
+            ),
+            None,
+        )
+        if causal_event.effect_ref is not None
+        else None
+    )
+    causal_worker = (
+        next(
+            (
+                item
+                for item in worker_results
+                if causal_event.result_ref is not None
+                and item.result_id == causal_event.result_ref.contract_id
+            ),
+            None,
+        )
+        if causal_event.result_ref is not None
+        and causal_event.result_ref.schema_version == WORKER_RESULT_VERSION
+        else None
+    )
+    causal_review = (
+        next(
+            (
+                item
+                for item in review_results
+                if causal_event.result_ref is not None
+                and item.result_id == causal_event.result_ref.contract_id
+            ),
+            None,
+        )
+        if causal_event.result_ref is not None
+        and causal_event.result_ref.schema_version == REVIEW_RESULT_VERSION
+        else None
+    )
+    validate_reducer_event_evidence(
+        causal_event,
+        plan=plan,
+        effect=causal_effect,
+        worker_result=causal_worker,
+        review_result=causal_review,
+        prior_effects=prior_effects,
+        worker_results=worker_results,
+        review_results=review_results,
+    )
     if effect.provenance.created_at < plan.provenance.created_at:
         raise ValueError("reducer effect must follow plan provenance")
     if (
@@ -1428,6 +1512,8 @@ def validate_reducer_effect_evidence(
         issue=effect.issue,
         pull_request_number=effect.pull_request_number,
         required_check_names=plan.policy_profile.required_check_names,
+        known_defect_registry_ref=effect.known_defect_registry_ref,
+        known_defect_finding_hash=effect.known_defect_finding_hash,
     )
     if effect.expected_outcome_keys != expected_outcome_keys:
         raise ValueError(
@@ -1485,6 +1571,9 @@ def validate_reducer_event_evidence(
     effect: ReducerEffect | None = None,
     worker_result: StructuredWorkerResult | None = None,
     review_result: ReviewResult | None = None,
+    prior_effects: tuple[ReducerEffect, ...] = (),
+    worker_results: tuple[StructuredWorkerResult, ...] = (),
+    review_results: tuple[ReviewResult, ...] = (),
 ) -> ReducerEvent:
     """Resolve reducer-event references and subject authority against exact evidence."""
 
@@ -1509,7 +1598,17 @@ def validate_reducer_event_evidence(
         )
         if event.effect_ref != expected_effect_ref:
             raise ValueError("reducer event effect ref does not resolve")
-        validate_reducer_effect_evidence(effect, plan=plan)
+        validate_reducer_effect_evidence(
+            effect,
+            plan=plan,
+            prior_effects=tuple(
+                item
+                for item in prior_effects
+                if item.sequence < effect.sequence
+            ),
+            worker_results=worker_results,
+            review_results=review_results,
+        )
         outcome = event.effect_outcome
         assert outcome is not None
         expected_outcome_state = (
@@ -2215,7 +2314,20 @@ class DeliveryReceipt(CanonicalDeliveryContract):
                 for readback in step.authority_readbacks
                 if readback.issue == step.issue
             )
-            if step.effect_class == "merge_pull_request":
+            if (
+                step.outcome != "reconciled"
+                and any(
+                    readback.observed_state in {"merged", "closed"}
+                    for readback in matching_readbacks
+                )
+            ):
+                raise ValueError(
+                    "failed recovery cannot claim a successful authority outcome"
+                )
+            if (
+                step.outcome == "reconciled"
+                and step.effect_class == "merge_pull_request"
+            ):
                 if (
                     recovery_proof.merge_identity is None
                     or step.occurred_at
@@ -2236,7 +2348,10 @@ class DeliveryReceipt(CanonicalDeliveryContract):
                     raise ValueError(
                         "merge recovery evidence must bind observed merge"
                     )
-            if step.effect_class == "close_issue":
+            if (
+                step.outcome == "reconciled"
+                and step.effect_class == "close_issue"
+            ):
                 if (
                     recovery_proof.closure is None
                     or step.occurred_at < recovery_proof.closure.closed_at
@@ -2331,7 +2446,13 @@ def validate_delivery_receipt_evidence(
             content_hash=effect.content_hash,
         ):
             raise ValueError("recovery effect ref does not resolve")
-        validate_reducer_effect_evidence(effect, plan=plan)
+        validate_reducer_effect_evidence(
+            effect,
+            plan=plan,
+            prior_effects=reducer_effects,
+            worker_results=worker_results,
+            review_results=review_results,
+        )
         expected_pr: int | None = None
         if proof.merge_identity is not None:
             expected_pr = proof.merge_identity.pull_request_number
@@ -2464,6 +2585,9 @@ def validate_delivery_receipt_evidence(
                 for item in review.findings
                 if item.severity == "P2"
             }
+            registered_finding_hashes = {
+                item.finding_hash for item in proof.known_defects
+            }
             if (
                 review.run_id != receipt.run_id
                 or review.plan_ref != expected_plan_ref
@@ -2474,8 +2598,11 @@ def validate_delivery_receipt_evidence(
                 or review.policy_profile != plan.policy_profile
                 or set(review.known_defect_refs)
                 != {item.registry_ref for item in proof.known_defects}
-                or p2_finding_hashes
-                != {item.finding_hash for item in proof.known_defects}
+                or not registered_finding_hashes.issubset(
+                    p2_finding_hashes
+                )
+                or len(registered_finding_hashes)
+                != len(proof.known_defects)
             ):
                 raise ValueError(
                     "receipt proof does not match review, policy, or P2 evidence"
@@ -2517,6 +2644,7 @@ def validate_delivery_receipt_evidence(
                 )
             )
             for effect_class in _SUCCESS_OUTCOME_BY_EFFECT
+            if effect_class != "record_known_defect"
         }
         effect_outcome_keys: dict[str, set[str]] = {
             "claim_issue": {f"{proof.issue.authority_id}#claimed"},
@@ -2541,25 +2669,39 @@ def validate_delivery_receipt_evidence(
                 if proof.closure is not None
                 else set()
             ),
-            "record_known_defect": logical_outcome_keys[
-                "record_known_defect"
-            ],
             "record_delivery_receipt": logical_outcome_keys[
                 "record_delivery_receipt"
             ],
         }
-        if not proof.known_defects:
-            effect_outcome_keys["record_known_defect"] = set()
         for recovery_step in (
             item
             for item in receipt.recovery_history
             if item.issue == proof.issue
         ):
-            expected_outcome_keys = effect_outcome_keys[
-                recovery_step.effect_class
+            recovery_effect = effects[
+                recovery_step.effect_ref.contract_id
             ]
+            if recovery_step.outcome != "reconciled":
+                continue
+            if recovery_step.effect_class == "record_known_defect":
+                matching_defect = any(
+                    item.registry_ref
+                    == recovery_effect.known_defect_registry_ref
+                    and item.finding_hash
+                    == recovery_effect.known_defect_finding_hash
+                    for item in proof.known_defects
+                )
+                expected_outcome_keys = set(
+                    recovery_effect.expected_outcome_keys
+                )
+            else:
+                matching_defect = True
+                expected_outcome_keys = effect_outcome_keys[
+                    recovery_step.effect_class
+                ]
             if (
-                not expected_outcome_keys
+                not matching_defect
+                or not expected_outcome_keys
                 or set(recovery_step.outcome_evidence.outcome_keys)
                 != expected_outcome_keys
                 or (
@@ -2614,6 +2756,14 @@ def validate_delivery_receipt_evidence(
             and all(item.status == "passed" for item in proof.check_evidence)
             and required_checks.issubset(passing_checks)
             and proof.review_disposition not in {None, "reject"}
+            and (
+                review is None
+                or len(proof.known_defects)
+                == sum(
+                    item.severity == "P2"
+                    for item in review.findings
+                )
+            )
             and not proof.exceptions
         )
         if proof_is_delivered:
