@@ -50,3 +50,4 @@ Resolve to exactly one (`docs/architecture/SBS_OPERATING_MODEL.md` §9). A comme
 
 ## Notes
 - State any residual risks, follow-ups, or assumptions.
+- Escalate to the repo-wide non-PG suite only through `scripts/run_with_host_lease.py --resource pytest-not-pg ...`; see `docs/development/DEV_WORKFLOW.md :: Validation baseline`.
