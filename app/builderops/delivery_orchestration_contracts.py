@@ -1041,6 +1041,37 @@ def delivery_effect_idempotency_key(input_hash: str) -> str:
     return f"builderops.delivery-effect.v1:{input_hash}"
 
 
+def delivery_effect_expected_outcome_keys(
+    *,
+    effect_class: EffectClass,
+    run_id: str,
+    issue: IssueScope,
+    pull_request_number: int | None,
+    required_check_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Derive carrier-neutral logical outcome identities for an effect."""
+
+    if effect_class == "claim_issue":
+        return (f"{issue.authority_id}#claimed",)
+    if effect_class == "launch_worker":
+        return (f"builderops:worker:{run_id}:{issue.authority_id}",)
+    if effect_class == "await_ci":
+        return tuple(
+            f"check-name:{name}" for name in sorted(required_check_names)
+        )
+    if effect_class == "request_review":
+        return (f"builderops:review:{run_id}:{issue.authority_id}",)
+    if effect_class == "merge_pull_request":
+        return (
+            f"github:{issue.repository}/pulls/{pull_request_number}",
+        )
+    if effect_class == "close_issue":
+        return (f"{issue.authority_id}#closed",)
+    if effect_class == "record_known_defect":
+        return (f"builderops:known-defect:{run_id}:{issue.authority_id}",)
+    return (f"builderops:receipt:{run_id}:{issue.authority_id}",)
+
+
 class ReducerEffect(CanonicalDeliveryContract):
     contract_family: ClassVar[str] = "reducer"
     schema_version: Literal[
@@ -1391,6 +1422,17 @@ def validate_reducer_effect_evidence(
         raise ValueError("reducer effect issue is outside exact plan scope")
     if effect.effect_class not in plan.effect_allowlist:
         raise ValueError("reducer effect class is outside the plan allowlist")
+    expected_outcome_keys = delivery_effect_expected_outcome_keys(
+        effect_class=effect.effect_class,
+        run_id=effect.run_id,
+        issue=effect.issue,
+        pull_request_number=effect.pull_request_number,
+        required_check_names=plan.policy_profile.required_check_names,
+    )
+    if effect.expected_outcome_keys != expected_outcome_keys:
+        raise ValueError(
+            "reducer effect outcome keys must match effect-class semantics"
+        )
     expected_state = next(
         (
             item
@@ -2456,16 +2498,36 @@ def validate_delivery_receipt_evidence(
                 )
         elif proof.review_disposition is not None or proof.known_defects:
             raise ValueError("receipt proof carries review evidence without a review")
+        required_checks = set(plan.policy_profile.required_check_names)
+        passing_checks = {
+            item.check_name
+            for item in proof.check_evidence
+            if item.status == "passed"
+        }
+        logical_outcome_keys = {
+            effect_class: set(
+                delivery_effect_expected_outcome_keys(
+                    effect_class=cast(EffectClass, effect_class),
+                    run_id=receipt.run_id,
+                    issue=proof.issue,
+                    pull_request_number=pull_request_number,
+                    required_check_names=(
+                        plan.policy_profile.required_check_names
+                    ),
+                )
+            )
+            for effect_class in _SUCCESS_OUTCOME_BY_EFFECT
+        }
         effect_outcome_keys: dict[str, set[str]] = {
             "claim_issue": {f"{proof.issue.authority_id}#claimed"},
-            "launch_worker": {
-                f"{worker.schema_version}:{worker.result_id}"
-            },
-            "await_ci": {
-                item.authority_id for item in proof.check_evidence
-            },
+            "launch_worker": logical_outcome_keys["launch_worker"],
+            "await_ci": (
+                logical_outcome_keys["await_ci"]
+                if required_checks.issubset(passing_checks)
+                else set()
+            ),
             "request_review": (
-                {f"{review.schema_version}:{review.result_id}"}
+                logical_outcome_keys["request_review"]
                 if review is not None
                 else set()
             ),
@@ -2479,13 +2541,15 @@ def validate_delivery_receipt_evidence(
                 if proof.closure is not None
                 else set()
             ),
-            "record_known_defect": {
-                item.registry_ref for item in proof.known_defects
-            },
-            "record_delivery_receipt": {
-                f"{receipt.schema_version}:{receipt.receipt_id}"
-            },
+            "record_known_defect": logical_outcome_keys[
+                "record_known_defect"
+            ],
+            "record_delivery_receipt": logical_outcome_keys[
+                "record_delivery_receipt"
+            ],
         }
+        if not proof.known_defects:
+            effect_outcome_keys["record_known_defect"] = set()
         for recovery_step in (
             item
             for item in receipt.recovery_history
@@ -2509,12 +2573,6 @@ def validate_delivery_receipt_evidence(
                 raise ValueError(
                     "recovery readback does not prove the effect-specific outcome"
                 )
-        required_checks = set(plan.policy_profile.required_check_names)
-        passing_checks = {
-            item.check_name
-            for item in proof.check_evidence
-            if item.status == "passed"
-        }
         if any(
             item.pull_request_number != pull_request_number
             or item.exact_head_sha != proof.exact_head_sha
@@ -2732,6 +2790,7 @@ __all__ = [
     "delivery_event_id",
     "delivery_event_input_hash",
     "delivery_effect_idempotency_key",
+    "delivery_effect_expected_outcome_keys",
     "delivery_effect_input_hash",
     "delivery_initiation_approval_hash",
     "parse_delivery_contract",
