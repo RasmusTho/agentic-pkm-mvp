@@ -36,6 +36,7 @@ REGISTRY_LABEL_COLOR = "C5DEF5"
 REGISTRY_LABEL_DESCRIPTION = (
     "Rolling registry of confirmed deferred defects; never eligible for agent pickup"
 )
+REGISTRY_TITLE = "Known Defects Registry (rolling)"
 REGISTRY_MARKER = "<!-- known-defects-registry:v1 -->"
 ENTRY_MARKER_TEMPLATE = (
     "<!-- known-defect-entry:v1 id={defect_id} phase={phase} -->"
@@ -306,6 +307,7 @@ class GhRegistryGateway:
 
     def __init__(self, repo: str) -> None:
         self.repo = _validate_repo(repo)
+        self._registry_identity_numbers: set[int] | None = None
 
     def _request(
         self,
@@ -351,6 +353,48 @@ class GhRegistryGateway:
                 return rows
         raise KnownDefectsError(f"pagination bound exceeded for {endpoint}")
 
+    def _search_registry_identity_numbers(self) -> set[int]:
+        if self._registry_identity_numbers is not None:
+            return set(self._registry_identity_numbers)
+        query = quote(
+            f'repo:{self.repo} is:issue in:title "{REGISTRY_TITLE}"',
+            safe="",
+        )
+        numbers: set[int] = set()
+        for page in range(1, 11):
+            payload = self._request(
+                "GET",
+                f"search/issues?q={query}&per_page=100&page={page}",
+            )
+            if (
+                not isinstance(payload, dict)
+                or not isinstance(payload.get("items"), list)
+            ):
+                raise KnownDefectsError(
+                    "expected object response from registry identity search"
+                )
+            if payload.get("incomplete_results") is True:
+                raise KnownDefectsError(
+                    "registry identity search returned incomplete results"
+                )
+            items = payload["items"]
+            for issue in items:
+                if (
+                    isinstance(issue, dict)
+                    and issue.get("title") == REGISTRY_TITLE
+                    and "pull_request" not in issue
+                ):
+                    number = int(issue.get("number") or 0)
+                    if number <= 0:
+                        raise KnownDefectsError(
+                            "registry identity search returned an invalid Issue number"
+                        )
+                    numbers.add(number)
+            if len(items) < 100:
+                self._registry_identity_numbers = numbers
+                return set(numbers)
+        raise KnownDefectsError("pagination bound exceeded for registry identity search")
+
     def ensure_registry_label(self) -> None:
         encoded = quote(REGISTRY_LABEL, safe="")
         try:
@@ -379,13 +423,22 @@ class GhRegistryGateway:
         if state not in {"open", "closed", "all"}:
             raise KnownDefectsError(f"unsupported issue state: {state}")
         encoded_label = quote(REGISTRY_LABEL, safe="")
-        issues = self._list_paginated(
+        labeled_issues = self._list_paginated(
             f"repos/{self.repo}/issues?state={state}&labels={encoded_label}"
         )
+        issues_by_number = {
+            int(issue["number"]): issue
+            for issue in labeled_issues
+            if "pull_request" not in issue
+        }
+        for number in self._search_registry_identity_numbers():
+            if number not in issues_by_number:
+                issues_by_number[number] = self.get_issue(number)
         return [
             issue
-            for issue in issues
-            if "pull_request" not in issue
+            for issue in issues_by_number.values()
+            if state == "all"
+            or str(issue.get("state", "")).lower() == state
         ]
 
     def get_issue(self, number: int) -> dict[str, Any]:
@@ -395,15 +448,18 @@ class GhRegistryGateway:
         return issue
 
     def create_registry_issue(self) -> dict[str, Any]:
-        return self._request(
+        issue = self._request(
             "POST",
             f"repos/{self.repo}/issues",
             {
-                "title": "Known Defects Registry (rolling)",
+                "title": REGISTRY_TITLE,
                 "labels": ["type:bug", REGISTRY_LABEL],
                 "body": render_registry_body(),
             },
         )
+        if self._registry_identity_numbers is not None:
+            self._registry_identity_numbers.add(int(issue["number"]))
+        return issue
 
     def lock_registry_issue(self, issue_number: int) -> None:
         self._request("PUT", f"repos/{self.repo}/issues/{issue_number}/lock")
@@ -1338,10 +1394,17 @@ def _has_resolvable_verify_target(item: str) -> bool:
             and _is_durable_anchor(roadmap_diff.group(2))
         ):
             return True
-        if re.fullmatch(
-            r"runtime receipt:\s+[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.v[1-9][0-9]*",
+        runtime_receipt = re.fullmatch(
+            (
+                r"runtime receipt:\s+"
+                r"([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\.v[1-9][0-9]*"
+            ),
             target,
             re.IGNORECASE,
+        )
+        if runtime_receipt is not None and not any(
+            token.casefold() in VAGUE_AUTHORITY_TOKENS
+            for token in re.split(r"[._-]+", runtime_receipt.group(1))
         ):
             return True
     return False

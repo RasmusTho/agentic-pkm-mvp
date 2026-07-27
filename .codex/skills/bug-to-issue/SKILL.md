@@ -95,6 +95,11 @@ If multiple open registry Issues are ever found, intake fails closed instead of 
 the duplicate registry state before retrying; `--registry-issue <N>` can select the already-verified
 single open registry but cannot override ambiguous registry authority.
 
+Registry discovery unions the mutable `state:known-defect` selector with an exact-title GitHub Issue
+identity search. Title-discovered Issue numbers are cached only as identities and reread live when
+the selector query no longer returns them. Removing the selector label therefore becomes explicit,
+fail-closed registry drift instead of hiding committed comments or permitting duplicate authority.
+
 Registry creation is crash-convergent across the create/lock boundary. Intake may lock and reuse
 exactly one structurally canonical open bootstrap Issue, then rereads the Issue and all comments
 before appending. Every schema entry and promotion marker must come from a GitHub author association

@@ -52,7 +52,11 @@ jobs:
               const labels = (issue.labels || []).map(label =>
                 typeof label === "string" ? label : label.name
               );
-              if (labels.includes("state:known-defect")) {
+              const hasKnownDefectsIdentity =
+                labels.includes("state:known-defect")
+                || issue.title === "Known Defects Registry (rolling)"
+                || body.startsWith("<!-- known-defects-registry:v1 -->\n");
+              if (hasKnownDefectsIdentity) {
                 const expectedLabels = ["state:known-defect", "type:bug"];
                 const actualLabels = [...new Set(labels)].sort();
                 const knownDefectsRegistryBodyLines = [

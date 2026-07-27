@@ -33,7 +33,8 @@ Keep only these labels for the delivery control plane taxonomy:
 locked rolling Known Defects Issue uses it with `type:bug` and without any `agent:*` label; normal
 implementation Issues never use it. The Issue governance workflow exempts only this exact-label
 container from the normal task-section requirement and validates its exact v1 body and live locked
-state instead. `locked` and `unlocked` events re-run that validation.
+state instead. Exact registry title/body identity keeps the validation active when the selector
+label is removed, and `locked` and `unlocked` events re-run that validation.
 
 `lane:governance` is the one additive lane label. Apply it to governance-lane Issues and PRs in
 addition to their canonical type, priority, and agent-state labels; never apply it to the Known
