@@ -12,6 +12,15 @@ issues:
     - Out of Scope
     - Suggested Validation
     - Source Docs
+  special_containers:
+    known_defects_registry:
+      selector_label: state:known-defect
+      exact_labels:
+        - type:bug
+        - state:known-defect
+      canonical_body_marker: "<!-- known-defects-registry:v1 -->"
+      normal_required_sections_exempt: true
+      agent_labels_forbidden: true
 labels:
   type:
     - type:task

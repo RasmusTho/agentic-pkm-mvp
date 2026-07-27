@@ -30,7 +30,8 @@ Keep only these labels for the delivery control plane taxonomy:
 
 `state:known-defect` is a narrow registry-container exception, not an agent execution state. The
 locked rolling Known Defects Issue uses it with `type:bug` and without any `agent:*` label; normal
-implementation Issues never use it.
+implementation Issues never use it. The Issue governance workflow exempts only this exact-label
+container from the normal task-section requirement and validates its exact v1 body instead.
 
 ## Project contract
 
