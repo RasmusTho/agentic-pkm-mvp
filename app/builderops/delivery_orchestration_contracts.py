@@ -1283,6 +1283,10 @@ class IssueDeliveryProof(_StrictFrozenModel):
         if self.closure is not None and self.closure.issue_number != self.issue.issue_number:
             raise ValueError("closure evidence must bind the proof issue")
         if self.closure is not None:
+            if self.merge_identity is None:
+                raise ValueError(
+                    "closure evidence requires matching merge evidence"
+                )
             if self.closure.repository.casefold() != self.issue.repository.casefold():
                 raise ValueError("closure evidence must bind the proof repository")
             if self.exact_head_sha != self.closure.exact_head_sha:
@@ -1520,6 +1524,20 @@ class DeliveryReceipt(CanonicalDeliveryContract):
                 raise ValueError(
                     "closure evidence must not precede merge chronology"
                 )
+        recovery_times = tuple(
+            step.occurred_at for step in self.recovery_history
+        )
+        if any(
+            occurred_at < self.started_at or occurred_at > self.completed_at
+            for occurred_at in recovery_times
+        ):
+            raise ValueError(
+                "recovery evidence must fall within receipt lifecycle chronology"
+            )
+        if recovery_times != tuple(sorted(recovery_times)):
+            raise ValueError(
+                "recovery evidence must use monotonic lifecycle chronology"
+            )
         return self
 
 
@@ -1798,6 +1816,7 @@ __all__ = [
     "WORKER_RESULT_VERSION",
     "canonical_hash",
     "canonical_json",
+    "delivery_effect_idempotency_key",
     "delivery_effect_input_hash",
     "delivery_initiation_approval_hash",
     "parse_delivery_contract",

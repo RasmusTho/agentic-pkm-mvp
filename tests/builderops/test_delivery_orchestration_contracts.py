@@ -939,6 +939,48 @@ def test_receipt_preserves_delivery_and_tcd_evidence() -> None:
         parse_delivery_contract(payload)
 
     payload = receipt.model_dump(mode="json")
+    payload["issue_proofs"][0]["merge_identity"] = None
+    with pytest.raises(ValidationError, match="requires matching merge"):
+        parse_delivery_contract(payload)
+
+    for occurred_at in (
+        "2026-07-27T09:59:59Z",
+        "2026-07-27T10:20:01Z",
+    ):
+        payload = receipt.model_dump(mode="json")
+        payload["recovery_history"][0]["occurred_at"] = occurred_at
+        with pytest.raises(ValidationError, match="lifecycle chronology"):
+            parse_delivery_contract(payload)
+
+    second_recovery_exception = DeliveryException(
+        kind="external_state_unknown",
+        code="closure-timeout-reconciled",
+        message="Closure call timed out and was reconciled.",
+        retryable=False,
+        evidence_refs=("github-issue:4165:closed",),
+    )
+    payload = receipt.model_dump(mode="json")
+    payload["exceptions"].append(
+        second_recovery_exception.model_dump(mode="json")
+    )
+    payload["recovery_history"][0]["occurred_at"] = (
+        "2026-07-27T10:10:00Z"
+    )
+    payload["recovery_history"].append(
+        RecoveryStep(
+            step_index=1,
+            exception_kind=second_recovery_exception.kind,
+            exception_code=second_recovery_exception.code,
+            action="read_live_closure_authority",
+            authority_readback_refs=("github-issue:4165:closed",),
+            outcome="reconciled",
+            occurred_at="2026-07-27T10:05:00Z",
+        ).model_dump(mode="json")
+    )
+    with pytest.raises(ValidationError, match="monotonic"):
+        parse_delivery_contract(payload)
+
+    payload = receipt.model_dump(mode="json")
     payload["issue_proofs"][0]["check_evidence"] = []
     with pytest.raises(ValidationError, match="accepted exact-head proof"):
         parse_delivery_contract(payload)
