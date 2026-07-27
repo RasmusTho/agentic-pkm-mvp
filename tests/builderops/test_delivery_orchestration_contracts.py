@@ -866,6 +866,21 @@ def test_contracts_round_trip_canonically() -> None:
         )
         is effect_event
     )
+    ready_authority = _authority(
+        issue,
+        labels=("agent:ready", "type:task"),
+    )
+    ready_plan_payload = plan.model_dump(mode="json")
+    ready_plan_payload["input_authorities"] = [
+        ready_authority.model_dump(mode="json")
+    ]
+    ready_plan = parse_delivery_contract(ready_plan_payload)
+    assert isinstance(ready_plan, DeliveryPlan)
+    ready_plan_ref = ContractRef(
+        schema_version=ready_plan.schema_version,
+        contract_id=ready_plan.plan_id,
+        content_hash=ready_plan.content_hash,
+    )
     claim_outcome_keys = delivery_effect_expected_outcome_keys(
         effect_class="claim_issue",
         run_id=effect.run_id,
@@ -875,12 +890,12 @@ def test_contracts_round_trip_canonically() -> None:
     )
     claim_effect_hash = delivery_effect_input_hash(
         run_id=effect.run_id,
-        plan_ref=effect.plan_ref,
+        plan_ref=ready_plan_ref,
         effect_class="claim_issue",
         issue=issue,
         pull_request_number=None,
         exact_head_sha=None,
-        expected_authorities=(_authority(issue),),
+        expected_authorities=(ready_authority,),
         expected_outcome_keys=claim_outcome_keys,
     )
     claim_effect_key = delivery_effect_idempotency_key(
@@ -889,14 +904,14 @@ def test_contracts_round_trip_canonically() -> None:
     claim_effect = ReducerEffect(
         effect_id=claim_effect_key,
         run_id=effect.run_id,
-        plan_ref=effect.plan_ref,
-        causal_event=run_started_event,
+        plan_ref=ready_plan_ref,
+        causal_event=_run_started_event(ready_plan),
         sequence=1,
         effect_class="claim_issue",
         issue=issue,
         pull_request_number=None,
         exact_head_sha=None,
-        expected_authorities=(_authority(issue),),
+        expected_authorities=(ready_authority,),
         expected_outcome_keys=claim_outcome_keys,
         idempotency_key=claim_effect_key,
         input_hash=claim_effect_hash,
@@ -914,7 +929,7 @@ def test_contracts_round_trip_canonically() -> None:
     with pytest.raises(ValueError, match="typed post-effect outcome"):
         validate_reducer_event_evidence(
             contradictory_claim_event,
-            plan=plan,
+            plan=ready_plan,
             effect=claim_effect,
         )
     valid_claim_event = _effect_result_event(
@@ -925,9 +940,44 @@ def test_contracts_round_trip_canonically() -> None:
     )
     assert validate_reducer_event_evidence(
         valid_claim_event,
-        plan=plan,
+        plan=ready_plan,
         effect=claim_effect,
     )
+    unready_claim_hash = delivery_effect_input_hash(
+        run_id=effect.run_id,
+        plan_ref=effect.plan_ref,
+        effect_class="claim_issue",
+        issue=issue,
+        pull_request_number=None,
+        exact_head_sha=None,
+        expected_authorities=(_authority(issue),),
+        expected_outcome_keys=claim_outcome_keys,
+    )
+    unready_claim_key = delivery_effect_idempotency_key(
+        unready_claim_hash
+    )
+    unready_claim_effect = claim_effect.model_copy(
+        update={
+            "effect_id": unready_claim_key,
+            "plan_ref": effect.plan_ref,
+            "causal_event": run_started_event,
+            "expected_authorities": (_authority(issue),),
+            "idempotency_key": unready_claim_key,
+            "input_hash": unready_claim_hash,
+        }
+    )
+    unchanged_claim_event = _effect_result_event(
+        unready_claim_effect,
+        subject=_authority(issue),
+        outcome_state="claimed",
+        correlation_id="event-claim-without-transition",
+    )
+    with pytest.raises(ValueError, match="typed post-effect outcome"):
+        validate_reducer_event_evidence(
+            unchanged_claim_event,
+            plan=plan,
+            effect=unready_claim_effect,
+        )
     wrong_outcome_payload = effect_event.model_dump(mode="json")
     wrong_outcome_payload["effect_outcome"]["outcome_state"] = "merged"
     wrong_outcome_hash = delivery_event_input_hash(

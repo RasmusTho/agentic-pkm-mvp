@@ -321,6 +321,8 @@ def _effect_result_subject_is_truthful(
     if event_type == "effect_failed":
         return _same_authority_state(subject, expected)
     if effect.effect_class == "claim_issue":
+        if "agent:ready" not in expected.observed_labels:
+            return False
         expected_labels = {
             label for label in expected.observed_labels if label != "agent:ready"
         }

@@ -123,9 +123,10 @@ envelope but no transport or storage shape becomes contract authority.
   resolve its referenced effect or structured result, including the same PR and exact head, before
   it can authorize a later effect; a known-defect write additionally binds the exact registry
   reference and finding hash so distinct P2 dispositions cannot collapse into one effect identity.
-  Success/failure events must carry the effect-specific post-effect authority state: claims cannot
-  retain `agent:ready`, closures must observe the Issue closed, and non-mutating or failed effects
-  cannot silently change the guarded Issue state.
+  Success/failure events must carry the effect-specific post-effect authority state: a claim
+  requires an actual transition from a pre-state containing `agent:ready` to a post-state without
+  it, closures must observe the Issue closed, and non-mutating or failed effects cannot silently
+  change the guarded Issue state.
 - **INV-DDO-7 — exact-head evidence.** CI, review, merge eligibility, and closure evidence bind the
   exact current PR head. New commits invalidate prior evidence.
 - **INV-DDO-8 — severity routing is fail-closed.** P0/P1, protected risk, false-green evidence,
