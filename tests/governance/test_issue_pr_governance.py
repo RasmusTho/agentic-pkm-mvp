@@ -140,7 +140,9 @@ def test_issue_shape_workflow_rechecks_registry_lock_transitions_from_live_issue
     assert "validateIssueShape(liveIssue)" in workflow
     assert 'context.payload.action === "opened"' in workflow
     assert "isUnlockedRegistryBootstrap" in workflow
-    assert "setTimeout(resolve, 3000)" in workflow
+    assert "const maxLockPolls = 10" in workflow
+    assert "attempt < maxLockPolls && liveIssue.locked !== true" in workflow
+    assert "setTimeout(resolve, 1000)" in workflow
     assert "({ data: liveIssue } = await github.rest.issues.get" in workflow
 
 

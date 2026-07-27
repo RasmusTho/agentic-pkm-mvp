@@ -1025,15 +1025,15 @@ class CloseAfterAppendGateway(FakeGateway):
         return comment
 
 
-def test_registry_close_after_append_compensates_and_retries_once() -> None:
+def test_registry_close_after_append_preserves_reserved_entry() -> None:
     gateway = CloseAfterAppendGateway()
 
     receipt = known_defects.intake_defect(_defect(), gateway)
 
     assert receipt["status"] == "created"
-    assert receipt["registry_issue"] == 901
-    assert gateway.comments[900] == []
-    assert len(gateway.comments[901]) == 1
+    assert receipt["registry_issue"] == 900
+    assert len(gateway.comments[900]) == 1
+    assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
 
 
 class MalformedAfterAppendGateway(FakeGateway):
@@ -1044,13 +1044,15 @@ class MalformedAfterAppendGateway(FakeGateway):
         return comment
 
 
-def test_registry_authority_drift_after_append_is_compensated_and_fails_closed() -> None:
+def test_registry_authority_drift_after_append_preserves_reservation() -> None:
     gateway = MalformedAfterAppendGateway()
 
-    with pytest.raises(known_defects.KnownDefectsError, match="agent state"):
-        known_defects.intake_defect(_defect(), gateway)
+    receipt = known_defects.intake_defect(_defect(), gateway)
 
-    assert gateway.comments[900] == []
+    assert receipt["status"] == "created"
+    assert receipt["registry_issue"] == 900
+    assert len(gateway.comments[900]) == 1
+    assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
 
 
 class PostAppendReadFailureGateway(FakeGateway):
@@ -1071,13 +1073,15 @@ class PostAppendReadFailureGateway(FakeGateway):
         return super().get_issue(number)
 
 
-def test_indeterminate_post_append_read_compensates_before_failing() -> None:
+def test_entry_commit_needs_no_post_append_issue_read() -> None:
     gateway = PostAppendReadFailureGateway()
 
-    with pytest.raises(known_defects.KnownDefectsError, match="indeterminate"):
-        known_defects.intake_defect(_defect(), gateway)
+    receipt = known_defects.intake_defect(_defect(), gateway)
 
-    assert gateway.comments[900] == []
+    assert receipt["status"] == "created"
+    assert gateway.fail_next_get is True
+    assert len(gateway.comments[900]) == 1
+    assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
 
 
 class AmbiguousEntryCreateGateway(FakeGateway):
@@ -1098,15 +1102,15 @@ class AmbiguousEntryCreateGateway(FakeGateway):
         return comment
 
 
-def test_ambiguous_entry_create_response_reconciles_closure_before_retry() -> None:
+def test_ambiguous_entry_create_response_preserves_closed_reservation() -> None:
     gateway = AmbiguousEntryCreateGateway()
 
     receipt = known_defects.intake_defect(_defect(), gateway)
 
     assert receipt["status"] == "created"
-    assert receipt["registry_issue"] == 901
-    assert gateway.comments[900] == []
-    assert len(gateway.comments[901]) == 1
+    assert receipt["registry_issue"] == 900
+    assert len(gateway.comments[900]) == 1
+    assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
 
 
 def test_ambiguous_entry_create_response_completes_from_open_inventory() -> None:
@@ -1159,6 +1163,60 @@ def test_failed_entry_finalize_leaves_nonauthoritative_pending_for_retry() -> No
 
     assert receipt["status"] == "duplicate"
     assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+
+
+def test_closed_pending_entry_remains_canonical_across_registry_generations() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    first = gateway.create_registry_issue()
+    gateway.lock_registry_issue(int(first["number"]))
+    canonical = gateway.add_comment(
+        int(first["number"]),
+        defect.render_entry(phase="pending"),
+    )
+    first["state"] = "closed"
+    second = gateway.create_registry_issue()
+    gateway.lock_registry_issue(int(second["number"]))
+    later = gateway.add_comment(
+        int(second["number"]),
+        defect.render_entry(phase="final"),
+    )
+
+    assert known_defects.lookup_defect(defect.defect_id, gateway)[
+        "status"
+    ] == "not_found"
+
+    receipt = known_defects.intake_defect(defect, gateway)
+
+    assert receipt["status"] == "duplicate"
+    assert receipt["registry_issue"] == int(first["number"])
+    assert receipt["url"] == canonical["html_url"]
+    assert "phase=final" in canonical["body"].splitlines()[0]
+    assert "phase=final" in later["body"].splitlines()[0]
+    lookup = known_defects.lookup_defect(defect.defect_id, gateway)
+    assert lookup["status"] == "deferred"
+    assert lookup["registry_issue"] == int(first["number"])
+    assert lookup["url"] == canonical["html_url"]
+
+
+def test_failed_entry_finalize_retries_after_registry_closes() -> None:
+    gateway = EntryFinalizeFailureGateway(apply_before_failure=False)
+    defect = _defect()
+
+    with pytest.raises(known_defects.KnownDefectsError, match="ambiguous entry"):
+        known_defects.intake_defect(defect, gateway)
+
+    gateway.issues[900]["state"] = "closed"
+    current = gateway.create_registry_issue()
+    gateway.lock_registry_issue(int(current["number"]))
+
+    receipt = known_defects.intake_defect(defect, gateway)
+
+    assert receipt["status"] == "duplicate"
+    assert receipt["registry_issue"] == 900
+    assert len(gateway.comments[900]) == 1
+    assert "phase=final" in gateway.comments[900][0]["body"].splitlines()[0]
+    assert gateway.comments[int(current["number"])] == []
 
 
 class EntryRetryFinalizeRaceGateway(FakeGateway):
@@ -1605,6 +1663,61 @@ class PromotionTargetRaceGateway(FakeGateway):
                 ]
             self.transitioned = True
         return super().add_comment(issue_number, body)
+
+
+class RegistryDriftDuringPromotionTargetReadGateway(FakeGateway):
+    def __init__(self, transition: str) -> None:
+        super().__init__()
+        self.transition = transition
+        self.transitioned = False
+
+    def get_issue(self, number: int) -> dict[str, Any]:
+        issue = super().get_issue(number)
+        if number == 901 and not self.transitioned:
+            self.transitioned = True
+            if self.transition == "closed":
+                self.issues[900]["state"] = "closed"
+            else:
+                competing = super().create_registry_issue()
+                super().lock_registry_issue(int(competing["number"]))
+        return issue
+
+
+@pytest.mark.parametrize(
+    ("transition", "error"),
+    [
+        ("closed", "expected one open registry"),
+        ("competing", "multiple open registries"),
+    ],
+)
+def test_promotion_rechecks_registry_after_target_read_before_reservation(
+    transition: str,
+    error: str,
+) -> None:
+    gateway = RegistryDriftDuringPromotionTargetReadGateway(transition)
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: recheck registry before promotion reservation",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match=error):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    promotion_comments = [
+        item
+        for item in gateway.comments[intake["registry_issue"]]
+        if item["body"].startswith("<!-- known-defect-promotion:")
+    ]
+    assert promotion_comments == []
 
 
 @pytest.mark.parametrize("transition", ["body", "label"])

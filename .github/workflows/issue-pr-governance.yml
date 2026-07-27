@@ -117,12 +117,19 @@ jobs:
                   === "state:known-defect"
               );
             if (isUnlockedRegistryBootstrap) {
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              ({ data: liveIssue } = await github.rest.issues.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.issue.number,
-              }));
+              const maxLockPolls = 10;
+              for (
+                let attempt = 0;
+                attempt < maxLockPolls && liveIssue.locked !== true;
+                attempt += 1
+              ) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                ({ data: liveIssue } = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.issue.number,
+                }));
+              }
             }
             const errors = validateIssueShape(liveIssue);
             if (errors.length) {

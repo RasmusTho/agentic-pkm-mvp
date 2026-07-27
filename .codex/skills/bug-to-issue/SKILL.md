@@ -107,22 +107,23 @@ Those comments represent one defect id, and lookup deterministically treats the 
 canonical. Registry reconciliation may remove later identical comments; it must never create a
 second implementation Issue from them.
 
-Intake rereads the selected registry immediately before and after comment creation. If a canonical
-registry closes before commit, intake compensates any just-created pending comment and makes one
-bounded retry against a new open registry. If the body, labels, or lock state drift before commit,
-intake removes its just-created pending comment and fails closed for explicit reconciliation. An
-ambiguous comment-create response is immediately reconciled from live Issue/comment inventories.
-New entry comments begin with `phase=pending`, which is not visible defect authority but is a durable
-reservation. GitHub's immutable comment creation time, with stable numeric comment id as the
-tie-breaker, orders all trusted reservations for the defect across registry generations. The
-earliest eligible reservation is canonical and later duplicates cannot preempt it. Finalization
-changes that exact reservation to `phase=final`. An applied final marker is a committed idempotent
-result, while an unapplied pending marker remains available for deterministic retry or compensation.
-Intake starts a reservation only while exactly one canonical open registry exists. Closure or
-competing-registry creation after the reservation does not rewrite the accepted history; lookup can
-still read the canonical entry while later registry drift independently blocks new intake. This
-avoids pretending that GitHub REST provides an atomic transaction across Issue lifecycle and comment
-writes.
+Intake performs its final strict single-open-registry check immediately before comment creation.
+If that check observes closure, intake makes one bounded retry against a new open registry; body,
+label, lock, or competing-registry drift fails closed before the write. New entry comments begin
+with `phase=pending`, which is not visible defect authority but is a durable reservation. GitHub's
+immutable comment creation time, with stable numeric comment id as the tie-breaker, orders all
+trusted reservations for the defect across registry generations. The earliest eligible reservation
+is canonical and later duplicates cannot preempt it. Finalization changes that exact reservation to
+`phase=final`. An applied final marker is a committed idempotent result, while an unapplied pending
+marker remains available for deterministic retry. An ambiguous comment-create response is
+immediately reconciled from live Issue/comment inventories.
+
+Intake starts a reservation only while exactly one canonical open registry exists. Once GitHub
+accepts the pending comment, closure, structural drift, or competing-registry creation cannot
+rewrite or relocate that accepted reservation; reconciliation finalizes the earliest reservation
+and removes only later pending duplicates. Lookup can still read the canonical entry while later
+registry drift independently blocks new intake. This avoids pretending that GitHub REST provides an
+atomic transaction across Issue lifecycle and comment writes.
 
 ### Promotion
 

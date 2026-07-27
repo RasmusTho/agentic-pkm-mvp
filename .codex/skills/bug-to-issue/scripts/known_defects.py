@@ -947,8 +947,6 @@ def _finalize_pending_entry(
     comment_id = int(comment.get("id") or 0)
     if comment_id <= 0:
         raise KnownDefectsError("entry finalization requires a comment id")
-    fresh_issue = gateway.get_issue(issue_number)
-    _validate_registry_issue(fresh_issue, require_open=True)
     pending_body = comment.get("body") or ""
     parsed = _entry_marker_from_comment(pending_body)
     if parsed is None or parsed[1] != "pending":
@@ -992,39 +990,38 @@ def _reconcile_pending_entries(
     gateway: RegistryGateway,
     defect_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    issues = _registry_inventory(gateway, recover_bootstrap=True)
-    pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for issue in issues:
-        pending.extend(
+    inventory_error: KnownDefectsError | None = None
+    try:
+        strict_issues = _registry_inventory(
+            gateway,
+            recover_bootstrap=True,
+        )
+        locations = [
             (issue, comment)
-            for comment in _entry_comments(
+            for issue in strict_issues
+            for comment in _inventory_comments(
                 gateway,
                 int(issue["number"]),
-                defect_id,
-                phase="pending",
             )
+        ]
+    except KnownDefectsError as exc:
+        inventory_error = exc
+        locations = _registry_comment_locations(
+            gateway,
+            recover_bootstrap=False,
         )
-    final_entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for issue in issues:
-        final_entries.extend(
-            (issue, comment)
-            for comment in _entry_comments(
-                gateway,
-                int(issue["number"]),
-                defect_id,
-                phase="final",
-            )
+    reservations = [
+        (issue, comment)
+        for issue, comment in locations
+        if (
+            (parsed := _entry_marker_from_comment(comment.get("body") or ""))
+            is not None
+            and parsed[0] == defect_id
         )
-    open_pending = [
-        item
-        for item in pending
-        if str(item[0].get("state", "")).lower() == "open"
     ]
-    closed_pending = [item for item in pending if item not in open_pending]
-    for issue, comment in closed_pending:
-        _compensate_comment(gateway, int(issue["number"]), comment)
-    reservations = final_entries + open_pending
     if not reservations:
+        if inventory_error is not None:
+            raise inventory_error
         return None
     reservations.sort(key=lambda item: _comment_reservation_order(item[1]))
     canonical_issue, canonical_comment = reservations[0]
@@ -1033,7 +1030,12 @@ def _reconcile_pending_entries(
     )
     if canonical_marker is None:
         raise KnownDefectsError("canonical entry reservation became malformed")
-    for issue, comment in open_pending:
+    if canonical_marker[1] == "final" and inventory_error is not None:
+        raise inventory_error
+    for issue, comment in reservations[1:]:
+        marker = _entry_marker_from_comment(comment.get("body") or "")
+        if marker is None or marker[1] != "pending":
+            continue
         if int(comment.get("id") or 0) == int(
             canonical_comment.get("id") or 0
         ):
@@ -1041,11 +1043,6 @@ def _reconcile_pending_entries(
         _compensate_comment(gateway, int(issue["number"]), comment)
     if canonical_marker[1] == "final":
         return canonical_issue, canonical_comment
-    canonical_issue_number = int(canonical_issue["number"])
-    _require_expected_single_open_registry(
-        gateway,
-        canonical_issue_number,
-    )
     finalized = _finalize_pending_entry(
         gateway,
         canonical_issue,
@@ -1128,6 +1125,10 @@ def _intake_defect(
                 allow_lifecycle_retry=False,
             )
         raise
+    _require_expected_single_open_registry(
+        gateway,
+        int(issue["number"]),
+    )
     try:
         comment = gateway.add_comment(
             int(issue["number"]),
@@ -1157,57 +1158,18 @@ def _intake_defect(
                 allow_lifecycle_retry=False,
             )
         raise
-    post_write_issue: dict[str, Any] | None = None
-    try:
-        post_write_issue = gateway.get_issue(int(issue["number"]))
-        _validate_registry_issue(post_write_issue, require_open=True)
-    except KnownDefectsError:
-        _compensate_comment(gateway, int(issue["number"]), comment)
-        if (
-            post_write_issue is not None
-            and registry_issue is None
-            and allow_lifecycle_retry
-            and _closed_canonical_registry(post_write_issue)
-        ):
-            return _intake_defect(
-                defect,
-                gateway,
-                registry_issue=None,
-                allow_lifecycle_retry=False,
-            )
-        raise
-    precommit_issue: dict[str, Any] | None = None
-    try:
-        precommit_issue = _require_expected_single_open_registry(
-            gateway,
-            int(issue["number"]),
+    reconciled = _reconcile_pending_entries(gateway, defect.defect_id)
+    if reconciled is None:
+        raise KnownDefectsError(
+            f"entry reservation disappeared for {defect.defect_id}"
         )
-    except KnownDefectsError:
-        _compensate_comment(gateway, int(issue["number"]), comment)
-        if precommit_issue is None:
-            try:
-                precommit_issue = gateway.get_issue(int(issue["number"]))
-            except KnownDefectsError:
-                pass
-        if (
-            precommit_issue is not None
-            and registry_issue is None
-            and allow_lifecycle_retry
-            and _closed_canonical_registry(precommit_issue)
-        ):
-            return _intake_defect(
-                defect,
-                gateway,
-                registry_issue=None,
-                allow_lifecycle_retry=False,
-            )
-        raise
-    finalized = _finalize_pending_entry(gateway, issue, comment)
+    reconciled_issue, finalized = reconciled
+    created = int(finalized.get("id") or 0) == int(comment.get("id") or 0)
     return {
         "schema": "known-defect-receipt.v1",
-        "status": "created",
+        "status": "created" if created else "duplicate",
         "defect_id": defect.defect_id,
-        "registry_issue": int(issue["number"]),
+        "registry_issue": int(reconciled_issue["number"]),
         "url": finalized.get("html_url"),
     }
 
@@ -1710,6 +1672,10 @@ def promote_defect(
         )
     )
     comment: dict[str, Any] | None = None
+    _require_expected_single_open_registry(
+        gateway,
+        registry_number,
+    )
     try:
         comment = gateway.add_comment(registry_number, promotion_body)
     except KnownDefectsError:
