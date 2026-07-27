@@ -801,6 +801,36 @@ def test_pr_contract_rejects_commit_message_closure_authority() -> None:
     assert "commit-message closing references are forbidden" in workflow
 
 
+def test_commit_message_closing_keywords_are_forbidden() -> None:
+    guidance = (
+        REPO_ROOT / ".codex" / "skills" / "publish-pr" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    for keyword in (
+        "Fix",
+        "Fixes",
+        "Fixed",
+        "Close",
+        "Closes",
+        "Closed",
+        "Resolve",
+        "Resolves",
+        "Resolved",
+    ):
+        assert f"`{keyword}`" in guidance
+    assert "Use evidence-only `Refs #<id>`" in guidance
+
+
+def test_pr_body_closing_keywords_remain_required_for_issue_backed_prs() -> None:
+    guidance = (
+        REPO_ROOT / ".codex" / "skills" / "publish-pr" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Governing-Issue: #<ISSUE_NUMBER>" in guidance
+    assert "Fixes #<ISSUE_NUMBER>" in guidance
+    assert "closing keywords only for fully delivered" in guidance
+
+
 def test_pr_contract_rejects_incomplete_commit_enumeration() -> None:
     workflow = _read_workflow()
 
