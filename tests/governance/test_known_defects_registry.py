@@ -489,6 +489,76 @@ def test_promotion_rejects_missing_sbs_fields_and_unexpected_top_level_section()
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            _canonical_bug_body().replace("## Context", "## context"),
+            "canonical section",
+        ),
+        (
+            _canonical_bug_body().replace(
+                "`.codex/skills/bug-to-issue/SKILL.md :: Promotion`",
+                "`<path> :: <anchor>`",
+            ),
+            "placeholder",
+        ),
+        (
+            _canonical_bug_body().replace(
+                "Verify: `tests/x.py::test_x`",
+                "Verify: later",
+            ),
+            "resolvable Verify",
+        ),
+    ],
+)
+def test_promotion_rejects_noncanonical_heading_anchor_and_verify_target(
+    body: str,
+    expected: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject malformed implementation authority",
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match=expected):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize("extra_label", ["maintenance", "state:other"])
+def test_promotion_rejects_labels_outside_the_canonical_issue_axes(
+    extra_label: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject noncanonical labels",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+            {"name": extra_label},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="unexpected label"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
 def test_registry_rejects_missing_type_bug_any_agent_state_and_unlocked_history() -> None:
     for mutation, expected in (
         (
@@ -579,12 +649,14 @@ def test_noncanonical_promotion_issue_number_fails_closed(issue_text: str) -> No
         (
             (
                 "<!-- known-defect-promotion:v1 "
-                f"id={defect_id} issue={issue_text} -->"
+                f"id={defect_id} issue={issue_text} "
+                f"authority_sha256={'0' * 64} -->"
             ),
             (
                 f"Promotion receipt: {defect_id} is now tracked for implementation "
                 f"by #{issue_text}."
             ),
+            f"Validated target authority: sha256:{'0' * 64}.",
             (
                 "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
                 "and execution state."
@@ -753,11 +825,13 @@ def test_untrusted_promotion_written_before_lock_fails_closed_after_entry_match(
                 known_defects.PROMOTION_MARKER_TEMPLATE.format(
                     defect_id=defect.defect_id,
                     issue_number=901,
+                    authority_sha256="0" * 64,
                 ),
                 (
                     f"Promotion receipt: {defect.defect_id} is now tracked for "
                     "implementation by #901."
                 ),
+                f"Validated target authority: sha256:{'0' * 64}.",
                 (
                     "The bounded bug Issue owns scope, acceptance criteria, Verify "
                     "targets, and execution state."
@@ -863,6 +937,33 @@ def test_registry_authority_drift_after_append_is_compensated_and_fails_closed()
     assert gateway.comments[900] == []
 
 
+class PostAppendReadFailureGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_get = False
+
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if body.startswith("<!-- known-defect-entry:"):
+            self.fail_next_get = True
+        return comment
+
+    def get_issue(self, number: int) -> dict[str, Any]:
+        if self.fail_next_get:
+            self.fail_next_get = False
+            raise known_defects.KnownDefectsError("indeterminate post-write read")
+        return super().get_issue(number)
+
+
+def test_indeterminate_post_append_read_compensates_before_failing() -> None:
+    gateway = PostAppendReadFailureGateway()
+
+    with pytest.raises(known_defects.KnownDefectsError, match="indeterminate"):
+        known_defects.intake_defect(_defect(), gateway)
+
+    assert gateway.comments[900] == []
+
+
 def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     gateway = FakeGateway()
     defect = _defect()
@@ -923,6 +1024,9 @@ class ConflictingPromotionGateway(FakeGateway):
             defect_id = known_defects.PROMOTION_MARKER_RE.fullmatch(
                 body.splitlines()[0]
             ).group(1)
+            authority_sha256 = known_defects.PROMOTION_MARKER_RE.fullmatch(
+                body.splitlines()[0]
+            ).group(3)
             super().add_comment(
                 issue_number,
                 "\n".join(
@@ -930,11 +1034,13 @@ class ConflictingPromotionGateway(FakeGateway):
                         known_defects.PROMOTION_MARKER_TEMPLATE.format(
                             defect_id=defect_id,
                             issue_number=902,
+                            authority_sha256=authority_sha256,
                         ),
                         (
                             f"Promotion receipt: {defect_id} is now tracked for "
                             "implementation by #902."
                         ),
+                        f"Validated target authority: sha256:{authority_sha256}.",
                         (
                             "The bounded bug Issue owns scope, acceptance criteria, "
                             "Verify targets, and execution state."
@@ -969,6 +1075,131 @@ def test_concurrent_conflicting_promotions_never_choose_a_canonical_target() -> 
     assert receipt["promotion_issue"] is None
     assert receipt["promotion_issues"] == [901, 902]
     assert receipt["registry_issue"] == intake["registry_issue"]
+
+
+class PromotionTargetRaceGateway(FakeGateway):
+    def __init__(self, transition: str) -> None:
+        super().__init__()
+        self.transition = transition
+        self.transitioned = False
+
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if (
+            body.startswith("<!-- known-defect-promotion:")
+            and not self.transitioned
+        ):
+            target = self.issues[901]
+            if self.transition == "body":
+                target["body"] += "\n\nDrifted outside the validated contract."
+            elif self.transition == "label":
+                target["labels"].append({"name": "maintenance"})
+            elif self.transition == "closed":
+                target["state"] = "closed"
+                target["labels"] = [
+                    {"name": "type:bug"},
+                    {"name": "prio:med"},
+                ]
+            elif self.transition == "claimed":
+                target["labels"] = [
+                    {"name": "type:bug"},
+                    {"name": "prio:med"},
+                ]
+            self.transitioned = True
+        return comment
+
+
+@pytest.mark.parametrize("transition", ["body", "label"])
+def test_first_promotion_compensates_target_authority_drift(
+    transition: str,
+) -> None:
+    gateway = PromotionTargetRaceGateway(transition)
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: guard promotion authority",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="authority drifted"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert len(gateway.comments[intake["registry_issue"]]) == 1
+
+
+@pytest.mark.parametrize("transition", ["closed", "claimed"])
+def test_first_promotion_accepts_normal_target_lifecycle_transition(
+    transition: str,
+) -> None:
+    gateway = PromotionTargetRaceGateway(transition)
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: guard promotion authority",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    promoted = known_defects.promote_defect(defect.defect_id, 901, gateway)
+    duplicate = known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert promoted["status"] == "promoted"
+    assert duplicate["status"] == "promotion_duplicate"
+
+
+class PromotionPostWriteReadFailureGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_get = False
+
+    def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+        comment = super().add_comment(issue_number, body)
+        if body.startswith("<!-- known-defect-promotion:"):
+            self.fail_next_get = True
+        return comment
+
+    def get_issue(self, number: int) -> dict[str, Any]:
+        if self.fail_next_get:
+            self.fail_next_get = False
+            raise known_defects.KnownDefectsError(
+                "indeterminate promotion post-write read"
+            )
+        return super().get_issue(number)
+
+
+def test_indeterminate_promotion_post_write_read_compensates_marker() -> None:
+    gateway = PromotionPostWriteReadFailureGateway()
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: guard promotion authority",
+        "state": "open",
+        "body": _canonical_bug_body(),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(known_defects.KnownDefectsError, match="indeterminate"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert len(gateway.comments[intake["registry_issue"]]) == 1
 
 
 def test_rest_gateway_fails_closed_on_transport_and_non_json(
@@ -1029,3 +1260,4 @@ def test_known_defect_label_is_canonical_and_registry_only() -> None:
         assert "`state:known-defect`" in surface or "state:known-defect" in surface
     assert "must never carry `agent:ready`" in taxonomy
     assert "normal bounded `type:bug` Issue" in skill
+    assert "locked_required: true" in governance

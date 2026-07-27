@@ -29,7 +29,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.validate_issue_readiness import (
     analyze_acceptance_criteria,
-    extract_sections,
 )
 
 REGISTRY_LABEL = "state:known-defect"
@@ -40,14 +39,16 @@ REGISTRY_LABEL_DESCRIPTION = (
 REGISTRY_MARKER = "<!-- known-defects-registry:v1 -->"
 ENTRY_MARKER_TEMPLATE = "<!-- known-defect-entry:v1 id={defect_id} -->"
 PROMOTION_MARKER_TEMPLATE = (
-    "<!-- known-defect-promotion:v1 id={defect_id} issue={issue_number} -->"
+    "<!-- known-defect-promotion:v1 id={defect_id} issue={issue_number} "
+    "authority_sha256={authority_sha256} -->"
 )
 ENTRY_ID_RE = re.compile(r"^KD-[0-9A-F]{12}$")
 ENTRY_MARKER_RE = re.compile(
     r"<!-- known-defect-entry:v1 id=(KD-[0-9A-F]{12}) -->"
 )
 PROMOTION_MARKER_RE = re.compile(
-    r"<!-- known-defect-promotion:v1 id=(KD-[0-9A-F]{12}) issue=([1-9][0-9]*) -->"
+    r"<!-- known-defect-promotion:v1 id=(KD-[0-9A-F]{12}) issue=([1-9][0-9]*) "
+    r"authority_sha256=([0-9a-f]{64}) -->"
 )
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 NORMAL_AGENT_STATES = {
@@ -517,14 +518,14 @@ def _entry_id_from_comment(body: str) -> str | None:
     return defect_id
 
 
-def _promotion_from_comment(body: str) -> tuple[str, int] | None:
+def _promotion_from_comment(body: str) -> tuple[str, int, str] | None:
     lines = body.splitlines()
     if not lines or not lines[0].startswith("<!-- known-defect-promotion:"):
         return None
     marker = PROMOTION_MARKER_RE.fullmatch(lines[0])
     if marker is None:
         raise KnownDefectsError("malformed known-defect promotion marker")
-    defect_id, issue_number_text = marker.groups()
+    defect_id, issue_number_text, authority_sha256 = marker.groups()
     issue_number = int(issue_number_text)
     expected_receipt = (
         f"Promotion receipt: {defect_id} is now tracked for implementation by "
@@ -534,15 +535,19 @@ def _promotion_from_comment(body: str) -> tuple[str, int] | None:
         "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
         "and execution state."
     )
+    expected_digest = (
+        f"Validated target authority: sha256:{authority_sha256}."
+    )
     if (
-        len(lines) != 3
+        len(lines) != 4
         or lines[1] != expected_receipt
-        or lines[2] != expected_authority
+        or lines[2] != expected_digest
+        or lines[3] != expected_authority
     ):
         raise KnownDefectsError(
             f"malformed known-defect promotion shape for {defect_id}"
         )
-    return defect_id, issue_number
+    return defect_id, issue_number, authority_sha256
 
 
 def _validate_schema_comment(comment: dict[str, Any]) -> None:
@@ -622,18 +627,25 @@ def _inventory_comments(
 def _promotion_targets(
     comments: Sequence[dict[str, Any]],
     defect_id: str,
-) -> tuple[set[int], dict[int, dict[str, Any]]]:
+) -> tuple[
+    set[int],
+    dict[int, dict[str, Any]],
+    dict[int, set[str]],
+]:
     targets: set[int] = set()
     evidence: dict[int, dict[str, Any]] = {}
+    authority_digests: dict[int, set[str]] = {}
     for comment in comments:
         _validate_schema_comment(comment)
         parsed = _promotion_from_comment(comment.get("body") or "")
         if parsed is None or parsed[0] != defect_id:
             continue
         issue_number = parsed[1]
+        authority_sha256 = parsed[2]
         targets.add(issue_number)
         evidence.setdefault(issue_number, comment)
-    return targets, evidence
+        authority_digests.setdefault(issue_number, set()).add(authority_sha256)
+    return targets, evidence, authority_digests
 
 
 def _find_entry(
@@ -786,13 +798,15 @@ def _intake_defect(
             )
         raise
     comment = gateway.add_comment(int(issue["number"]), defect.render_entry())
-    post_write_issue = gateway.get_issue(int(issue["number"]))
+    post_write_issue: dict[str, Any] | None = None
     try:
+        post_write_issue = gateway.get_issue(int(issue["number"]))
         _validate_registry_issue(post_write_issue, require_open=True)
     except KnownDefectsError:
         _compensate_comment(gateway, int(issue["number"]), comment)
         if (
-            registry_issue is None
+            post_write_issue is not None
+            and registry_issue is None
             and allow_lifecycle_retry
             and _closed_canonical_registry(post_write_issue)
         ):
@@ -840,11 +854,14 @@ def lookup_defect(
             "defect_id": defect_id,
         }
     issue, comment = found
-    targets, _evidence = _promotion_targets(
+    targets, _evidence, authority_digests = _promotion_targets(
         gateway.list_comments(int(issue["number"])),
         defect_id,
     )
-    if len(targets) > 1:
+    digest_conflict = any(
+        len(digests) != 1 for digests in authority_digests.values()
+    )
+    if len(targets) > 1 or digest_conflict:
         return {
             "schema": "known-defect-receipt.v1",
             "status": "promotion_conflict",
@@ -855,6 +872,23 @@ def lookup_defect(
             "url": comment.get("html_url"),
         }
     promotion_issue = next(iter(targets), None)
+    if promotion_issue is not None:
+        authority_sha256 = next(iter(authority_digests[promotion_issue]))
+        try:
+            _validate_promoted_target_snapshot(
+                gateway.get_issue(promotion_issue),
+                authority_sha256,
+            )
+        except KnownDefectsError:
+            return {
+                "schema": "known-defect-receipt.v1",
+                "status": "promotion_authority_drift",
+                "defect_id": defect_id,
+                "registry_issue": int(issue["number"]),
+                "promotion_issue": None,
+                "promotion_issues": [promotion_issue],
+                "url": comment.get("html_url"),
+            }
     return {
         "schema": "known-defect-receipt.v1",
         "status": "promoted" if promotion_issue is not None else "deferred",
@@ -869,15 +903,14 @@ def _top_level_sections(body: str) -> dict[str, str]:
     matches = list(re.finditer(r"^##[ \t]+(.+?)[ \t]*$", body, re.MULTILINE))
     sections: dict[str, str] = {}
     for index, match in enumerate(matches):
-        title = " ".join(match.group(1).split())
-        key = title.casefold()
-        if key in sections:
+        title = match.group(1).strip()
+        if title in sections:
             raise KnownDefectsError(
                 f"promotion target repeats canonical section: {title}"
             )
         start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        sections[key] = body[start:end].strip()
+        sections[title] = body[start:end].strip()
     return sections
 
 
@@ -893,11 +926,48 @@ def _has_concrete_section_content(value: str) -> bool:
             "",
             line,
         ).strip().strip("`").strip()
-        if not content or re.fullmatch(r"<[^>]+>", content):
+        if not content or re.search(r"<[^>]+>", content):
             continue
         if content.casefold() in {"tbd", "todo", "n/a"}:
             continue
         return True
+    return False
+
+
+def _acceptance_items(section: str) -> list[str]:
+    starts = list(
+        re.finditer(r"(?m)^\s*[-*]\s+\[[ xX]\]\s+.+$", section)
+    )
+    return [
+        section[
+            match.start():
+            starts[index + 1].start() if index + 1 < len(starts) else len(section)
+        ].strip()
+        for index, match in enumerate(starts)
+    ]
+
+
+def _has_resolvable_verify_target(item: str) -> bool:
+    for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item):
+        raw_target = match.group(1).strip()
+        target = raw_target.strip("`").strip()
+        if re.fullmatch(
+            r"tests/[A-Za-z0-9_./-]+::[A-Za-z0-9_.\[\]-]+",
+            target,
+        ):
+            return True
+        if re.fullmatch(
+            r"doc writeback at `(?:docs|\.codex)/[^`]+ :: [^`]+`",
+            raw_target,
+            re.IGNORECASE,
+        ):
+            return True
+        if re.fullmatch(
+            r"(?:roadmap diff|runtime receipt):\s+\S(?:.*\S)?",
+            target,
+            re.IGNORECASE,
+        ) and re.search(r"<[^>]+>", target) is None:
+            return True
     return False
 
 
@@ -931,14 +1001,21 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
         raise KnownDefectsError(
             "promotion target must carry exactly one canonical priority label"
         )
+    canonical_labels = {"type:bug"} | agent_states | priorities
+    unexpected_labels = sorted(labels - canonical_labels)
+    if unexpected_labels:
+        raise KnownDefectsError(
+            "promotion target has unexpected label(s): "
+            + ", ".join(unexpected_labels)
+        )
     body = issue.get("body") or ""
     sections = _top_level_sections(body)
-    required_keys = {heading.casefold() for heading in REQUIRED_ISSUE_SECTIONS}
-    allowed_keys = required_keys | {OPTIONAL_ISSUE_SECTION.casefold()}
+    required_keys = set(REQUIRED_ISSUE_SECTIONS)
+    allowed_keys = required_keys | {OPTIONAL_ISSUE_SECTION}
     missing = [
         heading
         for heading in REQUIRED_ISSUE_SECTIONS
-        if heading.casefold() not in sections
+        if heading not in sections
     ]
     if missing:
         raise KnownDefectsError(
@@ -953,7 +1030,7 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
     empty = [
         heading
         for heading in REQUIRED_ISSUE_SECTIONS
-        if not _has_concrete_section_content(sections[heading.casefold()])
+        if not _has_concrete_section_content(sections[heading])
     ]
     if empty:
         raise KnownDefectsError(
@@ -962,19 +1039,19 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
         )
     if re.search(
         r"(?m)^-\s+`[^`\n]+::[^`\n]+`\s*$",
-        sections["source anchors"],
+        sections["Source Anchors"],
     ) is None:
         raise KnownDefectsError(
             "promotion target Source Anchors must name a durable path and anchor"
         )
     if re.search(
         r"(?m)^-\s+`[^`\n]+`\s*$",
-        sections["source docs"],
+        sections["Source Docs"],
     ) is None:
         raise KnownDefectsError(
             "promotion target Source Docs must name a durable repo path"
         )
-    sbs = sections["sbs impact"]
+    sbs = sections["SBS Impact"]
     missing_sbs = []
     for field in REQUIRED_SBS_FIELDS:
         matches = list(re.finditer(
@@ -991,7 +1068,7 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
             "promotion target lacks concrete SBS field(s): "
             + ", ".join(missing_sbs)
         )
-    acceptance = extract_sections(body).get("acceptance criteria")
+    acceptance = sections["Acceptance Criteria"]
     report = analyze_acceptance_criteria(acceptance)
     if not report.present or report.malformed:
         raise KnownDefectsError(
@@ -1003,6 +1080,52 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
             "promotion target Acceptance Criteria lack concrete Verify targets: "
             + missing
         )
+    unresolved = [
+        item.splitlines()[0].strip()
+        for item in _acceptance_items(acceptance)
+        if not _has_resolvable_verify_target(item)
+    ]
+    if unresolved:
+        raise KnownDefectsError(
+            "promotion target Acceptance Criteria lack resolvable Verify targets: "
+            + "; ".join(unresolved)
+        )
+
+
+def _promotion_target_authority_sha256(issue: dict[str, Any]) -> str:
+    labels = _label_names(issue)
+    priority = next(iter(labels & PRIORITY_LABELS), "")
+    payload = {
+        "body": issue.get("body") or "",
+        "priority": priority,
+        "title": issue.get("title") or "",
+        "type": "type:bug",
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _validate_promoted_target_snapshot(
+    issue: dict[str, Any],
+    authority_sha256: str,
+) -> None:
+    state = str(issue.get("state", "")).lower()
+    if state not in {"open", "closed"}:
+        raise KnownDefectsError("promoted target has invalid lifecycle state")
+    labels = _label_names(issue)
+    type_labels = {label for label in labels if label.startswith("type:")}
+    priorities = {label for label in labels if label.startswith("prio:")}
+    agent_states = {label for label in labels if label.startswith("agent:")}
+    if type_labels != {"type:bug"} or len(priorities) != 1 or not priorities <= PRIORITY_LABELS:
+        raise KnownDefectsError("promoted target type or priority authority drifted")
+    if len(agent_states) > 1 or not agent_states <= NORMAL_AGENT_STATES:
+        raise KnownDefectsError("promoted target agent state is noncanonical")
+    allowed_labels = {"type:bug"} | priorities | agent_states
+    if labels != allowed_labels:
+        raise KnownDefectsError("promoted target label authority drifted")
+    if _promotion_target_authority_sha256(issue) != authority_sha256:
+        raise KnownDefectsError("promoted target contract authority drifted")
 
 
 def promote_defect(
@@ -1016,18 +1139,34 @@ def promote_defect(
     if found is None:
         raise KnownDefectsError(f"known defect {defect_id} was not found")
     registry, _entry_comment = found
-    targets, evidence = _promotion_targets(
+    targets, evidence, authority_digests = _promotion_targets(
         gateway.list_comments(int(registry["number"])),
         defect_id,
     )
-    if len(targets) > 1:
+    digest_conflict = any(
+        len(digests) != 1 for digests in authority_digests.values()
+    )
+    if len(targets) > 1 or digest_conflict:
         raise KnownDefectsError(
-            f"{defect_id} has conflicting promotion Issues: "
+            f"{defect_id} has conflicting promotion authority: "
             + ", ".join(f"#{number}" for number in sorted(targets))
         )
     if targets:
         existing_target = next(iter(targets))
         if existing_target == issue_number:
+            authority_sha256 = next(iter(authority_digests[existing_target]))
+            try:
+                _validate_promoted_target_snapshot(
+                    gateway.get_issue(existing_target),
+                    authority_sha256,
+                )
+            except KnownDefectsError:
+                _compensate_comment(
+                    gateway,
+                    int(registry["number"]),
+                    evidence[existing_target],
+                )
+                raise
             return {
                 "schema": "known-defect-receipt.v1",
                 "status": "promotion_duplicate",
@@ -1039,11 +1178,15 @@ def promote_defect(
         raise KnownDefectsError(
             f"{defect_id} is already linked to promotion Issue #{existing_target}"
         )
+    live_registry = gateway.get_issue(int(registry["number"]))
+    _validate_registry_issue(live_registry, require_open=True)
     target = gateway.get_issue(issue_number)
     _validate_promotion_issue(target)
+    authority_sha256 = _promotion_target_authority_sha256(target)
     marker = PROMOTION_MARKER_TEMPLATE.format(
         defect_id=defect_id,
         issue_number=issue_number,
+        authority_sha256=authority_sha256,
     )
     comment = gateway.add_comment(
         int(registry["number"]),
@@ -1052,16 +1195,28 @@ def promote_defect(
                 marker,
                 f"Promotion receipt: {defect_id} is now tracked for implementation by "
                 f"#{issue_number}.",
+                f"Validated target authority: sha256:{authority_sha256}.",
                 "The bounded bug Issue owns scope, acceptance criteria, Verify targets, "
                 "and execution state.",
             )
         ),
     )
-    targets, _evidence = _promotion_targets(
+    try:
+        post_registry = gateway.get_issue(int(registry["number"]))
+        _validate_registry_issue(post_registry, require_open=True)
+        post_target = gateway.get_issue(issue_number)
+        _validate_promoted_target_snapshot(post_target, authority_sha256)
+    except KnownDefectsError:
+        _compensate_comment(gateway, int(registry["number"]), comment)
+        raise
+    targets, _evidence, authority_digests = _promotion_targets(
         gateway.list_comments(int(registry["number"])),
         defect_id,
     )
-    if targets != {issue_number}:
+    if (
+        targets != {issue_number}
+        or authority_digests.get(issue_number) != {authority_sha256}
+    ):
         rendered_targets = ", ".join(f"#{number}" for number in sorted(targets))
         raise KnownDefectsError(
             f"promotion conflict detected for {defect_id}: {rendered_targets}"

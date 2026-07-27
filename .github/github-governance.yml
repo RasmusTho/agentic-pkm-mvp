@@ -21,6 +21,7 @@ issues:
       canonical_body_marker: "<!-- known-defects-registry:v1 -->"
       normal_required_sections_exempt: true
       agent_labels_forbidden: true
+      locked_required: true
 labels:
   type:
     - type:task

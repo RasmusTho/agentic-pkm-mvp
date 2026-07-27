@@ -102,6 +102,7 @@ def test_issue_shape_workflow_accepts_only_exact_known_defects_container() -> No
     body = _known_defects_registry_body()
     canonical = {
         "body": body,
+        "locked": True,
         "labels": [
             {"name": "type:bug"},
             {"name": "state:known-defect"},
@@ -123,6 +124,20 @@ def test_issue_shape_workflow_accepts_only_exact_known_defects_container() -> No
     ) == [
         "Known Defects registry must carry exactly type:bug and state:known-defect"
     ]
+    assert _js_issue_shape_errors(
+        {
+            **canonical,
+            "locked": False,
+        }
+    ) == ["Known Defects registry must remain locked"]
+
+
+def test_issue_shape_workflow_rechecks_registry_lock_transitions_from_live_issue() -> None:
+    workflow = _read_workflow()
+
+    assert "types: [opened, edited, reopened, labeled, unlabeled, locked, unlocked, closed]" in workflow
+    assert "const { data: liveIssue } = await github.rest.issues.get" in workflow
+    assert "validateIssueShape(liveIssue)" in workflow
 
 
 def test_issue_shape_workflow_keeps_normal_issue_contract_strict() -> None:

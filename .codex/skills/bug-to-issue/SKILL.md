@@ -130,6 +130,11 @@ python3 .codex/skills/bug-to-issue/scripts/known_defects.py promote \
 The link operation is idempotent and emits a compact promotion receipt. A post-write read detects
 concurrent conflicting promotion targets; lookup then returns `promotion_conflict` with no canonical
 target, and further promotion fails closed until a collaborator reconciles the marker comments.
+Each marker binds the target number to a SHA-256 digest of its validated title, body, type, and
+priority authority. The helper rereads both registry and target after writing: contract/body/label
+drift or an indeterminate read compensates the marker and fails closed, while normal claim or
+closure transitions may change only lifecycle state and the canonical agent label. Same-target
+retries revalidate the digest before returning the existing receipt.
 The promoted Issue owns implementation scope and closure; the registry entry remains durable source
 evidence.
 

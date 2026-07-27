@@ -2,7 +2,7 @@ name: Issue and PR Governance
 
 on:
   issues:
-    types: [opened, edited, reopened, labeled, unlabeled, closed]
+    types: [opened, edited, reopened, labeled, unlabeled, locked, unlocked, closed]
   pull_request:
     types: [opened, edited, reopened, synchronize, review_requested]
 
@@ -78,6 +78,9 @@ jobs:
                     "Known Defects registry body must match the exact v1 container schema"
                   );
                 }
+                if (issue.locked !== true) {
+                  errors.push("Known Defects registry must remain locked");
+                }
                 return errors;
               }
               const required = [
@@ -101,7 +104,12 @@ jobs:
                 : [];
             };
             // issue-shape-validator:end
-            const errors = validateIssueShape(context.payload.issue);
+            const { data: liveIssue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+            });
+            const errors = validateIssueShape(liveIssue);
             if (errors.length) {
               core.setFailed(errors.join("; "));
             }
