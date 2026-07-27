@@ -21,6 +21,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+import regex
 import yaml
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -99,7 +100,16 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _WIKILINK_RE = re.compile(r"!?\[\[([^\]\n|]*)(?:\|([^\]\n]*))?\]\]")
 _IGNORED_INLINE_MARKERS = frozenset(r"[]*_`~\\")
+_APOSTROPHE_CHARACTERS = frozenset({"'", "’", "‘", "ʼ"})
+_CONTRACTION_EXPANSIONS: Mapping[str, tuple[str, ...]] = {
+    "you've": ("you", "have"),
+    "owner's": ("owner", "has"),
+}
+_DEFAULT_IGNORABLE_RE = regex.compile(r"\p{Default_Ignorable_Code_Point}+")
+_BIDI_CONTROL_RE = regex.compile(r"\p{Bidi_Control}")
 _MARKDOWN = MarkdownIt("commonmark")
+
+NormalizedTokens = tuple[str, ...]
 
 
 class NoteRenderError(ValueError):
@@ -133,6 +143,7 @@ def render_review_required_note(
     escape the proposal band or create an owner-authored sibling section.
     """
 
+    _assert_no_bidi_controls_in_value(frontmatter, surface="frontmatter")
     rendered_sections: list[str] = []
     seen_module_ids: set[str] = set()
     for section in proposal_sections:
@@ -140,6 +151,7 @@ def render_review_required_note(
             raise NoteRenderError(
                 f"proposal content must be text for module {section.module_id!r}"
             )
+        _assert_no_bidi_controls(section.content, surface="proposal content")
         content = section.content.strip()
         if not content:
             continue
@@ -150,6 +162,7 @@ def render_review_required_note(
             raise NoteRenderError(
                 f"duplicate proposal module_id is not allowed: {module_id!r}"
             )
+        _assert_no_bidi_controls(section.title, surface="proposal title")
         title = section.title.strip()
         if not title:
             raise NoteRenderError(
@@ -171,9 +184,14 @@ def render_review_required_note(
         if rendered_sections
         else "> _No proposal modules were produced._"
     )
-    evidence_body = "\n".join(
-        f"- **{_plain_label(label)}:** {_plain_value(value)}" for label, value in evidence
-    )
+    rendered_evidence: list[str] = []
+    for label, value in evidence:
+        _assert_no_bidi_controls(label, surface="evidence label")
+        _assert_no_bidi_controls(str(value), surface="evidence value")
+        rendered_evidence.append(
+            f"- **{_plain_label(label)}:** {_plain_value(value)}"
+        )
+    evidence_body = "\n".join(rendered_evidence)
     if not evidence_body:
         raise NoteRenderError("at least one deterministic evidence field is required")
 
@@ -207,7 +225,9 @@ _The source URL remains authoritative. Generated proposals are non-authoritative
 material. Promotion into durable knowledge requires human review and creates a distinct
 artifact; this source note remains provenance._
 """
-    return f"---\n{yaml_block}\n---\n{body}"
+    rendered = f"---\n{yaml_block}\n---\n{body}"
+    _assert_no_bidi_controls(rendered, surface="rendered output")
+    return rendered
 
 
 def _assert_generated_prose_allowed(content: str) -> None:
@@ -242,7 +262,7 @@ def _assert_proposal_title_allowed(title: str) -> None:
         _assert_no_banned_authority_phrasing(normalized)
 
 
-def _assert_no_banned_authority_phrasing(normalized: str) -> None:
+def _assert_no_banned_authority_phrasing(normalized: NormalizedTokens) -> None:
     for phrase in BANNED_GENERATED_PHRASES:
         normalized_phrase = _normalize_plain_text(phrase)
         if _contains_phrase(normalized, normalized_phrase):
@@ -251,11 +271,22 @@ def _assert_no_banned_authority_phrasing(normalized: str) -> None:
             )
 
 
-def _contains_phrase(normalized: str, phrase: str) -> bool:
-    return f" {phrase} " in f" {normalized} "
+def _contains_phrase(
+    normalized: NormalizedTokens,
+    phrase: NormalizedTokens,
+) -> bool:
+    if not phrase or len(phrase) > len(normalized):
+        return False
+    width = len(phrase)
+    return any(
+        normalized[index : index + width] == phrase
+        for index in range(len(normalized) - width + 1)
+    )
 
 
-def _analyze_visible_markdown(value: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _analyze_visible_markdown(
+    value: str,
+) -> tuple[tuple[NormalizedTokens, ...], tuple[str, ...]]:
     """Return parser-derived visible prose and headings.
 
     CommonMark owns link/reference parsing so invisible destinations and valid
@@ -271,7 +302,7 @@ def _analyze_visible_markdown(value: str) -> tuple[tuple[str, ...], tuple[str, .
     escaped_output = html.escape(value, quote=False)
     projections = (semantic_html, escaped_output)
 
-    visible_variants: list[str] = []
+    visible_variants: list[NormalizedTokens] = []
     headings: list[str] = []
     seen_projections: set[str] = set()
     for projection in projections:
@@ -290,11 +321,7 @@ def _prepare_markdown_projection(value: str) -> str:
         lambda match: match.group(2) if match.group(2) is not None else match.group(1),
         value,
     )
-    return "".join(
-        character
-        for character in prepared
-        if not _is_ignored_format_character(character)
-    )
+    return _DEFAULT_IGNORABLE_RE.sub("", prepared)
 
 
 def _parse_visible_markdown(prepared: str) -> tuple[str, tuple[str, ...]]:
@@ -324,30 +351,50 @@ def _visible_inline_text(tokens: Sequence[Token]) -> str:
     return "".join(parts)
 
 
-def _normalize_plain_text(value: str) -> str:
+def _normalize_plain_text(value: str) -> NormalizedTokens:
     folded = unicodedata.normalize("NFKC", value).casefold()
-    return " ".join(
-        "".join(
-            (
-                character
-                if character.isalnum()
-                else ""
-                if _is_ignored_format_character(character)
-                or character in _IGNORED_INLINE_MARKERS
-                else " "
-            )
-            for character in folded
-        ).split()
+    token_text = "".join(
+        (
+            character
+            if character.isalnum()
+            else "'"
+            if character in _APOSTROPHE_CHARACTERS
+            else ""
+            if character in _IGNORED_INLINE_MARKERS
+            else " "
+        )
+        for character in folded
+    )
+    expanded: list[str] = []
+    for token in token_text.split():
+        expanded.extend(_CONTRACTION_EXPANSIONS.get(token, (token,)))
+    return tuple(expanded)
+
+
+def _assert_no_bidi_controls(value: str, *, surface: str) -> None:
+    match = _BIDI_CONTROL_RE.search(value)
+    if match is None:
+        return
+    character = match.group(0)
+    codepoint = f"U+{ord(character):04X}"
+    name = unicodedata.name(character, "UNKNOWN")
+    raise NoteRenderError(
+        f"bidirectional control {codepoint} {name} is not allowed in {surface}"
     )
 
 
-def _is_ignored_format_character(character: str) -> bool:
-    codepoint = ord(character)
-    return (
-        unicodedata.category(character) == "Cf"
-        or 0xFE00 <= codepoint <= 0xFE0F
-        or 0xE0100 <= codepoint <= 0xE01EF
-    )
+def _assert_no_bidi_controls_in_value(value: Any, *, surface: str) -> None:
+    if isinstance(value, str):
+        _assert_no_bidi_controls(value, surface=surface)
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _assert_no_bidi_controls_in_value(key, surface=surface)
+            _assert_no_bidi_controls_in_value(item, surface=surface)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        for item in value:
+            _assert_no_bidi_controls_in_value(item, surface=surface)
 
 
 def _escape_inline_markdown_text(value: str) -> str:

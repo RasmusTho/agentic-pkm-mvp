@@ -36,6 +36,12 @@ pipeline ends here; triage is human territory.
   `notägaren` / `notens ägare` / `anteckningsägaren` / `anteckningens ägare` forms, including
   singular/plural `slutsats(er)`. This is an authority lint, not a general style or claims-quality
   policy.
+- Builds the lint projection with Unicode NFKC/case folding, removes the Unicode
+  `Default_Ignorable_Code_Point` property before exact token-sequence matching, and expands the
+  declared English present-perfect contractions. Every Unicode `Bidi_Control` character fails
+  closed on frontmatter, proposal titles/content, evidence, and the final rendered artifact.
+  Legitimate RTL prose and benign joiners such as emoji ZWJ remain renderable; Unicode confusable
+  detection and semantic paraphrase classification are outside this exact declared lint.
 - Constrains registered module titles to one line, rejects reserved or owner-attributing visible
   title text, escapes raw HTML in all title/evidence fields, and flattens evidence fields to one
   line. Source-controlled title, URL, and lineage values therefore cannot create raw-HTML or
