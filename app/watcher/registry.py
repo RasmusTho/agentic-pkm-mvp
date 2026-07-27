@@ -1187,8 +1187,14 @@ def _emit_changed_entry(
     action_mappings: Mapping[str, PanelActionMapping],
     process_panel_notes_inline: bool,
 ) -> str | None:
-    last_seen = state.last_seen(str(entry.rel_path))
-    state.update_file_state(str(entry.rel_path), mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
+    rel_path = str(entry.rel_path)
+    last_seen = state.last_seen(rel_path)
+    previous_file_state = dict(state.files[rel_path]) if rel_path in state.files else None
+    required_db = (
+        spec.emit_event in {PANEL_SCAN_REQUESTED, INGEST_VAULT_CHANGED}
+        and _db_outbox_required()
+    )
+    state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
     if is_settings_control_path(
         entry.rel_path,
         configured_system_dir=resolve_vault_system_dir_rel_or_default(
@@ -1215,16 +1221,28 @@ def _emit_changed_entry(
         current_mtime, current_digest = _maybe_heal_ingest_uuid(
             cfg, state, entry.rel_path, current_mtime, current_digest
         )
-    trace_id = _emit_watch_event(
-        spec=spec,
-        cfg=cfg,
-        outbox_path=cfg.outbox_path,
-        vault_root=cfg.vault_path,
-        rel_path=entry.rel_path,
-        mtime=current_mtime,
-        content_hash=current_digest,
-        state=state,
-    )
+    try:
+        trace_id = _emit_watch_event(
+            spec=spec,
+            cfg=cfg,
+            outbox_path=cfg.outbox_path,
+            vault_root=cfg.vault_path,
+            rel_path=entry.rel_path,
+            mtime=current_mtime,
+            content_hash=current_digest,
+            state=state,
+            required_db=required_db,
+        )
+    except Exception:
+        if required_db:
+            # Required delivery and its durable observation cursor are one
+            # state transition: if enqueue fails, restore the pre-observation
+            # state so finalization cannot suppress an unchanged-file retry.
+            if previous_file_state is None:
+                state.files.pop(rel_path, None)
+            else:
+                state.files[rel_path] = previous_file_state
+        raise
     if not trace_id:
         return None
     state.last_trace_id = trace_id
@@ -1253,6 +1271,7 @@ def _emit_watch_event(
     mtime: float,
     content_hash: str | None,
     state: WatcherState,
+    required_db: bool | None = None,
 ) -> str | None:
     if spec.emit_event == "panel.scan.requested":
         trace_id = uuid4().hex
@@ -1270,7 +1289,7 @@ def _emit_watch_event(
             payload=payload,
         )
         append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
-        require_db = _db_outbox_required()
+        require_db = _db_outbox_required() if required_db is None else required_db
         if require_db and not _has_db_outbox_env():
             raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
         if require_db or _has_db_outbox_env():
@@ -1317,7 +1336,7 @@ def _emit_watch_event(
     append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
 
     if spec.emit_event == INGEST_VAULT_CHANGED:
-        require_db = _db_outbox_required()
+        require_db = _db_outbox_required() if required_db is None else required_db
         if require_db and not _has_db_outbox_env():
             raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
         if require_db or _has_db_outbox_env():
