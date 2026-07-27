@@ -396,6 +396,8 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
                 candidate.get("contract_surfaces", []), "contract_surfaces"
             )
         ),
+        "file_surfaces_known": "likely_touched_files" in candidate,
+        "contract_surfaces_known": "contract_surfaces" in candidate,
         "likely_touched_files": set(
             _normalize_string_list(
                 candidate.get("likely_touched_files", []),
@@ -497,6 +499,14 @@ def _validate_independent_fast_lane_admission(
             raise EpicDispatchError(f"issue {candidate['issue_number']} has authority ambiguity")
         if candidate["has_migration"] is not False:
             raise EpicDispatchError(f"issue {candidate['issue_number']} includes a migration")
+        if not candidate["file_surfaces_known"]:
+            raise EpicDispatchError(
+                f"issue {candidate['issue_number']} lacks likely mutation surface evidence"
+            )
+        if not candidate["contract_surfaces_known"]:
+            raise EpicDispatchError(
+                f"issue {candidate['issue_number']} lacks contract surface evidence"
+            )
     touched: set[str] = set()
     contracts: set[str] = set()
     for candidate in candidates:

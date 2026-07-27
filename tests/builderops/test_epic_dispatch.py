@@ -345,6 +345,8 @@ def test_fast_lane_rejects_non_independent_or_over_budget_sets() -> None:
 
     missing_fact = _candidate(5203, risk="high")
     missing_fact.pop("strict_ready")
+    missing_surfaces = _candidate(5207, risk="high")
+    missing_surfaces.pop("likely_touched_files")
     duplicate = [_candidate(5204, risk="high"), _candidate(5204, risk="high")]
     contract_overlap = [
         dict(_candidate(5205, risk="high"), contract_surfaces=["contract/a"]),
@@ -352,6 +354,7 @@ def test_fast_lane_rejects_non_independent_or_over_budget_sets() -> None:
     ]
     for candidates, scope, expected in (
         ([missing_fact], [5203], "strictly ready"),
+        ([missing_surfaces], [5207], "mutation surface evidence"),
         (duplicate, [5204], "match candidates exactly"),
         (contract_overlap, [5205, 5206], "contract overlap"),
     ):
