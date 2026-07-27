@@ -1283,6 +1283,7 @@ def _emit_watch_event(
                     idempotency_key=derive_idempotency_key(
                         PANEL_SCAN_REQUESTED, str(rel_path), payload_fingerprint(payload)
                     ),
+                    required_db=require_db,
                 )
             except Exception:
                 state.enqueue_failures_total += 1
@@ -1326,6 +1327,7 @@ def _emit_watch_event(
                     spec.emit_event,
                     trace_id=trace_id,
                     source="watcher.registry",
+                    required_db=require_db,
                 )
             except Exception:
                 state.enqueue_failures_total += 1

@@ -7,7 +7,7 @@ import os
 import uuid as uuid_module
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple
 
 from app.db.errors import OutboxSchemaMissingError
 from app.events.models import Event, new_event
@@ -123,23 +123,38 @@ def _open_conn():
     return psycopg.connect(url, autocommit=True)
 
 
-def _outbox_db_enabled() -> bool:
-    """Return whether a self-owned outbox write may use Postgres.
+def _self_owned_outbox_write_policy(
+    *,
+    backend: str | None,
+    dsn_configured: bool,
+    required_db: bool,
+) -> Literal["connect", "skip"]:
+    """Resolve one self-owned outbox write without probing the database.
 
     ``conn_rw`` can fall back to a settings DSN even when the active store is
     memory-backed.  A best-effort outbox emission must not trigger that fallback:
     DNS resolution happens before a connection failure can be caught and can
-    stall a non-pg test run.  An explicit non-pg backend therefore always skips
-    a self-owned DB write, even if a stale DSN remains in the environment.
+    stall a non-pg test run.  An optional explicit-memory write therefore skips
+    even if a stale DSN remains in the environment.
 
     With no explicit backend, an explicit DSN is still a durability request and
-    retains the existing Postgres write path.  Callers that supply ``conn`` own
-    their transaction and bypass this gate.
+    retains the existing Postgres write path.  A caller that has already resolved
+    required DB-outbox intent overrides the optional memory shortcut and must
+    observe connection failures.  Callers that supply ``conn`` own their
+    transaction and bypass this self-owned policy entirely.
     """
-    backend = (os.environ.get("STORE_BACKEND") or "").strip().lower()
-    if backend:
-        return backend == "pg"
-    return bool(os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN"))
+    normalized_backend = (backend or "").strip().lower()
+    if normalized_backend and normalized_backend not in {"memory", "pg"}:
+        raise RuntimeError(
+            f"Store backend '{normalized_backend}' is not supported: set STORE_BACKEND "
+            "to 'pg' or 'memory' (explicit opt-in to volatile state), or unset it to "
+            "resolve from DATABASE_URL/DB_DSN."
+        )
+    if required_db or normalized_backend == "pg":
+        return "connect"
+    if normalized_backend == "memory":
+        return "skip"
+    return "connect" if dsn_configured else "skip"
 
 
 def open_outbox_txn_conn():
@@ -430,6 +445,7 @@ def write_outbox_event(
     conn: Any = None,
     *,
     idempotency_key: str,
+    required_db: bool = False,
 ) -> str:
     """Insert one event into the DB outbox, keyed by a mandatory idempotency key.
 
@@ -448,6 +464,11 @@ def write_outbox_event(
     live dispatch table is enforced by
     ``tests/events/test_topic_schema_registry.py::test_every_dispatched_topic_has_schema``,
     not by this write path.
+
+    ``required_db`` is a caller-resolved durability requirement for a
+    self-owned connection.  It prevents the explicit-memory best-effort
+    shortcut from hiding connection failures.  A supplied ``conn`` remains
+    authoritative and caller-owned regardless of ambient backend settings.
     """
     if not isinstance(idempotency_key, str) or not idempotency_key.strip():
         raise ValueError(f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}")
@@ -459,11 +480,15 @@ def write_outbox_event(
         stamped_meta = dict(envelope.meta or {})
         stamped_meta["payload_schema"] = current_schema_ref(envelope.event_type)
         envelope = envelope.model_copy(update={"meta": stamped_meta})
-    if conn is None and not _outbox_db_enabled():
+    if conn is None and _self_owned_outbox_write_policy(
+        backend=os.environ.get("STORE_BACKEND"),
+        dsn_configured=bool(os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")),
+        required_db=required_db,
+    ) == "skip":
         # Outbox emission is best effort outside an explicitly configured
         # Postgres runtime.  ``""`` is the existing no-insert result (used for
-        # a deduplicated event), so callers do not mistake this skipped
-        # best-effort write for durable delivery (#4064).
+        # a deduplicated event); only callers that request ``required_db`` may
+        # treat a return from this function as evidence that the DB path ran.
         return ""
     conn, close = _use_conn(conn)
     stored = envelope.model_dump_json()
@@ -565,6 +590,7 @@ def insert_object_and_outbox(
     source: str | None = None,
     conn: Any = None,
     observation: str | None = None,
+    required_db: bool = False,
 ) -> str:
     """Helper som bygger ett Event och skickar det till outbox.
 
@@ -575,6 +601,9 @@ def insert_object_and_outbox(
     would swallow an A→B→A revert against the original A row while the
     object/file_state write still commits (``ON CONFLICT DO NOTHING`` is not
     an error) — silent projection divergence downstream.
+
+    ``required_db`` is forwarded unchanged to :func:`write_outbox_event`;
+    wrappers such as the watcher must resolve that policy before calling.
 
     ``observation`` is a per-observation marker mixed into the fingerprint
     (NOT into the event payload). It must re-derive identically on crash-retry
@@ -610,7 +639,12 @@ def insert_object_and_outbox(
     )
     key = derive_idempotency_key(topic, source_id, fingerprint)
     event = new_event(event_type=topic, payload=data, trace_id=trace_id, source=source)
-    return write_outbox_event(event, conn=conn, idempotency_key=key)
+    return write_outbox_event(
+        event,
+        conn=conn,
+        idempotency_key=key,
+        required_db=required_db,
+    )
 
 
 def _coerce_event_from_db(raw_payload: Any, topic: str) -> Event:
