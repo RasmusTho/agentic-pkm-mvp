@@ -17,7 +17,10 @@ import yaml
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel.writeback import upsert_executed_ids
 from app.briefing.trigger import scheduled_briefing_tick
-from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
+from app.agents.panel_agent.policy import (
+    watcher_panel_candidate_for_path,
+    watcher_panel_writeback_allowed,
+)
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.knowledge.errors import KnowledgeWriteConflict
@@ -383,6 +386,13 @@ def _process_panel_note(
         str(rel_path),
         str(note_path),
     )
+    if not watcher_panel_writeback_allowed(rel_path):
+        logger.info(
+            "panel note skipped non-rewritten class relative_path=%s note_path=%s",
+            str(rel_path),
+            str(note_path),
+        )
+        return 0
     try:
         note_uuid = _ensure_panel_note_uuid_with_retry(note_path, vault_root=vault_root)
     except Exception as exc:
@@ -1141,6 +1151,9 @@ def _panel_emit_allowed(
     panel_auto_exec_enabled: bool,
     state: WatcherState,
 ) -> bool:
+    if not watcher_panel_writeback_allowed(rel_path):
+        summary["panel_skipped_policy"] = int(summary.get("panel_skipped_policy", 0)) + 1
+        return False
     candidate, ok = _panel_candidate_for_path(cfg.vault_path / rel_path)
     if not ok:
         state.errors += 1

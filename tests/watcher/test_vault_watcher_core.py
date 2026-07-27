@@ -315,6 +315,93 @@ def test_vault_watcher_stale_panel_write_has_no_acknowledgement_effects(
     assert staged != concurrent
 
 
+def test_vault_watcher_create_once_source_interleaving_has_no_mutation_or_acknowledgement(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault = tmp_path / "vault"
+    sources = vault / "Sources"
+    sources.mkdir(parents=True)
+    note = sources / "panel-source.md"
+    note.write_text(
+        "---\n"
+        "uuid: source-panel\n"
+        "ai_panel_auto_run: watcher\n"
+        "---\n\n"
+        "%% AI:Start %%\n"
+        "## AI-åtgärder\n"
+        "- [x] Do thing\n"
+        "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    concurrent = "Concurrent human source snapshot\n"
+    persisted_ids: list[object] = []
+    emitted_events: list[object] = []
+    real_class_policy = watcher_module.watcher_panel_writeback_allowed
+
+    def interleave_before_class_boundary(relative_path: Path) -> bool:
+        note.write_text(concurrent, encoding="utf-8")
+        return real_class_policy(relative_path)
+
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-run.jsonl"))
+    monkeypatch.setattr(
+        watcher_module,
+        "watcher_panel_writeback_allowed",
+        interleave_before_class_boundary,
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "handle_note_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("create-once source must not enter panel preparation")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "write_note_from_absolute",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("create-once source must not reach the write seam")
+        ),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "upsert_executed_ids",
+        lambda *args, **kwargs: persisted_ids.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_write_outbox_events",
+        lambda _path, events: emitted_events.extend(events),
+    )
+
+    summary, messages = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=False,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=tmp_path / "events.jsonl",
+    )
+
+    assert summary["panel_candidates"] == 0
+    assert summary["panel_skipped_policy"] == 1
+    assert summary["applied_actions"] == 0
+    assert summary["errors"] == 0
+    assert persisted_ids == []
+    assert emitted_events == []
+    assert note.read_text(encoding="utf-8") == concurrent
+    assert not any(is_conflict_artifact(path.name) for path in note.parent.iterdir())
+    assert any("Watcher policy denies auto-run" in message for message in messages)
+
+
 def test_vault_watcher_emit_only_emits_created_without_acknowledgement_effects(
     tmp_path: Path,
     monkeypatch,

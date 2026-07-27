@@ -116,6 +116,64 @@ def test_registry_panel_policy_skips_never_and_counts_candidates(
     assert summary.get("panel_skipped_policy") == 1
 
 
+def test_registry_panel_policy_rejects_create_once_source_before_emit_or_processing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    source = vault_root / "Sources" / "panel-source.md"
+    _write_note(
+        source,
+        "uuid: source-panel",
+        "%% AI:Start %%\n- [x] Do thing\n%% AI:End %%",
+    )
+    concurrent = "Concurrent human source snapshot\n"
+    config_path = tmp_path / "watchers.yaml"
+    _write_config(config_path)
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "Sources/**")
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
+    monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
+    monkeypatch.setenv("WATCHER_DEBOUNCE_MS", "0")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+
+    processed: list[str] = []
+    real_class_policy = registry.watcher_panel_writeback_allowed
+
+    def interleave_before_class_boundary(relative_path: Path) -> bool:
+        if relative_path == Path("Sources/panel-source.md"):
+            source.write_text(concurrent, encoding="utf-8")
+        return real_class_policy(relative_path)
+
+    monkeypatch.setattr(
+        registry,
+        "watcher_panel_writeback_allowed",
+        interleave_before_class_boundary,
+    )
+    monkeypatch.setattr(
+        registry,
+        "_process_panel_note",
+        lambda **kwargs: processed.append(str(kwargs["rel_path"])),
+    )
+
+    summaries = registry.run_registry_once(config_path)
+    summary = summaries["panel"]
+
+    assert processed == []
+    assert summary.get("panel_candidates") == 0
+    assert summary.get("panel_skipped_policy") == 1
+    assert summary.get("emitted_in_tick") == 0
+    assert source.read_text(encoding="utf-8") == concurrent
+
+
 def test_registry_panel_auto_exec_disabled_skips_mutations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

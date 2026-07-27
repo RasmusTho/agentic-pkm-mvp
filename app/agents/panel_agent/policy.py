@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note
+
 AutoRunMode = str  # "manual" | "watcher" | "never"
 
 _AI_PANEL_FENCE_RE = re.compile(r"%%[^%\n]*ai[^%\n]*%%", re.IGNORECASE)
@@ -127,11 +129,32 @@ def watcher_may_run_panel(frontmatter: Mapping[str, Any]) -> bool:
     return get_auto_run_mode(frontmatter) != "never"
 
 
+def watcher_panel_writeback_allowed(
+    relative_path: Path | str,
+    *,
+    sources_root_rel: Path | str = "Sources",
+) -> bool:
+    """Limit mutation-capable watcher runs to rewritten note classes."""
+
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    return (
+        classify_note(
+            path.as_posix(),
+            WriteOperation.WRITE,
+            sources_root_rel=Path(sources_root_rel).as_posix(),
+        )
+        is NoteClass.REWRITTEN
+    )
+
+
 __all__ = [
     "get_auto_run_mode",
     "watcher_may_run_panel",
     "contains_ai_panel_fence",
     "watcher_panel_candidate",
     "watcher_panel_candidate_for_path",
+    "watcher_panel_writeback_allowed",
     "proactive_assist_enabled",
 ]

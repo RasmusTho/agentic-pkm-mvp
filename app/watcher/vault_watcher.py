@@ -12,7 +12,11 @@ from pathlib import Path
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block, upsert_executed_ids
-from app.agents.panel_agent.policy import watcher_may_run_panel, watcher_panel_candidate
+from app.agents.panel_agent.policy import (
+    watcher_may_run_panel,
+    watcher_panel_candidate,
+    watcher_panel_writeback_allowed,
+)
 from app.components.concurrency import DedupTaskQueue, SystemClock
 from app.ingest import vault_alpha as vault_alpha
 from app.services.companion_note import (
@@ -524,7 +528,11 @@ def run_watcher_tick(
         if not isinstance(frontmatter, dict):
             frontmatter = {}
 
-        if watcher_panel_candidate(frontmatter, raw_markdown) and watcher_may_run_panel(frontmatter):
+        if (
+            watcher_panel_candidate(frontmatter, raw_markdown)
+            and watcher_may_run_panel(frontmatter)
+            and watcher_panel_writeback_allowed(rel_path)
+        ):
             policy_allowed_paths.append(path)
         else:
             summary["panel_skipped_policy"] += 1

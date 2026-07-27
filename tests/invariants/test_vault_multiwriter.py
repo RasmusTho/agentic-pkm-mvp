@@ -350,6 +350,7 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
         watcher_source = (repo_root / watcher_path).read_text(encoding="utf-8")
         assert "write_if_unchanged(" not in watcher_source, watcher_path
         assert "write_note_from_absolute(" in watcher_source, watcher_path
+        assert "watcher_panel_writeback_allowed(" in watcher_source, watcher_path
 
     worker_source = (repo_root / "app/workers/outbox_worker.py").read_text(
         encoding="utf-8"

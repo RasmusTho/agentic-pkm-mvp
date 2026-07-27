@@ -4,6 +4,7 @@ from app.agents.panel_agent.policy import (
     get_auto_run_mode,
     watcher_may_run_panel,
     watcher_panel_candidate,
+    watcher_panel_writeback_allowed,
 )
 
 
@@ -57,3 +58,15 @@ def test_watcher_panel_candidate_needs_panel_fence() -> None:
     frontmatter: dict[str, object] = {}
     markdown = "# No AI fence here\nJust text"
     assert watcher_panel_candidate(frontmatter, markdown) is False
+
+
+def test_watcher_panel_writeback_uses_authoritative_note_class_mapping() -> None:
+    assert watcher_panel_writeback_allowed("Notes/panel.md") is True
+    assert watcher_panel_writeback_allowed("Sources/panel.md") is False
+    assert (
+        watcher_panel_writeback_allowed(
+            "Acquired/panel.md",
+            sources_root_rel="Acquired",
+        )
+        is False
+    )

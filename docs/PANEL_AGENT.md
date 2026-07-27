@@ -116,8 +116,10 @@ Authority and downstream boundaries:
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
 - Panel writeback uses a two-phase acknowledgement boundary. The note-update service and both
   direct watcher paths derive Markdown/events without persisting executed IDs or dispatching/
-  emitting events; after their canonical version-checked hardened knowledge write succeeds, they persist
-  non-empty executed IDs and then release eligible effects. A staged conflict leaves the snapshot
+  emitting events; watcher policy first admits only paths classified `REWRITTEN`, so create-once
+  Sources and append-only paths never enter watcher UUID healing, preparation, writeback, or
+  acknowledgement. After a rewritten note's canonical version-checked hardened knowledge write
+  succeeds, the watcher persists non-empty executed IDs and then releases eligible effects. A staged conflict leaves the snapshot
   and acknowledgement effects untouched, and watcher telemetry classifies it as skipped/deferred.
   Receiptless/other write conflicts propagate as errors because the canonical write may already
   have landed. The `panel-update` CLI follows the same prepare → write → commit ordering, but its
@@ -260,7 +262,15 @@ Make this note evergreen
   - removes executed checkboxes from the panel working set, writes a receipt into the AI status callout, and records the hidden `ai:id` in `executed_action_ids` on the note payload to prevent re-execution.
 - No LangGraph/planner/tool calls; this remains a lightweight runtime loop on top of Reality-MVP.
 - Markdown mutations (panel cleanup, receipts, promotion frontmatter) flow through the note writer; agents emit intents, and the writer/consumer apply deterministic file updates.
-- Auto-run policy (SoT v5.3, watcher-facing): watchers treat any note that contains an AI panel fence (`%% ...ai... %%`, case-insensitive) as a candidate once the global arm switch `WATCHER_AUTO_EXEC=1` is set. The only per-note opt-out is `ai_panel_auto_run: never` (nested `ai_panel: { auto_run: never }` also works); other modes (`watcher`/`manual`) remain metadata for manual CLI contexts but no longer gate watcher eligibility. Manual CLI commands (`panel run`, `panel run-many`) ignore this policy.
+- Auto-run policy (SoT v5.3, watcher-facing): once the global arm switch
+  `WATCHER_AUTO_EXEC=1` is set, watchers treat a note containing an AI panel fence
+  (`%% ...ai... %%`, case-insensitive) as a candidate only when the authoritative multi-writer
+  classifier marks its path `REWRITTEN`. `CREATE_ONCE` Sources and append-only paths are a hard
+  watcher exclusion, including emit-only runs; they cannot be made mutation-eligible by an AI
+  fence. Within the rewritten class, the only per-note opt-out is `ai_panel_auto_run: never`
+  (nested `ai_panel: { auto_run: never }` also works); other modes (`watcher`/`manual`) remain
+  metadata for manual CLI contexts but no longer gate watcher eligibility. Manual CLI commands
+  (`panel run`, `panel run-many`) ignore this watcher policy.
 
 Architectural reading note:
 - these event and writer paths describe the current runtime contract,

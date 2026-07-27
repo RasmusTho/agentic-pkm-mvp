@@ -32,7 +32,10 @@ Writes to notes or objects MUST use optimistic locking with a version token to p
 - **Acknowledgement fence:** panel note updates prepare their Markdown/events without persisting
   executed IDs or dispatching plans, land the canonical version-checked write, and only then persist
   non-empty executed IDs and dispatch/emit eligible events. This applies to the note-update service
-  and both direct watcher paths. A stale or staged-conflict result performs none of those
+  and both direct watcher paths. Mutation-capable watcher policy first uses the authoritative
+  note-class classifier and admits only `REWRITTEN` paths; `CREATE_ONCE` sources and append-only
+  paths do not enter UUID healing, panel preparation, writeback, or acknowledgement even when they
+  contain an AI fence. A stale or staged-conflict result performs none of those
   acknowledgement effects, leaves the prior snapshot unchanged where one exists, and is counted by
   the note watcher as skipped/deferred rather than processed. Only an attached
   `conflict_staged` receipt is a known stale/deferred outcome; a receiptless or other

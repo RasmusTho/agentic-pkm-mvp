@@ -43,8 +43,10 @@ event dispatch/emission, perform the canonical write, then commit non-empty exec
 eligible effects. An attached `conflict_staged` receipt cannot advance a snapshot or those effects.
 A receiptless/other `KnowledgeWriteConflict` is not classified as stale: it propagates as an
 indeterminate error because the write may already have linearized. Both direct watcher writeback
-paths route through the hardened absolute helper; `OptimisticWriteGuard.write_if_unchanged` is a
-check-then-write utility, not an approved rewritten-note CAS.
+paths first admit only paths classified `REWRITTEN`, then route through the hardened absolute
+helper. `CREATE_ONCE` Sources and append-only paths never enter watcher UUID healing, preparation,
+writeback, or acknowledgement. `OptimisticWriteGuard.write_if_unchanged` is a check-then-write
+utility, not an approved rewritten-note CAS.
 
 Reference types:
 - `NoteLocator(vault, path)` where `path` is vault-relative and portable (`/` separators).
