@@ -14,6 +14,8 @@ from app.dispatcher.verified_merge import (
     NEUTRALIZED_BODY_RESTORATION_CONTRACT,
     VERIFIED_MERGE_AUTHORITY_CONTRACT,
     build_verified_merge_phase,
+    carries_live_neutralized_body,
+    classify_neutralized_body_state,
     plan_post_merge_reconciliation,
     prepare_verified_merge,
     resolve_neutralized_body_restoration,
@@ -1295,7 +1297,17 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
     assert json.loads(output_path.read_text(encoding="utf-8")) == {
         "restoration": None,
         "restoration_required": False,
+        "status": "no_restoration_required",
     }
+
+    pr_path.write_text(json.dumps(_pr()), encoding="utf-8")
+    canonical = _run()
+
+    assert canonical.returncode == 0, canonical.stderr
+    assert (
+        json.loads(output_path.read_text(encoding="utf-8"))["status"]
+        == "no_restoration_required"
+    )
 
     pr_path.write_text(
         json.dumps(
@@ -1310,9 +1322,22 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
 
     assert outlived.returncode == 2, outlived.stderr
     payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "restoration_required"
     assert payload["restoration_required"] is True
     assert payload["restoration"]["neutralized_head_sha"] == HEAD
     assert payload["restoration"]["head_sha"] == NEXT_HEAD
+
+    # A neutralized body whose evidence cannot prove a restore target is
+    # indeterminate, never a safe exit 0.
+    comments_path.write_text(json.dumps([]), encoding="utf-8")
+    ambiguous = _run()
+
+    assert ambiguous.returncode == 3, ambiguous.stderr
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "restoration": None,
+        "restoration_required": False,
+        "status": "ambiguous_neutralized_body",
+    }
 
 
 def test_neutralized_body_restoration_fails_closed_without_unambiguous_evidence() -> None:
@@ -1393,3 +1418,72 @@ def test_neutralized_body_restoration_fails_closed_without_unambiguous_evidence(
         )
         is None
     )
+
+    # Every one of those `None` outcomes is still an indeterminate live
+    # neutralized body, distinct from a canonical or already-merged body.
+    assert carries_live_neutralized_body(head_b_pr)
+    assert not carries_live_neutralized_body({**head_b_pr, "body": _body()})
+    assert not carries_live_neutralized_body(
+        {
+            **head_b_pr,
+            "state": "closed",
+            "merged": True,
+            "merged_at": "2026-07-27T08:18:08Z",
+        }
+    )
+
+
+def test_neutralized_body_state_never_reports_ambiguity_as_safe() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    neutralized_body = str(plan["neutralized_body"])
+    head_a_pr = _pr(neutralized_body)
+    head_b_pr = {**head_a_pr, "head": {"sha": NEXT_HEAD}}
+
+    def _status(
+        candidate_comments: list[dict[str, object]],
+        pr: dict[str, object],
+    ) -> object:
+        return classify_neutralized_body_state(
+            candidate_comments, pr=pr, repository=REPOSITORY
+        )["status"]
+
+    # In flight on the head the receipt covers, and a canonical body, are both
+    # positively safe.
+    assert _status(comments, head_a_pr) == "no_restoration_required"
+    assert _status(comments, _pr()) == "no_restoration_required"
+    assert _status([], _pr()) == "no_restoration_required"
+
+    # Outlived its attempt with a provable restore target.
+    assert _status(comments, head_b_pr) == "restoration_required"
+
+    # Neutralized with unusable evidence is indeterminate, not safe.
+    assert _status([], head_b_pr) == "ambiguous_neutralized_body"
+    assert (
+        _status(
+            [{**comments[0], "author_association": "NONE"}],
+            head_b_pr,
+        )
+        == "ambiguous_neutralized_body"
+    )
+    assert (
+        classify_neutralized_body_state(
+            comments,
+            pr=head_b_pr,
+            repository=REPOSITORY,
+            expected_run_id="vrun-other",
+        )["status"]
+        == "ambiguous_neutralized_body"
+    )
+    assert classify_neutralized_body_state(
+        comments, pr=head_a_pr, repository=REPOSITORY
+    ) == {
+        "restoration": None,
+        "restoration_required": False,
+        "status": "no_restoration_required",
+    }

@@ -617,6 +617,75 @@ def resolve_neutralized_body_restoration(
     }
 
 
+def carries_live_neutralized_body(pr: Mapping[str, object]) -> bool:
+    """Whether an open, unmerged PR currently advertises a neutralized body.
+
+    Callers pair this with :func:`resolve_neutralized_body_restoration` to tell
+    the two ``None`` outcomes apart: a canonical body is a positively safe state,
+    while a neutralized body with no provable restore target is indeterminate and
+    must stop repair work rather than read as "nothing to do".
+    """
+
+    if (
+        pr.get("state") != "open"
+        or pr.get("merged") is True
+        or pr.get("merged_at") is not None
+    ):
+        return False
+    return resolve_neutralized_issue_authority(pr.get("body")) is not None
+
+
+def classify_neutralized_body_state(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+    expected_run_id: str | None = None,
+) -> dict[str, object]:
+    """Separate a positively safe body state from an indeterminate one.
+
+    ``resolve_neutralized_body_restoration`` returns ``None`` both when there is
+    nothing to restore and when the body is neutralized but no restore target can
+    be proven. Those must not collapse into one "all clear" answer, so classify
+    the live body into exactly one of:
+
+    * ``no_restoration_required`` -- the body is canonical or already merged, or a
+      trusted authority receipt still covers the current head, so the merge
+      attempt that neutralized it is in flight.
+    * ``restoration_required`` -- the body outlived its attempt and the durable
+      receipt names the restore target.
+    * ``ambiguous_neutralized_body`` -- the body is neutralized on an open PR with
+      no receipt for the current head and no provable restore target. Stop and
+      recover evidence; never continue repair work on this answer.
+    """
+
+    restoration = resolve_neutralized_body_restoration(
+        comments,
+        pr=pr,
+        repository=repository,
+        expected_run_id=expected_run_id,
+    )
+    if restoration is not None:
+        status = "restoration_required"
+    elif not carries_live_neutralized_body(pr) or (
+        resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pr,
+            repository=repository,
+            expected_run_id=expected_run_id,
+        )
+        is not None
+    ):
+        status = "no_restoration_required"
+    else:
+        status = "ambiguous_neutralized_body"
+    return {
+        "restoration": restoration,
+        "restoration_required": restoration is not None,
+        "status": status,
+    }
+
+
 def restored_body_matches_authority(
     body: object,
     *,

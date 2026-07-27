@@ -497,8 +497,11 @@ python3 scripts/resolve_neutralized_body_restoration.py \
   --pr-json <pr.json> --comments-json <comments.json> --repository <owner/repo>
 ```
 
-It is read-only and exits `2` when the live body is neutralized while no authority receipt covers the
-current head, naming the durable receipt's `restore_body_sha256` as the only accepted restore target.
+It is read-only and separates a positively safe state from an indeterminate one: `0` means no
+restoration is required, `2` means the body is neutralized with no receipt for the current head and
+names the durable receipt's `restore_body_sha256` as the only accepted restore target, and `3` means
+the body is neutralized on an open PR but the evidence is missing, untrusted, or conflicting. Treat
+`3` as a hard stop and recover the evidence; never read it as "nothing to do".
 
 Rules for the restore:
 
