@@ -44,7 +44,9 @@ provider's bug:
   transports; `HttpModelAdapter` (`:175-278`) is fully implemented for both Anthropic and OpenAI and
   unexercised.
 
-The owner separately stated that CKM should orchestrate development of the whole system. CKM's only
+The owner separately stated that development of the whole system should be orchestrated from the CKM
+(ruled in ADR-0057 A1, 2026-07-27: the acting party is a builder agent reading the map; the CKM has no
+agency of its own). CKM's only
 model path today resolves through the **Product** router (`app/builderops/ckm/semantic.py:32,116-136`)
 and rejects a mock route only after Product routing may already have constructed policy-defined
 fallback candidates.
@@ -130,14 +132,36 @@ That line was written when CKM was a peripheral consumer. **It is amended:** CKM
 its dependencies allow, requiring only credential resolution and the adapter contract.
 
 Through the migration window CKM continues to route Builder inference through Product policy — the
-authority leakage ADR-0063 rejected Option A to prevent. Two conditions make that tolerable and both
-must hold: CKM does not orchestrate during the window, and the leak is made visible by an
-`importlinter` rule with a single named, dated exemption. If orchestration must start first, CKM's
-migration precedes model inquiry.
+authority leakage ADR-0063 rejected Option A to prevent.
 
-Whether CKM may orchestrate at all is **not decided here**. ADR-0057 locks CKM projection-only with a
-candidate lifecycle and human confirmation; orchestration exceeds that scope and requires its own
-amendment.
+**Amended 2026-07-27, superseding this section's original interim conditions.** When this ADR was
+accepted, whether CKM might orchestrate was undecided, so tolerability was made conditional on CKM
+not orchestrating during the window, with a migration-order swap if it did. The owner has since
+ruled (ADR-0057 A1) that delivery may be orchestrated from the CKM by a builder agent. Both the
+original condition and the conditional swap are therefore withdrawn, and the tolerability argument is
+restated on the correct grounds:
+
+- **The order does not swap.** The CKM migration stays at step 5 of the migration table in
+  `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8. Migration` (that table is current; only its
+  §8.1 narrative is superseded). Orchestration selects work from
+  gap detection, which consumes `confirmed` material only (`app/builderops/ckm/gaps.py`), so an
+  orchestrator is not fed unconfirmed inference. The mock route is separately and already handled:
+  it is rejected before any provider call and the run writes zero edges
+  (`app/builderops/ckm/semantic.py`; `tests/builderops/ckm/test_semantic.py::test_llm_unavailable_skips_cleanly`).
+- **What the leak actually risks is the evidence graph, not the orchestrator — and specifically the
+  non-mock degraded route.** Product policy may silently resolve a degraded fallback
+  (`app/components/llm/router.py` sets `degraded=True`); `semantic.py` never inspects
+  `route.degraded`, and the persisted edge records provider and model but not the degraded state.
+  That is the genuine data-integrity defect, and step 5 closes it.
+- **The visibility condition does not yet exist and is therefore scheduled, not relied upon.** The
+  `app.builderops -> app.components.llm` importlinter contract is **not implemented**: `importlinter.ini`
+  lists `app.builderops` only as a member of a layered-independence contract, and `app.components.llm`
+  is a different package from `app.llm`. Adding it — with a single named, dated exemption for
+  `ckm/semantic.py` — is part of migration step 1. Until it lands, the leak is real and invisible,
+  and this ADR does not pretend otherwise.
+
+Whether delivery may be orchestrated *from* the CKM is decided in ADR-0057 A1, not here. The CKM
+itself never orchestrates under any reading: the acting party is a builder agent that reads it.
 
 ## Options considered
 
