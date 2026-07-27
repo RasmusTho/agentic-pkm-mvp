@@ -163,10 +163,25 @@ poll GitHub. GitHub check conclusions and the PR head SHA remain the authority.
 - branch protection is not the process gate: an unprotected branch or absent required-status-check rule does not waive the current-checks and review-feedback wait before merge
 - do not run GraphQL `reviewThreads` closure sweeps by default
 - run GraphQL review-thread closure checks only when triggered by a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback
-- blocking regression risk -> fix before merge
-- valid non-blocking improvement -> fix if cheap, otherwise file a follow-up
+- P0/P1 correctness, contract, or safety defect -> block merge, fix, and independently re-review
+- P2 real defect accepted for this PR -> leave the PR code unchanged for that finding, route it
+  through `bug-to-issue`, reply on the finding/thread with the Issue reference, and merge without
+  another review round once the durable disposition is live
+- P3 informational advice or non-defect suggestion -> record when useful; do not block, repair, or
+  open defect intake
 - out-of-scope -> short response; follow-up only if useful
 - incorrect or not applicable -> short response
+
+The protected severity floors and dispatcher receipt compatibility rule are normative in
+`.codex/skills/verification-and-closure/SKILL.md :: Severity routing`. There is no valid
+`blocking P2`.
+
+Compatibility for the current `pr-integration` consumer: its legacy `cheap fix` bucket is not a
+fifth severity and does not include P2/P3. Read `cheap fix`, `review-feedback repair`, and
+`fixing commit` there as P0/P1 blocking-repair concepts only. `pr-integration` requires
+classification with this hot path first, so a true P2 follows the Issue/thread disposition above
+and never requires a fixing commit; P3 remains informational. A secondary skill's abbreviated
+bucket list cannot override this canonical routing.
 
 4. Minimal delivery receipt
 - record PR number, issue number(s), current head SHA, lane, risk, checks run, review classification, and next handoff

@@ -225,3 +225,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The dependency plan treated #4111 as executable after #4110, but D5 requires the canonical atomic KnowledgePort create-if-absent boundary still blocked in #4132.
 **Upstream artifact:** `docs/YOUTUBE_SOURCE_NOTE_V2/PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS.md` and `docs/YOUTUBE_SOURCE_NOTE_V2/ISSUE_DRAFTS.md` — make the atomic HKA creation prerequisite explicit before the persistence slice becomes pickup-eligible.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
+
+## 2026-07-27 — PR #4159 (governance review-severity routing)
+**Source:** publish-pr / `pr-contract` CI
+**Diverged:** The governance-lane plan treated `tests/governance/test_autonomous_escalation_contract.py` as a directly related governance test, but the live `pr-contract` allowlist rejected that path.
+**Upstream artifact:** `docs/development/DEV_WORKFLOW.md :: Governance lane` — keep the documented governance-test surface aligned with the enforced `pr-contract` allowlist or make the path mismatch explicit before publication.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
