@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.orchestrator.handler import OrchestratorContext
-from app.services.note_update import DEFAULT_SNAPSHOT_DIR
+from app.services.note_update import DEFAULT_SNAPSHOT_DIR, NoteUpdateResult
 from app.settings.panel_actions import PanelActionMapping
 from app.services.note_watcher import NoteWatcherService
 
@@ -119,3 +119,40 @@ def test_scan_vault_once_uses_hash_when_mtime_same(tmp_path: Path, monkeypatch: 
     assert [r.uuid for r in results] == [uuid]
     assert service.last_scan["processed"] == 1
     assert service.last_scan["skipped"] == 0
+
+
+def test_scan_vault_once_does_not_acknowledge_stale_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note_uuid = "note-stale-watcher"
+    old_content = _note(note_uuid, checked=False)
+    current = _note(note_uuid, checked=True)
+    _write_snapshot(snapshot_dir, note_uuid, old_content)
+    note_path = vault / "note.md"
+    note_path.write_text(current, encoding="utf-8")
+    monkeypatch.setattr(
+        "app.services.note_watcher.process_note_update",
+        lambda *args, **kwargs: NoteUpdateResult(
+            uuid=note_uuid,
+            current_path=note_path,
+            changed=False,
+            stale=True,
+        ),
+    )
+    service = NoteWatcherService(vault_root=vault, snapshot_dir=snapshot_dir)
+
+    with caplog.at_level("INFO"):
+        results = service.scan_vault_once(
+            OrchestratorContext(settings={"panel_events_enable": True})
+        )
+
+    assert [result.stale for result in results] == [True]
+    assert service.last_scan["processed"] == 0
+    assert service.last_scan["skipped"] == 1
+    assert "note updated:" not in caplog.text
+    assert "deferred after stale write" in caplog.text

@@ -48,6 +48,8 @@ class WriteReceipt:
     note_class: str | None = None
     writer_identity: str | None = None
     written_at: str | None = None
+    outcome: str = "written"
+    conflict_artifact: str | None = None
 
 
 class KnowledgePort(Protocol):

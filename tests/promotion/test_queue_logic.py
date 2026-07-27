@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.promotion.queue import enqueue, run_once
 
 
@@ -114,6 +115,47 @@ def test_run_once_writes_note_via_knowledge_port(tmp_path: Path, monkeypatch):
     assert processed == 1
     assert calls and calls[0][0] == "note.md"
     assert "review_state: promoted" in calls[0][1]
+
+
+def test_run_once_staged_conflict_does_not_acknowledge_promotion(tmp_path: Path, monkeypatch) -> None:
+    import app.promotion.queue as q
+
+    qpath, log, settings = _setup(monkeypatch, tmp_path)
+    settings.write_text(
+        "promotion:\n  cooldown_seconds: 0\n  require_idle_seconds: 0\n  max_retries: 1\n"
+        "  move_policy:\n    enabled: false\n    default_target: 2_Cards/Concepts\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(q, "VAULT", tmp_path / "vault")
+    relation_calls: list[str] = []
+    monkeypatch.setattr(
+        q,
+        "prepare_relations_for_promotion",
+        lambda *args, **kwargs: relation_calls.append("prepare"),
+    )
+    monkeypatch.setattr(
+        q,
+        "ensure_object_has_relations",
+        lambda *args, **kwargs: relation_calls.append("ensure"),
+    )
+    monkeypatch.setattr(
+        q,
+        "write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+
+    note = tmp_path / "vault" / "note.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    original = "---\nreview_state: inbox\n---\nBody\n"
+    note.write_text(original, encoding="utf-8")
+    enqueue(note, uuid="00000000-0000-0000-0000-000000000006", desired_state="promoted")
+
+    assert run_once() == 0
+    assert relation_calls == []
+    assert note.read_text(encoding="utf-8") == original
+    assert any("promote.error" in line for line in log.read_text(encoding="utf-8").splitlines())
 
 
 # --- security: trace_id uses SHA-256, not SHA-1 ---

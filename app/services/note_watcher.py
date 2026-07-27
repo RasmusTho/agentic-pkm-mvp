@@ -68,6 +68,11 @@ class NoteWatcherService:
                 continue
 
             results.append(result)
+            if result.stale:
+                skipped += 1
+                self.last_skipped.append(note_path)
+                logger.info("note update deferred after stale write: %s", note_path)
+                continue
             processed += 1
             logger.info(
                 "note updated: %s (events=%s, dispatched=%s)",

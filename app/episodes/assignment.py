@@ -100,7 +100,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -689,10 +688,14 @@ def _transform_note_frontmatter_episode_ref(
     (:func:`app.knowledge.write_ops.write_note_from_absolute` raises ``WritesBlockedError``, which
     must propagate -- AC4's guard-at-seam enforcement).
     """
+    from app.knowledge.write_ops import (
+        read_note_text_with_version,
+        write_note_from_absolute,
+    )
     from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
     try:
-        text = note_path.read_text(encoding="utf-8")
+        text, expected_version = read_note_text_with_version(note_path)
     except OSError:
         logger.warning(
             "assignment: could not read vault note %s for episode_ref stamping -- skipping "
@@ -704,13 +707,10 @@ def _transform_note_frontmatter_episode_ref(
     frontmatter["episode_ref"] = transform(frontmatter.get("episode_ref"))
     new_text = dump_frontmatter(frontmatter, body)
 
-    from app.knowledge.write_ops import write_note_from_absolute
-
     # Shared knowledge-write seam (#3450): this vault note is REWRITTEN-
     # classified, so it requires an expected_version. ``text`` was just read
     # above, so its hash is the exact expected_version the filesystem seam
     # recomputes.
-    expected_version = hashlib.sha256(text.encode("utf-8")).hexdigest()
     write_note_from_absolute(
         note_path,
         new_text,

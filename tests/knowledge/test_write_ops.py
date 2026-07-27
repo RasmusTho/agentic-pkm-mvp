@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
 
 from app.knowledge import write_ops
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 from app.write_guard import WriteGuard, WritesBlockedError
 
@@ -14,6 +16,17 @@ def test_default_vault_root_for_path_uses_filesystem_anchor(tmp_path: Path) -> N
     note = tmp_path / "vault" / "Inbox" / "note.md"
     root = write_ops.default_vault_root_for_path(note)
     assert root == Path(note.anchor)
+
+
+def test_read_note_text_with_version_hashes_exact_raw_bytes(tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    raw = b"---\r\nuuid: crlf-note\r\n---\r\n\r\nBody\r\n"
+    note.write_bytes(raw)
+
+    text, version = write_ops.read_note_text_with_version(note)
+
+    assert text.encode("utf-8") == raw
+    assert version == hashlib.sha256(raw).hexdigest()
 
 
 def test_write_note_from_absolute_resolves_locator_and_port(monkeypatch, tmp_path: Path) -> None:
@@ -97,6 +110,90 @@ def test_write_note_from_absolute_rejects_symlink_escape(monkeypatch, tmp_path: 
     assert escaped.read_text(encoding="utf-8") == "old"
 
 
+def test_absolute_helper_rejects_expected_version_through_source_symlink_alias(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    target = vault / "Sources" / "panel-source.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("observed source", encoding="utf-8")
+    alias = vault / "Notes" / "source-alias.md"
+    alias.parent.mkdir()
+    alias.symlink_to(Path("..") / "Sources" / target.name)
+    _, expected_version = write_ops.read_note_text_with_version(alias)
+    target.write_text("concurrent human source", encoding="utf-8")
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="expected-version write rejects aliased note locator",
+    ):
+        write_ops.write_note_from_absolute(
+            alias,
+            "stale watcher proposal",
+            vault_root=vault,
+            expected_version=expected_version,
+        )
+
+    assert target.read_text(encoding="utf-8") == "concurrent human source"
+    assert alias.read_text(encoding="utf-8") == "concurrent human source"
+
+
+def test_relative_helper_rejects_expected_version_through_source_symlink_alias(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    target = vault / "Sources" / "panel-source.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("observed source", encoding="utf-8")
+    alias = vault / "Notes" / "source-alias.md"
+    alias.parent.mkdir()
+    alias.symlink_to(Path("..") / "Sources" / target.name)
+    _, expected_version = write_ops.read_note_text_with_version(alias)
+    target.write_text("concurrent human source", encoding="utf-8")
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="expected-version write rejects aliased note locator",
+    ):
+        write_ops.write_note_relative(
+            "Notes/source-alias.md",
+            "stale watcher proposal",
+            vault_root=vault,
+            expected_version=expected_version,
+        )
+
+    assert target.read_text(encoding="utf-8") == "concurrent human source"
+    assert alias.read_text(encoding="utf-8") == "concurrent human source"
+
+
+def test_absolute_helper_rejects_rewritten_leaf_alias_swap(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    first = vault / "Notes" / "a.md"
+    second = vault / "Notes" / "b.md"
+    first.parent.mkdir(parents=True)
+    first.write_text("same content", encoding="utf-8")
+    second.write_text("same content", encoding="utf-8")
+    _, expected_version = write_ops.read_note_text_with_version(first)
+    first.unlink()
+    first.symlink_to(second.name)
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="expected-version write rejects aliased note locator",
+    ):
+        write_ops.write_note_from_absolute(
+            first,
+            "stale proposal",
+            vault_root=vault,
+            expected_version=expected_version,
+        )
+
+    assert second.read_text(encoding="utf-8") == "same content"
+    assert first.read_text(encoding="utf-8") == "same content"
+
+
 def test_write_note_relative_uses_make_note_locator(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
@@ -115,6 +212,83 @@ def test_write_note_relative_uses_make_note_locator(monkeypatch, tmp_path: Path)
     assert captured["path"] == "Inbox/a.md"
     assert captured["vault"] == "Vault"
     assert captured["content"] == "body"
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_write_helpers_raise_with_staged_receipt_by_default(
+    relative: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, WriteReceipt] = {}
+
+    class FakePort:
+        def write_note(self, locator, content, **kwargs):  # type: ignore[no-untyped-def]
+            receipt = WriteReceipt(
+                operation="write_note",
+                locator=locator,
+                adapter="fake",
+                outcome="conflict_staged",
+                conflict_artifact="Inbox/note.concurrent-save-test.md",
+            )
+            captured["receipt"] = receipt
+            return receipt
+
+    monkeypatch.setattr(write_ops, "resolve_knowledge_port", lambda **_kwargs: FakePort())
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict staged") as exc_info:
+        if relative:
+            write_ops.write_note_relative(
+                "Inbox/note.md",
+                "proposal",
+                vault_root=tmp_path,
+                expected_version="stale",
+            )
+        else:
+            note = tmp_path / "Inbox" / "note.md"
+            write_ops.write_note_from_absolute(
+                note,
+                "proposal",
+                vault_root=tmp_path,
+                expected_version="stale",
+            )
+
+    assert exc_info.value.receipt is captured["receipt"]
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_write_helpers_return_staged_receipt_only_for_explicitly_aware_caller(
+    relative: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakePort:
+        def write_note(self, locator, content, **kwargs):  # type: ignore[no-untyped-def]
+            return WriteReceipt(
+                operation="write_note",
+                locator=locator,
+                adapter="fake",
+                outcome="conflict_staged",
+                conflict_artifact="Inbox/note.concurrent-save-test.md",
+            )
+
+    monkeypatch.setattr(write_ops, "resolve_knowledge_port", lambda **_kwargs: FakePort())
+
+    if relative:
+        receipt = write_ops.write_note_relative(
+            "Inbox/note.md",
+            "proposal",
+            vault_root=tmp_path,
+            expected_version="stale",
+            accept_staged_conflict=True,
+        )
+    else:
+        receipt = write_ops.write_note_from_absolute(
+            tmp_path / "Inbox" / "note.md",
+            "proposal",
+            vault_root=tmp_path,
+            expected_version="stale",
+            accept_staged_conflict=True,
+        )
+
+    assert receipt.outcome == "conflict_staged"
+    assert receipt.conflict_artifact == "Inbox/note.concurrent-save-test.md"
 
 
 def test_append_note_relative_uses_port_append(monkeypatch, tmp_path: Path) -> None:

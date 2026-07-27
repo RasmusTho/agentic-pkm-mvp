@@ -53,6 +53,21 @@ def test_instance_registry_change_selects_vault_coverage() -> None:
     )
 
 
+def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/knowledge/adapters.py",
+            "app/knowledge/contracts.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("vault",)
+    assert selection.unowned_paths == ()
+    assert "tests/knowledge" in selection.targets
+    assert "tests/ports" in selection.targets
+
+
 def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci.yml"])
 

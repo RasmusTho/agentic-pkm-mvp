@@ -2,7 +2,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from app.knowledge.contracts import NoteLocator, WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import write_note_from_absolute
 from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
+
+
+def _staged_conflict() -> KnowledgeWriteConflict:
+    receipt = WriteReceipt(
+        operation="write_note",
+        locator=NoteLocator(vault="Vault", path="note.md"),
+        adapter="fs_vault",
+        outcome="conflict_staged",
+        conflict_artifact="note (conflicted copy runtime).md",
+    )
+    return KnowledgeWriteConflict(
+        "rewritten note conflict staged",
+        receipt=receipt,
+    )
 
 
 def test_adapter_exposes_vault_port_lifecycle_methods(tmp_path: Path) -> None:
@@ -58,6 +77,108 @@ def test_ensure_uuid_defers_on_mtime_mismatch(monkeypatch, tmp_path: Path) -> No
     assert result.deferred
     assert result.reason == "mtime_mismatch"
     assert any("concurrent edit" in msg for msg in messages)
+
+
+def test_ensure_uuid_defers_when_rewritten_proposal_is_staged(monkeypatch, tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    note.write_text("Body", encoding="utf-8")
+    adapter = FilesystemVaultAdapter(vault_root=tmp_path, backend_writes_enabled=False)
+    monkeypatch.setattr("app.ports.filesystem_vault_adapter.active_edit", lambda _: False)
+    messages: list[str] = []
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.append_change",
+        lambda msg, **kwargs: messages.append(msg),
+    )
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(_staged_conflict()),
+    )
+
+    read = adapter.read_note(note)
+    result = adapter.ensure_uuid(read, expected_mtime_ns=read.mtime_ns)
+
+    assert result.deferred is True
+    assert result.wrote is False
+    assert result.uuid_value is None
+    assert "uuid" not in read.frontmatter
+    assert note.read_text(encoding="utf-8") == "Body"
+    assert any("concurrent edit" in msg for msg in messages)
+
+
+def test_ensure_uuid_binds_version_to_the_parsed_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    note = tmp_path / "note.md"
+    note.write_text("Snapshot A\n", encoding="utf-8")
+    adapter = FilesystemVaultAdapter(
+        vault_root=tmp_path,
+        backend_writes_enabled=False,
+    )
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.active_edit",
+        lambda _: False,
+    )
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.append_change",
+        lambda *args, **kwargs: None,
+    )
+    snapshot = adapter.read_note(note)
+
+    def concurrent_write_before_cas(
+        path: Path,
+        content: str,
+        **kwargs: object,
+    ):
+        note.write_text("Concurrent snapshot B\n", encoding="utf-8")
+        return write_note_from_absolute(path, content, **kwargs)
+
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.write_note_from_absolute",
+        concurrent_write_before_cas,
+    )
+
+    result = adapter.ensure_uuid(
+        snapshot,
+        expected_mtime_ns=snapshot.mtime_ns,
+    )
+
+    assert result.deferred is True
+    assert result.wrote is False
+    assert result.uuid_value is None
+    assert note.read_text(encoding="utf-8") == "Concurrent snapshot B\n"
+    assert "uuid" not in snapshot.frontmatter
+
+
+def test_write_frontmatter_propagates_receiptless_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    note = tmp_path / "note.md"
+    note.write_text("Body\n", encoding="utf-8")
+    adapter = FilesystemVaultAdapter(
+        vault_root=tmp_path,
+        backend_writes_enabled=False,
+    )
+    snapshot = adapter.read_note(note)
+    monkeypatch.setattr(
+        "app.ports.filesystem_vault_adapter.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("indeterminate post-exchange failure")
+        ),
+    )
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="indeterminate post-exchange failure",
+    ):
+        adapter.write_frontmatter(
+            note,
+            {"uuid": "candidate"},
+            snapshot.body,
+            expected_mtime_ns=snapshot.mtime_ns,
+            expected_version=snapshot.version,
+        )
 
 
 def test_ensure_uuid_defers_on_active_edit(monkeypatch, tmp_path: Path) -> None:

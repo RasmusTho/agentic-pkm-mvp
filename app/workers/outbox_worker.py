@@ -15,7 +15,7 @@ from uuid import UUID
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
-from app.components.concurrency import EventDedupStore, OptimisticWriteGuard, VersionMismatch
+from app.components.concurrency import EventDedupStore
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
 from app.events.types import (
     INGEST_OBJECT_CREATED,
@@ -35,6 +35,7 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.indexer.consumer import process_event as process_indexer_event
+from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.logging_setup import configure_json_logging
@@ -65,13 +66,10 @@ from app.services.outbox import (
     write_outbox_event,
 )
 from app.vault.paths import NoVaultSelectedError, get_vault_inbox_dir_rel
-from app.write_guard import DEFAULT_WRITE_GUARD
 from app.events.models import new_event
 from scripts.yaml_roundtrip import load_frontmatter
 
 logger = logging.getLogger(__name__)
-_WRITE_GUARD = OptimisticWriteGuard()
-
 _UNKNOWN_INSTANCE = "unknown"
 OUTBOX_EVENT_DEAD_LETTERED = "outbox.event.dead_lettered"
 
@@ -949,24 +947,12 @@ def _ensure_uuid_with_backoff(note_path: Path, *, vault_root: Path) -> str:
             return ""
 
     return ""
-def _write_markdown_if_changed(note_path: Path, original: str, updated: str) -> bool:
-    if original == updated:
-        return False
-    expected_version = _WRITE_GUARD.compute_version(original.encode("utf-8"))
-    DEFAULT_WRITE_GUARD.assert_writes_allowed("panel worker update")
-    try:
-        _WRITE_GUARD.write_if_unchanged(note_path, expected_version, updated)
-        return True
-    except VersionMismatch:
-        return False
-
-
 def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: float = 0.25) -> str | None:
     previous_signature: tuple[float, int, str] | None = None
     for attempt in range(attempts):
         try:
             before = note_path.stat()
-            raw_text = note_path.read_text(encoding="utf-8")
+            raw_text, raw_version = read_note_text_with_version(note_path)
             after = note_path.stat()
         except OSError as exc:
             if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS}:
@@ -978,7 +964,7 @@ def _stabilized_note_text(note_path: Path, *, attempts: int = 6, base_sleep: flo
         signature = (
             float(after.st_mtime),
             int(after.st_size),
-            hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+            raw_version,
         )
         if before.st_mtime == after.st_mtime and before.st_size == after.st_size:
             if signature == previous_signature:

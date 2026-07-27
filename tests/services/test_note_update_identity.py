@@ -30,16 +30,28 @@ def test_panel_seam_receives_canonical_identity(tmp_path: Path, monkeypatch) -> 
         seen["resolved_from"] = value
         return canonical_id
 
-    def fake_handle_panel_update(*, note_id, old_markdown, new_markdown, ctx, note_path):
+    def fake_prepare_panel_update(*, note_id, old_markdown, new_markdown, ctx, note_path):
         seen["panel_note_id"] = note_id
         panel = SimpleNamespace(
             updated_markdown=new_markdown,
             executed_action_ids=[],
         )
-        return SimpleNamespace(panel=panel, events=[], dispatch_count=0)
+        return SimpleNamespace(
+            note_id=note_id,
+            panel=panel,
+            events=[],
+            dispatch_count=0,
+        )
 
     monkeypatch.setattr(note_update, "resolve_canonical_object_id", fake_resolve)
-    monkeypatch.setattr(note_update, "handle_panel_update", fake_handle_panel_update)
+    monkeypatch.setattr(
+        note_update, "prepare_panel_update", fake_prepare_panel_update
+    )
+    monkeypatch.setattr(
+        note_update,
+        "commit_panel_update",
+        lambda prepared, *, ctx: prepared,
+    )
     monkeypatch.setattr(
         note_update.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda action: None
     )

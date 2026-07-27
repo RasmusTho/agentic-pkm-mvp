@@ -62,6 +62,7 @@ from app.episodes.assignment import (
 from app.episodes.segmenter import HEIMDAL_STREAM_ID, OpenSegment, run_segmentation_tick
 from app.jobs.episodes_projection import EPISODES_TABLE
 from app.heimdal.observation_log import ObservationRow
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import WriteGuard, WritesBlockedError
 
 pytestmark = pytest.mark.not_pg
@@ -773,6 +774,46 @@ def test_commit_assignment_diff_stamps_pending_episode_ref_on_real_bundle(
     frontmatter, _body = load_frontmatter(note_path.read_text(encoding="utf-8"))
     assert frontmatter["episode_ref"] == [decision.episode_id]
     assert frontmatter["uuid"] == object_id
+
+
+def test_staged_frontmatter_conflict_stops_assignment_before_db_bookkeeping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    note_path = vault_root / "notes" / "artifact.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("---\nuuid: object-stale\n---\n\nbody\n", encoding="utf-8")
+    decision = AssignmentDecision(
+        artifact_ref="vault.activity:row-stale",
+        episode_id="ep-stale-0001-4333-8444-555555555555",
+        scope="work",
+        basis=BASIS_TIME_OVERLAP,
+        confidence=TIME_OVERLAP_CONFIDENCE,
+    )
+    monkeypatch.setattr(
+        assignment_module,
+        "_resolve_bundle_object_id_and_note_path",
+        lambda artifact_ref, *, vault_root: ("object-stale", note_path),
+    )
+    monkeypatch.setattr(
+        "app.knowledge.write_ops.write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged")
+        ),
+    )
+    monkeypatch.setattr(
+        assignment_module,
+        "conn_rw",
+        lambda: (_ for _ in ()).throw(AssertionError("DB bookkeeping must not start")),
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict staged"):
+        commit_assignment_diff(
+            [decision],
+            [],
+            write_guard=_allow_guard(),
+            vault_root=vault_root,
+        )
 
 
 def test_commit_assignment_diff_correction_clears_episode_ref_from_bundle(

@@ -5,12 +5,16 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from app.agents.panel.integration import handle_panel_update
-from app.agents.panel.writeback import upsert_executed_ids
+from app.agents.panel.integration import commit_panel_update, prepare_panel_update
 from app.objects import resolve_canonical_object_id
 from app.components.concurrency import OptimisticWriteGuard
 from app.domain.state_axes import resolve_promotion_axes
-from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import (
+    default_vault_root_for_path,
+    read_note_text_with_version,
+    write_note_from_absolute,
+)
 from app.orchestrator.handler import OrchestratorContext
 from app.services.note_uuid import ensure_note_uuid
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -54,11 +58,10 @@ def apply_promotion_frontmatter(
     # During the first state-axis separation wave we normalize that input here so
     # standing is written to `maturity` while `review_state` keeps review posture.
     try:
-        markdown = note_path.read_text(encoding="utf-8")
+        markdown, expected_version = read_note_text_with_version(note_path)
     except Exception:
         return False
 
-    expected_version = _WRITE_GUARD.compute_version(markdown.encode("utf-8"))
     frontmatter, body = load_frontmatter(markdown)
     fm = dict(frontmatter or {})
 
@@ -92,7 +95,16 @@ def apply_promotion_frontmatter(
         current_version = _WRITE_GUARD.read_version(note_path)
         if current_version != expected_version:
             return False
-        _write_note_via_knowledge_port(note_path, updated, expected_version=expected_version)
+        try:
+            _write_note_via_knowledge_port(
+                note_path,
+                updated,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict as exc:
+            if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
+                raise
+            return False
     return True
 
 
@@ -106,14 +118,13 @@ def process_note_update(
 ) -> NoteUpdateResult:
     resolved_path = Path(note_path).resolve()
     resolved_root = Path(vault_root).resolve() if vault_root is not None else default_vault_root_for_path(resolved_path)
-    original_markdown = resolved_path.read_text(encoding="utf-8")
+    original_markdown, _ = read_note_text_with_version(resolved_path)
     original_frontmatter, _ = load_frontmatter(original_markdown)
     had_uuid = bool(str(original_frontmatter.get("uuid") or "").strip())
     note_uuid = ensure_note_uuid(resolved_path, vault_root=resolved_root)
     uuid_added = not had_uuid
 
-    raw_markdown = resolved_path.read_text(encoding="utf-8")
-    expected_version = _WRITE_GUARD.compute_version(raw_markdown.encode("utf-8"))
+    raw_markdown, expected_version = read_note_text_with_version(resolved_path)
     if not note_uuid:
         raise ValueError(f"Note {resolved_path} is missing 'uuid' in frontmatter")
 
@@ -139,7 +150,7 @@ def process_note_update(
     # across two parents (the defect class every sibling call site resolves).
     canonical_note_id = resolve_canonical_object_id(note_uuid)
 
-    panel_result = handle_panel_update(
+    prepared_panel = prepare_panel_update(
         note_id=canonical_note_id,
         old_markdown=old_markdown,
         new_markdown=raw_markdown,
@@ -147,7 +158,7 @@ def process_note_update(
         note_path=resolved_path,
     )
 
-    changed = panel_result.panel.updated_markdown != raw_markdown
+    changed = prepared_panel.panel.updated_markdown != raw_markdown
     if changed:
         current_version = _WRITE_GUARD.read_version(resolved_path)
         if current_version != expected_version:
@@ -157,15 +168,29 @@ def process_note_update(
                 changed=False,
                 stale=True,
                 uuid_added=uuid_added,
-                events_count=len(panel_result.events),
-                dispatch_count=panel_result.dispatch_count,
+                events_count=len(prepared_panel.events),
+                dispatch_count=0,
             )
-        _write_note_via_knowledge_port(
-            resolved_path,
-            panel_result.panel.updated_markdown,
-            expected_version=expected_version,
-        )
-        upsert_executed_ids(canonical_note_id, panel_result.panel.executed_action_ids)
+        try:
+            _write_note_via_knowledge_port(
+                resolved_path,
+                prepared_panel.panel.updated_markdown,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict as exc:
+            if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
+                raise
+            return NoteUpdateResult(
+                uuid=note_uuid,
+                current_path=resolved_path,
+                changed=False,
+                stale=True,
+                uuid_added=uuid_added,
+                events_count=len(prepared_panel.events),
+                dispatch_count=0,
+            )
+
+    panel_result = commit_panel_update(prepared_panel, ctx=ctx)
 
     snapshot_path = _snapshot_path(snapshot_dir, note_uuid, ensure_parent=True)
     if snapshot_path is not None:

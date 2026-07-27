@@ -24,7 +24,7 @@ from app.events.types import (
 )
 from app.observability.tracing import current_trace_id, span
 from app.promotion.gates import OrphanPromotionError, ensure_object_has_relations, prepare_relations_for_promotion
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.settings.models import PromotionSettings, SettingsBundle
 from app.settings.runtime import subscribe_settings
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
@@ -275,7 +275,7 @@ def run_once() -> int:
 
                 uuid = ev.get("uuid")
                 with span("worker.read_frontmatter"):
-                    original_text = p.read_text(encoding="utf-8")
+                    original_text, expected_version = read_note_text_with_version(p)
                     frontmatter, body = load_frontmatter(original_text)
                 meta = dict(frontmatter)
                 meta["review_state"] = "promoted"
@@ -286,7 +286,6 @@ def run_once() -> int:
                 # overwrite of an existing note, so the seam requires the expected_version
                 # of the bytes we just read -- otherwise it refuses the write as a would-be
                 # silent overwrite and run_once() would promote zero items.
-                expected_version = hashlib.sha256(original_text.encode("utf-8")).hexdigest()
                 _write_note_via_port(
                     p, updated_text, vault_root=vault_root, expected_version=expected_version
                 )

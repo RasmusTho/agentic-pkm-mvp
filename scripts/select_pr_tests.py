@@ -142,6 +142,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "vault",
         (
             "app/instance/",
+            "app/knowledge/",
             "app/vault/",
             "tests/instance/",
             "tests/vault/",

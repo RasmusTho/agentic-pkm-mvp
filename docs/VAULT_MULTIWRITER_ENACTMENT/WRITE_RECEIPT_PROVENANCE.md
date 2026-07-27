@@ -27,18 +27,18 @@ Add a centralized note-class/operation classifier aligned with the committed Mim
 
 - `expected_version` omitted → the write is performed normally (enforcement deferred). The `WriteReceipt` still records the structured `note_class` outcome, so the classification is observable even before a caller opts in.
 - `expected_version` provided and matching the current on-disk hash → the write proceeds.
-- `expected_version` provided and stale (mismatched) → the seam refuses with `KnowledgeWriteConflict`, upholding INV-VW1 (no silent overwrite of a concurrently-changed note) for opted-in callers.
+- `expected_version` provided and stale at the first comparison (mismatched) → with VMW-02 composed with this request contract, the low-level seam preserves the caller's proposal under the shared sibling conflict-artifact grammar, leaves the canonical note unchanged, and returns a `conflict_staged` receipt. Shared production helpers raise `KnowledgeWriteConflict` carrying that receipt by default; only an explicitly conflict-aware caller opts into a normal staged-receipt return. Missing targets and races after the first comparison still fail closed with `KnowledgeWriteConflict`.
 
-This resolves the earlier "structured non-write outcome vs. hard raise" tension in favour of the opt-in model: a versionless rewrite is a normal write plus a classified receipt, not a non-write; a raise is reserved for an opted-in stale-version conflict. The shared artifact helper owns the sibling filename grammar and `is_conflict_artifact` predicate.
+This resolves the earlier "structured non-write outcome vs. hard raise" tension in favour of the opt-in model: a versionless rewrite is a normal write plus a classified receipt, an initially stale opted-in rewrite has the structured staged-conflict outcome supplied by VMW-02 at the low-level adapter, the production helpers preserve hard-failure semantics for unaware consumers, and an in-flight race remains a hard failure. The shared artifact helper owns the sibling filename grammar and `is_conflict_artifact` predicate.
 
 ## Why This Matters
 
-VMW-02 cannot safely apply stale detection until it knows which operation is rewritten. Provenance lets a human understand the two sides of a staged conflict.
+VMW-02 relies on this classification to apply stale detection only to rewritten operations. Provenance lets a human understand the two sides of a staged conflict, while VMW-03 consumes the same artifact grammar to quarantine that sibling before ordinary ingest.
 
 ## Acceptance Criteria
 
 - [ ] Runtime classification covers every decided #3131 row, including mixed control notes by operation. Verify: `tests/invariants/test_vault_multiwriter.py::test_runtime_note_classes_match_published_contract_rows`
-- [ ] A rewritten write's expected hash is propagated through the public knowledge ports to the production filesystem seam; enforcement is opt-in (a versionless rewrite writes and records its `note_class`; an opted-in stale version is refused). Verify: `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam`
+- [ ] A rewritten write's expected hash is propagated through the public knowledge ports to the production filesystem seam; enforcement is opt-in (a versionless rewrite writes and records its `note_class`; after VMW-02 composition, an initially stale opted-in rewrite stages the proposal without overwriting canonical content). Verify: `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam`
 - [ ] Filesystem write and append receipts carry a non-empty writer identity and UTC timestamp. Verify: `tests/invariants/test_vault_multiwriter.py::test_filesystem_write_receipt_carries_writer_provenance`
 - [ ] Append-only classification is observable at the production filesystem write seam, not only in a helper test. Verify: `tests/invariants/test_vault_multiwriter.py::test_append_operation_uses_append_only_class_at_filesystem_seam`
 - [ ] The shared conflict-artifact grammar identifies both VMW-02 staged artifacts and iCloud-style conflicted copies. Verify: `tests/invariants/test_vault_multiwriter.py::test_conflict_artifact_classifier_recognizes_staged_and_icloud_names`
@@ -49,7 +49,7 @@ VMW-02 cannot safely apply stale detection until it knows which operation is rew
 
 ## Out of Scope
 
-Stale detection/conflict staging (VMW-02), watcher quarantine (VMW-03), migration of non-rewritten legacy writers, and `append_note_relative` WriteGuard coverage (#3129).
+VMW-01 does not itself own stale detection/conflict staging (VMW-02), watcher quarantine (VMW-03), or `append_note_relative` WriteGuard coverage (INV-VW2 / #3129), although all three are now delivered and composed with its shared contract. Migration of remaining versionless rewritten writers and VMW-04 registry reconciliation remain out of scope.
 
 ## Related Docs
 

@@ -62,7 +62,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "run_panel_note_execution, which emits panel.action.logged/blocked via the "
         "runtime's own outbox path (app/agents/panel_agent/runtime.py) for the same turn."
     ),
-    ("app/watcher/vault_watcher.py", 144): (
+    ("app/watcher/vault_watcher.py", 150): (
         "_hydrate_store_with_markdown: best-effort raw_text hydration for panel-scan "
         "note refresh; the mutating vault-sync path (T-sync) already emitted "
         "ingest.object.* for this note earlier in the same tick."
@@ -451,15 +451,15 @@ from typing import Callable as _Callable  # noqa: E402
 #                      (formal-model.md §2.3), e.g. the app-local device
 #                      registry, not a Human Knowledge Artifact.
 WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/ports/filesystem_vault_adapter.py", 45): (
+    ("app/ports/filesystem_vault_adapter.py", 57): (
         "guarded: FilesystemVaultAdapter.ensure_uuid calls this class's OWN "
-        "write_frontmatter method (line 61), which routes through "
-        "write_note_from_absolute (the knowledge port, line 84) -- covered by "
+        "write_frontmatter method (line 78), which routes through "
+        "write_note_from_absolute (the knowledge port, line 99) -- covered by "
         "the port's own guard-at-seam assertion (#2910), not the "
         "MarkdownSettingsStore primitive this census is otherwise about. "
-        "Line drifted 44 -> 45 (site unchanged); re-pinned per this census's "
-        "own directly-related-repair convention when #3450 threaded an opt-in "
-        "expected_version through write_frontmatter."
+        "Line drifted 44 -> 45 -> 57 (site unchanged); re-pinned per this "
+        "census's own directly-related-repair convention when #3451 bound "
+        "write_frontmatter to the exact NoteRead version."
     ),
     ("app/vault/manager.py", 841): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
@@ -1556,7 +1556,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_objects; a new-note branch has no prior row and no binding (unbound correct via the "
         "build_indexed_unit_payload choke at index time)."
     ),
-    ("app/watcher/vault_watcher.py", 144): (
+    ("app/watcher/vault_watcher.py", 150): (
         "preserves_existing_payload: _hydrate_store_with_markdown updates raw_text on "
         "dict(obj.payload); save_object -> store_objects; episode_ref preserved."
     ),

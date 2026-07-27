@@ -45,7 +45,13 @@ def test_vault_port_contract_uuid_write_read_cycle(
     if persists_writes:
         read2 = port.read_note(note)
         assert str(read2.frontmatter.get("uuid") or "").strip() == ensured.uuid_value
-        write_result = port.write_frontmatter(note, read2.frontmatter, read2.body, expected_mtime_ns=read2.mtime_ns)
+        write_result = port.write_frontmatter(
+            note,
+            read2.frontmatter,
+            read2.body,
+            expected_mtime_ns=read2.mtime_ns,
+            expected_version=read2.version,
+        )
         assert write_result is True
 
 
@@ -57,5 +63,11 @@ def test_vault_port_contract_mtime_guard(tmp_path: Path, monkeypatch: pytest.Mon
     read1 = port.read_note(note)
 
     note.write_text("---\nuuid: u-1\n---\n\nChanged", encoding="utf-8")
-    wrote = port.write_frontmatter(note, {"uuid": "u-1"}, "Body", expected_mtime_ns=read1.mtime_ns)
+    wrote = port.write_frontmatter(
+        note,
+        {"uuid": "u-1"},
+        "Body",
+        expected_mtime_ns=read1.mtime_ns,
+        expected_version=read1.version,
+    )
     assert wrote is False

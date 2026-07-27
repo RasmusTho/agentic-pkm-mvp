@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.knowledge.contracts import WriteReceipt
+
 
 class KnowledgeError(RuntimeError):
     """Base error for knowledge-port operations."""
@@ -23,6 +28,10 @@ class KnowledgeTransportError(KnowledgeCapabilityError):
 
 class KnowledgeWriteConflict(KnowledgeError):
     """Raised when a write precondition cannot be satisfied safely."""
+
+    def __init__(self, message: str, *, receipt: WriteReceipt | None = None) -> None:
+        super().__init__(message)
+        self.receipt = receipt
 
 
 __all__ = [

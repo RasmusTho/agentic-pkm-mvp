@@ -15,7 +15,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import app.api.routes.companion as companion_module
 from app.api.app import app
+from app.knowledge.contracts import NoteLocator, WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from tests.api._vault_test_helpers import bind_initialized_vault
 
 
@@ -49,6 +52,38 @@ def test_human_save_round_trip_without_canvas_or_flow_env(tmp_path: Path, monkey
     assert written.startswith("---\ntitle: My Note\nuuid: abc-123\n---")
     assert "New text by the human." in written
     assert "Original body." not in written
+
+
+def test_human_save_staged_rewritten_conflict_returns_409(tmp_path: Path, monkeypatch) -> None:
+    _clear_gates(monkeypatch)
+    note = tmp_path / "notes" / "My Note.md"
+    _write_note(note, frontmatter="title: My Note\nuuid: abc-123", body="Original body.\n")
+    bind_initialized_vault(monkeypatch, tmp_path)
+    before = note.read_text(encoding="utf-8")
+    receipt = WriteReceipt(
+        operation="write_note",
+        locator=NoteLocator(vault="Vault", path="notes/My Note.md"),
+        adapter="fs_vault",
+        outcome="conflict_staged",
+        conflict_artifact="notes/My Note.concurrent-save-test.md",
+    )
+    monkeypatch.setattr(
+        companion_module,
+        "write_note_from_absolute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KnowledgeWriteConflict("rewritten note conflict staged", receipt=receipt)
+        ),
+    )
+
+    resp = TestClient(app).post(
+        "/api/companion/note/save",
+        json={"note_path": "notes/My Note.md", "new_body": "Stale proposal.\n"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "write_conflict_staged"
+    assert resp.json()["detail"]["state"] == "conflict_staged"
+    assert note.read_text(encoding="utf-8") == before
 
 
 def test_frontmatter_in_body_rejected(tmp_path: Path, monkeypatch) -> None:

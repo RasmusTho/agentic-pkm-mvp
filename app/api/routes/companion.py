@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime
 from dataclasses import asdict
 import errno
-import hashlib
 import heapq
 import json
 import logging
@@ -81,7 +80,8 @@ from app.events.panel import (
     PanelIntentPayload,
 )
 from app.health_contract import DEFAULT_CONTRACT
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.journaling.day_context import assemble_day_context
 from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.leave_point_cursor import latest_leave_point_projection
@@ -3715,6 +3715,42 @@ def _compose_note_with_preserved_frontmatter(*, original_content: str, new_body:
     return new_body if new_body.endswith("\n") else f"{new_body}\n"
 
 
+def _write_rewritten_note_or_409(
+    note_path: Path,
+    content: str,
+    *,
+    vault_root: Path,
+    expected_version: str,
+) -> None:
+    try:
+        write_note_from_absolute(
+            note_path,
+            content,
+            vault_root=vault_root,
+            expected_version=expected_version,
+        )
+    except KnowledgeWriteConflict as exc:
+        receipt = exc.receipt
+        if receipt is not None and receipt.outcome == "conflict_staged":
+            detail: dict[str, str] = {
+                "error": "write_conflict_staged",
+                "state": "conflict_staged",
+                "message": (
+                    "The note changed before this edit committed; "
+                    "the proposal was preserved separately."
+                ),
+            }
+            if receipt.conflict_artifact is not None:
+                detail["conflict_artifact"] = receipt.conflict_artifact
+        else:
+            detail = {
+                "error": "write_conflict",
+                "state": "failure",
+                "message": str(exc),
+            }
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+
 @router.get(
     "/vault-browser",
     response_model=VaultBrowserStateResponse | VaultSelectionRequiredResponse,
@@ -4503,7 +4539,7 @@ def update_companion_workspace_note_body(
             },
         ) from exc
 
-    original_content = note_path.read_text(encoding="utf-8")
+    original_content, expected_version = read_note_text_with_version(note_path)
     content_hash_before = _content_hash(original_content)
     if req.content_hash is not None and req.content_hash != content_hash_before:
         raise HTTPException(
@@ -4524,8 +4560,12 @@ def update_companion_workspace_note_body(
     # classified, so it requires an expected_version. We already read
     # ``original_content`` above for the content-hash freshness check, so its
     # hash is the exact expected_version the filesystem seam recomputes.
-    expected_version = hashlib.sha256(original_content.encode("utf-8")).hexdigest()
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
+    _write_rewritten_note_or_409(
+        note_path,
+        new_content,
+        vault_root=vault_root,
+        expected_version=expected_version,
+    )
     updated_content = note_path.read_text(encoding="utf-8")
     content_hash_after = _content_hash(updated_content)
     return WorkspaceBodyUpdateResponse(
@@ -4590,7 +4630,7 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultS
             },
         )
 
-    current = note_path.read_text(encoding="utf-8")
+    current, expected_version = read_note_text_with_version(note_path)
     frontmatter_block, _ = _split_frontmatter(current)
     if frontmatter_block is not None:
         new_content = f"---{frontmatter_block}\n---\n{req.new_body}"
@@ -4600,8 +4640,12 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultS
     # Shared knowledge-write seam (#3450): this path is REWRITTEN-classified,
     # so it requires an expected_version. ``current`` was just read above, so
     # its hash is the exact expected_version the filesystem seam recomputes.
-    expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
+    _write_rewritten_note_or_409(
+        note_path,
+        new_content,
+        vault_root=vault_root,
+        expected_version=expected_version,
+    )
 
     written = note_path.read_text(encoding="utf-8")
     return BodyUpdateResponse(
@@ -4685,7 +4729,7 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
             },
         )
 
-    current = note_path.read_text(encoding="utf-8")
+    current, expected_version = read_note_text_with_version(note_path)
     if req.expected_content_hash and _content_hash(current) != req.expected_content_hash:
         raise HTTPException(
             status_code=409,
@@ -4707,8 +4751,12 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
     # (and already validated against ``expected_content_hash`` when the
     # caller supplied one), so its hash is the exact expected_version the
     # filesystem seam recomputes.
-    expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
+    _write_rewritten_note_or_409(
+        note_path,
+        new_content,
+        vault_root=vault_root,
+        expected_version=expected_version,
+    )
 
     written = note_path.read_text(encoding="utf-8")
     return NoteSaveResponse(
