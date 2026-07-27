@@ -96,14 +96,15 @@ the duplicate registry state before retrying; `--registry-issue <N>` can select 
 single open registry but cannot override ambiguous registry authority.
 
 Every public intake, lookup, and promotion command first authoritatively enumerates repository
-Issues in descending creation order back through Issue `#4162`, the first possible registry identity
-after this feature's PR. Any candidate found by selector label, canonical title, or canonical body
-marker is cached by immutable Issue number and reread live during the command. The final pre-create
-and final pre-reservation boundaries repeat that enumeration. Repeated inventories within the
-command also query the mutable `state:known-defect` selector, but selector state alone never
-authorizes creation or all-generation authority. Removing or renaming identity surfaces therefore
-becomes explicit, fail-closed registry drift instead of hiding committed comments or permitting
-duplicate authority.
+Issues updated since `2026-07-27T00:00:00Z`, the feature's rollout day, and exhausts the REST
+pagination to its natural end. Every legitimate registry is created or converted after that bound,
+so the contractual `since` filter excludes only pre-feature history; no Issue-number ordering is
+inferred. Any candidate found by selector label, canonical title, or canonical body marker is cached
+by immutable Issue number and reread live during the command. The final pre-create and final
+pre-reservation boundaries repeat that enumeration. Repeated inventories within the command also
+query the mutable `state:known-defect` selector, but selector state alone never authorizes creation
+or all-generation authority. Removing or renaming identity surfaces therefore becomes explicit,
+fail-closed registry drift instead of hiding committed comments or permitting duplicate authority.
 
 Registry creation is crash-convergent across the create/lock boundary. Intake may lock and reuse
 exactly one structurally canonical open bootstrap Issue, then rereads the Issue and all comments

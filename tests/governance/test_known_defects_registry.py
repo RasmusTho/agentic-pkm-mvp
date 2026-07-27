@@ -2771,7 +2771,7 @@ def test_rest_selector_discovery_is_cached_before_label_loss(
         known_defects._select_registry(gateway, None)
 
 
-def test_rest_precreate_enumeration_finds_stale_search_identity(
+def test_rest_precreate_enumeration_finds_hidden_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
@@ -2796,9 +2796,11 @@ def test_rest_precreate_enumeration_finds_stale_search_identity(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
         ):
             return []
-        if endpoint.startswith(
-            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all"
-            "&sort=created&direction=desc"
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+            )
+            and "&sort=updated&direction=desc" in endpoint
         ):
             authoritative_reads += 1
             return [unlabeled]
@@ -2812,6 +2814,58 @@ def test_rest_precreate_enumeration_finds_stale_search_identity(
         known_defects._select_registry(gateway, None)
 
     assert authoritative_reads == 1
+    assert gateway._registry_identity_numbers == {4200}
+
+
+def test_authoritative_enumeration_exhausts_pages_without_numeric_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    candidate = {
+        "number": 4200,
+        "title": "Renamed registry",
+        "state": "closed",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [{"name": "type:bug"}],
+    }
+    pages: list[int] = []
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        assert method == "GET"
+        if not (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+            )
+            and "&sort=updated&direction=desc" in endpoint
+        ):
+            raise AssertionError(endpoint)
+        page = int(endpoint.rsplit("page=", 1)[1])
+        pages.append(page)
+        if page == 1:
+            return [
+                {
+                    "number": number,
+                    "title": f"Ordinary Issue {number}",
+                    "state": "closed",
+                    "body": "",
+                    "labels": [],
+                }
+                for number in range(1, 101)
+            ]
+        if page == 2:
+            return [candidate]
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    gateway.refresh_registry_identities()
+
+    assert pages == [1, 2]
     assert gateway._registry_identity_numbers == {4200}
 
 
@@ -2848,9 +2902,11 @@ def test_rest_public_lookup_enumerates_hidden_prior_generation(
     ) -> Any:
         nonlocal authoritative_reads, hidden_reads
         assert method == "GET"
-        if endpoint.startswith(
-            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all"
-            "&sort=created&direction=desc"
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+            )
+            and "&sort=updated&direction=desc" in endpoint
         ):
             authoritative_reads += 1
             return [current, hidden]
@@ -2897,6 +2953,10 @@ def test_known_defect_label_is_canonical_and_registry_only() -> None:
         "known_defects_registry"
     ]
     assert registry_contract["canonical_title"] == known_defects.REGISTRY_TITLE
+    assert (
+        registry_contract["authoritative_discovery_since"]
+        == known_defects.REGISTRY_ROLLOUT_SINCE
+    )
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
     ).read_text(encoding="utf-8")

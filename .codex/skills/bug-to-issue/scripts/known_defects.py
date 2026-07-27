@@ -38,7 +38,7 @@ REGISTRY_LABEL_DESCRIPTION = (
 )
 REGISTRY_TITLE = "Known Defects Registry (rolling)"
 REGISTRY_MARKER = "<!-- known-defects-registry:v1 -->"
-REGISTRY_ROLLOUT_MIN_ISSUE = 4162
+REGISTRY_ROLLOUT_SINCE = "2026-07-27T00:00:00Z"
 ENTRY_MARKER_TEMPLATE = (
     "<!-- known-defect-entry:v1 id={defect_id} phase={phase} -->"
 )
@@ -358,9 +358,10 @@ class GhRegistryGateway:
 
     def refresh_registry_identities(self) -> None:
         numbers = set(self._registry_identity_numbers or ())
+        encoded_since = quote(REGISTRY_ROLLOUT_SINCE, safe="")
         endpoint = (
             f"repos/{self.repo}/issues?state=all"
-            "&sort=created&direction=desc"
+            f"&since={encoded_since}&sort=updated&direction=desc"
         )
         separator = "&"
         for page in range(1, 101):
@@ -372,7 +373,6 @@ class GhRegistryGateway:
                 raise KnownDefectsError(
                     "expected list response from authoritative registry discovery"
                 )
-            reached_rollout_boundary = False
             for issue in batch:
                 if not isinstance(issue, dict):
                     raise KnownDefectsError(
@@ -384,9 +384,6 @@ class GhRegistryGateway:
                         "authoritative registry discovery returned an invalid "
                         "Issue number"
                     )
-                if number < REGISTRY_ROLLOUT_MIN_ISSUE:
-                    reached_rollout_boundary = True
-                    continue
                 labels = _label_names(issue)
                 body = str(issue.get("body") or "")
                 if (
@@ -398,7 +395,7 @@ class GhRegistryGateway:
                     )
                 ):
                     numbers.add(number)
-            if reached_rollout_boundary or len(batch) < 100:
+            if len(batch) < 100:
                 self._registry_identity_numbers = numbers
                 return
         raise KnownDefectsError(
