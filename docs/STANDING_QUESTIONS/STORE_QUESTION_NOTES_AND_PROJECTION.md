@@ -29,19 +29,20 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    `evidence` (system-owned, bounded, **append-only** list: `{artifact_ref, source_stream, matched_at,
    confidence_class, provenance_ref, quoted_span}`), `last_matched_at` / `last_refreshed_at`
    (system-owned bounded timestamps). Prose-mirror-of-schema section in this capability's README,
-   consistent with `docs/architecture/*` contract style. The production validation seam checks every
-   non-null `format: date-time` value against a repo-local RFC 3339 grammar — four-digit proleptic
-   Gregorian dates, numeric offsets, and the offset-adjusted position of a `:60` second — before
-   guarded note writes and when notes are parsed for projection rebuild; enforcement does not depend
-   on optional host checker registration. **Leap-second policy (shipped):** a `:60` second is accepted
-   only when the offset-adjusted UTC instant is `23:59:60` on a date in the hand-maintained announced
-   leap-second table `app/standing_questions/question_store.py ::
+   consistent with `docs/architecture/*` contract style. `date-time` is the only `format` keyword in
+   the schema. The production validation seam checks every non-null `format: date-time` value against
+   a repo-local RFC 3339 grammar — four-digit proleptic Gregorian dates and numeric offsets through
+   ±23:59 — before guarded note writes and when notes are parsed for projection rebuild; enforcement
+   does not depend on optional host checker registration. **Leap-second policy (shipped):** a `:60`
+   second is accepted only when the offset-adjusted UTC instant is `23:59:60` on a date listed in the
+   hand-maintained announced leap-second table `app/standing_questions/question_store.py ::
    ANNOUNCED_LEAP_SECOND_UTC_DATES` (the 27 IERS-announced leap seconds, 1972-06-30 through
-   2016-12-31; reviewed 2026-07-28). Every other `:60` value — including a syntactically legal
-   June 30 / December 31 `23:59:60` where no leap second was announced — is rejected, never coerced.
-   The table is deliberately offline and requires manual maintenance when IERS announces a new leap
-   second; until it is updated, a newly announced leap second would be rejected. The seam therefore
-   enforces this documented subset, not general RFC 3339 conformance for every `format` keyword.
+   2016-12-31; reviewed 2026-07-28). A legal *position* is not sufficient: every other `:60` value —
+   including a syntactically well-formed June 30 / December 31 `23:59:60` where no leap second was
+   announced — is rejected, never coerced. The table is deliberately offline (no network lookup at
+   validation time) and requires manual maintenance when IERS announces a new leap second; until it is
+   updated, a newly announced leap second would be rejected. The seam therefore enforces this
+   documented, dated subset — not general RFC 3339 leap-second conformance.
 2. **Ownership split, enforced not just documented** (`docs/FRONTMATTER.md :: Ownership: human vs
    system`): `text` and `status` are human-owned — the store's write path refuses any engine-authored
    mutation of these two fields at the seam, full stop, regardless of caller. `evidence`,

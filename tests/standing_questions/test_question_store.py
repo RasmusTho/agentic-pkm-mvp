@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import jsonschema
@@ -289,17 +290,52 @@ def test_leap_second_policy_rejects_unannounced_leap_seconds(created_at: str) ->
         validate_question_note(_minimal_valid_note(created_at=created_at))
 
 
-def test_leap_second_policy_table_is_dated_and_month_end_only() -> None:
-    """The announced-leap-second table is repo-local, dated, and manually maintained."""
-    table = question_store_module.ANNOUNCED_LEAP_SECOND_UTC_DATES
-    assert isinstance(table, frozenset)
-    # IERS has announced 27 leap seconds, from 1972-06-30 through 2016-12-31.
-    assert len(table) == 27
-    assert min(table) == (1972, 6, 30)
-    assert max(table) == (2016, 12, 31)
-    assert all((month, day) in {(6, 30), (12, 31)} for _year, month, day in table)
-    # A dated review marker keeps the maintenance obligation visible in code.
-    assert question_store_module.ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED == "2026-07-28"
+def test_leap_second_policy_table_matches_the_iers_announcements() -> None:
+    """The whole contract rests on this table's exactness, so pin every entry.
+
+    A shape-only assertion (count, endpoints, month-end) would still accept a
+    transposed year, which would silently admit or reject a real leap second.
+    """
+    assert sorted(question_store_module.ANNOUNCED_LEAP_SECOND_UTC_DATES) == [
+        (1972, 6, 30),
+        (1972, 12, 31),
+        (1973, 12, 31),
+        (1974, 12, 31),
+        (1975, 12, 31),
+        (1976, 12, 31),
+        (1977, 12, 31),
+        (1978, 12, 31),
+        (1979, 12, 31),
+        (1981, 6, 30),
+        (1982, 6, 30),
+        (1983, 6, 30),
+        (1985, 6, 30),
+        (1987, 12, 31),
+        (1989, 12, 31),
+        (1990, 12, 31),
+        (1992, 6, 30),
+        (1993, 6, 30),
+        (1994, 6, 30),
+        (1995, 12, 31),
+        (1997, 6, 30),
+        (1998, 12, 31),
+        (2005, 12, 31),
+        (2008, 12, 31),
+        (2012, 6, 30),
+        (2015, 6, 30),
+        (2016, 12, 31),
+    ]
+
+
+def test_leap_second_policy_table_carries_a_usable_review_date() -> None:
+    """The dated review marker keeps the manual-maintenance obligation checkable."""
+    reviewed = question_store_module.ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED
+    reviewed_date = date.fromisoformat(reviewed)
+    last_year, last_month, last_day = max(
+        question_store_module.ANNOUNCED_LEAP_SECOND_UTC_DATES
+    )
+    # The table cannot claim a review older than the leap second it already lists.
+    assert reviewed_date >= date(last_year, last_month, last_day)
 
 
 def test_datetime_validation_does_not_depend_on_optional_global_checker(
