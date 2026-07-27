@@ -82,6 +82,20 @@ class FakeGateway:
                 )
             )
         )
+        for issue_number, comments in self.comments.items():
+            for comment in comments:
+                body = str(comment.get("body") or "")
+                first_line = body.splitlines()[0] if body.splitlines() else ""
+                if (
+                    str(comment.get("author_association") or "").upper()
+                    in known_defects.TRUSTED_AUTHOR_ASSOCIATIONS
+                    and (
+                        first_line.startswith("<!-- known-defect-entry:")
+                        or first_line.startswith("<!-- known-defect-promotion:")
+                    )
+                ):
+                    known_defects._validate_schema_comment(comment)
+                    self.registry_identity_numbers.add(issue_number)
 
     def create_registry_issue(self) -> dict[str, Any]:
         while self.next_issue in self.issues:
@@ -2796,6 +2810,10 @@ def test_rest_precreate_enumeration_finds_hidden_identity(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
         ):
             return []
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return []
         if (
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
@@ -2837,6 +2855,10 @@ def test_authoritative_enumeration_exhausts_pages_without_numeric_cutoff(
         _payload: dict[str, Any] | None = None,
     ) -> Any:
         assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return []
         if not (
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
@@ -2894,6 +2916,10 @@ def test_precreate_convergence_replays_interpage_identity_move(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
         ):
             return []
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return []
         if (
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
@@ -2944,6 +2970,10 @@ def test_authoritative_identity_nonconvergence_fails_without_cache(
     ) -> Any:
         nonlocal passes
         assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return []
         passes += 1
         if passes % 2 == 0:
             return []
@@ -3000,6 +3030,10 @@ def test_precreate_convergence_never_forgets_observed_identity(
             "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
         ):
             return []
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return []
         if (
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
@@ -3054,6 +3088,10 @@ def test_rest_public_lookup_enumerates_hidden_prior_generation(
     ) -> Any:
         nonlocal authoritative_reads, hidden_reads
         assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return []
         if (
             endpoint.startswith(
                 "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
@@ -3079,6 +3117,221 @@ def test_rest_public_lookup_enumerates_hidden_prior_generation(
     assert authoritative_reads == 2
     assert hidden_reads == 1
     assert gateway._registry_identity_numbers == {4200, 4201}
+
+
+@pytest.mark.parametrize("phase", ["pending", "final"])
+def test_authoritative_comment_ledger_recovers_hidden_generation_on_cold_start(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    comment = {
+        "id": 8801,
+        "created_at": "2026-07-27T01:02:03Z",
+        "author_association": "OWNER",
+        "body": _defect().render_entry(phase=phase),
+        "issue_url": (
+            "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/899"
+        ),
+    }
+    issue_reads = 0
+    comment_reads = 0
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        nonlocal issue_reads, comment_reads
+        assert method == "GET"
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+            )
+            and "&sort=updated&direction=asc" in endpoint
+        ):
+            issue_reads += 1
+            return []
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+            )
+            and "&sort=created&direction=asc" in endpoint
+        ):
+            comment_reads += 1
+            return [comment]
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    gateway.refresh_registry_identities()
+
+    assert issue_reads == 2
+    assert comment_reads == 2
+    assert gateway._registry_identity_numbers == {899}
+
+
+@pytest.mark.parametrize("association", [None, 123, "", "MYSTERY"])
+def test_cold_start_indeterminate_schema_author_fails_before_intake_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    association: Any,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    comment = {
+        "id": 8801,
+        "created_at": "2026-07-27T01:02:03Z",
+        "author_association": association,
+        "body": _defect().render_entry(phase="final"),
+        "issue_url": (
+            "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/899"
+        ),
+    }
+    mutations: list[tuple[str, str]] = []
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        if method != "GET":
+            mutations.append((method, endpoint))
+            raise AssertionError(f"unexpected mutation: {method} {endpoint}")
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+        ):
+            return []
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return [comment]
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="invalid author association",
+    ):
+        known_defects.intake_defect(_defect(), gateway)
+
+    assert mutations == []
+    assert gateway._registry_identity_numbers is None
+
+
+def test_explicit_untrusted_global_schema_comment_grants_no_registry_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    comment = {
+        "id": 8801,
+        "created_at": "2026-07-27T01:02:03Z",
+        "author_association": "CONTRIBUTOR",
+        "body": _defect().render_entry(phase="final"),
+        "issue_url": (
+            "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/899"
+        ),
+    }
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+        ):
+            return []
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            return [comment]
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    gateway.refresh_registry_identities()
+
+    assert gateway._registry_identity_numbers == set()
+
+
+@pytest.mark.parametrize("operation", ["intake", "lookup", "promote"])
+def test_cold_start_schema_ledger_blocks_duplicate_after_total_container_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    defect = _defect()
+    drifted = {
+        "number": 899,
+        "title": "Ordinary renamed Issue",
+        "state": "closed",
+        "locked": True,
+        "body": "All registry identity surfaces were removed.",
+        "labels": [],
+    }
+    comment = {
+        "id": 8801,
+        "created_at": "2026-07-27T01:02:03Z",
+        "author_association": "OWNER",
+        "body": defect.render_entry(phase="final"),
+        "issue_url": (
+            "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/899"
+        ),
+    }
+    mutations: list[tuple[str, str]] = []
+
+    def request(
+        method: str,
+        endpoint: str,
+        _payload: dict[str, Any] | None = None,
+    ) -> Any:
+        if method != "GET":
+            mutations.append((method, endpoint))
+            raise AssertionError(f"unexpected mutation: {method} {endpoint}")
+        if endpoint.endswith("/labels/state%3Aknown-defect"):
+            return {
+                "name": known_defects.REGISTRY_LABEL,
+                "color": known_defects.REGISTRY_LABEL_COLOR,
+                "description": known_defects.REGISTRY_LABEL_DESCRIPTION,
+            }
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+            )
+            and "&sort=updated&direction=asc" in endpoint
+        ):
+            return []
+        if (
+            endpoint.startswith(
+                "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+            )
+            and "&sort=created&direction=asc" in endpoint
+        ):
+            return [comment]
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&labels="
+        ):
+            return []
+        if endpoint == "repos/RasmusTho/agentic-pkm-mvp/issues/899":
+            return drifted
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="registry title|readable registry container",
+    ):
+        if operation == "intake":
+            known_defects.intake_defect(defect, gateway)
+        elif operation == "lookup":
+            known_defects.lookup_defect(defect.defect_id, gateway)
+        else:
+            known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+    assert mutations == []
+    assert gateway._registry_identity_numbers == {899}
 
 
 def test_known_defect_label_is_canonical_and_registry_only() -> None:
@@ -3118,6 +3371,10 @@ def test_known_defect_label_is_canonical_and_registry_only() -> None:
         registry_contract["authoritative_identity_cache"]
         == "monotonic_issue_numbers"
     )
+    assert registry_contract["authoritative_identity_sources"] == [
+        "issue_surfaces",
+        "trusted_schema_comments",
+    ]
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
     ).read_text(encoding="utf-8")

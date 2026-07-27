@@ -17,6 +17,9 @@ issues:
       selector_label: state:known-defect
       canonical_title: "Known Defects Registry (rolling)"
       authoritative_discovery_since: "2026-07-27T00:00:00Z"
+      authoritative_identity_sources:
+        - issue_surfaces
+        - trusted_schema_comments
       authoritative_consecutive_scans: 2
       authoritative_max_passes: 4
       authoritative_identity_cache: monotonic_issue_numbers

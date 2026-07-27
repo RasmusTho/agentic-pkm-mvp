@@ -82,6 +82,13 @@ NORMAL_AGENT_STATES = {
 PRIORITY_LABELS = {"prio:high", "prio:med", "prio:low"}
 ALLOWED_LANE_LABELS = {"lane:governance"}
 TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+KNOWN_AUTHOR_ASSOCIATIONS = TRUSTED_AUTHOR_ASSOCIATIONS | {
+    "CONTRIBUTOR",
+    "FIRST_TIMER",
+    "FIRST_TIME_CONTRIBUTOR",
+    "MANNEQUIN",
+    "NONE",
+}
 REQUIRED_ISSUE_SECTIONS = (
     "Context",
     "Scope",
@@ -360,15 +367,14 @@ class GhRegistryGateway:
     def _authoritative_registry_identity_pass(self) -> set[int]:
         numbers: set[int] = set()
         encoded_since = quote(REGISTRY_ROLLOUT_SINCE, safe="")
-        endpoint = (
+        issues_endpoint = (
             f"repos/{self.repo}/issues?state=all"
             f"&since={encoded_since}&sort=updated&direction=asc"
         )
-        separator = "&"
         for page in range(1, 101):
             batch = self._request(
                 "GET",
-                f"{endpoint}{separator}per_page=100&page={page}",
+                f"{issues_endpoint}&per_page=100&page={page}",
             )
             if not isinstance(batch, list):
                 raise KnownDefectsError(
@@ -397,9 +403,80 @@ class GhRegistryGateway:
                 ):
                     numbers.add(number)
             if len(batch) < 100:
+                break
+        else:
+            raise KnownDefectsError(
+                "pagination bound exceeded for authoritative registry discovery"
+            )
+
+        # Registry title, body, and labels are mutable. Trusted entry/promotion
+        # comments are the durable cross-process generation ledger: a fresh CLI
+        # must still rediscover their owning Issue after every container identity
+        # surface has drifted.
+        comments_endpoint = (
+            f"repos/{self.repo}/issues/comments"
+            f"?since={encoded_since}&sort=created&direction=asc"
+        )
+        for page in range(1, 101):
+            batch = self._request(
+                "GET",
+                f"{comments_endpoint}&per_page=100&page={page}",
+            )
+            if not isinstance(batch, list):
+                raise KnownDefectsError(
+                    "expected list response from registry comment discovery"
+                )
+            for comment in batch:
+                if not isinstance(comment, dict):
+                    raise KnownDefectsError(
+                        "registry comment discovery returned a malformed comment"
+                    )
+                body = str(comment.get("body") or "")
+                first_line = body.splitlines()[0] if body.splitlines() else ""
+                if not (
+                    first_line.startswith("<!-- known-defect-entry:")
+                    or first_line.startswith("<!-- known-defect-promotion:")
+                ):
+                    continue
+                raw_association = comment.get("author_association")
+                if not isinstance(raw_association, str):
+                    raise KnownDefectsError(
+                        f"schema comment #{comment.get('id')} has invalid "
+                        "author association"
+                    )
+                association = raw_association.upper()
+                if association not in KNOWN_AUTHOR_ASSOCIATIONS:
+                    raise KnownDefectsError(
+                        f"schema comment #{comment.get('id')} has invalid "
+                        f"author association {association or '<missing>'}"
+                    )
+                if association not in TRUSTED_AUTHOR_ASSOCIATIONS:
+                    continue
+                _validate_schema_comment(comment)
+                issue_url = urlparse(str(comment.get("issue_url") or ""))
+                expected_prefix = f"/repos/{self.repo}/issues/".casefold()
+                if (
+                    issue_url.scheme != "https"
+                    or issue_url.netloc.casefold() != "api.github.com"
+                    or not issue_url.path.casefold().startswith(expected_prefix)
+                ):
+                    raise KnownDefectsError(
+                        f"schema comment #{comment.get('id')} has invalid issue_url"
+                    )
+                issue_number_text = issue_url.path[len(expected_prefix) :]
+                if (
+                    issue_url.query
+                    or issue_url.fragment
+                    or re.fullmatch(r"[1-9][0-9]*", issue_number_text) is None
+                ):
+                    raise KnownDefectsError(
+                        f"schema comment #{comment.get('id')} has invalid issue_url"
+                    )
+                numbers.add(int(issue_number_text))
+            if len(batch) < 100:
                 return numbers
         raise KnownDefectsError(
-            "pagination bound exceeded for authoritative registry discovery"
+            "pagination bound exceeded for registry comment discovery"
         )
 
     def refresh_registry_identities(self) -> None:

@@ -96,15 +96,19 @@ the duplicate registry state before retrying; `--registry-issue <N>` can select 
 single open registry but cannot override ambiguous registry authority.
 
 Every public intake, lookup, and promotion command first authoritatively enumerates repository
-Issues updated since `2026-07-27T00:00:00Z`, the feature's rollout day, and exhausts the REST
-pagination to its natural end. Every legitimate registry is created or converted after that bound,
-so the contractual `since` filter excludes only pre-feature history; no Issue-number ordering is
-inferred. Traversal uses ascending update order and commits no cache until two complete scans return
-the same identity set; four non-converging passes fail closed. The local union of every identity
-observed across those passes is monotonic, so later surface drift cannot erase an Issue number. Any
-candidate found by selector label, canonical title, or canonical body marker is then reread live
-during the command. The final pre-create and final pre-reservation boundaries repeat that
-enumeration. Repeated inventories within the command also query the mutable
+Issues and repository-wide Issue comments since `2026-07-27T00:00:00Z`, the feature's rollout day,
+and exhausts both REST paginations to their natural ends. Every legitimate registry and schema
+comment is created after that bound, so the contractual `since` filter excludes only pre-feature
+history; no Issue-number ordering is inferred. Issue traversal uses ascending update order; comment
+traversal uses immutable ascending creation order. Exact trusted entry or promotion schema comments
+form the durable cross-process generation ledger, so a fresh command rediscovers their owning Issue
+even after all mutable container identity surfaces drift. Discovery commits no cache until two
+complete scans return the same identity set; four non-converging passes fail closed. The local union
+of every identity observed across those passes is monotonic, so later surface drift cannot erase an
+Issue number. Any candidate found by selector label, canonical title, canonical body marker, or a
+trusted schema comment is then reread live during the command. The final pre-create and final
+pre-reservation boundaries repeat that enumeration. Repeated inventories within the command also
+query the mutable
 `state:known-defect` selector, but selector state alone never authorizes creation or all-generation
 authority. Removing or renaming identity surfaces therefore becomes explicit, fail-closed registry
 drift instead of hiding committed comments or permitting duplicate authority.

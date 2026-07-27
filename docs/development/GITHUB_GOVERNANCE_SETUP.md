@@ -35,6 +35,10 @@ implementation Issues never use it. The Issue governance workflow exempts only t
 container from the normal task-section requirement and validates its exact v1 body and live locked
 state instead. Exact registry title/body identity keeps the validation active when the selector
 label is removed, and `locked` and `unlocked` events re-run that validation.
+The deterministic helper also discovers exact trusted entry and promotion schema comments through
+the repository-wide Issue-comment API. Those comments are the durable cross-process generation
+ledger: complete title/body/label drift remains visible and fails closed instead of allowing a
+second registry to orphan committed defect authority.
 
 `lane:governance` is the one additive lane label. Apply it to governance-lane Issues and PRs in
 addition to their canonical type, priority, and agent-state labels; never apply it to the Known
