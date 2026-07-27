@@ -500,14 +500,24 @@ python3 scripts/resolve_neutralized_body_restoration.py \
 It is read-only and separates a positively safe state from an indeterminate one: `0` means no
 restoration is required, `2` means the body is neutralized with no receipt for the current head and
 names the durable receipt's `restore_body_sha256` as the only accepted restore target, and `3` means
-the body is neutralized on an open PR but the evidence is missing, untrusted, or conflicting. Treat
-`3` as a hard stop and recover the evidence; never read it as "nothing to do".
+the body still carries a `Verified-Closing-Issues` marker but no restore target can be proven —
+because the evidence is missing, untrusted, or conflicting, because the snapshot is incomplete, or
+because the marker survived while the body's grammar no longer parses. Treat `3` as a hard stop and
+recover the evidence; never read it as "nothing to do". Only exit `0` means the body is positively
+canonical or the attempt is still in flight.
 
 Rules for the restore:
 
-- restore the exact authenticated pre-neutralization body; prove it with
-  `restored_body_matches_authority` against that receipt digest and its governing/closing identities
-  before writing, and fail closed rather than hand-editing a body the receipt cannot authenticate
+- restore the exact authenticated pre-neutralization body, and prove the candidate before writing it:
+
+  ```bash
+  python3 scripts/verify_restored_pr_body.py \
+    --restoration-json <restoration.json> --restored-body-file <candidate-body.md>
+  ```
+
+  It exits `0` only when the candidate reproduces the receipt's original-body digest and its
+  governing/closing identities. Never hand-edit a body the receipt cannot authenticate — a
+  hand-edited body is what strands a neutralization in the first place
 - never rewrite, delete, or re-post the durable authority and phase receipt trail; it is historical
   evidence of the abandoned attempt, and restoration repairs only the mutable body
 - never restore while a merge request for that head may still be in flight — resolve the attempt

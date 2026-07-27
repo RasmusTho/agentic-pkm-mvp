@@ -9,12 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from app.dispatcher.verification_contract import IssueAuthority, MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import (
+    IssueAuthority,
+    MAX_CLOSING_ISSUES,
+    has_neutralized_closing_marker,
+    resolve_neutralized_issue_authority,
+)
 from app.dispatcher.verified_merge import (
     NEUTRALIZED_BODY_RESTORATION_CONTRACT,
     VERIFIED_MERGE_AUTHORITY_CONTRACT,
     build_verified_merge_phase,
-    carries_live_neutralized_body,
     classify_neutralized_body_state,
     plan_post_merge_reconciliation,
     prepare_verified_merge,
@@ -1197,6 +1201,7 @@ def test_neutralized_body_outliving_its_head_is_surfaced_as_restorable() -> None
         "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
         "governing_issue": 3821,
         "head_sha": NEXT_HEAD,
+        "matching_attempts": 1,
         "neutralized_body_sha256": authority_receipt["neutralized_body_sha256"],
         "neutralized_head_sha": HEAD,
         "pr_number": 3822,
@@ -1421,15 +1426,23 @@ def test_neutralized_body_restoration_fails_closed_without_unambiguous_evidence(
 
     # Every one of those `None` outcomes is still an indeterminate live
     # neutralized body, distinct from a canonical or already-merged body.
-    assert carries_live_neutralized_body(head_b_pr)
-    assert not carries_live_neutralized_body({**head_b_pr, "body": _body()})
-    assert not carries_live_neutralized_body(
-        {
-            **head_b_pr,
-            "state": "closed",
-            "merged": True,
-            "merged_at": "2026-07-27T08:18:08Z",
-        }
+    def _status(pr: dict[str, object]) -> object:
+        return classify_neutralized_body_state(
+            comments, pr=pr, repository=REPOSITORY
+        )["status"]
+
+    assert _status(head_b_pr) == "restoration_required"
+    assert _status({**head_b_pr, "body": _body()}) == "no_restoration_required"
+    assert (
+        _status(
+            {
+                **head_b_pr,
+                "state": "closed",
+                "merged": True,
+                "merged_at": "2026-07-27T08:18:08Z",
+            }
+        )
+        == "no_restoration_required"
     )
 
 
@@ -1554,6 +1567,125 @@ def test_incomplete_or_contradictory_snapshots_are_never_reported_safe(
         )
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(
+            lambda body: body + "Governing-Issue: #3821\n",
+            id="second-governing-issue-line",
+        ),
+        pytest.param(
+            # Drops the evidence line for a closing issue, so the marker's
+            # closing set is no longer a subset of governing + supporting.
+            lambda body: body.replace("Refs #3820\n", ""),
+            id="deleted-closing-evidence-line",
+        ),
+        pytest.param(
+            lambda body: body + "Verified-Closing-Issues: #3820, #3823\n",
+            id="duplicated-marker-line",
+        ),
+        pytest.param(lambda body: body + "\ra\n", id="lone-carriage-return"),
+        pytest.param(
+            lambda body: body.replace("Governing-Issue: #3821", "Governing-Issue: x"),
+            id="unparseable-governing-issue",
+        ),
+    ],
+)
+def test_a_marker_that_no_longer_parses_is_stranded_not_canonical(damage) -> None:
+    """A body can keep its marker while its grammar stops resolving.
+
+    `resolve_neutralized_issue_authority` answers `None` for a canonical body and
+    for a damaged one alike. Treating that shared `None` as "canonical" strands a
+    neutralization that carries no closing authority at all, so `pr-contract`
+    fails on every head — issue #4185 reproduced by its own fix. The realistic
+    source is an agent re-pasting the PR template after a merge hard stop.
+    """
+
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    damaged = damage(str(plan["neutralized_body"]))
+    pr = {**_pr(damaged), "head": {"sha": NEXT_HEAD}}
+
+    # Precondition: the damage really did break the strict grammar, so this test
+    # exercises the conflation rather than an intact body.
+    assert resolve_neutralized_issue_authority(damaged) is None
+    assert has_neutralized_closing_marker(damaged)
+
+    assert (
+        classify_neutralized_body_state(comments, pr=pr, repository=REPOSITORY)[
+            "status"
+        ]
+        == "ambiguous_neutralized_body"
+    )
+
+
+def test_a_snapshot_without_a_body_is_never_reported_safe() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    pr = {**_pr(), "head": {"sha": NEXT_HEAD}}
+    del pr["body"]
+
+    assert (
+        classify_neutralized_body_state(comments, pr=pr, repository=REPOSITORY)[
+            "status"
+        ]
+        == "ambiguous_neutralized_body"
+    )
+
+
+def test_restored_body_proof_binds_contract_identities_and_lf_equivalence() -> None:
+    original_body = _body()
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(original_body),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    restoration = resolve_neutralized_body_restoration(
+        comments,
+        pr={**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}},
+        repository=REPOSITORY,
+    )
+    assert restoration is not None
+
+    assert restored_body_matches_authority(original_body, restoration=restoration)
+    # GitHub may return the same body without its single terminal LF.
+    assert original_body.endswith("\n")
+    assert restored_body_matches_authority(
+        original_body[:-1], restoration=restoration
+    )
+
+    # A payload that is not this contract proves nothing, even with a digest hit.
+    assert not restored_body_matches_authority(
+        original_body,
+        restoration={**restoration, "contract": "some_other_contract.v1"},
+    )
+    # Digest and identities must agree; neither alone is sufficient.
+    assert not restored_body_matches_authority(
+        original_body,
+        restoration={**restoration, "governing_issue": 4185},
+    )
+    assert not restored_body_matches_authority(
+        original_body,
+        restoration={**restoration, "closing_issues": [3820]},
+    )
+    assert not restored_body_matches_authority(
+        original_body + "trailing drift\n", restoration=restoration
+    )
+    assert not restored_body_matches_authority(None, restoration=restoration)
+
+
 def test_conflicting_current_head_authority_never_falls_back_to_a_stale_head() -> None:
     plan = prepare_verified_merge(
         context=_context(),
@@ -1606,3 +1738,162 @@ def test_conflicting_current_head_authority_never_falls_back_to_a_stale_head() -
         )["status"]
         == "ambiguous_neutralized_body"
     )
+
+
+@pytest.mark.parametrize(
+    "live_head_evidence",
+    [
+        pytest.param(
+            lambda receipt: [_authority_comment({**receipt, "surprise": True})],
+            id="extra-key",
+        ),
+        pytest.param(
+            lambda receipt: [
+                _authority_comment(
+                    {
+                        field: value
+                        for field, value in receipt.items()
+                        if field != "repair_budget"
+                    }
+                )
+            ],
+            id="missing-repair-budget",
+        ),
+        pytest.param(
+            lambda receipt: [
+                _trusted_comment(
+                    2
+                    * (
+                        "verified issue-set merge authority:\n```json\n"
+                        + json.dumps(
+                            receipt, sort_keys=True, separators=(",", ":")
+                        )
+                        + "\n```\n"
+                    )
+                )
+            ],
+            id="two-receipt-blocks-in-one-comment",
+        ),
+    ],
+)
+def test_malformed_live_head_evidence_still_blocks_a_stale_fallback(
+    live_head_evidence,
+) -> None:
+    """A structural filter must not be able to discard the race guard.
+
+    Each of these receipts is invalid as authority, so the exact-head resolver
+    ignores it. But it is still trusted evidence that a merge attempt exists on
+    the live head, and answering from an older head there is the merge race the
+    restore contract forbids.
+    """
+
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    stale_receipt = plan["authority_receipt"]
+    assert isinstance(stale_receipt, dict)
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    head_b_pr = {**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}}
+
+    assert (
+        resolve_neutralized_body_restoration(
+            comments, pr=head_b_pr, repository=REPOSITORY
+        )
+        is not None
+    )
+
+    guarded = [
+        *comments,
+        *live_head_evidence({**stale_receipt, "head_sha": NEXT_HEAD}),
+    ]
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            guarded, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            guarded, pr=head_b_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        classify_neutralized_body_state(
+            guarded, pr=head_b_pr, repository=REPOSITORY
+        )["status"]
+        == "ambiguous_neutralized_body"
+    )
+
+    # Untrusted authorship is not evidence and must not block a real restore.
+    untrusted = [
+        *comments,
+        *[
+            {**comment, "author_association": "NONE"}
+            for comment in live_head_evidence(
+                {**stale_receipt, "head_sha": NEXT_HEAD}
+            )
+        ],
+    ]
+    assert (
+        resolve_neutralized_body_restoration(
+            untrusted, pr=head_b_pr, repository=REPOSITORY
+        )
+        is not None
+    )
+
+
+def test_restored_body_proof_cli_uses_production_verifier(tmp_path: Path) -> None:
+    original_body = _body()
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(original_body),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    comments = [_trusted_comment(str(plan["authority_receipt_comment"]))]
+    restoration = resolve_neutralized_body_restoration(
+        comments,
+        pr={**_pr(str(plan["neutralized_body"])), "head": {"sha": NEXT_HEAD}},
+        repository=REPOSITORY,
+    )
+    restoration_path = tmp_path / "restoration.json"
+    body_path = tmp_path / "candidate.md"
+    # The resolver CLI's wrapper shape must be accepted directly.
+    restoration_path.write_text(
+        json.dumps({"restoration": restoration, "restoration_required": True}),
+        encoding="utf-8",
+    )
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.verify_restored_pr_body",
+                "--restoration-json",
+                str(restoration_path),
+                "--restored-body-file",
+                str(body_path),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    body_path.write_text(original_body, encoding="utf-8")
+    accepted = _run()
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert json.loads(accepted.stdout)["restored_body_matches_authority"] is True
+
+    body_path.write_text(str(plan["neutralized_body"]), encoding="utf-8")
+    refused = _run()
+
+    assert refused.returncode == 1
+    assert json.loads(refused.stdout)["restored_body_matches_authority"] is False

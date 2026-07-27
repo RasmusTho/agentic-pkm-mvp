@@ -20,6 +20,7 @@ from app.dispatcher.verification_contract import (
     IssueAuthority,
     MAX_CLOSING_ISSUES,
     has_closing_issue_attempt,
+    has_neutralized_closing_marker,
     neutralize_closing_issue_references,
     resolve_issue_authority,
     resolve_neutralized_issue_authority,
@@ -589,27 +590,34 @@ def resolve_neutralized_body_restoration(
         is not None
     ):
         return None
+    # Any trusted authority evidence naming the live head means a merge for this
+    # attempt may still be in flight, so an older head must never name a restore
+    # target that could race it. Scan the raw comment text rather than only
+    # well-formed receipts: a receipt with an extra key, a missing field, or two
+    # fenced blocks in one comment is exactly the evidence a structural filter
+    # would silently drop, and dropping it is what re-enables the race.
+    if any(
+        comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_AUTHORITY_MARKER in str(comment["body"])
+        and head_sha in str(comment["body"])
+        for comment in comments
+    ):
+        return None
     stale: list[Mapping[str, object]] = []
     for receipt, _ in _comment_receipt_entries(
         comments, VERIFIED_MERGE_AUTHORITY_MARKER
     ):
         stored_head = receipt.get("head_sha")
+        if stored_head == head_sha:
+            return None
         body_digest = receipt.get("body_sha256")
         if (
             set(receipt) != _AUTHORITY_RECEIPT_FIELDS
             or receipt.get("contract") != VERIFIED_MERGE_AUTHORITY_CONTRACT
             or receipt.get("repository") != repository
             or receipt.get("pr_number") != pr_number
-        ):
-            continue
-        if stored_head == head_sha:
-            # Trusted evidence for the live head exists, yet the resolver above
-            # could not resolve it to one identity. A merge for this attempt may
-            # still be in flight, so never fall back to an older head and name a
-            # restore target that could race it.
-            return None
-        if (
-            receipt.get("governing_issue") != neutralized.governing_issue
+            or receipt.get("governing_issue") != neutralized.governing_issue
             or receipt.get("closing_issues") != list(neutralized.closing_issues)
             or not isinstance(stored_head, str)
             or _SHA_PATTERN.fullmatch(stored_head) is None
@@ -630,12 +638,19 @@ def resolve_neutralized_body_restoration(
         stale.append(receipt)
     if not stale or len({receipt["body_sha256"] for receipt in stale}) != 1:
         return None
+    # The restore target is load-bearing and is proven unique above. The
+    # provenance fields below describe the last matching attempt in the supplied
+    # comment order, which for the GitHub comments API is the most recent one.
+    # A restore-then-re-neutralize loop legitimately leaves several attempts
+    # matching the same target, so report the count rather than implying the
+    # named attempt is the only one.
     authority_receipt = stale[-1]
     return {
         "closing_issues": list(neutralized.closing_issues),
         "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
         "governing_issue": neutralized.governing_issue,
         "head_sha": head_sha,
+        "matching_attempts": len(stale),
         "neutralized_body_sha256": authority_receipt["neutralized_body_sha256"],
         "neutralized_head_sha": authority_receipt["head_sha"],
         "pr_number": pr_number,
@@ -644,21 +659,6 @@ def resolve_neutralized_body_restoration(
         "restore_body_sha256": authority_receipt["body_sha256"],
         "run_id": authority_receipt["run_id"],
     }
-
-
-def carries_live_neutralized_body(pr: Mapping[str, object]) -> bool:
-    """Whether an open, unmerged PR currently advertises a neutralized body.
-
-    Callers pair this with :func:`resolve_neutralized_body_restoration` to tell
-    the two ``None`` outcomes apart: a canonical body is a positively safe state,
-    while a neutralized body with no provable restore target is indeterminate and
-    must stop repair work rather than read as "nothing to do".
-    """
-
-    return (
-        _resolve_merge_state(pr) == "open"
-        and resolve_neutralized_issue_authority(pr.get("body")) is not None
-    )
 
 
 def classify_neutralized_body_state(
@@ -684,8 +684,17 @@ def classify_neutralized_body_state(
       target can be proven, including when the live snapshot is incomplete or
       self-contradictory. Stop and recover evidence; never continue repair work
       on this answer.
+
+    "Canonical" is decided by :func:`has_neutralized_closing_marker`, never by
+    the strict resolver. The strict resolver also returns ``None`` for a body
+    whose marker survives but whose grammar no longer parses -- a second
+    ``Governing-Issue`` line, a duplicated marker, a deleted ``Refs`` line, a
+    lone CR -- and that body is a live stranded neutralization, not a clean one.
+    Reading it as safe would reproduce the very deadlock this module exists to
+    stop.
     """
 
+    body = pr.get("body")
     restoration = resolve_neutralized_body_restoration(
         comments,
         pr=pr,
@@ -695,9 +704,10 @@ def classify_neutralized_body_state(
     merge_state = _resolve_merge_state(pr)
     if restoration is not None:
         status = "restoration_required"
-    elif resolve_neutralized_issue_authority(pr.get("body")) is None:
-        # A canonical body cannot be a stranded neutralization, whatever the
-        # rest of the snapshot says.
+    elif not isinstance(body, str):
+        # No body to establish anything from.
+        status = "ambiguous_neutralized_body"
+    elif not has_neutralized_closing_marker(body):
         status = "no_restoration_required"
     elif merge_state == "merged" or (
         merge_state == "open"
