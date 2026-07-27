@@ -53,7 +53,7 @@
 - [ADR-0054: The Episode Resolution Engine is a Mimer organ — Heimdal contributes single-stream boundary proposals (Accepted)](./ADR-0054-episode-resolution-engine-is-a-mimer-organ.md)
 - [ADR-0055: Multi-writer vault-consistency model — stale-detection + conflict-copy for rewritten notes, per-note-class posture (Accepted)](./ADR-0055-vault-multiwriter-consistency-model.md)
 - [ADR-0056: One hub Mimer client contract; HTTP-API + direct-FS transports; external app agents join the writer set (Accepted)](./ADR-0056-mimer-client-contract-and-transports.md)
-- [ADR-0057: The Capability Knowledge Model (Kvasir) — a projection-only Builder System subsystem (Accepted)](./ADR-0057-capability-knowledge-model-kvasir.md)
+- [ADR-0057: The Capability Knowledge Model (Kvasir) — a projection-only Builder System subsystem (Accepted; amended 2026-07-27, A1: a CKM-informed orchestrator role may drive delivery under the ordinary builder gates; the knowledge model stays projection-only)](./ADR-0057-capability-knowledge-model-kvasir.md)
 - [ADR-0058: Event Horizon decay — relevance decay is a derived, reversible retrieval consequence of Episode closure (Accepted; amended 2026-07-11)](./ADR-0058-event-horizon-closure-decay.md)
 - [ADR-0059: Unified retrieval path — durable index as vector read authority, warm cache with identity-aware invalidation, tunable fusion (Accepted)](./ADR-0059-unified-retrieval-path-pgvector-read-authority.md)
 - [ADR-0060: Capture posture flips to B-full (always-on) with voice identification — staged activation behind explicit gates (Accepted)](./ADR-0060-capture-posture-b-full-voice-identity.md)

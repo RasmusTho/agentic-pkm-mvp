@@ -1,4 +1,4 @@
-State: Accepted (owner acceptance 2026-07-07 — "proceed until the design is broken down to ready issues"). Enacts the Capability Knowledge Model (CKM, codename Kvasir) as a Builder System subsystem and records the five owner decisions OD-K1..OD-K5 from the grounding research. Docs + backlog enactment only; no runtime/product behavior changes here.
+State: Accepted (owner acceptance 2026-07-07 — "proceed until the design is broken down to ready issues"). **Amended 2026-07-27 (A1, owner decision):** a CKM-informed orchestrator role may drive delivery of epics and comparable work with exactly the authority Claude Code and Codex already hold. The amendment separates the acting role from the knowledge model — §6's candidate-until-confirmed lifecycle and the §7 authority posture are unchanged, §2's gap→issue writeback deferral is partially lifted, and automated orchestration carries a named entry condition tied to ADR-0064 §8. Marked inline at §1, §7, and `When to revisit`. Enacts the Capability Knowledge Model (CKM, codename Kvasir) as a Builder System subsystem and records the five owner decisions OD-K1..OD-K5 from the grounding research. Docs + backlog enactment only; no runtime/product behavior changes here.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the existence, scope, authority posture, store choice, naming, and confirmation policy of the CKM subsystem. It does NOT define implementation internals (schema field lists, prompts, aggregation weights) — those live in the specification directory `docs/CAPABILITY_KNOWLEDGE_MODEL/` and are refined by delivery.
 Owner: BuilderOps governance / Architecture spine (Rasmus)
@@ -23,6 +23,8 @@ The research grounding `docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md` (2026-07-0
 ### 1. The CKM exists, as a Builder System subsystem
 
 The Capability Knowledge Model enters the Builder System as the subsystem that continuously constructs and maintains an evidence-backed model of the platform's capabilities and their maturity. It lives entirely in the BuilderOps plane (ADR-0010): it reads product-plane and builder-plane artifacts as evidence; it writes only `analytical`/`projection`/`receipt` objects.
+
+**Amended 2026-07-27 (A1):** this write-class restriction continues to bind the knowledge model itself. The CKM-informed orchestrator role admitted in §7 is a builder agent, not a CKM writer: its effects (issues, branches, PRs, dispatch claims) are produced through the ordinary builder surfaces under the ordinary gates, and never as CKM object writes.
 
 ### 2. OD-K1 — Build the MVP now; defer drift detection
 
@@ -50,6 +52,17 @@ Capabilities and evidence edges produced by inference (LLM association, capabili
 
 Every CKM output is a projection: self-identifying as derived, carrying provenance (inputs, method, model/provider where inferred) and an ingestion watermark, and never functioning as a source of truth. Maturity is always a visible, cited 7-dimension vector; any scalar aggregate is a labeled convenience computed by a published transparent function. Crossing from a CKM observation to action (filing an issue, editing a doc) is a human/agent decision outside the CKM, never a CKM effect.
 
+**Amended 2026-07-27 (A1) — the acting role is admitted, the knowledge model is unchanged.** The owner ruled that CKM may orchestrate delivery of epics and comparable work "exactly as Claude Code and Codex may", as one step in raising the level of automation. That ruling is enacted by *separating the model from the role*, not by weakening the authority posture:
+
+- **The Capability Knowledge Model remains projection-only.** Every clause above still holds for it: derived, provenance-bearing, never a source of truth, and never a runtime admissibility signal (§4). §6's candidate-until-confirmed lifecycle is **unchanged** — its rationale (unconfirmed inference must not silently look like ground truth) becomes *more* load-bearing once an orchestrator reads it, not less.
+- **A CKM-informed orchestrator role is admitted as a builder agent.** It reads CKM projections and acts. Its authority is exactly the authority Claude Code and Codex already hold — no more: it is bound by the Issue task contract, the branch-truth and publication boundaries, CI, and the review gate. Automation level rises; the gate chain does not move.
+- **The sentence "never a CKM effect" is therefore preserved in substance.** Action remains a decision by an agent operating outside the knowledge model, under the normal builder gates. What changes is only that the agent may now be the one that reads CKM most closely.
+- **Candidate inference may propose, not select unreviewed.** An orchestrator may act directly on already-governed work (an epic, a strictly valid `agent:ready` issue). Work originating from `candidate` CKM inference enters through the normal Issue contract, which is where it is confirmed — at the task-contract boundary rather than per evidence edge. This satisfies §6's intent with a cheaper gate, not a weaker one.
+
+Consequently §2's deferral of closed-loop writeback (gap→issue automation) is **partially lifted**: an orchestrator may file and drive issues. The deferral of prescriptive-vs-descriptive drift detection, predictive maturity, and cross-repo federation stands unchanged.
+
+**Entry condition (safety, not ceremony).** Automated orchestration must not begin while the CKM's own model access still resolves through Product routing, because that path can silently return a mock route (`app/builderops/ckm/semantic.py`; recorded as transition debt in ADR-0063 and sequenced in ADR-0064 §8). An orchestrator that can unknowingly receive fabricated analysis cannot be trusted to gate delivery. ADR-0064's migration order swaps accordingly: the CKM model-path migration precedes the model-inquiry migration.
+
 ## Constraints honored
 
 - BuilderOps plane only (ADR-0010): no product/runtime behavior, schema, or authority change.
@@ -66,6 +79,8 @@ Every CKM output is a projection: self-identifying as derived, carrying provenan
 - When the Correctness Kernel registry substrate lands, a follow-up ADR/issue set may enact drift detection (deferred FR-8).
 
 ## When to revisit
+
+**Amended 2026-07-27 (A1):** admitting the orchestrator role is *not* one of the reversals below — it grants no authority to the knowledge model. A future move that made CKM inference itself authoritative (dissolving §6's candidate lifecycle, or letting an orchestrator act on unconfirmed inference without passing the Issue contract) **would** require a new ADR.
 
 Supersede only if the owner reverses the CKM's existence, moves it out of the BuilderOps plane, grants it authority, or replaces the store substrate. Tuning (weights, prompts, seed grain, projection formats) is delivery-level and needs no ADR revision.
 
