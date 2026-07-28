@@ -1,9 +1,15 @@
 """Merged dev-compose regression contracts for Issues #3659 and #3875."""
 from __future__ import annotations
 
+import json
+import os
 import re
+import shutil
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
+
+import pytest
 
 from app.release_channels.channel_isolation_preflight import (
     _load_compose,
@@ -15,10 +21,15 @@ from app.release_channels.channel_isolation_preflight import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_COMPOSE = REPO_ROOT / "docker-compose.yaml"
 DEV_COMPOSE = REPO_ROOT / "docker-compose.dev.yml"
+DEPLOY_COMPOSE_WRAPPER = REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
 DEV_DSN = "postgresql+psycopg://app:app@db:5432/app_dev"
 
 RUNTIME_SERVICES = ("api", "worker", "watcher")
 VAULT_BINDING_KEYS = ("VAULT_ROOT", "VAULT_ROOT_DEV")
+requires_docker = pytest.mark.skipif(
+    shutil.which("docker") is None,
+    reason="docker executable not found on PATH",
+)
 
 # Compose value interpolation tokens: $$, $VAR, ${VAR}, ${VAR:-def}, ${VAR-def}.
 _VALUE_VAR_PATTERN = re.compile(
@@ -103,7 +114,7 @@ def _deploy_subshell_environment(
     The wrapper exports WATCHER_RUNTIME_ENV_FILE, the non-secret LLM_PROVIDER
     selector, and VAULT_HOST_ROOT from the governed channel/runtime env files
     (using the channel runtime-env default when the pin omits its path) so a
-    stale parent shell cannot swap those selectors. It
+    stale parent shell cannot swap those selectors. The wrapper
     never passes the runtime env file as a Compose CLI --env-file (that would
     expose its DSNs to interpolation).
     """
@@ -234,6 +245,229 @@ def _write_deploy_fixtures(
         encoding="utf-8",
     )
     return channel_env
+
+
+def _render_signboard_deploy_compose(
+    tmp_path: Path,
+    *,
+    signboard_host_root: Path | None,
+    vault_host_root: Path | None,
+    runtime_signboard_root: str = "",
+    force_no_active_vault: bool = False,
+) -> tuple[dict[str, object], Path, bytes]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    runtime_env = tmp_path / "runtime.env"
+    runtime_lines = ["LLM_PROVIDER=mock"]
+    if vault_host_root is not None:
+        runtime_lines.extend(
+            (
+                "VAULT_ROOT=/app/vault",
+                f"VAULT_HOST_ROOT={vault_host_root}",
+            )
+        )
+    if runtime_signboard_root:
+        runtime_lines.append(f"SIGNBOARD_ROOT={runtime_signboard_root}")
+    runtime_env.write_text("\n".join(runtime_lines) + "\n", encoding="utf-8")
+    original_runtime_env = runtime_env.read_bytes()
+
+    channel_env = tmp_path / "dev.env"
+    channel_env.write_text(
+        f"WATCHER_RUNTIME_ENV_FILE={runtime_env}\n"
+        "APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\n"
+        "APP_IMAGE_TAG=0000000000000000000000000000000000000000\n",
+        encoding="utf-8",
+    )
+
+    command = """
+set -euo pipefail
+source "$1"
+if [ "${FORCE_NO_ACTIVE_SIGNBOARD:-0}" = "1" ]; then
+  resolve_signboard_root_env() { unset SIGNBOARD_ROOT; }
+fi
+deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contract \
+  "$3" config --format json
+"""
+    env = os.environ.copy()
+    for key in (
+        "COMPOSE_FILE",
+        "DEPLOY_VAULT_CONTAINER_ROOT",
+        "SIGNBOARD_ROOT",
+        "VAULT_HOST_ROOT",
+        "VAULT_ROOT",
+        "WATCHER_RUNTIME_ENV_FILE",
+    ):
+        env.pop(key, None)
+    env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(tmp_path / "instance-ownership")
+    if signboard_host_root is not None:
+        env["SIGNBOARD_ROOT"] = str(signboard_host_root)
+    if force_no_active_vault:
+        env["FORCE_NO_ACTIVE_SIGNBOARD"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "signboard-compose-contract",
+            str(DEPLOY_COMPOSE_WRAPPER),
+            str(REPO_ROOT),
+            str(channel_env),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout), runtime_env, original_runtime_env
+
+
+def _rendered_api(compose: dict[str, object]) -> dict[str, object]:
+    services = compose["services"]
+    assert isinstance(services, dict)
+    api = services["api"]
+    assert isinstance(api, dict)
+    return api
+
+
+def _rendered_mount_source(service: dict[str, object], target: str) -> str | None:
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    for volume in volumes:
+        if isinstance(volume, dict) and volume.get("target") == target:
+            source = volume.get("source")
+            return str(source) if source is not None else None
+    return None
+
+
+@pytest.fixture
+def same_path_test_root(tmp_path: Path) -> Path:
+    shared_users = Path("/Users/Shared")
+    try:
+        shared_users.mkdir(parents=True, exist_ok=True)
+        root = shared_users / f"agentic-pkm-signboard-{tmp_path.name}"
+        root.mkdir()
+    except OSError as exc:
+        pytest.skip(f"same-path mount fixture unavailable: {exc}")
+    try:
+        yield root
+    finally:
+        unreadable = root / "vault/unreadable"
+        if unreadable.exists():
+            unreadable.chmod(0o700)
+        shutil.rmtree(root)
+
+
+@requires_docker
+def test_channel_deploy_supplies_signboard_root(
+    tmp_path: Path,
+    same_path_test_root: Path,
+) -> None:
+    """The real deploy wrapper renders only a container-readable board root."""
+    wrapper = DEPLOY_COMPOSE_WRAPPER.read_text(encoding="utf-8")
+    assert 'source "${_deploy_channel_compose_lib_dir}/signboard_root.sh"' in wrapper
+
+    same_path_vault = same_path_test_root / "vault"
+    same_path_board = same_path_vault / "BuilderOpsVault/agent-delivery"
+    same_path_board.mkdir(parents=True)
+    same_path_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "same-path",
+        signboard_host_root=same_path_board,
+        vault_host_root=same_path_vault,
+    )
+    same_path_api = _rendered_api(same_path_compose)
+    same_path_environment = same_path_api["environment"]
+    assert isinstance(same_path_environment, dict)
+    assert same_path_environment["SIGNBOARD_ROOT"] == str(same_path_board)
+    assert _rendered_mount_source(same_path_api, "/app/vault") is None
+
+    nonexistent_board = same_path_vault / "nonexistent"
+    nonexistent_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "nonexistent",
+        signboard_host_root=nonexistent_board,
+        vault_host_root=same_path_vault,
+    )
+    nonexistent_environment = _rendered_api(nonexistent_compose)["environment"]
+    assert isinstance(nonexistent_environment, dict)
+    assert nonexistent_environment["SIGNBOARD_ROOT"] is None
+
+    unreadable_board = same_path_vault / "unreadable"
+    unreadable_board.mkdir()
+    unreadable_board.chmod(0)
+    unreadable_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "unreadable",
+        signboard_host_root=unreadable_board,
+        vault_host_root=same_path_vault,
+    )
+    unreadable_environment = _rendered_api(unreadable_compose)["environment"]
+    assert isinstance(unreadable_environment, dict)
+    assert unreadable_environment["SIGNBOARD_ROOT"] is None
+    unreadable_board.chmod(0o700)
+
+    legacy_vault = tmp_path / "legacy/vault"
+    legacy_board = legacy_vault / "BuilderOpsVault/agent-delivery"
+    legacy_board.mkdir(parents=True)
+    legacy_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "legacy/render",
+        signboard_host_root=legacy_board,
+        vault_host_root=legacy_vault,
+    )
+    legacy_api = _rendered_api(legacy_compose)
+    legacy_environment = legacy_api["environment"]
+    assert isinstance(legacy_environment, dict)
+    assert legacy_environment["SIGNBOARD_ROOT"] == (
+        "/app/vault/BuilderOpsVault/agent-delivery"
+    )
+    assert _rendered_mount_source(legacy_api, "/app/vault") == str(legacy_vault)
+
+    stale_root = "/synthetic/stale/signboard"
+    no_vault_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "no-vault",
+        signboard_host_root=None,
+        vault_host_root=None,
+        runtime_signboard_root=stale_root,
+        force_no_active_vault=True,
+    )
+    no_vault_environment = _rendered_api(no_vault_compose)["environment"]
+    assert isinstance(no_vault_environment, dict)
+    assert no_vault_environment["SIGNBOARD_ROOT"] is None
+
+    escaped_vault = tmp_path / "escaped/vault"
+    escaped_target = tmp_path / "escaped/outside"
+    escaped_vault.mkdir(parents=True)
+    escaped_target.mkdir(parents=True)
+    escaped_link = escaped_vault / "projection-link"
+    escaped_link.symlink_to(escaped_target, target_is_directory=True)
+    escaped_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "escaped/render",
+        signboard_host_root=escaped_link / "agent-delivery",
+        vault_host_root=escaped_vault,
+    )
+    escaped_environment = _rendered_api(escaped_compose)["environment"]
+    assert isinstance(escaped_environment, dict)
+    assert escaped_environment["SIGNBOARD_ROOT"] is None
+
+
+@requires_docker
+def test_channel_deploy_preserves_vault_binding(tmp_path: Path) -> None:
+    """Real Compose rendering preserves runtime-env vault bytes and values."""
+    vault_host_root = tmp_path / "selected-vault"
+    signboard_host_root = vault_host_root / "BuilderOpsVault/agent-delivery"
+    signboard_host_root.mkdir(parents=True)
+
+    compose, runtime_env, original_runtime_env = _render_signboard_deploy_compose(
+        tmp_path / "render",
+        signboard_host_root=signboard_host_root,
+        vault_host_root=vault_host_root,
+    )
+    api = _rendered_api(compose)
+    environment = api["environment"]
+    assert isinstance(environment, dict)
+
+    assert environment["VAULT_ROOT"] == "/app/vault"
+    assert environment["VAULT_HOST_ROOT"] == str(vault_host_root)
+    assert _rendered_mount_source(api, "/app/vault") == str(vault_host_root)
+    assert runtime_env.read_bytes() == original_runtime_env
 
 
 def test_dev_migrate_uses_app_dev_dsn() -> None:

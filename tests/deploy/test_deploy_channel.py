@@ -60,10 +60,19 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_state_deployment.sh",
         "scripts/lib/instance_ownership_host_state.sh",
+        "scripts/lib/signboard_root.sh",
         "scripts/instance_state_writer_inventory.py",
     ):
         destination = root / relative
         shutil.copy2(REPO_ROOT / relative, destination)
+
+    # The deploy harness has no active-vault fixture. Keep that state explicit
+    # and process-free so the host-wide writer inventory cannot race a
+    # short-lived resolver subprocess that exists only because of test setup.
+    (root / "scripts/lib/signboard_root.sh").write_text(
+        "resolve_signboard_root_env() { unset SIGNBOARD_ROOT; }\n",
+        encoding="utf-8",
+    )
 
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
@@ -237,6 +246,7 @@ exec {sys.executable!s} "$@"
     for name in (
         "DESIGN_HANDOFF_APP_LOCAL_SETTINGS",
         "INSTANCE_LEGACY_OWNER_CONFIG_PATHS",
+        "SIGNBOARD_ROOT",
         "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "VAULT_ROOT_DEV",
