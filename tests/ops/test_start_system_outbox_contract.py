@@ -227,6 +227,14 @@ def test_start_full_system_runs_runtime_verification_and_endpoint_probe() -> Non
     assert 'API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"' in script
 
 
+def test_start_full_system_preflights_explicit_embedding_provider_before_health() -> None:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    start = script.index('settings_validate_json=$(run_docker_compose exec -T api python -m app.cli settings validate --json)')
+    preflight = script[start - 500 : start + 500]
+    assert 'if [ "$NO_VAULT_MODE" -ne 1 ]; then' in preflight
+    assert 'if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$auto_bootstrap" -eq 1 ]; then' not in preflight
+
+
 def test_runtime_scripts_default_test_project_to_tmp_test_runtime_env() -> None:
     for path in (
         "scripts/start_full_system.sh",

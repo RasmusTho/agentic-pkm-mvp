@@ -339,6 +339,13 @@ health_gate() {
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 
+embedding_provider_preflight_gate() {
+  # Explicit embedding sources are authoritative.  Validate them in the
+  # recreated API before the channel health gate can report this deployment
+  # healthy; LLM_PROVIDER spillover intentionally remains tolerant.
+  compose exec -T api python -m app.cli settings validate --json
+}
+
 recreate_channel_services() {
   local rc=0
   if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then
@@ -786,6 +793,8 @@ run_postmutation_gate "migration execution failed" apply_changed_migrations || e
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?
 rollback_target_recreated=1
+run_postmutation_gate "embedding provider configuration preflight failed" \
+  embedding_provider_preflight_gate || exit $?
 run_postmutation_gate "health gate failed" health_gate || exit $?
 run_postmutation_gate "version gate failed" version_gate || exit $?
 run_postmutation_gate "fleet-model fitness gate failed" \

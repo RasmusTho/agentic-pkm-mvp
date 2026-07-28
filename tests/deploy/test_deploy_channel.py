@@ -283,6 +283,27 @@ def _run_deploy(
     )
 
 
+def test_deploy_channel_preflights_embedding_provider_before_health_gate() -> None:
+    script = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
+    preflight = 'run_postmutation_gate "embedding provider configuration preflight failed"'
+    assert preflight in script
+    assert "embedding_provider_preflight_gate()" in script
+    assert "compose exec -T api python -m app.cli settings validate --json" in script
+    assert script.index(preflight) < script.index('run_postmutation_gate "health gate failed"')
+
+
+def test_deploy_channel_rolls_back_when_embedding_provider_preflight_fails(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_DOCKER_FAIL_MATCH"] = "exec -T api python -m app.cli settings validate --json"
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 24
+    assert "embedding provider configuration preflight failed" in result.stderr
+
+
 def _wait_for_path_or_process_exit(
     process: subprocess.Popen[str],
     path: Path,

@@ -2171,7 +2171,11 @@ index_doctor_status="skipped"
 index_issue_count=0
 
 auto_bootstrap="${AUTO_BOOTSTRAP:-0}"
-if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$auto_bootstrap" -eq 1 ]; then
+# Explicit embedding-provider configuration must be rejected before this
+# startup path can report a vault-backed runtime healthy.  This is independent
+# of whether an index rebuild was requested, so it cannot be gated on
+# AUTO_BOOTSTRAP or VERIFY_ACTIVE.
+if [ "$NO_VAULT_MODE" -ne 1 ]; then
   set +e
   settings_validate_json=$(run_docker_compose exec -T api python -m app.cli settings validate --json)
   settings_validate_status=$?
