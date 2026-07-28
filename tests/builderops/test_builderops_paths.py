@@ -277,3 +277,123 @@ def test_validation_rejects_symlinked_sqlite_candidate_without_following_it(
     assert result.exit_code != 0
     assert "symlink" in result.output.lower()
     assert outside.read_bytes() == b"SQLite format 3\x00" + b"external-marker"
+
+
+def _simulate_evicted_vault(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Make every vault file look like an un-materialized iCloud file.
+
+    On the real shared vault the first ``open()`` of an evicted file costs a
+    network round-trip (measured ~1.0-1.2 s each), which is why validating a
+    ~900-file vault did not terminate. Here the eviction is simulated and the
+    opened paths are recorded, so the test can assert what the scan actually
+    reads rather than how long it takes.
+    """
+    from app.builderops import vault_queue
+
+    opened: list[Path] = []
+    monkeypatch.setattr(vault_queue, "_content_is_local", lambda stat_result: False)
+
+    real_open = Path.open
+
+    def recording_open(self: Path, *args: object, **kwargs: object):
+        opened.append(self)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", recording_open)
+    return opened
+
+
+def test_vault_validate_detects_extensionless_sqlite_without_full_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confinement invariant holds without opening every vault file."""
+    import sqlite3
+
+    vault = tmp_path / "shared-vault"
+    notes = vault / "model-inquiries"
+    notes.mkdir(parents=True)
+    for index in range(50):
+        # Ordinary vault material: never a page-size multiple, so an evicted
+        # copy must not be materialized just to read 16 bytes.
+        (notes / f"note-{index:03d}.md").write_text("x" * (700 + index), encoding="utf-8")
+
+    hidden = vault / "transient" / "opaque-state"
+    hidden.parent.mkdir(parents=True)
+    connection = sqlite3.connect(hidden)
+    connection.execute("CREATE TABLE t (a INTEGER)")
+    connection.commit()
+    connection.close()
+    assert hidden.suffix == ""
+    assert hidden.stat().st_size % 512 == 0
+
+    opened = _simulate_evicted_vault(monkeypatch)
+
+    env = {
+        "BUILDEROPS_VAULT_ROOT": str(vault),
+        "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
+    }
+    result = _run(["vault", "validate", str(vault), "--json"], env)
+
+    assert result.exit_code != 0
+    assert f"forbidden SQLite state in shared vault: {hidden}" in result.output
+
+    # The database was read; the notes that cannot be database images were not.
+    assert hidden in opened
+    assert [path for path in opened if path.parent == notes] == []
+
+
+def test_vault_validate_still_opens_local_files_for_the_header_sniff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing narrows for a normal local vault: the sniff is unchanged there.
+
+    Local reads are cheap (a full 900-file vault sniffs in ~0.1 s), so an
+    extension-less file that merely starts with the magic bytes is still
+    caught exactly as before.
+    """
+    from app.builderops import vault_queue
+
+    vault = tmp_path / "shared-vault"
+    nested = vault / "transient" / "opaque-state"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"SQLite format 3\x00" + b"\x00" * 16)
+
+    assert vault_queue._content_is_local(nested.stat()) is True
+    assert vault_queue._sqlite_candidates(vault) == [nested]
+
+
+def test_vault_validate_reports_scan_stats_and_preserves_symlink_rejection(
+    tmp_path: Path,
+) -> None:
+    from app.builderops import vault_queue
+    from app.builderops.config import load_paths
+
+    vault = tmp_path / "shared-vault"
+    vault.mkdir()
+    (vault / "note.md").write_text("hello\n", encoding="utf-8")
+    seen: list[dict[str, int]] = []
+
+    payload = vault_queue.validate_vault(
+        vault,
+        load_paths(
+            {
+                "BUILDEROPS_VAULT_ROOT": str(vault),
+                "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
+            }
+        ),
+        on_progress=seen.append,
+    )
+
+    assert payload["sqlite_scan"]["files"] == 1
+    assert payload["sqlite_scan"]["opened"] == 1
+    assert payload["sqlite_scan"]["skipped_remote"] == 0
+    assert seen == [{"files": 1, "opened": 0, "skipped_remote": 0, "elapsed_ms": 0}]
+
+    outside = tmp_path / "outside.md"
+    outside.write_text("elsewhere\n", encoding="utf-8")
+    try:
+        (vault / "linked.md").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+    with pytest.raises(vault_queue.VaultQueueError, match="must not be a symlink"):
+        vault_queue._sqlite_candidates(vault)
