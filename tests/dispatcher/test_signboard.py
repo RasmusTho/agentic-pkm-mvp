@@ -615,3 +615,34 @@ def test_cli_export_signboard_prune_absent_flag(tmp_env, store, tmp_path: Path) 
     assert main(["export-signboard", str(board), "--prune-absent", "--json"]) == 0
 
     assert not stale.exists()
+
+
+def test_prune_retains_a_stale_card_carrying_human_receipts(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """The other hand-editable section is human material too.
+
+    ``_render_task`` always leaves "## Receipts" empty, and re-export never
+    reaches a stale card, so text below that heading is something a human put
+    there and nothing else would have removed. The prune must not be what
+    deletes it.
+    """
+    tasks = seed_tasks(store)
+    ready = next(task for task in tasks if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    stale = _write_stale_card(
+        board, next(board.glob(f"**/{ready.task_id}--*.md")), task_id="task-gone", notes=None
+    )
+    stale.write_text(
+        stale.read_text(encoding="utf-8").rstrip("\n")
+        + "\n- merged in PR #123 after the owner signed off\n",
+        encoding="utf-8",
+    )
+
+    result = export_signboard(store, board, prune_absent=True)
+
+    assert stale.exists()
+    assert result["retained_with_notes"] == [str(stale)]
+    assert result["pruned"] == []
+    assert "merged in PR #123" in stale.read_text(encoding="utf-8")

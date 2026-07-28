@@ -810,9 +810,11 @@ python -m app.dispatcher export-signboard [path] --prune-absent --json
 ```
 
 `--prune-absent` deletes a generated card only when its task ID is absent from the store *and* the
-card carries no human-authored `## Notes` content. A stale card that does carry notes is kept and
-listed under `retained_with_notes` in the JSON result, so a human decides its fate; human material
-is never destroyed by the prune. Malformed generated cards and non-generated files are never
+card carries nothing a human wrote. Both hand-editable sections count: `## Notes`, and any non-blank
+text below the card's final `## Receipts` heading — the exporter always emits that heading empty,
+and it never rewrites a stale card, so anything there is human-authored. A stale card carrying
+either is kept and listed under `retained_with_notes` in the JSON result, so a human decides its
+fate; human material is never destroyed by the prune. Malformed generated cards and non-generated files are never
 touched. The prune is opt-in: the exporter run by the startup bootstrap and by the `/signboard`
 refresh route never deletes.
 

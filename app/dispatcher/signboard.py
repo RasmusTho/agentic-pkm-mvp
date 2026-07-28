@@ -175,7 +175,7 @@ def export_signboard(
 def _prune_cards_absent_from_store(
     root: Path, *, known_task_ids: set[str]
 ) -> tuple[list[str], list[str]]:
-    """Remove note-free generated cards whose task ID is gone from dispatcher.
+    """Remove empty generated cards whose task ID is gone from dispatcher.
 
     Returns ``(pruned, retained_with_notes)``. Malformed generated cards are
     left in place: ``signboard-validate`` already reports them under their own
@@ -191,12 +191,43 @@ def _prune_cards_absent_from_store(
         frontmatter = _parse_generated_frontmatter(text)
         if frontmatter is None or frontmatter["id"] in known_task_ids:
             continue
-        if _extract_notes_section(text) is not None:
+        if _has_human_authored_content(text):
             retained_with_notes.append(str(path))
             continue
         path.unlink()
         pruned.append(str(path))
     return pruned, retained_with_notes
+
+
+def _has_human_authored_content(text: str) -> bool:
+    """True when a generated card carries anything a human wrote into it.
+
+    Both hand-editable sections count. ``## Notes`` is the documented one, and
+    it is the only one re-export splices forward. ``## Receipts`` is the other
+    section ``_render_task`` emits and always leaves empty, so any non-blank
+    text below the generator's final heading is equally human-authored — and a
+    stale card is precisely the case where re-export never touched it, so that
+    text is still there. A prune must not be the thing that deletes it.
+    """
+
+    return (
+        _extract_notes_section(text) is not None
+        or _trailing_receipts_content(text) is not None
+    )
+
+
+def _trailing_receipts_content(text: str) -> str | None:
+    """Return non-blank text below the card's final "## Receipts" heading."""
+
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == _RECEIPTS_HEADING:
+            start = index
+    if start is None:
+        return None
+    trailing = "\n".join(lines[start + 1 :]).strip()
+    return trailing or None
 
 
 def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
