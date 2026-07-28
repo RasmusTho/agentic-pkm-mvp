@@ -61,9 +61,16 @@ a Crossing-B cleanup task.
 Visual similarity, a copied color value, or the system being marked “default” is not proof that the
 project used the design system. A failed or ambiguous gate blocks generation and Crossing B.
 
+**Adoption boundary:** PR #4239 (2026-07-28). This gate does not retroactively change a retained
+package's recorded crossing state. Packages accepted before that merge keep their historical
+maturity classification. Before one of those packages is materially revised, regenerated, or
+submitted for a new promotion, add the receipt and pass the current gate; absence of a historical
+receipt is not evidence that the earlier acceptance was invalid.
+
 ### Maturity checklist (Crossing B)
 
-A handoff package passes Crossing B when all of the following are true:
+A handoff package first generated or materially revised after the adoption boundary passes Crossing
+B when all of the following are true:
 
 - [ ] The package README names the surface it covers and declares its authority status ("Visual guidance only" or equivalent).
 - [ ] The package README contains a passing Yggdrasil design-system receipt: exact live name and ID,
@@ -76,7 +83,8 @@ A handoff package passes Crossing B when all of the following are true:
 - [ ] The state gallery covers every declared state.
 - [ ] The package does not assert current runtime behavior unless explicitly cited from a shipped owner-doc.
 
-If any item is missing, the package remains at Crossing A until the reviewer signs off.
+If any item is missing, an in-scope new or revised package remains at Crossing A until the reviewer
+signs off. This does not retroactively downgrade a package accepted before the adoption boundary.
 
 ## Authority boundary
 

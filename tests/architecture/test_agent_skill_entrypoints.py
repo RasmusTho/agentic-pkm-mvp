@@ -98,6 +98,11 @@ def test_yggdrasil_design_handoff_is_routed_and_fail_closed() -> None:
         assert required_gate in skill
 
     assert "failed or ambiguous gate blocks generation and Crossing B" in governance
+    assert "This gate does not retroactively change" in governance
+    assert "does not retroactively downgrade" in governance
+    assert "Packages accepted before PR #4239 retain their recorded maturity" in _read(
+        "companion-ui/design_handoff/README.md"
+    )
     assert "Do not let Claude Design use its generic" in prompts
     assert "Visual resemblance alone is not compliance" in template
     assert ".codex/skills/yggdrasil-design-handoff/SKILL.md" in epic_runner
