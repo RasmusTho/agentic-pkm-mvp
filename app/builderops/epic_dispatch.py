@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Mapping
+import subprocess
+import tomllib
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from app.builderops.epic_run_state import validate_run_id
 
@@ -34,6 +37,176 @@ HANDOFF_RECEIPT_SCHEMA: dict[str, Any] = {
 
 class EpicDispatchError(ValueError):
     """Raised when dispatch planning input is invalid or unsafe."""
+
+
+class IssueSessionLaunchError(RuntimeError):
+    """Raised when one fresh worker session cannot finish truthfully."""
+
+    def __init__(self, message: str, *, session_id: str | None = None) -> None:
+        self.session_id = session_id
+        super().__init__(message)
+
+
+class IssueSessionLauncher(Protocol):
+    """Minimal transitional seam for one fresh issue-worker session."""
+
+    def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+
+_TCD_CODEX_ROUTE = {
+    "low-cost": ("gpt-5.6-luna", "low"),
+    "standard": ("gpt-5.6-terra", "medium"),
+    "high-reasoning": ("gpt-5.6-sol", "high"),
+}
+
+
+class CodexIssueSessionLauncher:
+    """Run one issue context pack to terminal in a fresh local Codex session."""
+
+    def __init__(
+        self,
+        *,
+        repo_root: Path,
+        adapter_path: Path | None = None,
+        runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    ) -> None:
+        self.repo_root = repo_root.resolve()
+        self.adapter_path = adapter_path or (
+            Path(__file__).resolve().parents[2]
+            / ".codex"
+            / "agents"
+            / "slice-implementer.toml"
+        )
+        self.runner = runner or subprocess.run
+        try:
+            adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise EpicDispatchError("slice_implementer adapter is unavailable") from exc
+        if adapter.get("name") != "slice_implementer":
+            raise EpicDispatchError("slice_implementer adapter contract mismatch")
+        instructions = adapter.get("developer_instructions")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise EpicDispatchError("slice_implementer instructions are missing")
+        sandbox = adapter.get("sandbox_mode")
+        if sandbox != "workspace-write":
+            raise EpicDispatchError("slice_implementer sandbox contract mismatch")
+        self.developer_instructions = instructions.strip()
+        self.sandbox = sandbox
+
+    def command(self, context_pack: Mapping[str, Any]) -> list[str]:
+        model, reasoning_effort = self._tcd_route(context_pack)
+        worktree = self._planned_worktree(context_pack)
+        return [
+            "codex",
+            "exec",
+            "--json",
+            "--sandbox",
+            self.sandbox,
+            "--model",
+            model,
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+            "-C",
+            str(self.repo_root),
+            "--add-dir",
+            str(worktree.parent),
+            "-",
+        ]
+
+    def prompt(self, context_pack: Mapping[str, Any]) -> str:
+        try:
+            serialized = json.dumps(
+                context_pack,
+                sort_keys=True,
+                indent=2,
+                ensure_ascii=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise EpicDispatchError("context pack must be JSON serializable") from exc
+        return (
+            "Use the registered slice_implementer execution role.\n"
+            f"{self.developer_instructions}\n"
+            "Load and obey .codex/skills/issue-to-code/SKILL.md. "
+            "Perform exactly the one Issue in this immutable context pack. "
+            "Self-claim through issue-to-code before editing, work in the named dedicated "
+            "worktree, and return the requested subagent_handoff_receipt. "
+            "This invocation is a fresh session; do not resume or reuse another Issue's session.\n"
+            f"{serialized}\n"
+        )
+
+    def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]:
+        result = self.runner(
+            self.command(context_pack),
+            cwd=self.repo_root,
+            input=self.prompt(context_pack),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        session_id: str | None = None
+        worker_receipt: object | None = None
+        terminal_error: str | None = None
+        for line in result.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, Mapping):
+                continue
+            if event.get("type") == "thread.started":
+                candidate = event.get("thread_id")
+                if isinstance(candidate, str) and candidate.strip():
+                    session_id = candidate.strip()
+            if event.get("type") in {"turn.failed", "error"}:
+                terminal_error = json.dumps(event, sort_keys=True)
+            if event.get("type") == "item.completed":
+                item = event.get("item")
+                if isinstance(item, Mapping) and item.get("type") == "agent_message":
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        worker_receipt = _parse_worker_receipt(text)
+        if result.returncode != 0 or terminal_error is not None:
+            detail = result.stderr.strip() or terminal_error or "codex exec failed"
+            raise IssueSessionLaunchError(
+                detail[-2_000:],
+                session_id=session_id,
+            )
+        if session_id is None:
+            raise IssueSessionLaunchError("codex exec produced no session id")
+        if worker_receipt is None:
+            raise IssueSessionLaunchError(
+                "codex exec produced no terminal worker receipt",
+                session_id=session_id,
+            )
+        return {
+            "session_id": session_id,
+            "worker_receipt": worker_receipt,
+        }
+
+    @staticmethod
+    def _tcd_route(context_pack: Mapping[str, Any]) -> tuple[str, str]:
+        runtime = context_pack.get("runtime")
+        if not isinstance(runtime, Mapping) or runtime.get("runtime") != "codex":
+            raise EpicDispatchError("serial session launcher supports codex runtime only")
+        model_class = runtime.get("model_class")
+        if not isinstance(model_class, str) or model_class not in _TCD_CODEX_ROUTE:
+            raise EpicDispatchError("context pack has no supported TCD model class")
+        return _TCD_CODEX_ROUTE[model_class]
+
+    @staticmethod
+    def _planned_worktree(context_pack: Mapping[str, Any]) -> Path:
+        plan = context_pack.get("branch_worktree_plan")
+        if not isinstance(plan, Mapping):
+            raise EpicDispatchError("context pack has no branch/worktree plan")
+        value = plan.get("worktree")
+        if not isinstance(value, str) or not value.strip():
+            raise EpicDispatchError("context pack has no planned worktree")
+        worktree = Path(value)
+        if not worktree.is_absolute() or "<" in value or ">" in value:
+            raise EpicDispatchError("planned worktree must be an explicit absolute path")
+        if not worktree.parent.is_dir():
+            raise EpicDispatchError("planned worktree parent does not exist")
+        return worktree
 
 
 def build_dispatch_plan(
@@ -176,6 +349,203 @@ def build_dispatch_plan(
     else:
         result["epic_issue_number"] = normalized_epic
     return result
+
+
+def dispatch_issue_sessions(
+    plan: Mapping[str, Any],
+    launcher: IssueSessionLauncher,
+) -> dict[str, Any]:
+    """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
+
+    run_id, ordered = _validated_session_contexts(plan)
+    sessions: list[dict[str, Any]] = []
+    seen_session_ids: set[str] = set()
+
+    for decision, context_pack in ordered:
+        issue_number = decision["issue_number"]
+        context_pack_id = decision["context_pack_id"]
+        try:
+            launch_result = launcher.launch(context_pack)
+            if not isinstance(launch_result, Mapping):
+                raise IssueSessionLaunchError(
+                    "session launcher returned a non-object result"
+                )
+            session_id = _normalize_string(
+                launch_result.get("session_id"),
+                "launch_result.session_id",
+            )
+            if session_id in seen_session_ids:
+                sessions.append(
+                    {
+                        "issue_number": issue_number,
+                        "context_pack_id": context_pack_id,
+                        "session_id": session_id,
+                        "fresh_session": False,
+                        "status": "rejected",
+                        "error_type": "EpicDispatchError",
+                        "error": "session id was already used by another Issue",
+                    }
+                )
+                return _session_dispatch_receipt(
+                    run_id,
+                    sessions,
+                    status="stopped",
+                    stopped_reason="cross-issue-session-reuse",
+                )
+            seen_session_ids.add(session_id)
+            sessions.append(
+                {
+                    "issue_number": issue_number,
+                    "context_pack_id": context_pack_id,
+                    "session_id": session_id,
+                    "fresh_session": True,
+                    "status": "completed",
+                    "worker_receipt": launch_result.get("worker_receipt"),
+                }
+            )
+        except Exception as exc:
+            failed_session_id = getattr(exc, "session_id", None)
+            if (
+                not isinstance(failed_session_id, str)
+                or not failed_session_id.strip()
+            ):
+                failed_session_id = None
+            sessions.append(
+                {
+                    "issue_number": issue_number,
+                    "context_pack_id": context_pack_id,
+                    "session_id": failed_session_id,
+                    "fresh_session": True,
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": (str(exc).strip() or type(exc).__name__)[-2_000:],
+                }
+            )
+            return _session_dispatch_receipt(
+                run_id,
+                sessions,
+                status="stopped",
+                stopped_reason="session-launch-failed",
+            )
+
+    return _session_dispatch_receipt(
+        run_id,
+        sessions,
+        status="completed",
+        stopped_reason=None,
+    )
+
+
+def _validated_session_contexts(
+    plan: Mapping[str, Any],
+) -> tuple[str, list[tuple[dict[str, Any], dict[str, Any]]]]:
+    if not isinstance(plan, Mapping):
+        raise EpicDispatchError("dispatch plan must be an object")
+    if plan.get("source") != "builderops.epic_dispatch.dry_run":
+        raise EpicDispatchError("dispatch sessions requires a frozen dry-run plan")
+    run_id = validate_run_id(_normalize_string(plan.get("run_id"), "plan.run_id"))
+    decisions_raw = plan.get("decisions")
+    contexts_raw = plan.get("context_packs")
+    if not isinstance(decisions_raw, list) or not isinstance(contexts_raw, list):
+        raise EpicDispatchError("dispatch plan decisions and context_packs must be lists")
+
+    selected: list[dict[str, Any]] = []
+    for raw in decisions_raw:
+        if not isinstance(raw, Mapping):
+            raise EpicDispatchError("dispatch decision must be an object")
+        if raw.get("selected_for_dispatch") is True:
+            selected.append(dict(raw))
+    selected.sort(key=lambda item: _dispatch_slot(item))
+    if [_dispatch_slot(item) for item in selected] != list(
+        range(1, len(selected) + 1)
+    ):
+        raise EpicDispatchError("selected dispatch slots must be unique and contiguous")
+    selected_count = plan.get("selected_count")
+    if (
+        not isinstance(selected_count, int)
+        or isinstance(selected_count, bool)
+        or selected_count != len(selected)
+    ):
+        raise EpicDispatchError("selected_count does not match selected decisions")
+
+    contexts_by_id: dict[str, dict[str, Any]] = {}
+    for raw in contexts_raw:
+        if not isinstance(raw, Mapping):
+            raise EpicDispatchError("context pack must be an object")
+        context_payload = dict(raw)
+        context_id = _normalize_string(
+            context_payload.get("context_pack_id"),
+            "context_pack_id",
+        )
+        if context_id in contexts_by_id:
+            raise EpicDispatchError("context_pack_id must be unique")
+        contexts_by_id[context_id] = context_payload
+    if len(contexts_by_id) != len(selected):
+        raise EpicDispatchError(
+            "selected decisions must have exactly one context pack each"
+        )
+
+    ordered: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for decision in selected:
+        issue_number = _normalize_positive_int(
+            decision.get("issue_number"),
+            "decision.issue_number",
+        )
+        context_id = _normalize_string(
+            decision.get("context_pack_id"),
+            "decision.context_pack_id",
+        )
+        matching_context = contexts_by_id.get(context_id)
+        if matching_context is None:
+            raise EpicDispatchError("selected decision is missing its context pack")
+        issue_contract = matching_context.get("issue_contract")
+        runtime = matching_context.get("runtime")
+        if (
+            not isinstance(issue_contract, Mapping)
+            or issue_contract.get("number") != issue_number
+            or matching_context.get("dispatch_slot") != decision.get("dispatch_slot")
+            or not isinstance(runtime, Mapping)
+            or runtime.get("runtime") != "codex"
+        ):
+            raise EpicDispatchError("context pack does not match its selected decision")
+        ordered.append((decision, matching_context))
+    return run_id, ordered
+
+
+def _dispatch_slot(decision: Mapping[str, Any]) -> int:
+    return _normalize_positive_int(
+        decision.get("dispatch_slot"),
+        "decision.dispatch_slot",
+    )
+
+
+def _session_dispatch_receipt(
+    run_id: str,
+    sessions: list[dict[str, Any]],
+    *,
+    status: str,
+    stopped_reason: str | None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "execution_mode": "serial-fresh-sessions",
+        "status": status,
+        "sessions": sessions,
+        "stopped_reason": stopped_reason,
+        "github_mutations": [],
+        "coordinator_claims": [],
+        "source": "builderops.epic_dispatch.serial_sessions",
+    }
+
+
+def _parse_worker_receipt(text: str) -> object:
+    stripped = text.strip()
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return stripped[-8_000:]
+    return parsed
 
 
 def _build_tcd_decision(
@@ -600,9 +970,13 @@ def _budget_class_for(risk: str, expected_value: str) -> str:
 
 
 __all__ = [
+    "CodexIssueSessionLauncher",
     "DEFAULT_MAX_PARALLEL",
     "HANDOFF_RECEIPT_SCHEMA",
+    "IssueSessionLaunchError",
+    "IssueSessionLauncher",
     "SCHEMA_VERSION",
     "EpicDispatchError",
     "build_dispatch_plan",
+    "dispatch_issue_sessions",
 ]

@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Mapping
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_standalone_root
-from app.builderops.epic_dispatch import build_dispatch_plan
+from app.builderops.epic_dispatch import (
+    CodexIssueSessionLauncher,
+    EpicDispatchError,
+    IssueSessionLaunchError,
+    build_dispatch_plan,
+    dispatch_issue_sessions,
+)
 from app.builderops.epic_run_state import (
     apply_epic_run_update,
     create_epic_run_state,
@@ -30,6 +38,7 @@ def _candidate(
     project_status: str = "Ready",
     preferred_path: str | None = None,
     scriptable: bool = False,
+    worktree: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "issue_number": issue_number,
@@ -60,6 +69,8 @@ def _candidate(
         payload["preferred_path"] = preferred_path
     if scriptable:
         payload["scriptable"] = True
+    if worktree is not None:
+        payload["worktree"] = worktree
     return payload
 
 
@@ -69,6 +80,20 @@ def _run_builderops(args: list[str]):
         ["builderops", *args],
         catch_exceptions=False,
     )
+
+
+class _RecordingSessionLauncher:
+    def __init__(self, responses: list[object]) -> None:
+        self.responses = iter(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def launch(self, context_pack: Mapping[str, object]) -> Mapping[str, object]:
+        self.calls.append(dict(context_pack))
+        response = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        assert isinstance(response, dict)
+        return response
 
 
 def test_tcd_decisions_cover_inline_subagent_and_overfan() -> None:
@@ -388,3 +413,207 @@ def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
         "discovered_overlap": "typed-coordinator-exception",
     }
     assert "epic_history" not in json.dumps(pack)
+
+
+def test_dispatch_sessions_starts_one_fresh_serial_session_per_issue() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5401, 5402],
+        run_id="serial-sessions",
+        candidates=[
+            _candidate(5401, risk="high", files=["app/a.py"]),
+            _candidate(5402, risk="high", files=["app/b.py"]),
+        ],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5401",
+                "worker_receipt": {"final_state": "handoff", "task": "#5401"},
+            },
+            {
+                "session_id": "session-5402",
+                "worker_receipt": {"final_state": "handoff", "task": "#5402"},
+            },
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(plan, launcher)
+
+    assert [call["issue_contract"]["number"] for call in launcher.calls] == [5401, 5402]
+    assert receipt["status"] == "completed"
+    assert receipt["execution_mode"] == "serial-fresh-sessions"
+    assert [item["session_id"] for item in receipt["sessions"]] == [
+        "session-5401",
+        "session-5402",
+    ]
+    assert all(item["fresh_session"] is True for item in receipt["sessions"])
+    assert receipt["github_mutations"] == []
+    assert receipt["coordinator_claims"] == []
+
+
+def test_dispatch_sessions_rejects_invalid_plan_before_launch() -> None:
+    valid = build_dispatch_plan(
+        independent_issue_numbers=[5501],
+        run_id="invalid-plan",
+        candidates=[_candidate(5501, risk="high", files=["app/a.py"])],
+    )
+    invalid_plans = []
+
+    missing = json.loads(json.dumps(valid))
+    missing["context_packs"] = []
+    invalid_plans.append(missing)
+
+    duplicate = json.loads(json.dumps(valid))
+    duplicate["context_packs"].append(dict(duplicate["context_packs"][0]))
+    invalid_plans.append(duplicate)
+
+    mismatched = json.loads(json.dumps(valid))
+    mismatched["context_packs"][0]["issue_contract"]["number"] = 9999
+    invalid_plans.append(mismatched)
+
+    unsupported_runtime = json.loads(json.dumps(valid))
+    unsupported_runtime["context_packs"][0]["runtime"]["runtime"] = "claude"
+    invalid_plans.append(unsupported_runtime)
+
+    for plan in invalid_plans:
+        launcher = _RecordingSessionLauncher([])
+        try:
+            dispatch_issue_sessions(plan, launcher)
+        except EpicDispatchError:
+            pass
+        else:  # pragma: no cover - assertion keeps validation fail closed.
+            raise AssertionError("invalid dispatch plan should be rejected")
+        assert launcher.calls == []
+
+
+def test_dispatch_sessions_rejects_cross_issue_session_reuse() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5601, 5602],
+        run_id="session-reuse",
+        candidates=[
+            _candidate(5601, risk="high", files=["app/a.py"]),
+            _candidate(5602, risk="high", files=["app/b.py"]),
+        ],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {"session_id": "same-session", "worker_receipt": {"task": "#5601"}},
+            {"session_id": "same-session", "worker_receipt": {"task": "#5602"}},
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(plan, launcher)
+
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "cross-issue-session-reuse"
+    assert len(launcher.calls) == 2
+    assert receipt["sessions"][1]["status"] == "rejected"
+
+
+def test_dispatch_sessions_stops_after_first_failed_session() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5701, 5702],
+        run_id="failed-session",
+        candidates=[
+            _candidate(5701, risk="high", files=["app/a.py"]),
+            _candidate(5702, risk="high", files=["app/b.py"]),
+        ],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            IssueSessionLaunchError(
+                "codex exec failed",
+                session_id="session-5701",
+            ),
+            {"session_id": "session-5702", "worker_receipt": {"task": "#5702"}},
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(plan, launcher)
+
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert len(launcher.calls) == 1
+    assert receipt["sessions"] == [
+        {
+            "issue_number": 5701,
+            "context_pack_id": "ctx-5701",
+            "session_id": "session-5701",
+            "fresh_session": True,
+            "status": "failed",
+            "error_type": "IssueSessionLaunchError",
+            "error": "codex exec failed",
+        }
+    ]
+
+
+def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5801],
+        run_id="codex-command",
+        candidates=[
+            _candidate(
+                5801,
+                risk="high",
+                files=["app/a.py"],
+                worktree=str(tmp_path / "issue-5801"),
+            )
+        ],
+    )
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+
+    command = launcher.command(plan["context_packs"][0])
+
+    assert command[:3] == ["codex", "exec", "--json"]
+    assert command[command.index("--model") + 1] == "gpt-5.6-sol"
+    assert 'model_reasoning_effort="high"' in command
+    assert "resume" not in command
+    assert command[command.index("--add-dir") + 1] == str(tmp_path)
+    assert command[-1] == "-"
+    prompt = launcher.prompt(plan["context_packs"][0])
+    assert "slice_implementer" in prompt
+    assert ".codex/skills/issue-to-code/SKILL.md" in prompt
+    assert '"number": 5801' in prompt
+
+
+def test_dispatch_sessions_cli_emits_receipt_without_github_mutations(
+    tmp_path: Path,
+) -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5901],
+        run_id="cli-sessions",
+        candidates=[_candidate(5901, risk="high", files=["app/a.py"])],
+    )
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps(plan), encoding="utf-8")
+    launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5901",
+                "worker_receipt": {"final_state": "handoff", "task": "#5901"},
+            }
+        ]
+    )
+
+    with patch(
+        "app.builderops.cli.CodexIssueSessionLauncher",
+        return_value=launcher,
+    ):
+        result = _run_builderops(
+            [
+                "epic-run-state",
+                "dispatch-sessions",
+                "--plan-file",
+                str(plan_file),
+                "--repo-root",
+                str(tmp_path),
+                "--json",
+            ]
+        )
+
+    assert result.exit_code == 0, result.output
+    receipt = json.loads(result.output)
+    assert receipt["status"] == "completed"
+    assert receipt["sessions"][0]["session_id"] == "session-5901"
+    assert receipt["github_mutations"] == []
+    assert receipt["coordinator_claims"] == []

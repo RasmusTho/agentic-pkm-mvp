@@ -62,7 +62,12 @@ from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
     build_evidence_bridge_report,
 )
-from app.builderops.epic_dispatch import EpicDispatchError, build_dispatch_plan
+from app.builderops.epic_dispatch import (
+    CodexIssueSessionLauncher,
+    EpicDispatchError,
+    build_dispatch_plan,
+    dispatch_issue_sessions,
+)
 from app.builderops.epic_delivery_ledger import (
     EpicDeliveryLedgerError,
     build_parent_epic_delivery_ledger,
@@ -1738,6 +1743,37 @@ def dispatch_plan(
     except (EpicDispatchError, EpicRunStateError) as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(plan, as_json)
+
+
+@epic_run_state.command(
+    "dispatch-sessions",
+    help="Run a frozen dispatch plan serially in fresh Codex sessions.",
+)
+@click.option(
+    "--plan-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Frozen JSON output from dispatch-plan.",
+)
+@click.option(
+    "--repo-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path.cwd,
+    show_default="current directory",
+)
+@click.option("--json", "as_json", is_flag=True)
+def dispatch_sessions(
+    plan_file: Path,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    plan = _load_json_object_file(plan_file, field="plan-file")
+    try:
+        launcher = CodexIssueSessionLauncher(repo_root=repo_root)
+        receipt = dispatch_issue_sessions(plan, launcher)
+    except EpicDispatchError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(receipt, as_json)
 
 
 @epic_run_state.command(
