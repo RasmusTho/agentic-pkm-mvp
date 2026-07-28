@@ -21,6 +21,7 @@ It exists to keep high-level design work systematic:
 
 - System-level design principles for modularity and flexibility.
 - Authority boundaries for interaction, cognition, execution, memory, and governance.
+- Shared visual-language rules for new and revised human-facing components.
 - Documentation-layer rules for where architectural intent, sequencing, and implementation detail belong.
 
 ## Out of Scope
@@ -36,6 +37,8 @@ It exists to keep high-level design work systematic:
 - `docs/STATUS.md` — present-tense operational posture.
 - `docs/AGENTS.md` — current runtime agent architecture.
 - `docs/plans/V60_ARCHITECTURE_TARGET.md` — wanted-state context for larger target-state moves.
+- `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md` — governed external-design handoff for
+  Companion UI.
 
 ## Reading Order
 
@@ -132,6 +135,21 @@ It exists to keep high-level design work systematic:
   principle; they are what single-operator trust rests on.
 - The builder-side twin of this principle is `AGENTS.md :: Proportional delivery` (right-size
   default); this principle governs product architecture, that one governs how we build.
+
+### 11. Shared Visual Language
+
+- Every new or revised human-facing visual component, whether it belongs to a Product surface or a
+  Builder surface, must use the canonical **Yggdrasil Design System**.
+- `companion-ui/companion-app/colors_and_type.css` is the repository's binding token source for
+  governed design handoffs. The matching live design system must pass the
+  `.codex/skills/yggdrasil-design-handoff/SKILL.md` parity gate before external design generation.
+- Existing Yggdrasil primitives should be reused before a new primitive, token, or visual idiom is
+  proposed. A necessary extension is an explicit design-system proposal, not a silent local
+  invention.
+- This principle governs visual language only. A component's behavior, authority, persistence, and
+  shipped-state truth remain with its local owner contracts.
+- This is a rule for new and revised work; it does not claim that every historical surface already
+  conforms.
 
 ## Documentation Design Principles
 

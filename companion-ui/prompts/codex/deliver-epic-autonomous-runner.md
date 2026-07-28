@@ -348,23 +348,32 @@ design-owned, create a complete handoff package request. Do not send Claude a va
 1. Freeze only the implementation branch whose acceptance depends on the unresolved design choice.
 2. Continue ready-pool repair, independent slices, tests/contracts not prejudging the design, and
    parent evidence work.
-3. Route Claude output through the governed chain in
-   `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`.
-4. Treat the output as visual/interaction guidance only. It cannot override owner docs, declare
+3. Load `.codex/skills/yggdrasil-design-handoff/SKILL.md` and complete its fail-closed live
+   design-system selection/attachment and token-parity gate before any design generation.
+4. For a Companion UI surface, route Claude output through the governed chain in
+   `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`. For another Product or Builder surface,
+   normalize accepted intent through that surface's local owner document or specification.
+5. Treat the output as visual/interaction guidance only. It cannot override owner docs, declare
    schemas, assert runtime truth, or authorize implementation by itself.
-5. Require Crossing-B maturity before normalized-spec promotion. Implementation begins only from a
-   bounded executable issue backed by the accepted normalized spec/authority chain.
-6. If a design package contains unresolved questions, triage each as resolve-before-promotion,
+6. For Companion UI, require Crossing-B maturity before normalized-spec promotion. For every
+   surface, implementation begins only from a bounded executable issue backed by the accepted
+   normalized spec/authority chain.
+7. If a design package contains unresolved questions, triage each as resolve-before-promotion,
    resolve-in-normalized-spec, or defer-to-implementation-issue. Only the dependent scope waits.
 
 ### Claude Design handoff template
 
-Send the following as a self-contained task, filling every bracket from live repo/issue evidence:
+First prepend the complete
+`companion-ui/prompts/claude-design/YGGDRASIL_HANDOFF_TEMPLATE.md` binding block after replacing
+every receipt placeholder from the successful live preflight. Do not send the task with an
+unresolved receipt placeholder. Then send the following as one self-contained task, filling every
+bracket from live repo/issue evidence:
 
 ```markdown
 # Claude Design Handoff — [SURFACE / CAPABILITY]
 
-You are producing governed interaction and visual design guidance for Yggdrasil / Companion UI.
+You are producing governed interaction and visual design guidance for a Yggdrasil Product or
+Builder surface.
 This is a design handoff package, not architecture authority, schema authority, runtime truth, or
 implementation authorization.
 
@@ -392,9 +401,11 @@ capabilities to make the visual concept easier.
 
 Read these files in the repository before designing:
 
-- `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`
+- `docs/DESIGN_PRINCIPLES.md`
+- `.codex/skills/yggdrasil-design-handoff/SKILL.md`
+- `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md` [COMPANION UI ONLY]
 - `companion-ui/docs/CORE_TERM_MAPPING.md`
-- `docs/COMPANION_UI_PRODUCT_SPEC.md`
+- `docs/COMPANION_UI_PRODUCT_SPEC.md` [COMPANION UI ONLY]
 - [RELEVANT INTERACTION OWNER DOCS]
 - [RELEVANT RUNTIME/CURRENT-STATE OWNER DOCS]
 - [ACCEPTED NORMALIZED SPEC, IF ANY]
@@ -446,7 +457,9 @@ contract or open question.
 
 ## Existing visual system
 
-- Reuse: [TOKENS / COMPONENTS / PRIOR HANDOFFS]
+- Binding system: `Yggdrasil Design System`
+- Verified receipt: [EXACT SYSTEM ID / SELECTION OR ATTACHMENT / MATCHING TOKEN SHA-256]
+- Reuse: [YGGDRASIL TOKENS / COMPONENTS / PREVIEWS / PRIOR HANDOFFS]
 - Preserve: [GEOMETRY / TYPOGRAPHY / INTERACTION GRAMMAR]
 - May explore: [BOUNDED VISUAL SPACE]
 - Must not change: [SETTLED SURFACE OR CONTRACT]
@@ -455,9 +468,11 @@ contract or open question.
 
 Export to:
 
-`companion-ui/design_handoff/[YYYY-MM-DD]-[SLUG]/`
+`[VERSIONED OUTPUT PATH RESOLVED BY yggdrasil-design-handoff]`
 
-Produce a Crossing-B-eligible package:
+For Companion UI, produce a Crossing-B-eligible package. For another Product or Builder surface,
+produce the same evidence shape as supporting design input, but route acceptance through that
+surface's local owner document or specification rather than claiming Crossing B:
 
 1. `README.md` — surface, human outcome, issue links, authority status “Visual / interaction
    guidance only”, source inventory, and crossing target.
@@ -474,8 +489,8 @@ Produce a Crossing-B-eligible package:
    `resolve-before-promotion`, `resolve-in-normalized-spec`, or `defer-to-implementation-issue`.
 8. `edge-states.md` when the edge-state detail would overload the gallery.
 
-Update `companion-ui/design_handoff/README.md` only if this task is authorized to write the archive
-index. Do not modify production code.
+Update `companion-ui/design_handoff/README.md` only for a Companion UI package when this task is
+authorized to write the archive index. Do not modify production code.
 
 ## Crossing-B acceptance test
 
@@ -499,7 +514,7 @@ Return:
 - package path;
 - concise design recommendation;
 - alternatives considered;
-- Crossing-B readiness verdict;
+- Crossing-B readiness verdict for Companion UI, otherwise the local normalization target;
 - unresolved questions by triage class;
 - exact normalized-spec decisions still required;
 - implementation issues unblocked versus still blocked; and

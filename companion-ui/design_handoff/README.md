@@ -32,6 +32,9 @@ Preserved Claude Design artifacts and handoff packages. These are reference/hand
 ## Rules
 
 - Design artifacts in this folder are guidance only. They are not architecture authority and not runtime truth.
+- UI/component/visual packages must carry a passing Yggdrasil design-system receipt in their
+  README and use the canonical token sheet per
+  [`.codex/skills/yggdrasil-design-handoff/SKILL.md`](../../.codex/skills/yggdrasil-design-handoff/SKILL.md).
 - Do not implement production UI components directly from a handoff package. Route through the governed chain.
 - Do not let a design package modify or override an owner-doc in `docs/**`.
 - Implementation issues #868–#874 (canvas suggestion flow) and others remain their own task contracts. This folder does not absorb them.

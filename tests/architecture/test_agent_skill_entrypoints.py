@@ -58,6 +58,62 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
+def test_yggdrasil_design_handoff_is_routed_and_fail_closed() -> None:
+    agents = _read("AGENTS.md")
+    index = _read(".codex/skills/README.md")
+    skill = _read(".codex/skills/yggdrasil-design-handoff/SKILL.md")
+    principles = _read("docs/DESIGN_PRINCIPLES.md")
+    governance = _read("companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md")
+    prompts = _read("companion-ui/prompts/claude-design/README.md")
+    epic_runner = _read(
+        "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"
+    )
+    template = _read(
+        "companion-ui/prompts/claude-design/YGGDRASIL_HANDOFF_TEMPLATE.md"
+    )
+
+    skill_path = ".codex/skills/yggdrasil-design-handoff/SKILL.md"
+    token_path = "companion-ui/companion-app/colors_and_type.css"
+    design_system_name = "Yggdrasil Design System"
+    principles_flat = " ".join(principles.split())
+
+    assert skill_path in agents
+    assert "yggdrasil-design-handoff" in index
+    assert (
+        "yggdrasil-design-handoff -> governed exploration/handoff"
+        in index
+    )
+    assert "other surface: local owner doc/spec" in index
+
+    for surface in (skill, principles, governance, prompts, template):
+        assert design_system_name in surface
+        assert token_path in surface
+
+    for required_gate in (
+        "mcp__claude-design__list_design_systems",
+        "f2b13410-af14-4875-8029-445352123f57",
+        "They must match byte for byte",
+        "No successful gate means no design generation",
+    ):
+        assert required_gate in skill
+
+    assert "failed or ambiguous gate blocks generation and Crossing B" in governance
+    assert "Do not let Claude Design use its generic" in prompts
+    assert "Visual resemblance alone is not compliance" in template
+    assert ".codex/skills/yggdrasil-design-handoff/SKILL.md" in epic_runner
+    assert "YGGDRASIL_HANDOFF_TEMPLATE.md" in epic_runner
+    assert "For another Product or Builder surface" in epic_runner
+    assert (
+        "whether it belongs to a Product surface or a Builder surface"
+        in principles_flat
+    )
+    assert (
+        "it does not claim that every historical surface already conforms"
+        in principles_flat
+    )
+    assert "For other Product or Builder surfaces" in skill
+
+
 def test_issue_to_code_preflight_captures_expected_branch_and_worktree() -> None:
     text = _read(".codex/skills/issue-to-code/SKILL.md")
     section = _section_between(
