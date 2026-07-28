@@ -8,8 +8,9 @@ mutation.
 from __future__ import annotations
 
 import posixpath
+import re
 from collections import defaultdict
-from typing import ClassVar, Final, Literal, Protocol, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -36,6 +37,9 @@ from app.builderops.delivery_orchestration_contracts import (
 COMPILER_VERSION: Final[
     Literal["builderops.delivery-plan-compiler.v1"]
 ] = "builderops.delivery-plan-compiler.v1"
+PLANNING_SNAPSHOT_VERSION: Final[
+    Literal["builderops.delivery-planning-snapshot.v1"]
+] = "builderops.delivery-planning-snapshot.v1"
 
 REQUIRED_SBS_IMPACT_FIELDS: Final[tuple[str, ...]] = (
     "Authority impact",
@@ -66,6 +70,15 @@ _EFFECT_ALLOWLIST: Final[tuple[EffectClass, ...]] = (
     "record_known_defect",
     "request_review",
 )
+_TEST_VERIFY_TARGET = re.compile(
+    r"^(?:tests|companion-ui/companion-app/tests)/"
+    r"[^\s`]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]\s]+\])?)+$"
+)
+_NON_TEST_VERIFY_PREFIXES: Final[tuple[str, ...]] = (
+    "doc writeback at ",
+    "roadmap diff: ",
+    "runtime receipt: ",
+)
 
 Priority: TypeAlias = Literal["high", "medium", "low"]
 RiskClass: TypeAlias = Literal["low", "medium", "high", "critical"]
@@ -78,6 +91,7 @@ ScopeRole: TypeAlias = Literal["delivery", "validation_parent"]
 RefusalCode: TypeAlias = Literal[
     "approved_exclusion",
     "authority_ambiguity",
+    "budget_exceeded",
     "dependency_blocked",
     "dependency_cycle",
     "malformed_sbs_impact",
@@ -87,8 +101,14 @@ RefusalCode: TypeAlias = Literal[
     "not_ready",
     "outside_approved_scope",
     "parent_validation_only",
+    "risk_policy_blocked",
     "stale_delivery",
 ]
+_POLICY_RISK_ALLOWLIST: Final[
+    dict[str, frozenset[RiskClass]]
+] = {
+    "delivery-low-risk": frozenset({"low", "medium"}),
+}
 
 
 class _Refuse(Protocol):
@@ -137,9 +157,9 @@ class DeliveryIssuePlanningSnapshot(_CompilerModel):
 
 
 class DeliveryPlanningSnapshot(_CompilerModel):
-    schema_version: ClassVar[str] = (
+    schema_version: Literal[
         "builderops.delivery-planning-snapshot.v1"
-    )
+    ]
     snapshot_id: str
     captured_at: UtcTimestamp
     issues: tuple[DeliveryIssuePlanningSnapshot, ...]
@@ -367,7 +387,7 @@ def compile_delivery_plan(
                 "stale_delivery",
                 "issue already has active or delivered PR evidence",
             )
-        if not _clean_values(fact.verify_targets):
+        if not _verify_targets_are_concrete(fact.verify_targets):
             refuse(
                 issue,
                 "missing_verify_targets",
@@ -384,6 +404,18 @@ def compile_delivery_plan(
                 issue,
                 "malformed_sbs_impact",
                 "SBS Impact fields are missing, duplicated, or empty",
+            )
+        if not _risk_is_allowed(
+            initiation.policy_profile.profile_id,
+            fact.risk_class,
+        ):
+            refuse(
+                issue,
+                "risk_policy_blocked",
+                (
+                    "issue risk class is not admitted by the approved "
+                    "policy profile"
+                ),
             )
         if _dependencies_are_ambiguous(fact.dependencies):
             refuse(
@@ -436,6 +468,17 @@ def compile_delivery_plan(
         for scope_key, fact in accepted_facts.items()
         if not _issue_has_refusal(scope_key, refusal_map)
     }
+    if len(eligible) > initiation.budget.max_worker_starts:
+        for fact in eligible.values():
+            refuse(
+                fact.issue,
+                "budget_exceeded",
+                (
+                    "eligible scope exceeds the approved worker-start "
+                    "budget"
+                ),
+            )
+        eligible = {}
     waves, cycle_keys = _build_dependency_waves(
         eligible,
         max_parallel=initiation.budget.max_parallel_workers,
@@ -668,6 +711,49 @@ def _clean_values(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(cleaned))
 
 
+def _verify_targets_are_concrete(values: tuple[str, ...]) -> bool:
+    cleaned = _clean_values(values)
+    if not cleaned:
+        return False
+    for value in cleaned:
+        folded = value.casefold()
+        if (
+            folded in {"n/a", "none", "tbd", "todo"}
+            or (value.startswith("<") and value.endswith(">"))
+        ):
+            return False
+        if _TEST_VERIFY_TARGET.fullmatch(value):
+            continue
+        if value.startswith("doc writeback at "):
+            target = value.removeprefix("doc writeback at ").strip("` ")
+            if target.startswith("docs/") and " :: " in target:
+                path, anchor = target.split(" :: ", 1)
+                if path.endswith(".md") and anchor.strip():
+                    continue
+        if value.startswith(_NON_TEST_VERIFY_PREFIXES[1:]):
+            target = value.split(": ", 1)[-1].strip()
+            if (
+                target
+                and target.casefold() not in {
+                "n/a",
+                "none",
+                "tbd",
+                "todo",
+                }
+            ):
+                continue
+        return False
+    return True
+
+
+def _risk_is_allowed(
+    profile_id: str,
+    risk_class: RiskClass,
+) -> bool:
+    allowed = _POLICY_RISK_ALLOWLIST.get(profile_id)
+    return allowed is not None and risk_class in allowed
+
+
 def _sbs_impact_is_complete(
     entries: tuple[SbsImpactEntry, ...],
 ) -> bool:
@@ -783,7 +869,8 @@ def _propagate_dependency_refusals(
             blocked = tuple(
                 dependency.issue
                 for dependency in fact.dependencies
-                if dependency.issue.scope_key in approved
+                if not dependency.satisfied
+                and dependency.issue.scope_key in approved
                 and _issue_has_refusal(
                     dependency.issue.scope_key,
                     refusal_map,
@@ -815,7 +902,8 @@ def _build_dependency_waves(
             scope_key
             for scope_key in remaining
             if all(
-                dependency.issue.scope_key in completed
+                dependency.satisfied
+                or dependency.issue.scope_key in completed
                 or dependency.issue.scope_key not in facts
                 for dependency in facts[scope_key].dependencies
             )
@@ -870,6 +958,8 @@ def _dependency_cycle_keys(
                 continue
             visited.add(current)
             for dependency in facts[current].dependencies:
+                if dependency.satisfied:
+                    continue
                 dependency_key = dependency.issue.scope_key
                 if dependency_key not in candidates:
                     continue
@@ -940,6 +1030,7 @@ def _authority_scope(
 
 __all__ = [
     "COMPILER_VERSION",
+    "PLANNING_SNAPSHOT_VERSION",
     "REQUIRED_SBS_IMPACT_FIELDS",
     "DeliveryDependency",
     "DeliveryIssuePlanningSnapshot",

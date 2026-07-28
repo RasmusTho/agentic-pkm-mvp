@@ -4,6 +4,9 @@ import ast
 import inspect
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from app.builderops.delivery_orchestration_contracts import (
     ActorIdentity,
     ApprovalEvidence,
@@ -72,6 +75,7 @@ def _initiation(
     issues: tuple[IssueScope, ...],
     *,
     max_parallel_workers: int = 2,
+    max_worker_starts: int | None = None,
 ) -> DeliveryInitiation:
     issues = tuple(sorted(issues, key=lambda item: item.scope_key))
     authorities = tuple(_authority(issue) for issue in issues)
@@ -84,7 +88,11 @@ def _initiation(
     )
     budget = DeliveryBudget(
         max_parallel_workers=max_parallel_workers,
-        max_worker_starts=max(len(issues), max_parallel_workers),
+        max_worker_starts=(
+            max_worker_starts
+            if max_worker_starts is not None
+            else max(len(issues), max_parallel_workers)
+        ),
         max_coordinator_turns=12,
         max_total_tokens=200_000,
         max_wall_time_seconds=7_200,
@@ -163,6 +171,7 @@ def _fact(
     issue: IssueScope,
     *,
     authority: AuthoritySnapshot | None = None,
+    risk_class: str = "medium",
     dependencies: tuple[DeliveryDependency, ...] = (),
     mutation_paths: tuple[str, ...] = (),
     verify_targets: tuple[str, ...] = ("tests/example.py::test_contract",),
@@ -176,7 +185,7 @@ def _fact(
         issue=issue,
         authority=authority or _authority(issue),
         priority="high",
-        risk_class="medium",
+        risk_class=risk_class,
         source_anchors=(
             "docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/"
             "COMPILE_IMMUTABLE_DELIVERY_PLANS.md :: What This Task Does",
@@ -196,6 +205,7 @@ def _snapshot(
     *facts: DeliveryIssuePlanningSnapshot,
 ) -> DeliveryPlanningSnapshot:
     return DeliveryPlanningSnapshot(
+        schema_version="builderops.delivery-planning-snapshot.v1",
         snapshot_id="snapshot-4166",
         captured_at=SNAPSHOT_AT,
         issues=tuple(facts),
@@ -240,6 +250,18 @@ def test_compiler_is_deterministic() -> None:
     assert duplicate_first.input_hash == duplicate_second.input_hash
     assert duplicate_first.refusals == duplicate_second.refusals
 
+    serialized = first_snapshot = _snapshot(*facts)
+    assert (
+        DeliveryPlanningSnapshot.model_validate_json(
+            serialized.model_dump_json()
+        )
+        == first_snapshot
+    )
+    unversioned = first_snapshot.model_dump()
+    unversioned.pop("schema_version")
+    with pytest.raises(ValidationError):
+        DeliveryPlanningSnapshot.model_validate(unversioned)
+
 
 def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     missing_verify = _issue(5201, "1" * 64)
@@ -251,6 +273,8 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     missing_authority = _issue(5206, "6" * 64)
     malformed_sbs = _issue(5207, "7" * 64)
     mismatched_dependency = _issue(5208, "8" * 64)
+    placeholder_verify = _issue(5213, "d" * 64)
+    high_risk = _issue(5214, "e" * 64)
     cycle_a = _issue(5210, "a" * 64)
     cycle_b = _issue(5211, "b" * 64)
     cycle_downstream = _issue(5212, "c" * 64)
@@ -266,6 +290,8 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
             missing_authority,
             malformed_sbs,
             mismatched_dependency,
+            placeholder_verify,
+            high_risk,
             cycle_a,
             cycle_b,
             cycle_downstream,
@@ -306,6 +332,8 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
                     ),
                 ),
             ),
+            _fact(placeholder_verify, verify_targets=("TBD",)),
+            _fact(high_risk, risk_class="high"),
             _fact(
                 cycle_a,
                 dependencies=(
@@ -346,6 +374,7 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
         "malformed_sbs_impact",
         "missing_verify_targets",
         "mutation_overlap",
+        "risk_policy_blocked",
         "stale_delivery",
     }
     assert any(
@@ -377,6 +406,7 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     )
 
     stale_snapshot = DeliveryPlanningSnapshot(
+        schema_version="builderops.delivery-planning-snapshot.v1",
         snapshot_id="snapshot-before-initiation",
         captured_at=OBSERVED_AT,
         issues=(_fact(missing_verify),),
@@ -389,6 +419,57 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     assert {
         refusal.code for refusal in stale_snapshot_result.refusals
     } == {"authority_ambiguity"}
+
+
+def test_compiler_honors_satisfied_internal_dependencies() -> None:
+    dependency = _issue(5251, "1" * 64)
+    dependent = _issue(5252, "2" * 64)
+    result = compile_delivery_plan(
+        _initiation((dependency, dependent)),
+        _snapshot(
+            _fact(dependency),
+            _fact(
+                dependent,
+                dependencies=(
+                    DeliveryDependency(
+                        issue=dependency,
+                        satisfied=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert result.plan is not None
+    wave_by_issue = {
+        issue.scope_key: wave.wave_index
+        for wave in result.plan.dependency_waves
+        for issue in wave.issues
+    }
+    assert (
+        wave_by_issue[dependency.scope_key]
+        == wave_by_issue[dependent.scope_key]
+    )
+
+
+def test_compiler_refuses_scope_over_worker_start_budget() -> None:
+    issues = tuple(
+        _issue(5260 + index, f"{index + 1:064x}")
+        for index in range(3)
+    )
+    result = compile_delivery_plan(
+        _initiation(
+            issues,
+            max_parallel_workers=1,
+            max_worker_starts=2,
+        ),
+        _snapshot(*(_fact(issue) for issue in issues)),
+    )
+
+    assert result.plan is None
+    assert {
+        refusal.code for refusal in result.refusals
+    } == {"budget_exceeded"}
 
 
 def test_compiler_separates_exact_set_from_parent_closure() -> None:
