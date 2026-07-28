@@ -16,6 +16,8 @@ hygiene:
   empty_tokens: 0
   near_empty_tokens: 80
   salvage_llm: true
-  model: gpt-5.4
+  # Scheduled hygiene is bounded cleanup/triage; use the lower-latency model.
+  # Keep gpt-5.4 for merge because its semantic decision quality is higher risk.
+  model: gpt-5.4-mini
   temperature: 0
   allow_hard_delete: false
