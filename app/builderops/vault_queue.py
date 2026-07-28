@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -87,9 +90,15 @@ def vault_paths(paths: BuilderOpsPaths) -> dict[str, Any]:
     }
 
 
-def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
+def validate_vault(
+    root: Path,
+    paths: BuilderOpsPaths,
+    *,
+    on_progress: Callable[[dict[str, int]], None] | None = None,
+) -> dict[str, Any]:
     requested_root = root.expanduser()
     errors: list[str] = []
+    sqlite_scan: dict[str, int] = {"files": 0, "opened": 0, "skipped_remote": 0, "elapsed_ms": 0}
     try:
         root = _trusted_vault_root(requested_root)
     except VaultQueueError as exc:
@@ -104,6 +113,7 @@ def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
                 "errors": [message],
             },
             "claims_advisory": True,
+            "sqlite_scan": sqlite_scan,
         }
     configured_root = None
     if paths.vault_root is not None:
@@ -119,7 +129,8 @@ def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
     if configured_db == root or root in configured_db.parents:
         errors.append(f"configured SQLite path is inside shared vault: {configured_db}")
     try:
-        for path in _sqlite_candidates(root):
+        found, sqlite_scan = _scan_sqlite_candidates(root, on_progress=on_progress)
+        for path in found:
             errors.append(f"forbidden SQLite state in shared vault: {path}")
     except VaultQueueError as exc:
         errors.append(str(exc))
@@ -148,7 +159,14 @@ def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
     except VaultQueueError as exc:
         errors.append(str(exc))
         claims = {"root": str(root / ".builderops" / "claims"), "claims": [], "errors": [str(exc)]}
-    return {"ok": not errors, "ticket_count": len(tickets), "errors": errors, "advisory_claims": claims, "claims_advisory": True}
+    return {
+        "ok": not errors,
+        "ticket_count": len(tickets),
+        "errors": errors,
+        "advisory_claims": claims,
+        "claims_advisory": True,
+        "sqlite_scan": sqlite_scan,
+    }
 
 
 def claim_ticket(
@@ -324,27 +342,108 @@ def _require_within_vault(candidate: Path, vault_root: Path, *, label: str) -> N
         raise VaultQueueError(f"{label} escapes shared vault: {candidate}")
 
 
+_SQLITE_HEADER_MAGIC = b"SQLite format 3\x00"
+_SQLITE_EXTENSIONS = frozenset({".db", ".db3", ".sqlite", ".sqlite3"})
+
+# The smallest page size the SQLite file format allows. Every database image is
+# a whole number of pages, and every legal page size (512..65536, powers of two)
+# is a multiple of this, so a database image's size is always a non-zero
+# multiple of 512 bytes.
+_SQLITE_PAGE_UNIT = 512
+
+# macOS `st_flags` bit marking a file whose metadata is local but whose content
+# is not — an iCloud Drive "dataless" file. Reading one byte of it triggers an
+# on-demand materialization over the network.
+_SF_DATALESS = 0x40000000
+
+
+def _content_is_local(stat_result: os.stat_result) -> bool:
+    """True when the file's bytes are already on this disk.
+
+    A synchronized vault (iCloud Drive) evicts file *contents* while keeping
+    metadata local. Opening such a file costs a network round-trip — measured
+    at ~1.0-1.2 s per file, which is what made `vault validate` fail to
+    terminate on the real shared vault (#4199). ``SF_DATALESS`` is the direct
+    macOS signal; zero allocated blocks against a non-zero logical size is the
+    portable fallback for the same state.
+    """
+
+    if getattr(stat_result, "st_flags", 0) & _SF_DATALESS:
+        return False
+    return not (stat_result.st_size > 0 and getattr(stat_result, "st_blocks", 1) == 0)
+
+
+def _may_be_sqlite_image(size: int) -> bool:
+    """True when ``size`` is consistent with a SQLite database image.
+
+    Used only to decide whether materializing an evicted file is worth it. It
+    can never hide a real database: a SQLite image is always a whole number of
+    pages, so its size is always a non-zero multiple of 512. What it does skip
+    is an evicted file that merely *starts* with the magic bytes without being
+    a database image — which is not the thing the confinement invariant exists
+    to catch, and which is still sniffed whenever the content is local.
+    """
+
+    return size >= _SQLITE_PAGE_UNIT and size % _SQLITE_PAGE_UNIT == 0
+
+
 def _sqlite_candidates(root: Path) -> list[Path]:
+    """Return every file in the vault that is (or could be) a SQLite database."""
+
+    return _scan_sqlite_candidates(root)[0]
+
+
+def _scan_sqlite_candidates(
+    root: Path,
+    *,
+    on_progress: Callable[[dict[str, int]], None] | None = None,
+) -> tuple[list[Path], dict[str, int]]:
+    """Scan for SQLite candidates and report what the scan actually did.
+
+    Files whose content is already local are sniffed exactly as before: full
+    header check, no narrowing. The only change is that an *evicted* file is
+    materialized solely when its size is consistent with a database image, so a
+    synchronized vault no longer costs one network round-trip per Markdown
+    note. Symlink rejection is unchanged and still happens before any read.
+    """
+
+    started = time.monotonic()
+    stats = {"files": 0, "opened": 0, "skipped_remote": 0, "elapsed_ms": 0}
     root = _trusted_vault_root(root)
     if not root.exists():
-        return []
+        return [], stats
     candidates: list[Path] = []
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
             raise VaultQueueError(f"vault entry must not be a symlink: {path}")
-        if not path.is_file():
+        try:
+            stat_result = path.stat()
+        except OSError:
+            # ``Path.is_file()`` swallowed this before the stat-first rewrite;
+            # keep that tolerance so an entry that vanishes mid-walk (a live
+            # synchronized vault) is skipped rather than failing validation.
             continue
-        if path.suffix.lower() in {".db", ".db3", ".sqlite", ".sqlite3"}:
+        if not stat.S_ISREG(stat_result.st_mode):
+            continue
+        stats["files"] += 1
+        if on_progress is not None:
+            on_progress(dict(stats))
+        if path.suffix.lower() in _SQLITE_EXTENSIONS:
             candidates.append(path)
             continue
+        if not _content_is_local(stat_result) and not _may_be_sqlite_image(stat_result.st_size):
+            stats["skipped_remote"] += 1
+            continue
+        stats["opened"] += 1
         try:
             with path.open("rb") as handle:
                 header = handle.read(16)
-            if header == b"SQLite format 3\x00":
-                candidates.append(path)
         except OSError as exc:
             raise VaultQueueError(f"unable to inspect vault file: {path}") from exc
-    return candidates
+        if header == _SQLITE_HEADER_MAGIC:
+            candidates.append(path)
+    stats["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    return candidates, stats
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):

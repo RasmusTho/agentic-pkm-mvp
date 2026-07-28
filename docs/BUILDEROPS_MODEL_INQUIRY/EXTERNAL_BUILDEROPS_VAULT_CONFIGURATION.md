@@ -43,6 +43,16 @@ boundary, not only during CLI configuration, so explicit API/MCP paths, complete
 and direct store construction cannot bypass it. Completeness inspection uses SQLite read-only mode;
 it never creates a database when the inspected file is missing or disappears before open.
 
+`builderops vault validate` additionally scans the vault for a SQLite database that is *already*
+there, including an extension-less one, by reading each file's 16-byte header. On a synchronized
+vault most files' contents are not local: iCloud Drive keeps the metadata and evicts the bytes, so
+the first `open()` of an evicted file costs a network round-trip (~1.0-1.2 s each, measured
+2026-07-28). The scan therefore reads a file's header when its content is local, and materializes an
+evicted file only when its size is consistent with a SQLite database image — a whole number of
+pages, so always a non-zero multiple of 512 bytes. No real database can hide behind that: it is a
+property of the file format, not a heuristic about names or locations. `builderops vault paths`
+performs no scan at all and stays instant.
+
 ## Ticket And Advisory Claim Schemas
 
 Queue tickets are Markdown files with YAML mapping frontmatter. `id` is a required, non-empty,

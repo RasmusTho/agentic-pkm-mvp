@@ -344,6 +344,17 @@ scripts/builderops_cli.sh builderops vault init "$BUILDEROPS_VAULT_ROOT" --json
 scripts/builderops_cli.sh builderops vault validate "$BUILDEROPS_VAULT_ROOT" --json
 ```
 
+`vault paths` is pure path arithmetic and returns instantly. `vault validate` walks the whole vault
+to enforce the SQLite confinement invariant, so its cost scales with vault size — add `--progress`
+to get a stderr heartbeat and a final `scanned N files, opened M, skipped K non-local` line, which
+is how you tell a slow synchronized vault from a hung command. The JSON payload carries the same
+counts under `sqlite_scan`. On a synchronized (iCloud) vault the scan deliberately does not
+materialize evicted files whose size cannot be a SQLite database image; see
+`docs/BUILDEROPS_MODEL_INQUIRY/EXTERNAL_BUILDEROPS_VAULT_CONFIGURATION.md :: SQLite Confinement
+Invariant` for why that cannot hide a real database. Measured on the ~900-file shared vault
+2026-07-28: 0.13 s scan, versus ~1.4 s of extra network wait for every evicted file the previous
+scan downloaded.
+
 The resulting `agent-delivery/` tree holds BMI-01 ticket Markdown for a human to read. It is never
 an automation API or a source of authoritative lease state.
 

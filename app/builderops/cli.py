@@ -380,13 +380,43 @@ def vault_init(root: Path, as_json: bool) -> None:
 @vault.command("validate", help="Validate shared-vault separation and ticket status integrity.")
 @click.argument("root", type=click.Path(file_okay=False, path_type=Path))
 @click.option("--json", "as_json", is_flag=True)
+@click.option(
+    "--progress",
+    is_flag=True,
+    help=(
+        "Report scan progress on stderr while walking the vault, so a slow "
+        "synchronized vault is distinguishable from a hung command."
+    ),
+)
 @click.pass_context
-def vault_validate(ctx: click.Context, root: Path, as_json: bool) -> None:
+def vault_validate(ctx: click.Context, root: Path, as_json: bool, progress: bool) -> None:
     paths = _effective_paths(ctx)
-    payload = validate_vault(root, paths)
+    on_progress = _sqlite_scan_progress_reporter() if progress else None
+    payload = validate_vault(root, paths, on_progress=on_progress)
+    if progress:
+        scan = payload["sqlite_scan"]
+        click.echo(
+            f"scanned {scan['files']} files, opened {scan['opened']}, "
+            f"skipped {scan['skipped_remote']} non-local, {scan['elapsed_ms']} ms",
+            err=True,
+        )
     _emit(payload, as_json)
     if not payload["ok"]:
         raise click.ClickException("Builder Ops Vault validation failed")
+
+
+def _sqlite_scan_progress_reporter(every: int = 200) -> Callable[[dict[str, int]], None]:
+    """Emit a stderr heartbeat every ``every`` files so the scan looks alive."""
+
+    def report(stats: dict[str, int]) -> None:
+        if stats["files"] % every == 0:
+            click.echo(
+                f"scanning… {stats['files']} files, {stats['opened']} opened, "
+                f"{stats['skipped_remote']} skipped as non-local",
+                err=True,
+            )
+
+    return report
 
 
 @vault.command("claim", help="Write a shared advisory TTL claim for a Ready ticket.")
