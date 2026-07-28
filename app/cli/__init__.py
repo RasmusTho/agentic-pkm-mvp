@@ -665,6 +665,28 @@ def acquire_youtube_cmd(
 
 
 @cli.command(
+    name="youtube-onboard",
+    help="Bootstrap YouTube subscriptions and playlists from a Google Takeout export.",
+)
+@click.argument("takeout_root", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--output", "output_path", required=True, type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Print the registry receipt as JSON.")
+def youtube_onboard(takeout_root: Path, output_path: Path, as_json: bool) -> None:
+    """Create a source registry without contacting YouTube or writing vault notes."""
+    from app.knowledge_acquisition.youtube_onboarding import parse_takeout, save_registry
+
+    registry = parse_takeout(takeout_root)
+    save_registry(output_path, registry)
+    receipt = {
+        "output": str(output_path),
+        "subscriptions": sum(source.kind == "subscription" for source in registry.sources),
+        "playlists": sum(source.kind == "playlist" for source in registry.sources),
+        "source_count": len(registry.sources),
+    }
+    click.echo(json.dumps(receipt if as_json else {**receipt, "status": "written"}, ensure_ascii=False))
+
+
+@cli.command(
     help="Run full pipeline (normalize -> classify -> optional transcribe). Accepts file, URL, or audio/YouTube."
 )
 @click.argument("source")
