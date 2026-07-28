@@ -1,0 +1,4 @@
+interface:
+  display_name: "Yggdrasil Design Handoff"
+  short_description: "Create governed Yggdrasil design handoffs"
+  default_prompt: "Use $yggdrasil-design-handoff to prepare or revise a Claude Design handoff using the canonical Yggdrasil Design System."

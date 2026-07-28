@@ -31,6 +31,8 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
   `.codex/skills/deliver-issue-set/SKILL.md`
 - Docs-as-code ownership, anti-sprawl, DOCS_INDEX impact, or docs workflow routing decisions:
   `.codex/skills/docs-governance/SKILL.md`
+- Claude Design projects, UI/component prototypes, visual audits, and governed design handoffs:
+  `.codex/skills/yggdrasil-design-handoff/SKILL.md`
 - Docs-only authoritative spec work:
   `.codex/skills/docs-authoring/SKILL.md`
 - Convert active docs into bounded GitHub backlog:

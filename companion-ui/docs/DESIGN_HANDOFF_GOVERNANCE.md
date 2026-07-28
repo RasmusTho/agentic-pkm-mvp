@@ -6,7 +6,7 @@ Temporal class: stable
 Review cadence: event-driven
 Source of truth: authoritative for the handoff chain
 Last reviewed: 2026-06-10
-Last verified against: companion-ui/design_handoff/, companion-ui/prompts/claude-design/README.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, companion-ui/design_handoff/2026-05-14-claude-design-package/README.md, companion-ui/design_handoff/2026-05-14-handoff-governance-pack/, companion-ui/design_handoff/2026-06-09-system-entry-point/, issue #901
+Last verified against: companion-ui/design_handoff/, companion-ui/prompts/claude-design/README.md, companion-ui/prompts/claude-design/YGGDRASIL_HANDOFF_TEMPLATE.md, companion-ui/companion-app/colors_and_type.css, .codex/skills/yggdrasil-design-handoff/SKILL.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, companion-ui/design_handoff/2026-05-14-claude-design-package/README.md, companion-ui/design_handoff/2026-05-14-handoff-governance-pack/, companion-ui/design_handoff/2026-06-09-system-entry-point/, issue #901
 
 # Design Handoff Governance
 
@@ -39,11 +39,36 @@ Each step-to-step transition is a **crossing**. The crossings that require expli
 
 Crossings A (exploration → handoff) and E (merge → receipt) are automatic / no formal gate required.
 
+## Yggdrasil design-system gate
+
+Every UI, component, interaction, prototype, or visual-audit exploration must use the canonical
+**Yggdrasil Design System** before its first generated visual. This is a pre-exploration gate, not
+a Crossing-B cleanup task.
+
+- Resolve the live Claude Design system by exact name through `list_design_systems`; the currently
+  verified ID is `f2b13410-af14-4875-8029-445352123f57`.
+- Select it at project creation. For an existing project that cannot express selection, attach its
+  `SKILL.md`, `README.md`, exact `colors_and_type.css`, and relevant component/reference previews
+  under `design-system/`, and include the binding prompt preamble.
+- Compare the live token sheet byte-for-byte with the binding repo source
+  `companion-ui/companion-app/colors_and_type.css`. The repo source wins on conflict, but generation
+  must stop until the live design system is reconciled.
+- Record the exact name, ID, selection/attachment mechanism, token path, and SHA-256 in the package
+  README.
+- Reuse established tokens and components. Any proposed extension stays explicit in
+  `open-questions.md` until normalized; it must not be silently used as if already canonical.
+
+Visual similarity, a copied color value, or the system being marked “default” is not proof that the
+project used the design system. A failed or ambiguous gate blocks generation and Crossing B.
+
 ### Maturity checklist (Crossing B)
 
 A handoff package passes Crossing B when all of the following are true:
 
 - [ ] The package README names the surface it covers and declares its authority status ("Visual guidance only" or equivalent).
+- [ ] The package README contains a passing Yggdrasil design-system receipt: exact live name and ID,
+      selection/attachment mechanism, binding repo token path, matching token SHA-256, and relevant
+      component/preview inputs.
 - [ ] `authority-boundaries.md` is present and distinguishes: design guidance / normalized spec / architecture contract / runtime truth.
 - [ ] `implementation-contracts.md` is present and lists the state enum, allowed transitions, and data attributes.
 - [ ] `open-questions.md` is present; each open question is triaged into: resolve-before-promotion / resolve-in-normalized-spec / defer-to-implementation-issue.
@@ -102,6 +127,10 @@ spec_chrome.css             — shared spec layout (import from sibling packages
 edge-states.md              — degraded / empty / loading / blocked / narrow states
 ```
 
+For UI/component/visual packages, `colors_and_type.css` is required rather than optional unless the
+prototype embeds the exact binding token sheet and the README records its matching hash. A package
+must not substitute an independently recreated palette.
+
 The index package `<date>-claude-design-package/` holds the executive summary, intake table, and CHANGELOG for a multi-package session. It is not a package itself — it does not require its own `prototype.html`.
 
 ## Handoff archive
@@ -135,14 +164,16 @@ The following are explicitly not authorized by this governance doc. They remain 
 
 ## How to introduce a new design exploration
 
-1. Run the Claude Design session using prompts from `companion-ui/prompts/claude-design/`.
-2. Export the output into a new dated folder under `companion-ui/design_handoff/`.
-3. Ensure the folder shape matches the requirements above (README, authority-boundaries, implementation-contracts, open-questions).
-4. Update `companion-ui/design_handoff/README.md` with the new entry.
-5. Route to Crossing B when the maturity checklist is complete.
-6. After Crossing B approval, author a normalized spec in `companion-ui/docs/`.
-7. Create a bounded GitHub issue from the normalized spec.
-8. Implement via the standard `issue-to-code` flow.
+1. Load `.codex/skills/yggdrasil-design-handoff/SKILL.md`.
+2. Complete its fail-closed Yggdrasil design-system gate.
+3. Run the Claude Design session using prompts from `companion-ui/prompts/claude-design/`.
+4. Export the output into a new dated folder under `companion-ui/design_handoff/`.
+5. Ensure the folder shape and design-system receipt match the requirements above.
+6. Update `companion-ui/design_handoff/README.md` with the new entry.
+7. Route to Crossing B when the maturity checklist is complete.
+8. After Crossing B approval, author a normalized spec in `companion-ui/docs/`.
+9. Create a bounded GitHub issue from the normalized spec.
+10. Implement via the standard `issue-to-code` flow.
 
 ## References
 
