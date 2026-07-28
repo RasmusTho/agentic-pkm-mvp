@@ -272,9 +272,10 @@ import sys
 # Re-delegate to the real sitecustomize this interpreter would otherwise
 # load (issue #4186): search sys.path with this hook's own directory
 # excluded, and if a real `sitecustomize` module is found elsewhere, execute
-# its source in this module's namespace so its site-packages wiring still
-# happens. A venv interpreter that ships no sitecustomize.py of its own
-# leaves this as a no-op.
+# it through its own spec/loader in a temporary module. The temporary module
+# keeps the real hook's __spec__, __loader__, and __file__ metadata intact;
+# source-reading into this replacement module's globals does not. A venv
+# interpreter that ships no sitecustomize.py of its own leaves this as a no-op.
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 _search_path = [p for p in sys.path if os.path.abspath(p) != _this_dir]
 _real_spec = importlib.machinery.PathFinder().find_spec(
@@ -282,11 +283,17 @@ _real_spec = importlib.machinery.PathFinder().find_spec(
 )
 if (
     _real_spec is not None
-    and _real_spec.origin
-    and os.path.abspath(_real_spec.origin) != os.path.abspath(__file__)
+    and _real_spec.loader is not None
+    and hasattr(_real_spec.loader, "exec_module")
+    and (_real_spec.origin is None or os.path.abspath(_real_spec.origin) != os.path.abspath(__file__))
 ):
-    _real_source = Path(_real_spec.origin).read_text(encoding="utf-8")
-    exec(compile(_real_source, _real_spec.origin, "exec"), globals())
+    _real_module = importlib.util.module_from_spec(_real_spec)
+    _injected_module = sys.modules[__name__]
+    sys.modules[_real_spec.name] = _real_module
+    try:
+        _real_spec.loader.exec_module(_real_module)
+    finally:
+        sys.modules[_real_spec.name] = _injected_module
 
 _counter = Path(os.environ["PKM_SETTINGS_LOCATION_IMPORT_COUNTER"])
 _fail_on = int(os.environ["PKM_SETTINGS_LOCATION_IMPORT_FAIL_ON"])
@@ -349,6 +356,59 @@ def test_export_runtime_env_fails_loudly_when_settings_location_import_fails(
     assert "injected settings-location import failure" in result.stderr
     assert "NameError: name 'resolve_settings_file' is not defined" not in result.stderr
     assert "NameError: name 'LEGACY_COMPILED_DIR' is not defined" not in result.stderr
+
+
+def test_export_runtime_env_delegated_sitecustomize_preserves_loader_metadata(
+    tmp_path: Path,
+) -> None:
+    """A delegated hook executes with its own import-spec metadata.
+
+    A source-file hook is enough to expose the original bug: executing its
+    source in the injection module gives it the injection module's ``__file__``
+    and ``__spec__``. Running the export path also proves the controlled import
+    failure still fires after delegation.
+    """
+    repo_root, _, env = _runtime_env_with_db(tmp_path)
+    real_hook_dir = tmp_path / "real-python-hook"
+    real_hook_dir.mkdir()
+    metadata_path = tmp_path / "delegated-sitecustomize-metadata"
+    (real_hook_dir / "sitecustomize.py").write_text(
+        """\
+import os
+from pathlib import Path
+
+if __spec__ is None or __spec__.name != "sitecustomize":
+    raise RuntimeError("delegated sitecustomize lost its spec")
+if __loader__ is not __spec__.loader:
+    raise RuntimeError("delegated sitecustomize lost its loader")
+if Path(__file__).resolve() != Path(__spec__.origin).resolve():
+    raise RuntimeError("delegated sitecustomize lost its file metadata")
+Path(os.environ["PKM_DELEGATED_SITECUSTOMIZE_METADATA"]).write_text(
+    f"{__spec__.name}|{Path(__file__).resolve()}|{type(__loader__).__name__}",
+    encoding="utf-8",
+)
+""",
+        encoding="utf-8",
+    )
+    env["PYTHONPATH"] = str(real_hook_dir)
+    env["PKM_DELEGATED_SITECUSTOMIZE_METADATA"] = str(metadata_path)
+    _install_settings_location_import_failure(tmp_path, env, fail_on_import=1)
+
+    result = subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "injected settings-location import failure" in result.stderr
+    name, origin, loader_name = metadata_path.read_text(encoding="utf-8").split("|")
+    assert name == "sitecustomize"
+    assert Path(origin) == (real_hook_dir / "sitecustomize.py").resolve()
+    assert loader_name == "SourceFileLoader"
 
 
 def test_export_runtime_env_import_failure_paths_do_not_leave_unbound_location_helpers() -> None:

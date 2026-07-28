@@ -217,9 +217,13 @@ def test_harness_selfverify_paths_include_release_channels() -> None:
 # isolates the env per case (so the unset case is genuinely unset).
 # ---------------------------------------------------------------------------
 
-def _run_fault_injection(python: str) -> subprocess.CompletedProcess[str]:
+def _run_fault_injection(
+    python: str, *, ambient_pythonpath: str | None = None
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHON"] = python
+    if ambient_pythonpath is not None:
+        env["PYTHONPATH"] = ambient_pythonpath
     # Deliberately do NOT default PYTHONPATH to REPO_ROOT here: the script
     # itself builds a private, sitecustomize-free PYTHONPATH default when the
     # caller does not supply one (issue #4186). REPO_ROOT carries its own
@@ -268,16 +272,20 @@ def test_fault_injection_fails_when_preflight_crashes(tmp_path: Path) -> None:
     assert "BASELINE FAILED" in combined or "CRASHED" in combined
 
 
-def test_fault_injection_isolates_env_per_case() -> None:
-    """The gate must run each case under a hermetic `env -i` shell.
+def test_fault_injection_ignores_ambient_repo_root_pythonpath() -> None:
+    """The private import path wins even if a caller exports the repo root.
 
-    Without isolation a caller-exported INDEX_OUTBOX_PATH would mask the
-    'unset' case and the gate would silently stop testing it.
+    This executes the actual gate with precisely the environment that used to
+    shadow an affected interpreter's real ``sitecustomize``. A text assertion
+    that merely notices ``env -i`` would not prove the hermetic guarantee.
     """
-    text = FAULT_INJECTION.read_text(encoding="utf-8")
-    assert "env -i" in text
-    # The discriminator asserts the specific marker, not a bare non-zero exit.
-    assert "channel-env preflight" in text
+    proc = _run_fault_injection(sys.executable, ambient_pythonpath=str(REPO_ROOT))
+    assert proc.returncode == 0, (
+        "an ambient repository-root PYTHONPATH must not affect the hermetic gate\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert "baseline known-good test env accepted" in proc.stdout
+    assert "the gate is real" in proc.stdout
 
 
 # ---------------------------------------------------------------------------

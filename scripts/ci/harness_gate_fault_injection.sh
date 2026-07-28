@@ -46,7 +46,7 @@ _run_preflight() {
   env -i \
     HOME="${HOME:-/root}" \
     PATH="${PATH}" \
-    PYTHONPATH="${PYTHONPATH:-$PYLIB_DIR}" \
+    PYTHONPATH="$PYLIB_DIR" \
     "$@" \
     "${PYTHON}" -m app.cli ops channel-preflight --channel test --context host 2>&1
 }
