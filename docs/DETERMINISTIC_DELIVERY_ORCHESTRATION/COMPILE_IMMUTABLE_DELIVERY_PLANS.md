@@ -34,6 +34,20 @@ Recompiling identical inputs produces byte-identical `DeliveryPlan.v1`. A change
 dependency, or linked PR head changes the input digest and requires a new plan; it never silently
 updates the prior plan.
 
+## Compiler Contract Surface
+
+- `DeliveryPlanningSnapshot.v1` carries exact live Issue authority plus immutable, versioned
+  resolution evidence for every Source Anchor and `Verify:` target.
+- Resolution evidence binds the exact Issue authority and contract hash, declared target,
+  resolver/version, resolved authority/content hash, and observation chronology.
+- The compiler consumes that evidence without filesystem, GitHub, dispatcher, BuilderOps, CKM,
+  carrier, or provider access. Missing, duplicate, mismatched, or stale evidence produces a typed
+  refusal and cannot enter an executable wave.
+- The compiler and governed Issue intake share one pure canonical validator for repository paths,
+  anchors, test targets, doc/roadmap writebacks, and versioned runtime-receipt identities.
+- Snapshot evidence is part of the canonical input digest. Changed evidence creates a new plan
+  identity rather than mutating a prior plan.
+
 ## Why This Matters
 
 The compiler removes a large model-coordination cost while making every admission and exclusion
@@ -58,6 +72,8 @@ explainable before effects begin.
 
 - Run the five named tests.
 - Run focused contract tests from DDO-02.
+- Run the focused strict-contract parity tests in
+  `tests/governance/test_known_defects_registry.py`.
 - Run `ruff check app tests` and `mypy app`.
 
 ## Out of Scope
