@@ -41,3 +41,46 @@ def test_validate_settings_flags_missing_secret_in_compiled_runtime(
     issues = validate_settings()
 
     assert any(issue.code == "runtime_settings.missing_secret" for issue in issues)
+
+
+def test_validate_settings_rejects_unservable_explicit_embedding_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "openai")
+
+    issues = validate_settings()
+
+    assert any(
+        issue.code == "embedding_provider.unservable"
+        and issue.ref == "EMBED_PRIMARY_PROVIDER"
+        and "openai" in issue.message
+        for issue in issues
+    )
+
+
+def test_validate_settings_rejects_unservable_embedding_profile_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.components.embeddings import legacy
+    from app.settings.models import EmbeddingProfile, EmbeddingProfiles
+
+    monkeypatch.delenv("EMBED_PRIMARY_PROVIDER", raising=False)
+    profile = EmbeddingProfile(primary_provider="deepseek")
+    bundle = SimpleNamespace(
+        embedding_profiles=EmbeddingProfiles(
+            default_profile="default",
+            profiles={"default": profile},
+        )
+    )
+    monkeypatch.setattr(legacy, "get_settings_bundle", lambda: bundle)
+
+    issues = validate_settings()
+
+    assert any(
+        issue.code == "embedding_provider.unservable"
+        and issue.ref == "embedding_profiles:default.primary_provider"
+        and "deepseek" in issue.message
+        for issue in issues
+    )

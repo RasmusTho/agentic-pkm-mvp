@@ -198,6 +198,10 @@ posture of resolving to `mock` instead of creating a new ingest/query outage. Em
 or unset provider input still defaults to `mock`, and the `llm` → `ollama` and
 `fake` → `mock` aliases remain supported. Accepted names are derived from the live
 adapter registry plus `deterministic`; no separate provider-name allowlist exists.
+`python -m app.cli settings-validate` is the channel/deployment preflight for this
+posture: it rejects unservable `EMBED_PRIMARY_PROVIDER` values and every explicit
+embedding-profile `primary_provider` or `provider` before a channel can be reported
+healthy. It intentionally does not reject an unservable `LLM_PROVIDER` spillover.
 
 **Requested identity vs written identity.** `index.embedding.requested` carries the identity the
 producer *asked for*, resolved through the same `get_embeddings_client` / `get_embedding_identity`

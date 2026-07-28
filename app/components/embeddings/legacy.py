@@ -165,6 +165,51 @@ def _resolve_embedding_provider_name(
     )
 
 
+def validate_explicit_embedding_provider_configuration() -> list[tuple[str, str]]:
+    """Return preflight errors for configured embedding-provider sources.
+
+    ``LLM_PROVIDER`` is deliberately excluded: it is chat-provider spillover and
+    retains the compatible mock fallback. Every embedding-specific source must
+    instead fail before a channel is declared healthy.
+    """
+
+    errors: list[tuple[str, str]] = []
+
+    def validate(value: str | None, source: str, ref: str) -> None:
+        if _normalize_name(value) is None:
+            return
+        try:
+            _resolve_embedding_provider_name(value, provider_source=source)
+        except ValueError as exc:
+            errors.append((ref, str(exc)))
+
+    validate(
+        os.getenv("EMBED_PRIMARY_PROVIDER"),
+        "EMBED_PRIMARY_PROVIDER",
+        "EMBED_PRIMARY_PROVIDER",
+    )
+
+    try:
+        profiles = get_settings_bundle().embedding_profiles
+    except Exception:
+        return errors
+
+    for profile_name, profile in profiles.profiles.items():
+        prefix = f"embedding_profiles:{profile_name}"
+        validate(
+            getattr(profile, "primary_provider", None),
+            "profile.primary_provider",
+            f"{prefix}.primary_provider",
+        )
+        validate(
+            getattr(profile, "provider", None),
+            "profile.provider",
+            f"{prefix}.provider",
+        )
+
+    return errors
+
+
 def _resolve_embedding_model(provider: str, override_model: str | None, configured_model: str | None = None) -> str:
     if provider == "mock":
         return _MOCK_EMBED_MODEL

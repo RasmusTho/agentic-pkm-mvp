@@ -20,6 +20,7 @@ from app.components.settings.graphs_loader import load_graphs
 from app.components.settings.models_loader import load_models
 from app.components.settings.events_loader import load_events
 from app.components.settings.panel_actions_loader import DEFAULT_PANEL_ACTIONS_PATH
+from app.components.embeddings.legacy import validate_explicit_embedding_provider_configuration
 from app.index.ingest_md import parse_markdown
 from app.settings.panel_actions import resolve_panel_actions_root
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
@@ -231,6 +232,17 @@ def _validate_compiled_runtime_settings() -> list[ValidationIssue]:
     return issues
 
 
+def _validate_embedding_provider_configuration() -> list[ValidationIssue]:
+    return [
+        ValidationIssue(
+            code="embedding_provider.unservable",
+            message=message,
+            ref=ref,
+        )
+        for ref, message in validate_explicit_embedding_provider_configuration()
+    ]
+
+
 def validate_settings() -> List[ValidationIssue]:
     issues: List[ValidationIssue] = []
 
@@ -370,6 +382,7 @@ def validate_settings() -> List[ValidationIssue]:
                 )
             )
     issues.extend(_validate_compiled_runtime_settings())
+    issues.extend(_validate_embedding_provider_configuration())
     return issues
 
 
