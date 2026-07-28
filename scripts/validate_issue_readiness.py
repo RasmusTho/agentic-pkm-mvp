@@ -47,7 +47,7 @@ READINESS_CLASSES: tuple[str, ...] = (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERIFY_FILE_PATH_PATTERN = re.compile(
-    r"(?<![\w.-])(?P<path>(?:(?:/|\.?\./)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+))"
+    r"(?<![\w.-])(?P<path>(?:(?:/|\.?\./)?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9]+))"
 )
 
 AMBIGUOUS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(

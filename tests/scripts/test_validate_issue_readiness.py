@@ -82,8 +82,34 @@ def test_ready_issue_rejects_missing_verify_file_path() -> None:
     assert any("tests/scripts/test_missing_verify_path.py" in item for item in report.repair_guidance)
 
 
+def test_ready_issue_rejects_missing_root_level_verify_file_path() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "pyproject.tmol::missing_target",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+    assert report.acceptance_criteria.missing_verify_file_paths == ["pyproject.tmol"]
+
+
 def test_ready_issue_accepts_existing_verify_file_path() -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_ready_issue_accepts_existing_root_level_verify_file_path() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "pyproject.toml::test_new_readiness_case",
+    )
 
     report = classify_issue_body(body, labels=["agent:ready"])
 
