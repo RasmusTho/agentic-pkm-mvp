@@ -440,9 +440,9 @@ def test_review_severity_routing_blocks_only_p0_and_p1() -> None:
         assert "only p0/p1 findings" in normalized_lower
         assert ".codex/skills/bug-to-issue/SKILL.md" in surface
         assert "leave the pr code unchanged" in normalized_lower
-        assert (
-            "reply on the original review finding/thread with the issue reference"
-            in normalized_lower
+        assert re.search(
+            r"reply on the original review finding/thread with the (?:registry )?issue reference",
+            normalized_lower,
         )
         assert "without another review round" in normalized_lower
         assert "P3" in surface and "informational" in normalized_lower
