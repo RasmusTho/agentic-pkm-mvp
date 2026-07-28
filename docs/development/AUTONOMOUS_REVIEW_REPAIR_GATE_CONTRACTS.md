@@ -1,4 +1,4 @@
-State: Builder System governance design contract. Defines target contracts; does not implement automation.
+State: Builder System governance design contract. Defines target contracts; does not implement automation. Light-path deliveries (`AGENTS.md :: Proportional delivery`) do not run these gates; this contract's unconditional review/closure language binds the full path only.
 Doc role: Governance design / process contract
 Authority: Defines contract requirements for future review, repair, exception, and closure automation. Subordinate to `AGENTS.md`, `docs/architecture/SBS_OPERATING_MODEL.md`, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, and `.codex/skills/_shared/CI_WAIT_CONTRACT.md`.
 Owner: Builder System governance

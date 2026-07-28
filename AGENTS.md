@@ -184,7 +184,7 @@ Human time is the dominant TCD term, so the default posture is to **act**, not t
 - `log + Git` is the safety net, not a human gate. Reversible, in-scope, bounded work proceeds without asking.
 - A retry count, a failed local/CI/type check, a host/tool compatibility failure, or a safe fail-closed pause is **not** by itself an owner decision. Route it through the autonomous escalation classifier in `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md`; only its explicit authority categories may create `agent:needs-human`.
 - Owner asks route through `.codex/skills/owner-decision-brief`: discretionary escalations re-test this gate first (contractual operator gates are never re-tested away — they fire as their skills define), and every ask that reaches the owner is delivered as one standalone plain-language decision brief.
-- **Autonomous delivery** runs the full gate chain unattended: wait for CI green and resolve the local review gate (`verification-and-closure :: Running the local review gate`), then merge — the owner is not asked to babysit. The CI + review gate is never waived (an unprotected branch does not relax it); only the human *watching* is removed. Quality is preserved by the gate, not by the wait.
+- **Autonomous delivery** runs its tier's gate chain unattended per `AGENTS.md :: Proportional delivery`: on the light path (single-issue or issue-free Tier 1/2), wait for required CI green with self-verified `Verify:` targets, then merge; on the full path (Tier 3, multi-issue, TCD high-risk surfaces), also resolve the local review gate (`verification-and-closure :: Running the local review gate`) before merging — the owner is not asked to babysit either way. The governing tier's gate is never waived (an unprotected branch does not relax it); only the human *watching* is removed. Quality is preserved by the gate plus cheap reverts on an always-releasable main, not by the wait.
 
 This is human-first, not human-absent: the owner still owns irreversible, external, and strategic calls — agents just stop interrupting for reversible ones.
 
@@ -271,6 +271,14 @@ tcd_retrospective:
   skill_update_recommendation:
 ```
 
+## Proportional delivery (chain depth and solution size)
+
+TCD chooses capability *inside* the delivery chain; this section chooses how much chain and how much solution a change pays for. Skills reference it as `AGENTS.md :: Proportional delivery`; the per-tier mechanics live in `docs/development/GOVERNANCE_PROPORTIONALITY.md` and are not restated here. This is a single-operator system: function over ceremony, ready over perfect.
+
+- **Delivery depth follows the risk tier.** Single-issue (or issue-free) Tier 1 and Tier 2 PRs take the light path: required CI green plus self-verified `Verify:` targets on the head SHA, then plain merge with `Final-Review-Rounds: 0` — no independent review round, no verified-merge ceremony. The full chain (independent local review gate, `Final-Review-Rounds: 1|2`, verified-merge sequence) applies only to Tier 3 work, multi-issue PRs, and PRs touching a TCD high-risk *surface* (auth / security / data / migration / concurrency / payments / external API). Process outcomes in the escalation-trigger list — a failed attempt, a CI flake, a reviewer nit — escalate capability, never delivery depth.
+- **Right-size default.** Build the most boring solution that satisfies the acceptance criteria. A new gate, receipt, ledger, registry, config surface, abstraction layer, or enterprise-grade pattern (high availability, multi-tenancy, pluggable providers, defense-in-depth beyond the single-operator trust model) requires an explicit demand in the governing contract — never default posture. "A simpler mechanism satisfies the contract" is a valid blocking review finding. A new permanent governance mechanism must name what it replaces or carry an explicit review-by date.
+- **Budget and stop-loss.** A delivery gets 2 CI-repair rounds per failure mechanism (the full path keeps the 2+2 escalated repair budget in `verification-and-closure`). When the budget is spent, stop grinding: ship the smallest passing subset, or hand back a one-paragraph stop report plus a `LearningSignal`. Budgets are never rebound to reset accounting. Light work runs without sub-agent fan-out. Repeated failure on a bounded change usually means the solution is too big — shrink it before escalating capability.
+
 ## Communicating with the owner
 
 The owner is the operator and decision-maker. Human-first means optimizing for the owner's time **and cognitive load**: fast decision support, low running cost, and the fewest things he must hold in his head — not narrating how you got there. Cognitive load is a real cost (part of C_human), not just clock-time.
@@ -348,7 +356,7 @@ Builder-agent rules:
   (batch authorization, child/scope map, shared constraints, source anchors, validation path, and
   exact authority identities); unfinished feature-level ACs on the open parent do not block delivery
   of fully verified closing children.
-- Before an issue-backed merge, neutralize authenticated body closers to evidence-only `Refs`,
+- The verified-merge ceremony in this bullet applies to full-path deliveries only (Tier 3, multi-issue, or TCD high-risk per `AGENTS.md :: Proportional delivery`); light-path PRs merge plainly and let native closing keywords close the single governing issue, verified after merge. On the full path: before an issue-backed merge, neutralize authenticated body closers to evidence-only `Refs`,
   revalidate the live exact head/body/empty closing-link set, merge with a fixed non-closing message,
   and explicitly close only the authenticated issue set. Preserve the exact v2 authority and repair
   budget in a trusted durable receipt and advance a continuous prepared -> merged -> reconciled ->
