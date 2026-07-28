@@ -27,7 +27,7 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 - `## BuilderOps Routing` may be omitted entirely when nothing was routed: **absence means "none"**. A present-but-unfilled section (template placeholders) still fails CI — claiming the section means filling it.
 - output format: a short human summary (2–4 sentences) plus a receipt line; no multi-section report
 - validation: lightweight docs/governance checks appropriate to the touched surfaces; no full code/test smoke by default
-- delivery depth: light path — declare `Final-Review-Rounds: 0` and merge plainly on green required checks; no independent review round, no verified-merge ceremony
+- delivery depth: light path — declare `Final-Review-Rounds: 0` and merge plainly on green required checks; no independent review round, no verified-merge ceremony (single-issue or issue-free; a multi-issue PR escalates to the full path like any other)
 
 ### Tier 2 — standard
 

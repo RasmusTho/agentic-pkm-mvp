@@ -259,7 +259,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sbs", action="append", default=[], help="SBS field as key=value.")
     parser.add_argument("--owner-doc-resolution", choices=sorted(OWNER_DOC_RESOLUTIONS))
     parser.add_argument("--owner-doc-followup-issue")
-    parser.add_argument("--final-review-rounds", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--final-review-rounds", type=int, choices=(0, 1, 2), default=1)
     parser.add_argument("--builderops-records")
     parser.add_argument("--builderops-reason")
     parser.add_argument("--notes", default="None.")

@@ -145,7 +145,7 @@ Verification owns the merge decision.
 Delivery depth follows `AGENTS.md :: Proportional delivery` and
 `docs/development/GOVERNANCE_PROPORTIONALITY.md`:
 
-- **Light path — Tier 1 PRs and single-issue Tier 2 PRs** with no TCD high-risk escalation surface
+- **Light path — single-issue (or issue-free) Tier 1 and Tier 2 PRs** with no TCD high-risk escalation surface
   and no explicitly requested review round. The complete merge gate is: current SHA truth intact;
   required checks and repo-standard checks covering the changed surface green on the head SHA;
   every closing issue's `Verify:` targets self-verified on that SHA; no scope drift; the PR body
