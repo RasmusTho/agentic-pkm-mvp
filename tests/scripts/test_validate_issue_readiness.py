@@ -103,6 +103,25 @@ def test_ready_issue_does_not_require_future_verify_test_function() -> None:
     assert report.readiness_classification == "ready_candidate"
 
 
+@pytest.mark.parametrize(
+    "verify_path",
+    [
+        "/tests/scripts/test_validate_issue_readiness.py",
+        "../tests/scripts/test_validate_issue_readiness.py",
+    ],
+)
+def test_ready_issue_rejects_non_repo_relative_verify_file_path(verify_path: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        f"{verify_path}::test_fixture_classifications",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+
+
 @pytest.mark.parametrize("target", ["<test pointer>", "none", "n/a", "TBD"])
 def test_placeholder_verify_targets_are_not_concrete(target: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
