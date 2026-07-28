@@ -97,10 +97,9 @@ rendering.
 
 ## Related GitHub Issues
 
-CKM-DB-05 [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085) is terminal. Live
-terminal child [#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086) is active under
-parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080); Direction B remains
-pre-acceptance. Cheapest acceptable TCD route:
-**Terra/high** because CSS/test mechanics are bounded but final acceptance depends on manual visual
-evidence and complete cross-slice coverage; use Sol/high for the independent parent-acceptance
-review if residual omission risk remains.
+Delivery history: CKM-DB-05
+[#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085), terminal child
+[#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086), and independently accepted parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) are closed. The planned cheapest
+acceptable TCD route was **Terra/high** for bounded CSS/test mechanics, with Sol/high reserved for
+the independent parent-acceptance review.

@@ -95,9 +95,8 @@ renderer causal or backlog authority.
 
 ## Related GitHub Issues
 
-Live child [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082) under parent
-[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` on CKM-DB-01
-[#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081). Cheapest acceptable TCD route:
-**Terra/high** because generated interpretation can create persuasive false authority and requires
-multi-fixture rhetoric scoping; escalate to Sol/high if source-vs-generated-copy boundaries cannot
-be isolated deterministically.
+Delivery history: child [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082),
+predecessor [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081), and parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) are closed. The planned cheapest
+acceptable TCD route was **Terra/high** because generated interpretation can create persuasive
+false authority and required multi-fixture rhetoric scoping.

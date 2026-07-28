@@ -1,4 +1,4 @@
-State: Filed as GitHub parent Issue #4163.
+State: Active blocked validation hub #4163. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is the next serial slice after the 2026-07-28 architecture reconciliation.
 Doc role: Parent validation-hub contract
 Authority: The capability README owns stable decomposition. The live GitHub parent owns backlog and validation state after filing.
 
@@ -39,7 +39,9 @@ reconciliation, and receipts.
 - Retrieval/context impact: bounded worker context packs replace broad epic-history replay
 - Sync/deployment impact: BuilderOps control-plane integration only; no Product deployment change
 - External boundary impact: GitHub REST, CI, and bounded model-worker invocation
-- New or changed contract: DeliveryInitiation.v1, DeliveryPlan.v1, reducer event/effect contract, DeliveryReceipt.v1
+- New or changed contract: request/preview/approved-initiation chain, DeliveryPlan, reducer
+  event/effect and lifecycle-control contracts, provider-neutral worker runtime, active-run
+  projection, acceptance profile, and terminal receipt
 - Owner-doc impact: follow-up final owner-doc promotion through DDO-07
 - Transition debt impact: reduces D11 concentration in model coordination and D12 loss of TCD evidence
 - Fitness rule impact: adds deterministic state-machine, idempotency, crash, and authority-boundary tests
@@ -47,7 +49,8 @@ reconciliation, and receipts.
 ## Constraints
 
 - Parent is a validation hub and never receives `agent:ready`.
-- Only DDO-01 and DDO-02 may start ready.
+- After the 2026-07-28 reconciliation, only DDO-04 may become ready; later children remain serially
+  dependency-blocked.
 - GitHub, dispatcher leases, PR heads, CI, review, merge, and closure evidence remain authoritative.
 - Do not create a new journal/outbox when the #3792 substrate satisfies the required conformance.
 - Do not mutate the static CKM Direction B cockpit.
@@ -60,7 +63,7 @@ reconciliation, and receipts.
 - [ ] Capability-level invariants and partial-failure paths are evidenced.
   - Verify: `docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Capability acceptance`.
 - [ ] Fast-lane and full-kernel TCD targets are evaluated without hiding quality regressions.
-  - Verify: DDO-07 acceptance report and linked `DeliveryReceipt.v1` artifacts.
+  - Verify: DDO-07 acceptance report and linked `DeliveryReceipt.v2` artifacts.
 - [ ] CKM initiation and receipt projection preserve the non-authority boundary.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py`.
 - [ ] Owner-doc truth is promoted only after capability acceptance.
@@ -95,12 +98,12 @@ reconciliation, and receipts.
 
 ## Implementation Tasks
 
-| Task | Issue | Initial lifecycle | Dependency |
+| Task | Issue | Live lifecycle on 2026-07-28 | Dependency |
 | --- | --- | --- | --- |
-| DDO-01 — independent-Issue fast lane | #4164 | blocked until specification and #4161 merge; #4159 delivered | #4161 |
-| DDO-02 — carrier-neutral delivery contracts | #4165 | ready after specification merge | none |
-| DDO-03 — immutable plan compiler | #4166 | blocked | #4165 |
-| DDO-04 — deterministic reducer | #4167 | blocked | #4164 and #4166 |
+| DDO-01 — independent-Issue fast lane | #4164 | delivered/closed | #4161 |
+| DDO-02 — carrier-neutral delivery contracts | #4165 | delivered/closed by PR #4176 | none |
+| DDO-03 — immutable plan compiler | #4166 | delivered/closed by PR #4226 | #4165 |
+| DDO-04 — deterministic reducer | #4167 | next serial slice; blocked until reconciled spec/body and strict readiness | delivered #4164 and #4166 |
 | DDO-05 — BuilderOps reconciliation binding | #4168 | blocked | #4167; reconcile timing with #3793 |
 | DDO-06 — CKM initiation/receipt bridge | #4169 | blocked | #4165 and #4168 |
 | DDO-07 — TCD/recovery acceptance | #4170 | blocked | #4164 through #4169 |

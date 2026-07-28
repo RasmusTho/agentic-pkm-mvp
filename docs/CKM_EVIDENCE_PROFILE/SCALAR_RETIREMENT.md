@@ -127,9 +127,10 @@ state is introduced; a process restart changes nothing about what the next rende
 
 ## Related GitHub Issues
 
-Filed as [#4090](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4090), the first serial child
-of parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). It is
-delivered independently before CKM-EP-02; its exact PR/SHA, validation, owner-doc result, and parent
-handoff belong on #4089. TCD hint: Sonnet / medium — bounded render-surface deletion mirroring an
+Delivered as closed [#4090](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4090), the first
+serial child of closed parent validation hub
+[#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). Its exact PR/SHA, validation,
+owner-doc result, and parent handoff are recorded on #4089. TCD hint: Sonnet / medium — bounded
+render-surface deletion mirroring an
 existing pattern, low blast radius, but the Direction A contract writeback and the real-store gate
 must not be dropped at handoff.

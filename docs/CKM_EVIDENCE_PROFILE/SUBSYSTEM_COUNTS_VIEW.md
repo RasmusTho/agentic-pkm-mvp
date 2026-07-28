@@ -120,9 +120,10 @@ render. No deferred or in-memory state is introduced; a restart changes nothing 
 
 ## Related GitHub Issues
 
-Filed as [#4092](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4092), the third serial child
-of parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). It remains
-blocked until the preceding serial work is delivered; its exact PR/SHA, validation, owner-doc result,
-and parent handoff belong on #4089. TCD hint: Sonnet / high — the honest-counting requirement
+Delivered as closed [#4092](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4092), the third
+serial child of closed parent validation hub
+[#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089). Its exact PR/SHA, validation,
+owner-doc result, and parent handoff are recorded on #4089. TCD hint: Sonnet / high — the
+honest-counting requirement
 (distinct-artifact + shared-evidence indicator over a 79%-duplicated graph) is the correctness-
 sensitive part; a naive raw-edge implementation would ship a fresh false picture.

@@ -84,5 +84,7 @@ make the fast lane wait for the full control surface.
 
 ## Related GitHub Issues
 
-Live task: [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165). It is one of two
-initial ready slices and may run in parallel with DDO-01 (#4164).
+Delivery history: [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) is closed and
+delivered by [PR #4176](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4176). Later versioned
+request/preview/worker-runtime contracts are reconciled in the capability README without
+reinterpreting the delivered v1 bytes.

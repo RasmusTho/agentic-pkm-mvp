@@ -1,11 +1,11 @@
-State: Filed target-state specification directory for CKM Cockpit Direction B. Owner Gate A authorized bounded design and feature breakdown on 2026-07-24; parent validation hub [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) and children #4081–#4086 are open with `agent:blocked`. This docs-only specification and its Issues enact no renderer, CLI, retention, comparison, or proposal behavior. Implementation remains dependency-blocked on delivery of `docs/CKM_EVIDENCE_PROFILE/README.md` Phase 1 so this capability cannot preserve or recreate the scalar/maturity-band surface already ratified for retirement.
+State: ACCEPTED/DELIVERED CKM Cockpit Direction B specification and delivery history. Owner Gate A authorized the bounded design on 2026-07-24; Evidence Profile, children #4081–#4086, completion #4222, and parent #4080 are closed. Independent parent acceptance and closure were recorded on 2026-07-28. Direction A remains the script-free default; Direction B is the supported opt-in `ckm overview --cockpit` mode.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the target-state Direction B cockpit boundary, task decomposition, interaction-safety invariants, and acceptance path. Subordinate to ADR-0057, the delivered CKM MVP and Measurement & Access contracts, the ratified CKM Evidence Profile Phase 1 contract, and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
-Temporal class: operational
+Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: this directory for Direction B implementation-task shape; ADR-0057 for CKM authority posture; `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` for the delivered presentation contract being amended; `docs/CKM_MEASUREMENT_AND_ACCESS/README.md` for retained-observation semantics.
-Last reviewed: 2026-07-24
+Last reviewed: 2026-07-28
 
 # CKM Cockpit Direction B
 
@@ -183,56 +183,54 @@ through `app/builderops/ckm/overview_html.py` and
 
 - [x] Owner Gate A records GO for bounded Direction B design and feature breakdown.
   Verify: [#3972 comment 5066973510](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3972#issuecomment-5066973510)
-- [ ] CKM Evidence Profile Phase 1 is delivered before Direction B implementation begins.
+- [x] CKM Evidence Profile Phase 1 is delivered before Direction B implementation begins.
   Verify: closed Evidence Profile parent/children plus a terminal real-store receipt at `docs/CKM_EVIDENCE_PROFILE/README.md :: Verification and acceptance path`
-- [ ] All six child contracts pass their named tests, current-SHA CI, and local review gate.
+- [x] All six child contracts pass their named tests, current-SHA CI, and local review gate.
   Verify: child PR delivery receipts linked from parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080)
-- [ ] The finished cockpit answers the four fixed questions without ranking, causality, authority, or mutation.
+- [x] The finished cockpit answers the four fixed questions without ranking, causality, authority, or mutation.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_answers_fixed_owner_questions_without_authority`
-- [ ] O1b comparison and all refusal states are exercised through the production CLI/render call site.
+- [x] O1b comparison and all refusal states are exercised through the production CLI/render call site.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_cli_renders_comparison_and_refusal_states`
   in completion issue [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222), then its
   merged delivery receipt on parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080)
-- [ ] JS-off and print receipts prove full-content preservation.
+- [x] JS-off and print receipts prove full-content preservation.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_progressive_enhancement_keeps_full_source_content`; manual PDF receipt on parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080)
-- [ ] No owner doc claims Direction B is supported before all child and parent acceptance checks pass.
-  Verify: post-merge owner-doc receipts on every child and final promotion diff at `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
+- [x] No owner doc claimed Direction B was supported before all child and parent acceptance checks
+  passed; this reconciliation now records the accepted truth.
+  Verify: post-merge owner-doc receipts on every child, independent parent acceptance, and final
+  promotion diff at `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
 
 ## Verification, validation, and owner-doc promotion
 
-Each child runs its exact `Verify:` targets, the full focused CKM suite, `ruff check app tests`,
-`mypy app`, current-head CI, and the independent local review gate. Parent
-[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is the live validation hub. Each
-child posts a short receipt containing exact PR, merge SHA, tests,
-comparison/refusal or visual evidence, owner-doc outcome, and transition-debt outcome.
-
-The final child records a deterministic HTML digest and a manual PDF receipt proving that trust,
-hazards, comparison/refusal, every capability detail, unfiltered gaps, proposals, and provenance
-print with scripting disabled. Completion issue [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222)
-adds the protected production-CLI comparison/refusal proof and carries a terminal owner-doc
-promotion candidate. It is an acceptance input, not acceptance: only after the parent ledger is
-complete and #4080 independently accepts may that candidate change
-`docs/CAPABILITY_KNOWLEDGE_MODEL/README.md` and the Direction A presentation contract from
-target-state linkage to supported Direction B truth.
+Each child ran its exact `Verify:` targets, the full focused CKM suite, `ruff check app tests`,
+`mypy app`, current-head CI, and the independent local review gate. Completion issue
+[#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222) and
+[PR #4224](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4224) added the protected
+production-CLI comparison/refusal proof. Parent
+[#4080 acceptance](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102696743)
+verified the child ledger, deterministic artifact/print evidence, exact merged-main authority, and
+owner-doc posture. Its
+[closure receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102745391)
+is the terminal acceptance boundary.
 
 ## Relationship to GitHub issues
 
-The live execution chain is serialized and currently blocked:
+The serial execution chain is terminal:
 
 1. Parent validation hub [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) —
-   `agent:blocked`; never a pickup Issue.
+   accepted and closed; never a pickup Issue.
 2. CKM-DB-01 [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081) —
-   `agent:blocked` on CKM Evidence Profile Phase 1.
+   delivered and closed.
 3. CKM-DB-02 [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082) —
-   `agent:blocked` on #4081.
+   delivered and closed.
 4. CKM-DB-03 [#4083](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4083) —
-   `agent:blocked` on #4082.
+   delivered and closed.
 5. CKM-DB-04 [#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084) —
-   `agent:blocked` on #4083.
+   delivered and closed.
 6. CKM-DB-05 [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085) —
-   `agent:blocked` on #4084.
+   delivered and closed.
 7. CKM-DB-06 [#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086) —
-   `agent:blocked` on #4085.
+   delivered and closed.
 
 GitHub is the live backlog and validation surface. These docs own stable target-state intent,
 invariants, and task shape; Issue labels and receipts own current pickup/delivery truth.

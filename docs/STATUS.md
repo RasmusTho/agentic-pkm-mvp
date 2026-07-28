@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-07-27
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730, issue #3720, PR #3743, parent issue #4080, and current repo state on 2026-07-27
+Last reviewed: 2026-07-28
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224, issue #3720, PR #3743, closed parent issue #4080, and current repo state at `origin/main` `53e0d5cf25928ee83bfd0b2dee766e124a2302b0` on 2026-07-28
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
@@ -292,13 +292,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
   predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
   reconcile next.)
-- CKM Cockpit Direction B remains a pre-acceptance BuilderOps target under parent #4080. Completion
-  issue #4222 supplies the protected production-CLI comparison/refusal evidence and may carry
-  terminal promotion wording, but it is an acceptance input rather than acceptance itself. Individual
-  child slices may exist on `main` as parent-validation inputs, including the inert governed-draft
-  projection, but they do not make Direction B a supported owner-facing surface. Direction A
-  remains the supported default until independent parent acceptance is terminal and the promotion
-  candidate merges; no child delivery may promote the Direction B support claim.
+- CKM Cockpit Direction B is an accepted BuilderOps presentation capability. Children #4081–#4086
+  and completion #4222 are closed; PR #4224 supplied the terminal production-CLI proof, and parent
+  #4080 independently accepted and closed the capability on 2026-07-28. Direction A remains the
+  script-free default. The opt-in `ckm overview --cockpit` surface is supported and remains local,
+  generated, deterministic, non-authoritative, network-free, and non-mutating.
 - The dispatcher's Signboard Markdown projection (`app/dispatcher/signboard.py`,
   `python -m app.dispatcher export-signboard`) preserves any human-authored `## Notes` content
   across re-export instead of overwriting it, and its export path defaults to
