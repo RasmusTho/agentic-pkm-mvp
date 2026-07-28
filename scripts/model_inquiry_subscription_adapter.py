@@ -11,7 +11,10 @@ import subprocess
 import sys
 from typing import Any, Mapping
 
-COMMAND_TIMEOUT_SECONDS = 540
+# xhigh subscription turns can spend several minutes in provider-side reasoning
+# before producing their structured response. Keep this inner deadline aligned
+# with the host wrapper's larger 1500-second bound.
+COMMAND_TIMEOUT_SECONDS = 1200
 TIMEOUT_EXIT_CODE = 124
 FABLE_MODEL = "claude-fable-5"
 CODEX_MODEL = "gpt-5.6-sol"

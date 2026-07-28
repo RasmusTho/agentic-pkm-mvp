@@ -54,7 +54,7 @@ BMI-04 adds Codex and portable Claude bridge skills that transfer the question t
 remote-host launcher. The configured remote host owns the BuilderOps command, configured role
 adapters, subscription sessions, and durable artifacts; its credentials and launcher-path settings
 remain outside Git. The versioned subscription adapter profile gives both roles explicit `xhigh`
-reasoning effort and a 540-second inner deadline; the host wrapper permits 600 seconds per role.
+reasoning effort and a 1200-second inner deadline; the host wrapper permits 1500 seconds per role.
 BMI-05 adds the structured Issue proposal, readiness receipt, file-first
 PromotionIntent, REST-only Issue crossing, crash reconciliation marker, and append-only delivery
 references.

@@ -21,7 +21,7 @@ from typing import Sequence
 SCHEMA_INSTALL = "builderops.model-inquiry-host-install.v1"
 SCHEMA_CHECK = "builderops.model-inquiry-host-check.v1"
 TRUSTED_REPO_ROOT = Path(__file__).resolve().parents[1]
-VERSIONED_ADAPTER_SHA256 = "59bd9ec13f96ac990b0ba3f5ee1e08df760201e54255bbd5033b10df174a8e59"
+VERSIONED_ADAPTER_SHA256 = "3d037cded9ba4905c42cbccd0b660dcf2f4f70ea44d55704209e50cb510dbc0b"
 
 
 @dataclass(frozen=True)

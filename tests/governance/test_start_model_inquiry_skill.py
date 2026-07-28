@@ -175,7 +175,7 @@ def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:
     fable_argv = module.build_argv("fable", "system prompt")
     codex_argv = module.build_argv("gpt_codex", "system prompt")
 
-    assert module.COMMAND_TIMEOUT_SECONDS == 540
+    assert module.COMMAND_TIMEOUT_SECONDS == 1200
     assert fable_argv[fable_argv.index("--effort") + 1] == "xhigh"
     assert codex_argv[codex_argv.index("-c") + 1] == 'model_reasoning_effort="xhigh"'
 
@@ -189,7 +189,7 @@ def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
     monkeypatch.setattr(
         module.subprocess,
         "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(module.subprocess.TimeoutExpired(args[0], 540)),
+        lambda *args, **kwargs: (_ for _ in ()).throw(module.subprocess.TimeoutExpired(args[0], 1200)),
     )
 
     with pytest.raises(SystemExit) as raised:
