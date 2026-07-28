@@ -47,6 +47,7 @@ from app.builderops.delivery_orchestration_contracts import (
     delivery_effect_input_hash,
     delivery_initiation_approval_hash,
     parse_delivery_contract,
+    resolve_current_authority,
     validate_delivery_plan_evidence,
     validate_delivery_receipt_evidence,
     validate_reducer_effect_evidence,
@@ -1637,6 +1638,101 @@ def test_contracts_round_trip_canonically() -> None:
     invalid_timestamp["provenance"]["created_at"] = "2026-99-99T99:99:99Z"
     with pytest.raises(ValidationError, match="real UTC calendar"):
         parse_delivery_contract(invalid_timestamp)
+
+
+def test_check_run_id_uses_canonical_github_identity() -> None:
+    issue = _issue(4165, SHA_A)
+    initiation = _initiation(issue)
+    plan = _plan(issue, initiation)
+    receipt = _receipt(
+        issue,
+        initiation,
+        plan,
+        _worker_result(issue, plan),
+        _review_result(issue, plan),
+    )
+    evidence = receipt.issue_proofs[0].check_evidence[0]
+
+    for check_run_id in ("09001", "not-a-run"):
+        evidence_payload = evidence.model_dump(mode="json")
+        evidence_payload["check_run_id"] = check_run_id
+        evidence_payload["authority_id"] = (
+            f"github:{issue.repository}/check-runs/{check_run_id}"
+        )
+        with pytest.raises(ValidationError, match="pattern"):
+            CheckEvidence.model_validate(evidence_payload)
+
+        receipt_payload = receipt.model_dump(mode="json")
+        receipt_payload["issue_proofs"][0]["check_evidence"][0].update(
+            evidence_payload
+        )
+        with pytest.raises(ValidationError, match="pattern"):
+            parse_delivery_contract(receipt_payload)
+
+
+def test_current_authority_resolution_is_order_independent() -> None:
+    issue = _issue(4165, SHA_A)
+    plan = _plan(issue, _initiation(issue))
+    plan_ref = ContractRef(
+        schema_version=plan.schema_version,
+        contract_id=plan.plan_id,
+        content_hash=plan.content_hash,
+    )
+    first_authority = _authority(
+        issue,
+        labels=("agent:in-progress", "type:task"),
+    )
+    second_authority = _authority(issue, labels=("type:task",))
+
+    def authority_changed_event(
+        subject: AuthoritySnapshot,
+        correlation_id: str,
+    ) -> ReducerEvent:
+        input_hash = delivery_event_input_hash(
+            run_id="run-4165",
+            plan_ref=plan_ref,
+            sequence=1,
+            event_type="authority_changed",
+            subject_authority=subject,
+            effect_ref=None,
+            result_ref=None,
+            exception=None,
+        )
+        return ReducerEvent(
+            event_id=delivery_event_id(input_hash),
+            input_hash=input_hash,
+            run_id="run-4165",
+            plan_ref=plan_ref,
+            sequence=1,
+            event_type="authority_changed",
+            subject_authority=subject,
+            effect_ref=None,
+            result_ref=None,
+            exception=None,
+            provenance=_provenance(correlation_id),
+        )
+
+    first_event = authority_changed_event(first_authority, "same-sequence-first")
+    second_event = authority_changed_event(second_authority, "same-sequence-second")
+    resolved = resolve_current_authority(
+        authority_id=issue.authority_id,
+        planned_authority=_authority(issue),
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        before_sequence=2,
+        prior_events=(first_event, second_event),
+    )
+    reordered = resolve_current_authority(
+        authority_id=issue.authority_id,
+        planned_authority=_authority(issue),
+        run_id="run-4165",
+        plan_ref=plan_ref,
+        before_sequence=2,
+        prior_events=(second_event, first_event),
+    )
+
+    assert resolved == reordered
+    assert resolved == second_authority
 
 
 def test_claim_recovery_requires_ready_to_absent_transition() -> None:

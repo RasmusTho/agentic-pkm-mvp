@@ -82,6 +82,10 @@ GitSha = Annotated[
     str,
     StringConstraints(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"),
 ]
+GitHubCheckRunId = Annotated[
+    str,
+    StringConstraints(pattern=r"^[1-9][0-9]*$"),
+]
 UtcTimestamp = Annotated[str, AfterValidator(_validate_utc_timestamp)]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
@@ -1101,7 +1105,9 @@ def resolve_current_authority(
     observed authority change bound to the same run and plan - move the current
     state forward. When no such prior event is supplied the plan input remains
     the resolved state, so resolution can never accept an unproven authority
-    claim.
+    claim. Equal event sequences are resolved by the canonical JSON form of
+    their authority snapshot, making the pure resolver independent of tuple
+    order until the reducer log establishes sequence uniqueness.
     """
 
     advancing = [
@@ -1116,7 +1122,10 @@ def resolve_current_authority(
     ]
     if not advancing:
         return planned_authority
-    resolved = max(advancing, key=lambda item: item.sequence).subject_authority
+    resolved = max(
+        advancing,
+        key=lambda item: (item.sequence, canonical_json(item.subject_authority)),
+    ).subject_authority
     assert resolved is not None
     return resolved
 
@@ -1630,6 +1639,9 @@ def validate_reducer_effect_evidence(
         and causal_event.result_ref.schema_version == REVIEW_RESULT_VERSION
         else None
     )
+    prior_events_before_causal = tuple(
+        item for item in prior_events if item.sequence < causal_event.sequence
+    )
     validate_reducer_event_evidence(
         causal_event,
         plan=plan,
@@ -1637,9 +1649,7 @@ def validate_reducer_effect_evidence(
         worker_result=causal_worker,
         review_result=causal_review,
         prior_effects=prior_effects,
-        prior_events=tuple(
-            item for item in prior_events if item.sequence < causal_event.sequence
-        ),
+        prior_events=prior_events_before_causal,
         worker_results=worker_results,
         review_results=review_results,
     )
@@ -1725,8 +1735,8 @@ def validate_reducer_effect_evidence(
             planned_authority=planned_authorities[0],
             run_id=effect.run_id,
             plan_ref=effect.plan_ref,
-            before_sequence=effect.causal_event.sequence + 1,
-            prior_events=prior_events,
+            before_sequence=effect.causal_event.sequence,
+            prior_events=prior_events_before_causal,
         )
     else:
         current_authority = causal_subject
@@ -1947,7 +1957,7 @@ def validate_reducer_event_evidence(
 class CheckEvidence(_StrictFrozenModel):
     check_name: NonEmptyStr
     repository: RepositoryId
-    check_run_id: NonEmptyStr
+    check_run_id: GitHubCheckRunId
     authority_id: NonEmptyStr
     pull_request_number: PositiveInt
     status: Literal["passed", "failed", "skipped"]
