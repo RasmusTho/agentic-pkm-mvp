@@ -191,6 +191,8 @@ through `app/builderops/ckm/overview_html.py` and
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_answers_fixed_owner_questions_without_authority`
 - [ ] O1b comparison and all refusal states are exercised through the production CLI/render call site.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_cli_renders_comparison_and_refusal_states`
+  in completion issue [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222), then its
+  merged delivery receipt on parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080)
 - [ ] JS-off and print receipts prove full-content preservation.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_progressive_enhancement_keeps_full_source_content`; manual PDF receipt on parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080)
 - [ ] No owner doc claims Direction B is supported before all child and parent acceptance checks pass.
@@ -206,8 +208,11 @@ comparison/refusal or visual evidence, owner-doc outcome, and transition-debt ou
 
 The final child records a deterministic HTML digest and a manual PDF receipt proving that trust,
 hazards, comparison/refusal, every capability detail, unfiltered gaps, proposals, and provenance
-print with scripting disabled. Only after the parent ledger is complete may an owner-doc promotion
-change `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md` and the Direction A presentation contract from
+print with scripting disabled. Completion issue [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222)
+adds the protected production-CLI comparison/refusal proof and carries a terminal owner-doc
+promotion candidate. It is an acceptance input, not acceptance: only after the parent ledger is
+complete and #4080 independently accepts may that candidate change
+`docs/CAPABILITY_KNOWLEDGE_MODEL/README.md` and the Direction A presentation contract from
 target-state linkage to supported Direction B truth.
 
 ## Relationship to GitHub issues

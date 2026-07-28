@@ -292,11 +292,13 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
   predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
   reconcile next.)
-- CKM Cockpit Direction B remains a pre-acceptance BuilderOps target under parent #4080. Individual
+- CKM Cockpit Direction B remains a pre-acceptance BuilderOps target under parent #4080. Completion
+  issue #4222 supplies the protected production-CLI comparison/refusal evidence and may carry
+  terminal promotion wording, but it is an acceptance input rather than acceptance itself. Individual
   child slices may exist on `main` as parent-validation inputs, including the inert governed-draft
   projection, but they do not make Direction B a supported owner-facing surface. Direction A
-  remains the supported default until independent parent acceptance is terminal; no child delivery
-  may promote the Direction B support claim.
+  remains the supported default until independent parent acceptance is terminal and the promotion
+  candidate merges; no child delivery may promote the Direction B support claim.
 - The dispatcher's Signboard Markdown projection (`app/dispatcher/signboard.py`,
   `python -m app.dispatcher export-signboard`) preserves any human-authored `## Notes` content
   across re-export instead of overwriting it, and its export path defaults to
