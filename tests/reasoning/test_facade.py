@@ -1,4 +1,4 @@
-"""Tests for app.reasoning.facade -- ReasoningFacade and graph builder."""
+"""Tests for app.reasoning.facade -- ReasoningModeFacade and graph builder."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 
 from app.reasoning.facade import (
-    ReasoningFacade,
+    ReasoningModeFacade,
     _claims_to_graph,
-    get_reasoning_facade,
+    get_reasoning_mode_facade,
 )
 from app.reasoning.models import ReasoningMode, ReasoningRun
 
@@ -90,7 +90,7 @@ def _failing_provider(
 
 class TestExtractClaims:
     def test_delegates_to_claims_mode(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         run = facade.extract_claims("obj-1")
         assert run.mode == ReasoningMode.CLAIMS
         assert run.status == "ok"
@@ -98,28 +98,28 @@ class TestExtractClaims:
         assert len(run.result["claims"]) == 1
 
     def test_trace_id_passthrough(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         run = facade.extract_claims("obj-1", trace_id="t-42")
         assert run.trace_id == "t-42"
 
 
 class TestReview:
     def test_delegates_to_review_mode(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         run = facade.review("obj-2")
         assert run.mode == ReasoningMode.REVIEW
         assert run.status == "ok"
         assert run.result["summary"] == "looks good"
 
     def test_trace_id_passthrough(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         run = facade.review("obj-2", trace_id="t-99")
         assert run.trace_id == "t-99"
 
 
 class TestRank:
     def test_delegates_to_ranking_mode(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         run = facade.rank(["a", "b", "c"])
         assert run.mode == ReasoningMode.RANKING
         assert len(run.result["ranking"]) == 3
@@ -131,14 +131,14 @@ class TestRank:
             calls.append({"mode": mode, "kwargs": kw})
             return _fake_provider(mode, ids, trace_id, **kw)
 
-        facade = ReasoningFacade(provider=spy)
+        facade = ReasoningModeFacade(provider=spy)
         facade.rank(["x"], question="why?")
         assert calls[0]["kwargs"]["question"] == "why?"
 
 
 class TestAnswer:
     def test_delegates_to_ask_answer_mode(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         run = facade.answer("What is 2+2?")
         assert run.mode == ReasoningMode.ASK_ANSWER
         assert "mock answer" in run.result["answer"]
@@ -150,7 +150,7 @@ class TestAnswer:
             calls.append({"ids": ids, "kwargs": kw})
             return _fake_provider(mode, ids, trace_id, **kw)
 
-        facade = ReasoningFacade(provider=spy)
+        facade = ReasoningModeFacade(provider=spy)
         facade.answer("q?", context="ctx", object_ids=["o1", "o2"])
         assert calls[0]["ids"] == ["o1", "o2"]
         assert calls[0]["kwargs"]["context"] == "ctx"
@@ -162,14 +162,14 @@ class TestAnswer:
             calls.append({"ids": ids})
             return _fake_provider(mode, ids, trace_id, **kw)
 
-        facade = ReasoningFacade(provider=spy)
+        facade = ReasoningModeFacade(provider=spy)
         facade.answer("q?")
         assert calls[0]["ids"] == []
 
 
 class TestPlan:
     def test_delegates_to_planning_mode(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         run = facade.plan(["a", "b"], goal="ship it")
         assert run.mode == ReasoningMode.PLANNING
 
@@ -180,7 +180,7 @@ class TestPlan:
             calls.append({"kwargs": kw})
             return _fake_provider(mode, ids, trace_id, **kw)
 
-        facade = ReasoningFacade(provider=spy)
+        facade = ReasoningModeFacade(provider=spy)
         facade.plan(["a"], goal="do X")
         assert calls[0]["kwargs"]["question"] == "do X"
 
@@ -191,13 +191,13 @@ class TestPlan:
 
 class TestErrorPropagation:
     def test_failed_run_surfaces_error(self) -> None:
-        facade = ReasoningFacade(provider=_failing_provider)
+        facade = ReasoningModeFacade(provider=_failing_provider)
         run = facade.extract_claims("obj-1")
         assert run.status == "failed"
         assert run.error == "provider exploded"
 
     def test_failed_claims_gives_empty_graph(self) -> None:
-        facade = ReasoningFacade(provider=_failing_provider)
+        facade = ReasoningModeFacade(provider=_failing_provider)
         graph = facade.build_graph("obj-1")
         assert graph.nodes == []
         assert graph.edges == []
@@ -210,7 +210,7 @@ class TestErrorPropagation:
 
 class TestBuildGraph:
     def test_claims_become_nodes(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         graph = facade.build_graph("obj-1")
         claim_nodes = [n for n in graph.nodes if n.kind == "claim"]
         assert len(claim_nodes) == 1
@@ -218,14 +218,14 @@ class TestBuildGraph:
         assert claim_nodes[0].label == "Sun is hot"
 
     def test_evidence_becomes_nodes(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         graph = facade.build_graph("obj-1")
         ev_nodes = [n for n in graph.nodes if n.kind == "evidence"]
         assert len(ev_nodes) == 1
         assert ev_nodes[0].label == "paper.pdf"
 
     def test_inferences_become_edges(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         graph = facade.build_graph("obj-1")
         assert len(graph.edges) == 1
         edge = graph.edges[0]
@@ -235,7 +235,7 @@ class TestBuildGraph:
         assert edge.properties["rationale"] == "trivial"
 
     def test_source_run_id_set(self) -> None:
-        facade = ReasoningFacade(provider=_fake_provider)
+        facade = ReasoningModeFacade(provider=_fake_provider)
         graph = facade.build_graph("obj-1")
         assert graph.source_run_id  # non-empty
 
@@ -246,7 +246,7 @@ class TestBuildGraph:
             calls.append(trace_id)
             return _fake_provider(mode, ids, trace_id, **kw)
 
-        facade = ReasoningFacade(provider=spy)
+        facade = ReasoningModeFacade(provider=spy)
         facade.build_graph("x", trace_id="t-graph")
         assert calls[0] == "t-graph"
 
@@ -301,7 +301,7 @@ class TestCustomProvider:
             called["count"] += 1
             return _fake_provider(mode, ids, trace_id, **kw)
 
-        facade = ReasoningFacade(provider=custom)
+        facade = ReasoningModeFacade(provider=custom)
         facade.extract_claims("x")
         facade.review("x")
         assert called["count"] == 2
@@ -311,12 +311,29 @@ class TestCustomProvider:
 # Factory function
 # ---------------------------------------------------------------------------
 
-class TestGetReasoningFacade:
+class TestGetReasoningModeFacade:
     def test_returns_facade_instance(self) -> None:
-        facade = get_reasoning_facade(provider=_fake_provider)
-        assert isinstance(facade, ReasoningFacade)
+        facade = get_reasoning_mode_facade(provider=_fake_provider)
+        assert isinstance(facade, ReasoningModeFacade)
+
+    def test_returns_mode_facade_and_old_names_are_gone(self) -> None:
+        """The module must not still offer the names it collided on.
+
+        An alias would keep ``from ... import get_reasoning_facade`` ambiguous
+        between this module and ``app/components/reasoning/facade.py``, which is
+        the whole defect (#4207, D8).
+        """
+        from app.reasoning import facade as mode_facade
+
+        assert isinstance(
+            get_reasoning_mode_facade(provider=_fake_provider), ReasoningModeFacade
+        )
+        assert not hasattr(mode_facade, "ReasoningFacade")
+        assert not hasattr(mode_facade, "get_reasoning_facade")
+        assert set(mode_facade.__all__) >= {"ReasoningModeFacade", "get_reasoning_mode_facade"}
+        assert not {"ReasoningFacade", "get_reasoning_facade"} & set(mode_facade.__all__)
 
     def test_custom_provider_bypasses_singleton(self) -> None:
-        f1 = get_reasoning_facade(provider=_fake_provider)
-        f2 = get_reasoning_facade(provider=_fake_provider)
+        f1 = get_reasoning_mode_facade(provider=_fake_provider)
+        f2 = get_reasoning_mode_facade(provider=_fake_provider)
         assert f1 is not f2  # each call with custom provider is fresh

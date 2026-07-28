@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any, Callable
 
-from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
+from app.reasoning.facade import ReasoningModeFacade, get_reasoning_mode_facade
 
 _DENY_HINTS = (
     "write",
@@ -46,7 +46,7 @@ class ReadOnlyChatCognition:
     def __init__(
         self,
         *,
-        facade_factory: Callable[[], ReasoningFacade] = get_reasoning_facade,
+        facade_factory: Callable[[], ReasoningModeFacade] = get_reasoning_mode_facade,
         note_writer: Callable[..., None] | None = None,
         outbox_writer: Callable[..., None] | None = None,
     ) -> None:
