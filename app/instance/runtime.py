@@ -16,7 +16,6 @@ from uuid import uuid4
 
 import yaml
 
-from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
     same_filesystem_root,
