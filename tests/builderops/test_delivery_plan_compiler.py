@@ -26,6 +26,7 @@ from app.builderops.delivery_plan_compiler import (
     DeliveryIssuePlanningSnapshot,
     DeliveryPlanCompilation,
     DeliveryPlanningSnapshot,
+    IssueContractResolutionEvidence,
     SbsImpactEntry,
     compile_delivery_plan,
 )
@@ -38,6 +39,7 @@ OBSERVED_AT = "2026-07-28T07:00:00Z"
 APPROVED_AT = "2026-07-28T07:01:00Z"
 CREATED_AT = "2026-07-28T07:02:00Z"
 SNAPSHOT_AT = "2026-07-28T07:03:00Z"
+RESOLVED_AT = "2026-07-28T07:02:30Z"
 
 
 def _issue(number: int, content_hash: str = SHA_A) -> IssueScope:
@@ -167,6 +169,87 @@ def _sbs_impact(
     )
 
 
+def _unquote(value: str) -> str:
+    if value.startswith("`") and value.endswith("`"):
+        return value[1:-1]
+    return value
+
+
+def _resolution_evidence(
+    issue: IssueScope,
+    *,
+    source_anchors: tuple[str, ...],
+    verify_targets: tuple[str, ...],
+    observed_at: str = RESOLVED_AT,
+    resolved_content_hash: str = SHA_D,
+) -> tuple[IssueContractResolutionEvidence, ...]:
+    evidence: list[IssueContractResolutionEvidence] = []
+    for source_anchor in source_anchors:
+        target = source_anchor.strip()
+        path = target.split(" :: ", maxsplit=1)[0]
+        evidence.append(
+            IssueContractResolutionEvidence(
+                schema_version=(
+                    "builderops.issue-contract-resolution-evidence.v1"
+                ),
+                issue_authority_id=issue.authority_id,
+                issue_contract_hash=issue.contract_hash,
+                target_kind="source_anchor",
+                target=target,
+                resolver_id="builderops.repo-anchor-resolver",
+                resolver_version="v1",
+                resolved_authority_id=(
+                    f"git:{issue.repository}:{path}"
+                ),
+                resolved_content_hash=resolved_content_hash,
+                observed_at=observed_at,
+            )
+        )
+    for verify_target in verify_targets:
+        target = verify_target.strip()
+        unquoted = _unquote(target)
+        if unquoted.startswith("runtime receipt: "):
+            identity = unquoted.removeprefix("runtime receipt: ")
+            resolver_id = "builderops.runtime-receipt-resolver"
+            resolved_authority_id = (
+                f"builderops:runtime-receipt-registry:{identity}"
+            )
+        else:
+            resolver_id = "builderops.repo-verify-target-resolver"
+            if unquoted.startswith("doc writeback at "):
+                repo_target = _unquote(
+                    unquoted.removeprefix("doc writeback at ")
+                )
+                path = repo_target.split(" :: ", maxsplit=1)[0]
+            elif unquoted.startswith("roadmap diff: "):
+                repo_target = _unquote(
+                    unquoted.removeprefix("roadmap diff: ")
+                )
+                path = repo_target.split(" :: ", maxsplit=1)[0]
+            else:
+                path = unquoted.split("::", maxsplit=1)[0]
+            resolved_authority_id = (
+                f"git:{issue.repository}:{path}"
+            )
+        evidence.append(
+            IssueContractResolutionEvidence(
+                schema_version=(
+                    "builderops.issue-contract-resolution-evidence.v1"
+                ),
+                issue_authority_id=issue.authority_id,
+                issue_contract_hash=issue.contract_hash,
+                target_kind="verify_target",
+                target=target,
+                resolver_id=resolver_id,
+                resolver_version="v1",
+                resolved_authority_id=resolved_authority_id,
+                resolved_content_hash=resolved_content_hash,
+                observed_at=observed_at,
+            )
+        )
+    return tuple(evidence)
+
+
 def _fact(
     issue: IssueScope,
     *,
@@ -181,22 +264,35 @@ def _fact(
     linked_pr_head: str | None = None,
     parent_issue: IssueScope | None = None,
     scope_role: str = "delivery",
+    resolution_evidence: (
+        tuple[IssueContractResolutionEvidence, ...] | None
+    ) = None,
 ) -> DeliveryIssuePlanningSnapshot:
+    resolved_source_anchors = (
+        source_anchors
+        if source_anchors is not None
+        else (
+            "docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/"
+            "COMPILE_IMMUTABLE_DELIVERY_PLANS.md"
+            " :: What This Task Does",
+        )
+    )
     return DeliveryIssuePlanningSnapshot(
         issue=issue,
         authority=authority or _authority(issue),
         priority="high",
         risk_class=risk_class,
-        source_anchors=(
-            source_anchors
-            if source_anchors is not None
-            else (
-                "docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/"
-                "COMPILE_IMMUTABLE_DELIVERY_PLANS.md"
-                " :: What This Task Does",
+        source_anchors=resolved_source_anchors,
+        verify_targets=verify_targets,
+        resolution_evidence=(
+            resolution_evidence
+            if resolution_evidence is not None
+            else _resolution_evidence(
+                issue,
+                source_anchors=resolved_source_anchors,
+                verify_targets=verify_targets,
             )
         ),
-        verify_targets=verify_targets,
         sbs_impact=sbs_impact or _sbs_impact(),
         dependencies=dependencies,
         likely_mutation_paths=mutation_paths,
@@ -238,6 +334,23 @@ def test_compiler_is_deterministic() -> None:
     assert first.plan.canonical_bytes() == second.plan.canonical_bytes()
     assert first.plan.content_hash == second.plan.content_hash
     assert first.plan.plan_id == second.plan.plan_id
+
+    changed_evidence = tuple(
+        item.model_copy(update={"resolved_content_hash": SHA_C})
+        for item in facts[0].resolution_evidence
+    )
+    changed = compile_delivery_plan(
+        initiation,
+        _snapshot(
+            facts[0].model_copy(
+                update={"resolution_evidence": changed_evidence}
+            ),
+            facts[1],
+        ),
+    )
+    assert changed.plan is not None
+    assert changed.input_hash != first.input_hash
+    assert changed.plan.plan_id != first.plan.plan_id
 
     duplicate_first = compile_delivery_plan(
         _initiation((issue_a,)),
@@ -472,6 +585,127 @@ def test_compiler_accepts_concrete_non_test_verify_targets() -> None:
     assert result.refusals == ()
 
 
+def test_compiler_refuses_unresolved_or_invalid_resolution_evidence() -> None:
+    missing_source = _issue(5245, "1" * 64)
+    missing_receipt = _issue(5246, "2" * 64)
+    duplicate = _issue(5247, "3" * 64)
+    mismatched = _issue(5248, "4" * 64)
+    stale = _issue(5249, "5" * 64)
+
+    missing_source_fact = _fact(
+        missing_source,
+        source_anchors=(
+            "docs/DOES_NOT_EXIST.md :: Plausible contract",
+        ),
+    )
+    missing_receipt_fact = _fact(
+        missing_receipt,
+        verify_targets=(
+            "runtime receipt: unregistered_delivery_receipt.v1",
+        ),
+    )
+    duplicate_fact = _fact(duplicate)
+    mismatched_fact = _fact(mismatched)
+    stale_fact = _fact(stale)
+    result = compile_delivery_plan(
+        _initiation(
+            (
+                missing_source,
+                missing_receipt,
+                duplicate,
+                mismatched,
+                stale,
+            )
+        ),
+        _snapshot(
+            missing_source_fact.model_copy(
+                update={
+                    "resolution_evidence": tuple(
+                        item
+                        for item in missing_source_fact.resolution_evidence
+                        if item.target_kind != "source_anchor"
+                    )
+                }
+            ),
+            missing_receipt_fact.model_copy(
+                update={
+                    "resolution_evidence": tuple(
+                        item
+                        for item in missing_receipt_fact.resolution_evidence
+                        if item.target_kind != "verify_target"
+                    )
+                }
+            ),
+            duplicate_fact.model_copy(
+                update={
+                    "resolution_evidence": (
+                        *duplicate_fact.resolution_evidence,
+                        duplicate_fact.resolution_evidence[0],
+                    )
+                }
+            ),
+            mismatched_fact.model_copy(
+                update={
+                    "resolution_evidence": (
+                        mismatched_fact.resolution_evidence[0].model_copy(
+                            update={
+                                "issue_contract_hash": SHA_A,
+                            }
+                        ),
+                        *mismatched_fact.resolution_evidence[1:],
+                    )
+                }
+            ),
+            stale_fact.model_copy(
+                update={
+                    "resolution_evidence": tuple(
+                        item.model_copy(
+                            update={
+                                "observed_at": "2026-07-28T06:59:59Z",
+                            }
+                        )
+                        for item in stale_fact.resolution_evidence
+                    )
+                }
+            ),
+        ),
+    )
+
+    assert result.plan is None
+    codes_by_issue = {
+        refusal.issue.issue_number: refusal.code
+        for refusal in result.refusals
+    }
+    assert codes_by_issue == {
+        5245: "missing_resolution_evidence",
+        5246: "missing_resolution_evidence",
+        5247: "duplicate_resolution_evidence",
+        5248: "mismatched_resolution_evidence",
+        5249: "stale_resolution_evidence",
+    }
+
+
+def test_compiler_accepts_complete_canonical_resolution_evidence() -> None:
+    issue = _issue(5250)
+    result = compile_delivery_plan(
+        _initiation((issue,)),
+        _snapshot(
+            _fact(
+                issue,
+                verify_targets=(
+                    "tests/example.py::test_contract",
+                    "doc writeback at "
+                    "docs/STATUS.md :: Delivery status",
+                    "runtime receipt: delivery_receipt.v1",
+                ),
+            )
+        ),
+    )
+
+    assert result.plan is not None
+    assert result.refusals == ()
+
+
 @pytest.mark.parametrize(
     "source_anchor",
     [
@@ -510,6 +744,10 @@ def test_compiler_rejects_noncanonical_source_anchor_parity_cases(
         "doc writeback at `./docs/STATUS.md :: Delivery status`",
         "doc writeback at `<path> :: <anchor>`",
         "doc writeback at `docs/STATUS.md :: Delivery later`",
+        (
+            "`doc writeback at "
+            "`docs/STATUS.md :: Delivery status``"
+        ),
         "roadmap diff: `docs//ROADMAP.md :: DDO-03`",
         "runtime receipt: later",
         "runtime receipt: later.v1",

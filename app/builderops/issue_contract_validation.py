@@ -106,7 +106,10 @@ def is_resolvable_verify_target(value: str) -> bool:
     target = value.strip()
     if not target or _PLACEHOLDER.search(target) is not None:
         return False
-    target = _strip_backtick_pair(target)
+    unquoted_target = _strip_backtick_pair(target)
+    if unquoted_target != target and "`" in unquoted_target:
+        return False
+    target = unquoted_target
 
     test_target = _TEST_VERIFY_TARGET.fullmatch(target)
     if test_target is not None:

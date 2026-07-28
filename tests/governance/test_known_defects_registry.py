@@ -2749,6 +2749,10 @@ def test_promotion_rejects_noncanonical_source_anchor_parity_cases(
         "doc writeback at `./docs/STATUS.md :: Delivery status`",
         "doc writeback at `<path> :: <anchor>`",
         "doc writeback at `docs/STATUS.md :: Delivery later`",
+        (
+            "`doc writeback at "
+            "`docs/STATUS.md :: Delivery status``"
+        ),
         "roadmap diff: `docs//ROADMAP.md :: DDO-03`",
         "runtime receipt: later",
         "runtime receipt: later.v1",

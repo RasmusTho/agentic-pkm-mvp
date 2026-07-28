@@ -81,13 +81,25 @@ DeliveryStatus: TypeAlias = Literal[
     "delivered",
 ]
 ScopeRole: TypeAlias = Literal["delivery", "validation_parent"]
+ResolutionTargetKind: TypeAlias = Literal[
+    "source_anchor",
+    "verify_target",
+]
+ResolutionResolverId: TypeAlias = Literal[
+    "builderops.repo-anchor-resolver",
+    "builderops.repo-verify-target-resolver",
+    "builderops.runtime-receipt-resolver",
+]
 RefusalCode: TypeAlias = Literal[
     "approved_exclusion",
     "authority_ambiguity",
     "budget_exceeded",
     "dependency_blocked",
     "dependency_cycle",
+    "duplicate_resolution_evidence",
     "malformed_sbs_impact",
+    "mismatched_resolution_evidence",
+    "missing_resolution_evidence",
     "missing_source_anchors",
     "missing_verify_targets",
     "mutation_overlap",
@@ -96,6 +108,7 @@ RefusalCode: TypeAlias = Literal[
     "parent_validation_only",
     "risk_policy_blocked",
     "stale_delivery",
+    "stale_resolution_evidence",
 ]
 _POLICY_RISK_ALLOWLIST: Final[
     dict[str, frozenset[RiskClass]]
@@ -133,6 +146,37 @@ class DeliveryDependency(_CompilerModel):
     satisfied: bool
 
 
+class IssueContractResolutionEvidence(_CompilerModel):
+    """Captured proof that one declared Issue-contract target resolved."""
+
+    schema_version: Literal[
+        "builderops.issue-contract-resolution-evidence.v1"
+    ]
+    issue_authority_id: str
+    issue_contract_hash: Sha256
+    target_kind: ResolutionTargetKind
+    target: str
+    resolver_id: ResolutionResolverId
+    resolver_version: Literal["v1"]
+    resolved_authority_id: str
+    resolved_content_hash: Sha256
+    observed_at: UtcTimestamp
+
+    @field_validator(
+        "issue_authority_id",
+        "target",
+        "resolved_authority_id",
+    )
+    @classmethod
+    def _validate_canonical_identity(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "resolution evidence identities must not be empty"
+            )
+        return normalized
+
+
 class DeliveryIssuePlanningSnapshot(_CompilerModel):
     issue: IssueScope
     authority: AuthoritySnapshot
@@ -140,6 +184,10 @@ class DeliveryIssuePlanningSnapshot(_CompilerModel):
     risk_class: RiskClass
     source_anchors: tuple[str, ...]
     verify_targets: tuple[str, ...]
+    resolution_evidence: tuple[
+        IssueContractResolutionEvidence,
+        ...,
+    ]
     sbs_impact: tuple[SbsImpactEntry, ...]
     dependencies: tuple[DeliveryDependency, ...] = ()
     likely_mutation_paths: tuple[str, ...] = ()
@@ -380,18 +428,31 @@ def compile_delivery_plan(
                 "stale_delivery",
                 "issue already has active or delivered PR evidence",
             )
-        if not _verify_targets_are_concrete(fact.verify_targets):
+        verify_targets_are_concrete = _verify_targets_are_concrete(
+            fact.verify_targets
+        )
+        source_anchors_are_concrete = _source_anchors_are_concrete(
+            fact.source_anchors
+        )
+        if not verify_targets_are_concrete:
             refuse(
                 issue,
                 "missing_verify_targets",
                 "strict issue contract has no concrete Verify target",
             )
-        if not _source_anchors_are_concrete(fact.source_anchors):
+        if not source_anchors_are_concrete:
             refuse(
                 issue,
                 "missing_source_anchors",
                 "strict issue contract has no source anchor",
             )
+        _validate_resolution_evidence(
+            fact,
+            captured_at=snapshot.captured_at,
+            validate_source_anchors=source_anchors_are_concrete,
+            validate_verify_targets=verify_targets_are_concrete,
+            refuse=refuse,
+        )
         if not _sbs_impact_is_complete(fact.sbs_impact):
             refuse(
                 issue,
@@ -654,6 +715,7 @@ def _canonical_issue_payload(
             exclude={
                 "source_anchors",
                 "verify_targets",
+                "resolution_evidence",
                 "sbs_impact",
                 "dependencies",
                 "likely_mutation_paths",
@@ -664,6 +726,13 @@ def _canonical_issue_payload(
         ),
         "verify_targets": sorted(
             value.strip() for value in fact.verify_targets
+        ),
+        "resolution_evidence": sorted(
+            (
+                evidence.model_dump(mode="json")
+                for evidence in fact.resolution_evidence
+            ),
+            key=canonical_hash,
         ),
         "sbs_impact": sorted(
             (
@@ -718,6 +787,167 @@ def _source_anchors_are_concrete(values: tuple[str, ...]) -> bool:
         is_durable_repo_anchor(value)
         for value in cleaned
     )
+
+
+def _strip_backtick_pair(value: str) -> str:
+    if value.startswith("`") and value.endswith("`"):
+        return value[1:-1]
+    return value
+
+
+def _expected_resolution_identity(
+    *,
+    issue: IssueScope,
+    target_kind: ResolutionTargetKind,
+    target: str,
+) -> tuple[ResolutionResolverId, str] | None:
+    canonical_target = target.strip()
+    if target_kind == "source_anchor":
+        path, separator, _ = canonical_target.partition(" :: ")
+        if not separator:
+            return None
+        return (
+            "builderops.repo-anchor-resolver",
+            f"git:{issue.repository}:{path}",
+        )
+
+    unquoted = _strip_backtick_pair(canonical_target)
+    if unquoted.startswith("runtime receipt: "):
+        identity = unquoted.removeprefix("runtime receipt: ")
+        return (
+            "builderops.runtime-receipt-resolver",
+            f"builderops:runtime-receipt-registry:{identity}",
+        )
+    if unquoted.startswith("doc writeback at "):
+        repo_target = _strip_backtick_pair(
+            unquoted.removeprefix("doc writeback at ")
+        )
+        path, separator, _ = repo_target.partition(" :: ")
+    elif unquoted.startswith("roadmap diff: "):
+        repo_target = _strip_backtick_pair(
+            unquoted.removeprefix("roadmap diff: ")
+        )
+        path, separator, _ = repo_target.partition(" :: ")
+    else:
+        path, separator, _ = unquoted.partition("::")
+    if not separator:
+        return None
+    return (
+        "builderops.repo-verify-target-resolver",
+        f"git:{issue.repository}:{path}",
+    )
+
+
+def _validate_resolution_evidence(
+    fact: DeliveryIssuePlanningSnapshot,
+    *,
+    captured_at: str,
+    validate_source_anchors: bool,
+    validate_verify_targets: bool,
+    refuse: _Refuse,
+) -> None:
+    declared: set[tuple[ResolutionTargetKind, str]] = set()
+    if validate_source_anchors:
+        declared.update(
+            ("source_anchor", value)
+            for value in _clean_values(fact.source_anchors)
+        )
+    if validate_verify_targets:
+        declared.update(
+            ("verify_target", value)
+            for value in _clean_values(fact.verify_targets)
+        )
+
+    evidence_by_target: dict[
+        tuple[ResolutionTargetKind, str],
+        list[IssueContractResolutionEvidence],
+    ] = defaultdict(list)
+    for evidence in fact.resolution_evidence:
+        if (
+            evidence.target_kind == "source_anchor"
+            and not validate_source_anchors
+        ) or (
+            evidence.target_kind == "verify_target"
+            and not validate_verify_targets
+        ):
+            continue
+        evidence_by_target[
+            (evidence.target_kind, evidence.target)
+        ].append(evidence)
+
+    if any(key not in evidence_by_target for key in declared):
+        refuse(
+            fact.issue,
+            "missing_resolution_evidence",
+            (
+                "strict issue contract target lacks immutable "
+                "resolution evidence"
+            ),
+        )
+    if any(
+        len(entries) != 1
+        for entries in evidence_by_target.values()
+    ):
+        refuse(
+            fact.issue,
+            "duplicate_resolution_evidence",
+            (
+                "strict issue contract target has duplicate "
+                "resolution evidence"
+            ),
+        )
+    if any(key not in declared for key in evidence_by_target):
+        refuse(
+            fact.issue,
+            "mismatched_resolution_evidence",
+            (
+                "resolution evidence target is not an exact declared "
+                "Issue-contract target"
+            ),
+        )
+
+    for key, entries in evidence_by_target.items():
+        if key not in declared:
+            continue
+        expected = _expected_resolution_identity(
+            issue=fact.issue,
+            target_kind=key[0],
+            target=key[1],
+        )
+        if any(
+            expected is None
+            or evidence.issue_authority_id
+            != fact.issue.authority_id
+            or evidence.issue_contract_hash
+            != fact.issue.contract_hash
+            or (
+                evidence.resolver_id,
+                evidence.resolved_authority_id,
+            )
+            != expected
+            for evidence in entries
+        ):
+            refuse(
+                fact.issue,
+                "mismatched_resolution_evidence",
+                (
+                    "resolution evidence does not exactly bind the "
+                    "Issue contract, target, resolver, and authority"
+                ),
+            )
+        if any(
+            evidence.observed_at < fact.authority.observed_at
+            or evidence.observed_at > captured_at
+            for evidence in entries
+        ):
+            refuse(
+                fact.issue,
+                "stale_resolution_evidence",
+                (
+                    "resolution evidence is outside the Issue-authority "
+                    "snapshot chronology"
+                ),
+            )
 
 
 def _risk_is_allowed(
