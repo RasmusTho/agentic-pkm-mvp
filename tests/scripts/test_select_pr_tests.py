@@ -462,6 +462,10 @@ def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
     assert "tests/stores" in selection.targets
     assert "tests/ingest" in selection.targets
     assert "tests/architecture" in selection.targets
+    assert (
+        "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event"
+        in selection.targets
+    )
 
 
 def test_object_store_module_selects_store_ingest_regressions() -> None:
@@ -474,6 +478,10 @@ def test_object_store_module_selects_store_ingest_regressions() -> None:
     assert "tests/stores" in selection.targets
     assert "tests/ingest" in selection.targets
     assert "tests/architecture" in selection.targets
+    assert (
+        "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event"
+        in selection.targets
+    )
 
 
 def test_outbox_worker_change_selects_worker_regressions() -> None:
@@ -504,6 +512,7 @@ def test_outbox_embedding_events_select_shared_regressions() -> None:
     assert "tests/indexer" in selection.targets
     assert "tests/index" in selection.targets
     assert "tests/services/test_indexer_worker.py" in selection.targets
+    assert "tests/architecture/test_events_outbox_contracts.py" in selection.targets
 
 
 def test_worker_metrics_module_change_has_a_ci_owner() -> None:
