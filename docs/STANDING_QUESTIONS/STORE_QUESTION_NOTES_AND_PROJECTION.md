@@ -62,10 +62,19 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    vault notes are the SoR; the projection exists for query (open-question list, evidence-trail
    lookups, pending-candidate lookups) and must fully rebuild from vault (DRI discipline). At this
    boundary only, the projector converts the three values bound to Postgres `TIMESTAMPTZ` columns
-   (`created_at`, `last_matched_at`, `last_refreshed_at`) to equivalent UTC literals that Postgres
-   accepts, including its `BC` notation for RFC 3339 year `0000`. The vault's canonical RFC 3339
-   strings remain unchanged; `evidence[].matched_at` remains unchanged inside JSON rather than being
-   adapted as a database timestamp.
+   (`created_at`, `last_matched_at`, `last_refreshed_at`) to UTC literals Postgres will store,
+   including its `BC` notation for RFC 3339 year `0000`. **The conversion preserves the instant
+   except at two documented boundaries (shipped):** (a) an announced leap second is folded onto the
+   following minute — Postgres has no `:60` representation, so a vault-canonical
+   `2016-12-31T23:59:60Z` is stored as `2017-01-01 00:00:00+00`, one second later, on all 27
+   announced dates; and (b) fractional seconds past the microsecond `TIMESTAMPTZ` resolves to are
+   truncated, never rounded, since RFC 3339's `time-secfrac` is unbounded. Both folds happen in the
+   projector, not in Postgres: forwarding a `:60` literal or an over-long fraction to the server is a
+   hard error that aborts the whole TRUNCATE+replay rebuild, so bounding them here is what keeps the
+   projection rebuildable for every value the write seam accepts. Both are query-surface
+   approximations, not a loss of canonical truth — the vault's canonical RFC 3339 strings remain
+   unchanged and the projection fully rebuilds from them; `evidence[].matched_at` remains unchanged
+   inside JSON rather than being adapted as a database timestamp.
 5. **Id minting**: `question_id = sq-<uuid>`, distinct namespace from `ep-*` (episodes) and any other
    entity id space in the vault — the store rejects a caller-supplied id that does not match the
    `sq-` prefix.

@@ -100,10 +100,19 @@ class Rfc3339DateTime:
     fraction: str
     offset_minutes: int
 
-    def utc_date_and_minute(self) -> tuple[int, int, int, int, int]:
-        """Return the offset-adjusted UTC calendar date, hour, and minute."""
+    def utc_date_and_minute(
+        self, *, minute_delta: int = 0
+    ) -> tuple[int, int, int, int, int]:
+        """Return the offset-adjusted UTC calendar date, hour, and minute.
+
+        ``minute_delta`` shifts the result by whole minutes. The projection boundary
+        passes ``1`` to fold a leap second onto the following minute; no caller needs a
+        larger shift, and a larger one is refused by :func:`_shift_gregorian_date`
+        because the legal offset range (±23:59) plus one minute can never move the
+        calendar date by more than a day.
+        """
         utc_minute, minute = divmod(
-            self.hour * 60 + self.minute - self.offset_minutes,
+            self.hour * 60 + self.minute - self.offset_minutes + minute_delta,
             60,
         )
         day_delta, hour = divmod(utc_minute, 24)
