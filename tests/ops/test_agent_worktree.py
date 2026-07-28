@@ -233,6 +233,55 @@ def test_registration_generation_does_not_replay_after_worktree_recreation(
     )
 
 
+def test_bind_live_generations_skips_removal_tombstones(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Tombstones must not cost a `git rev-parse` on every report/janitor run.
+
+    A removal tombstone's checkout is gone by construction, so the probe always
+    fails and is always caught, and no consumer reads a tombstone's generation.
+    Tombstones are never pruned, so probing them is unbounded work per run.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    live = tmp_path / "live"
+    tombstoned = tmp_path / "tombstoned"
+    probed: list[str] = []
+
+    def fake_generation(_cwd: Path, worktree: Path, *, create: bool) -> str:
+        probed.append(str(worktree))
+        return GENERATION
+
+    monkeypatch.setattr(agent_worktree, "_worktree_generation", fake_generation)
+
+    bound = agent_worktree._bind_live_generations(
+        repo,
+        {
+            str(live.resolve()): {
+                "path": str(live.resolve()),
+                "branch": "codex/live",
+                "generation": GENERATION,
+                "status": "active",
+            },
+            str(tombstoned.resolve()): {
+                "path": str(tombstoned.resolve()),
+                "branch": "codex/tombstoned",
+                "generation": GENERATION,
+                "status": "removed",
+            },
+        },
+    )
+
+    assert probed == [str(live.resolve())]
+    # The tombstone survives untouched: its path->branch binding is exactly what
+    # keeps a later run from reclassifying the branch as ordinary.
+    tombstone = bound[str(tombstoned.resolve())]
+    assert tombstone["status"] == "removed"
+    assert tombstone["branch"] == "codex/tombstoned"
+    assert tombstone["path"] == str(tombstoned.resolve())
+
+
 def test_lifecycle_register_heartbeat_release_and_report(
     tmp_path,
     monkeypatch,

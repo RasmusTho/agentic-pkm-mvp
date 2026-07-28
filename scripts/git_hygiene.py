@@ -12,6 +12,7 @@ import math
 import re
 import subprocess
 import time
+import unicodedata
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -400,11 +401,41 @@ def _canonical_path_key(path: str) -> str:
     return str(Path(path).expanduser().resolve(strict=False))
 
 
+def _folded_path_key(path: str) -> str:
+    """Case- and normalisation-insensitive identity for a filesystem path.
+
+    Kept in its own ``casefold:`` namespace so it can only ever match another
+    folded identity — an exact spelling never collides with a folded one.
+    """
+    return "casefold:" + unicodedata.normalize("NFC", path).casefold()
+
+
 def _path_identities(path: str | None) -> set[str]:
-    """Both spellings of a worktree path, so lease matching is not spelling-bound."""
+    """Every spelling that can denote the same worktree directory.
+
+    Lease matching must not be spelling-bound. Besides the raw and canonical
+    (``resolve()``d) spellings, each is also emitted in a case-folded, NFC
+    normalised form, because the filesystem this repo runs on by default (macOS
+    APFS/HFS+) is case-insensitive *and* normalisation-insensitive:
+    ``…/candidate-wt``, ``…/CANDIDATE-WT`` and the NFD spelling of a non-ASCII
+    path are the identical directory there, and ``os.path.normcase`` is a no-op
+    on POSIX so it cannot express this. The directory is already gone by the
+    time the branch deletion is revalidated, so the filesystem cannot be probed
+    for its actual case sensitivity at that point.
+
+    On a genuinely case-sensitive filesystem those spellings are different
+    directories and the folded identity can over-match. That is deliberate:
+    every consumer uses these identities as a *preservation* predicate, so an
+    over-match at worst preserves a branch that could have been reclaimed, while
+    an under-match runs an irreversible ``git branch -D`` against a directory
+    somebody holds a lease on. The asymmetry is not close, and the collision it
+    costs requires two live agent worktree paths differing only by case or
+    Unicode form.
+    """
     if not path:
         return set()
-    return {path, _canonical_path_key(path)}
+    spellings = {path, _canonical_path_key(path)}
+    return spellings | {_folded_path_key(spelling) for spelling in spellings}
 
 
 def _leased_worktree_paths(active_resources: set[str]) -> set[str]:

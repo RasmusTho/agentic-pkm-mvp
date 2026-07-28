@@ -14,7 +14,10 @@ path (``build_janitor_plan`` / ``janitor_apply``):
 
 from pathlib import Path
 import subprocess
+import unicodedata
 from contextlib import nullcontext
+
+import pytest
 
 from scripts import agent_worktree, git_hygiene
 
@@ -489,3 +492,179 @@ def test_restart_cleanup_preserves_branch_with_active_former_worktree_path_lease
         "name": "codex/candidate",
         "reason": "active_worktree_path_lease",
     } in second["skipped"]
+
+
+# --- Anchor 4: path identity is case- and normalisation-robust (round-1 F1) ---
+
+
+def _assert_post_removal_lease_spelling_blocks_delete(
+    tmp_path: Path,
+    *,
+    worktree_name: str,
+    lease_spelling: str,
+) -> None:
+    """Run the #4201 post-removal scenario with an alternate lease *spelling*.
+
+    ``lease_spelling`` denotes the same directory as ``worktree_name`` on the
+    case-insensitive, normalisation-insensitive filesystem this repo runs on by
+    default (macOS APFS/HFS+). The contract asserted here is that the guard is
+    not spelling-bound: an active ``worktree:<path>`` lease must block the
+    irreversible ``git branch -D`` regardless of how the path is spelled.
+    """
+    repo = _init_repo_with_merged_branch(
+        tmp_path, branch="codex/candidate", squash=True
+    )
+    # Squash merge -> non-ancestor -> merged_pr proof -> irreversible `branch -D`.
+    assert git_hygiene._is_ancestor(repo, "codex/candidate", "origin/main") is False
+
+    worktree = tmp_path / worktree_name
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree), "codex/candidate"],
+        cwd=repo,
+        check=True,
+    )
+    lifecycle_records = {
+        str(worktree.resolve()): {
+            "path": str(worktree.resolve()),
+            "branch": "codex/candidate",
+            "generation": GENERATION,
+            "owner": "prior-agent",
+            "status": "complete",
+            "registered_at": -20,
+            "heartbeat_at": -10,
+            "complete_at": 0,
+            "expires_at": 0,
+        }
+    }
+    leased_path = str(tmp_path / lease_spelling)
+    assert leased_path != str(worktree)
+    lease = {"resource_id": f"worktree:{leased_path}", "expires_at": None}
+
+    def load_active_leases() -> list[dict[str, object]]:
+        return [] if worktree.exists() else [dict(lease)]
+
+    report = git_hygiene.janitor_apply(
+        repo,
+        pr_states={"codex/candidate": {"state": "MERGED"}},
+        active_lease_loader=load_active_leases,
+        lifecycle_authority_guard=_allow_lifecycle_authority,
+        lifecycle_records=lifecycle_records,
+    )
+
+    assert report["ok"] is False
+    # The irreversible branch deletion never ran and the branch survives.
+    assert "codex/candidate" in git_hygiene._local_branches(repo)
+    assert not any(
+        action.get("command", [])[:2] == ["git", "branch"]
+        for action in report["destructive_actions"]
+    )
+    assert any(
+        error.get("reason") == "lease_authority_changed"
+        and error.get("branch") == "codex/candidate"
+        and lease["resource_id"] in error.get("active_leases", [])
+        for error in report["errors"]
+    )
+
+
+def test_branch_deletion_fails_closed_on_case_variant_worktree_path_lease(
+    tmp_path,
+) -> None:
+    """A lease on the same directory spelled with different case must block.
+
+    On the default macOS filesystem ``…/candidate-wt`` and ``…/CANDIDATE-WT``
+    are the *identical* directory, so an exact-string path identity lets the
+    janitor run ``git branch -D`` while the checkout's path is leased.
+    """
+    _assert_post_removal_lease_spelling_blocks_delete(
+        tmp_path,
+        worktree_name="candidate-wt",
+        lease_spelling="CANDIDATE-WT",
+    )
+
+
+def test_branch_deletion_fails_closed_on_unicode_variant_worktree_path_lease(
+    tmp_path,
+) -> None:
+    """A lease on the same directory in the other Unicode normal form must block.
+
+    macOS filesystems are normalisation-insensitive, so the NFC and NFD
+    spellings of a non-ASCII worktree path name the same directory.
+    """
+    composed = unicodedata.normalize("NFC", "kandidát-wt")
+    decomposed = unicodedata.normalize("NFD", composed)
+    assert composed != decomposed
+    _assert_post_removal_lease_spelling_blocks_delete(
+        tmp_path,
+        worktree_name=composed,
+        lease_spelling=decomposed,
+    )
+
+
+# --- Anchor 5: absent lifecycle registry fails closed (round-1 F2) ---
+
+
+def test_apply_fails_closed_when_lifecycle_registry_is_absent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Losing the registry file must preserve the branch, like corruption does.
+
+    After the first apply tombstones the removed checkout, deleting
+    ``agent-worktrees.json`` (operator cleanup, fresh clone, ``.git`` surgery)
+    destroys the durable path->branch association. Absence used to be
+    indistinguishable from "never registered", so the restart reclassified the
+    branch as an ordinary cleanup candidate and deleted it with ``git branch -d``
+    while its former path was still leased. A corrupt registry already fails
+    closed; an absent one must too.
+    """
+    repo = _init_repo_with_merged_branch(
+        tmp_path, branch="codex/candidate", squash=False
+    )
+    assert git_hygiene._is_ancestor(repo, "codex/candidate", "origin/main") is True
+
+    worktree = tmp_path / "candidate-wt"
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree), "codex/candidate"],
+        cwd=repo,
+        check=True,
+    )
+    registry_path = tmp_path / "agent-worktrees.json"
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    agent_worktree.register_worktree(
+        repo,
+        worktree=worktree,
+        owner="prior-agent",
+        ttl_seconds=1,
+        registry_path=registry_path,
+        now=0.0,
+    )
+    lease = {"resource_id": f"worktree:{worktree.resolve()}", "expires_at": None}
+    monkeypatch.setattr(
+        agent_worktree,
+        "_load_active_lease_snapshot",
+        lambda _path: [] if worktree.exists() else [dict(lease)],
+    )
+
+    first = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={"codex/candidate": {"state": "MERGED"}},
+        lease_path=lease_path,
+    )
+    assert first["ok"] is False
+    assert not worktree.exists()
+    assert "codex/candidate" in git_hygiene._local_branches(repo)
+
+    # The durable lifecycle state is lost between runs.
+    registry_path.unlink()
+
+    with pytest.raises(agent_worktree.WorktreeLifecycleError):
+        agent_worktree.janitor_apply(
+            repo,
+            registry_path=registry_path,
+            pr_states={"codex/candidate": {"state": "MERGED"}},
+            lease_path=lease_path,
+        )
+
+    assert "codex/candidate" in git_hygiene._local_branches(repo)

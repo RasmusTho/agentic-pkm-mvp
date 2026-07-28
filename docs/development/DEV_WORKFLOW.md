@@ -315,8 +315,8 @@ Enforcement surfaces:
   default. Apply may remove only a registered, expired, clean, unlocked worktree whose live
   path/branch/HEAD and generation marker still match, with no active lease and proven merge/closure
   eligibility; active, dirty, locked, mismatched, replaced-generation, orphaned, and unregistered
-  worktrees are preserved. Apply requires explicit PR-state and active-lease files; absence of either
-  proof is fail-closed. Fetch and planning use a locked lifecycle snapshot without retaining the
+  worktrees are preserved. Apply requires explicit PR-state and active-lease files and a present,
+  readable lifecycle registry; absence or corruption of any of those proofs is fail-closed. Fetch and planning use a locked lifecycle snapshot without retaining the
   registry lock; lease and lifecycle authority are revalidated at the targeted removal boundary,
   with the lifecycle lock held through that one command. Before Git removal it durably records a
   generation-bound `removal_pending` transition. Successful removal durably retires the exact

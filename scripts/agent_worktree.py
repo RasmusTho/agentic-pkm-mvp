@@ -271,6 +271,15 @@ def _bind_live_generations(
 
     bound = {key: dict(value) for key, value in records.items()}
     for key, record in bound.items():
+        if record.get("status") == "removed":
+            # A tombstone's checkout is gone by construction, so the probe below
+            # always fails and is always caught. No consumer reads a tombstone's
+            # generation — `_lifecycle_worktree_paths_for_branch` reads only
+            # path/branch and `_worktree_lifecycle_skip_reason` rejects on
+            # `status` first — and tombstones are never pruned, so probing them
+            # costs one subprocess per removed worktree on every report and
+            # janitor run, forever.
+            continue
         generation = record.get("generation")
         if not _valid_generation(generation):
             continue
@@ -593,6 +602,15 @@ def janitor_apply(
     stale_after_days: int = 14,
 ) -> dict[str, Any]:
     path = _canonical(registry_path or _default_registry_path(cwd))
+    if not path.exists():
+        # Absence is not "nothing was ever registered": the registry is the only
+        # durable path->branch association behind a removed checkout, so losing
+        # it (operator cleanup, fresh clone, `.git` surgery) would silently
+        # reclassify a tombstoned branch as an ordinary cleanup candidate and
+        # delete it while its former path is leased. A corrupt registry already
+        # fails closed in `_read_registry`; absence must fail closed too rather
+        # than authorize destruction from unknown lifecycle state.
+        raise WorktreeLifecycleError("worktree lifecycle registry is missing")
     _reconcile_removed_generations(cwd, path)
     records = _bind_live_generations(cwd, _locked_lifecycle_snapshot(path))
     return git_hygiene.janitor_apply(
