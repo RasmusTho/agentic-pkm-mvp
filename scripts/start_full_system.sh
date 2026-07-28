@@ -68,9 +68,12 @@ apply_start_full_system_defaults
 
 # Signboard is a dispatcher projection. Resolve this on the host before the
 # BuilderOps bootstrap and forward the same absolute path into the API
-# container via tmp/runtime.env; ``/Users`` is mounted at the same path.
-SIGNBOARD_ROOT="$(python3 -c 'from pathlib import Path; import os; print(Path(os.environ.get("SIGNBOARD_ROOT", "~/BuilderOpsVault/agent-delivery")).expanduser().resolve())')"
-export SIGNBOARD_ROOT
+# container via tmp/runtime.env; ``/Users`` is mounted at the same path. The
+# default comes from app/dispatcher/signboard.py, never from a literal here
+# (#4198). With no vault selected the variable stays unset and the bootstrap
+# degrades visibly instead of writing to an invented root.
+source "scripts/lib/signboard_root.sh"
+resolve_signboard_root_env
 DISPATCHER_HOST_STATE_DIR="$(python3 -c 'from pathlib import Path; import os; print(Path(os.environ.get("DISPATCHER_HOST_STATE_DIR", "runtime/dispatcher")).expanduser().resolve())')"
 export DISPATCHER_HOST_STATE_DIR
 

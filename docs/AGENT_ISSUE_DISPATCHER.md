@@ -799,6 +799,25 @@ malformed generated cards, duplicate generated cards, column/status drift, cards
 dispatcher store, and unreadable generated-filename candidates; run `export-signboard` to repair
 valid generated-card drift. Human-authored files are outside this lint's jurisdiction.
 
+A plain `export-signboard` only rewrites cards for task IDs that still exist in the dispatcher
+store, so it cannot clear a card whose task ID has disappeared from the store — those accumulate as
+`stale_card` findings the lint reports and nothing removes. `--prune-absent` is the repair for
+exactly those cards:
+
+```bash
+python -m app.dispatcher signboard-validate [path] --json   # reports stale_card findings
+python -m app.dispatcher export-signboard [path] --prune-absent --json
+```
+
+`--prune-absent` deletes a generated card only when its task ID is absent from the store *and* the
+card carries nothing a human wrote. Both hand-editable sections count: `## Notes`, and any non-blank
+text below the card's final `## Receipts` heading — the exporter always emits that heading empty,
+and it never rewrites a stale card, so anything there is human-authored. A stale card carrying
+either is kept and listed under `retained_with_notes` in the JSON result, so a human decides its
+fate; human material is never destroyed by the prune. Malformed generated cards and non-generated files are never
+touched. The prune is opt-in: the exporter run by the startup bootstrap and by the `/signboard`
+refresh route never deletes.
+
 Each generated card carries a `## Notes` section the human may hand-edit directly in the vault.
 Re-running `export-signboard` refreshes the generated frontmatter and body but splices any existing
 `## Notes` content back in unchanged — it never blind-overwrites human-authored notes. The exporter
@@ -810,20 +829,56 @@ ADR-0010.
 ### Local visual Signboard
 
 The FastAPI runtime also exposes a local visual board at `/signboard`. Its API reads only the
-generated Markdown files beneath `SIGNBOARD_ROOT` (default:
-`~/BuilderOpsVault/agent-delivery`) and renders the six exporter columns. A refresh explicitly
-runs the normal exporter. Card moves are loopback/API-key protected and invoke dispatcher service
-operations (`move`, `block`, or `complete`) before immediately re-exporting the projection; the UI
-never writes card files or the SQLite database itself. `SIGNBOARD_ROOT` is operator configuration,
-not request input, and card reads are containment-checked after symlink resolution.
+generated Markdown files beneath the resolved board root and renders the six exporter columns. A
+refresh explicitly runs the normal exporter. Card moves are loopback/API-key protected and invoke
+dispatcher service operations (`move`, `block`, or `complete`) before immediately re-exporting the
+projection; the UI never writes card files or the SQLite database itself. The board root is
+operator configuration, not request input, and card reads are containment-checked after symlink
+resolution.
+
+The board root resolves from exactly one source. `SIGNBOARD_ROOT`, when set, is the operator/launcher
+override; otherwise the route falls back to `default_signboard_root()` in
+`app/dispatcher/signboard.py`, the same active-vault-relative default the CLI uses. Neither the API
+route nor the shell launchers carry a board-root literal of their own — that divergence is what let
+the projection root mean three different things at once.
+
+When no root resolves at all (no forwarded `SIGNBOARD_ROOT` and no selected vault), or when the
+resolved root does not exist, `/api/signboard/board` returns `status: "error"` with an explicit
+message and the UI shows it as a notice. An unreadable root never renders as six empty columns:
+"no work" and "misconfigured" must not look the same.
 
 `make dev-start-full` and the prod full-stack launcher refresh the board as part of their existing
-BuilderOps dispatcher bootstrap. The launcher resolves `SIGNBOARD_ROOT` to an absolute host path
-and forwards it into the API container, which has `/Users` mounted at the same path. On a Mac mini
-develop stack, use the existing API port over Tailscale:
+BuilderOps dispatcher bootstrap. `scripts/start_full_system.sh` resolves the board root to an
+absolute host path (via `scripts/lib/signboard_root.sh`, which calls the same single source) and
+`scripts/export_runtime_env.sh` forwards it into the generated runtime env consumed by the API
+container's `env_file` chain; `/Users` is mounted at the same path, so the host path is valid
+in-container. With no vault selected the variable stays unset and the bootstrap reports
+`signboard_root_missing` instead of writing to an invented location.
+
+The channel deploy wrappers (`scripts/deploy_channel.sh`) do **not** regenerate the runtime env —
+they read the one the last full-stack start produced. A channel whose runtime env predates the
+board-root line therefore starts its API container with `SIGNBOARD_ROOT` empty; that is how the
+Demerzel dev stack ended up serving an empty board. It now shows as an explicit error state rather
+than as "no work", and regenerating the runtime env through the full-stack launcher restores the
+board. On a Mac mini develop stack, use the existing API port over Tailscale:
 `http://<mac-mini-tailnet-name>:18001/signboard`. Remote refreshes and moves require the configured
 `API_KEY`, entered into the Signboard session field and sent only as `X-API-Key`; it is not stored
 in URLs or browser persistence. No separate Signboard process is started.
+
+#### The projection root is not the shared BuilderOps vault's `agent-delivery/`
+
+Two different directories are both called "agent-delivery", and they are not interchangeable:
+
+| | Signboard projection root | Shared BuilderOps vault queue |
+| --- | --- | --- |
+| Location | `<active vault>/BuilderOpsVault/agent-delivery` (or the forwarded `SIGNBOARD_ROOT`) | `<BUILDEROPS_VAULT_ROOT>/agent-delivery` |
+| Written by | `export-signboard` | `builderops vault` ticket commands |
+| Card schema | `generated_by: dispatcher.signboard`, lowercase dispatcher `status`, `column` | BMI-01 ticket frontmatter: `agent_state`, title-case `status`, no `generated_by` |
+| Authority | none — rebuildable projection of the dispatcher SQLite store | the vault tickets themselves |
+
+Do not migrate cards from one into the other, and do not point `SIGNBOARD_ROOT` at the shared
+vault's queue root. The projection is regenerable and disposable; the vault queue is not. See
+`docs/builderops/BUILDEROPS_VAULT_STORE.md` for the shared-vault contract.
 
 ### Epic-runner lifecycle planning
 
