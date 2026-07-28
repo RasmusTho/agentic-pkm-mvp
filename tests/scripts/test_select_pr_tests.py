@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.select_pr_tests as selector
 from scripts.select_pr_tests import select_tests
 
 
@@ -466,6 +467,53 @@ def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
         "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event"
         in selection.targets
     )
+
+
+def test_missing_node_id_target_is_filtered(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The CLI path must not pass a missing node-id target to pytest."""
+    missing_target = "tests/services/test_removed_target.py::test_removed"
+    monkeypatch.setattr(
+        selector,
+        "SUBSYSTEMS",
+        (("store_ingest", ("app/stores/",), (missing_target,)),),
+    )
+    monkeypatch.setattr(sys, "argv", ["select_pr_tests.py", "--changed-file", "app/stores/postgres.py"])
+
+    assert selector.main() == 0
+    assert missing_target not in capsys.readouterr().out
+
+
+def test_existing_node_id_target_is_selected(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The node-id guard preserves collectable targets on the CLI path."""
+    target = "tests/scripts/test_select_pr_tests.py::test_existing_node_id_target_is_selected"
+    monkeypatch.setattr(
+        selector,
+        "SUBSYSTEMS",
+        (("store_ingest", ("app/stores/",), (target,)),),
+    )
+    monkeypatch.setattr(sys, "argv", ["select_pr_tests.py", "--changed-file", "app/stores/postgres.py"])
+
+    assert selector.main() == 0
+    assert target in capsys.readouterr().out
+
+
+def test_static_selector_targets_are_collectable() -> None:
+    """A renamed/deleted static selector target fails in the PR that changes it."""
+    targets = tuple(
+        target
+        for _, _, subsystem_targets in selector.SUBSYSTEMS
+        for target in subsystem_targets
+        if target.split("::", 1)[0].endswith(".py")
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", *targets],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_object_store_module_selects_store_ingest_regressions() -> None:

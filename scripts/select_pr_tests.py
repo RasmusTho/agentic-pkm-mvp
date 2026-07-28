@@ -838,8 +838,14 @@ def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
 def _existing_test_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
     # Deleted/renamed test files must never reach pytest as a positional
     # target (pytest errors hard on a path that no longer exists). Directory
-    # targets (never end in .py) always pass through unfiltered.
-    return tuple(target for target in targets if not target.endswith(".py") or Path(target).is_file())
+    # targets pass through unfiltered; file and node-id targets check their
+    # file portion before pytest receives them.
+    return tuple(
+        target
+        for target in targets
+        if not (target_file := target.split("::", 1)[0]).endswith(".py")
+        or Path(target_file).is_file()
+    )
 
 
 def _write_github_output(path: str, selection: Selection) -> None:
