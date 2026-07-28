@@ -108,9 +108,10 @@ For a small ready Issue set, save the dry-run output and run:
 This transitional local command validates the complete frozen plan before execution, then runs each
 selected Issue to its worker handoff in deterministic order. Every Issue uses a new Codex session;
 the command never resumes or reuses another Issue's session, and it stops before later Issues when
-one session fails. Each candidate must name an explicit absolute worktree path; the worker creates or
-enters that dedicated worktree and self-claims through `issue-to-code`. The coordinator does not
-preclaim, mutate GitHub lifecycle state, merge, or close.
+one session fails or returns a `blocked` / `needs-human` handoff. Each candidate must name an
+explicit absolute worktree path; the worker creates or enters that dedicated worktree and
+self-claims through `issue-to-code`. The coordinator does not preclaim, mutate GitHub lifecycle
+state, merge, or close.
 
 The command is intentionally Codex-only and serial. It is the simplest executable bridge from the
 existing context-pack planner, not a second durable orchestrator. DDO-04's provider-neutral

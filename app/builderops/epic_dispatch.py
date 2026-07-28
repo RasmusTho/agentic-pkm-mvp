@@ -129,7 +129,8 @@ class CodexIssueSessionLauncher:
             "Load and obey .codex/skills/issue-to-code/SKILL.md. "
             "Perform exactly the one Issue in this immutable context pack. "
             "Self-claim through issue-to-code before editing, work in the named dedicated "
-            "worktree, and return the requested subagent_handoff_receipt. "
+            "worktree, and return only one JSON object matching the requested "
+            "subagent_handoff_receipt. "
             "This invocation is a fresh session; do not resume or reuse another Issue's session.\n"
             f"{serialized}\n"
         )
@@ -393,16 +394,32 @@ def dispatch_issue_sessions(
                     stopped_reason="cross-issue-session-reuse",
                 )
             seen_session_ids.add(session_id)
+            worker_receipt = _validated_worker_receipt(
+                launch_result.get("worker_receipt"),
+                session_id=session_id,
+            )
+            final_state = worker_receipt["final_state"]
             sessions.append(
                 {
                     "issue_number": issue_number,
                     "context_pack_id": context_pack_id,
                     "session_id": session_id,
                     "fresh_session": True,
-                    "status": "completed",
-                    "worker_receipt": launch_result.get("worker_receipt"),
+                    "status": (
+                        "completed"
+                        if final_state in {"done", "handoff"}
+                        else final_state
+                    ),
+                    "worker_receipt": worker_receipt,
                 }
             )
+            if final_state not in {"done", "handoff"}:
+                return _session_dispatch_receipt(
+                    run_id,
+                    sessions,
+                    status="stopped",
+                    stopped_reason=f"worker-{final_state}",
+                )
         except Exception as exc:
             failed_session_id = getattr(exc, "session_id", None)
             if (
@@ -546,6 +563,35 @@ def _parse_worker_receipt(text: str) -> object:
     except json.JSONDecodeError:
         return stripped[-8_000:]
     return parsed
+
+
+def _validated_worker_receipt(
+    receipt: object,
+    *,
+    session_id: str,
+) -> dict[str, Any]:
+    if not isinstance(receipt, Mapping):
+        raise IssueSessionLaunchError(
+            "worker returned no structured handoff receipt",
+            session_id=session_id,
+        )
+    missing = [
+        field
+        for field in HANDOFF_RECEIPT_SCHEMA["required_fields"]
+        if field not in receipt
+    ]
+    if missing:
+        raise IssueSessionLaunchError(
+            f"worker handoff receipt is missing fields: {', '.join(missing)}",
+            session_id=session_id,
+        )
+    final_state = receipt.get("final_state")
+    if final_state not in {"done", "blocked", "needs-human", "handoff"}:
+        raise IssueSessionLaunchError(
+            "worker handoff receipt has an invalid final_state",
+            session_id=session_id,
+        )
+    return dict(receipt)
 
 
 def _build_tcd_decision(

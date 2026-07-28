@@ -96,6 +96,28 @@ class _RecordingSessionLauncher:
         return response
 
 
+def _worker_receipt(
+    issue_number: int,
+    *,
+    final_state: str = "handoff",
+) -> dict[str, object]:
+    return {
+        "role": "slice_implementer",
+        "task": f"#{issue_number}",
+        "skill_loaded": ".codex/skills/issue-to-code/SKILL.md",
+        "branch": f"codex/issue-{issue_number}",
+        "worktree": f"/tmp/issue-{issue_number}",
+        "actions": ["implemented"],
+        "ac_verdicts": ["pass"],
+        "lifecycle_mutations": [],
+        "validation": ["pass"],
+        "owner_doc_result": "none",
+        "residual_risk": "none",
+        "final_state": final_state,
+        "next_step": "verify PR",
+    }
+
+
 def test_tcd_decisions_cover_inline_subagent_and_overfan() -> None:
     plan = build_dispatch_plan(
         epic_issue_number=3229,
@@ -428,11 +450,11 @@ def test_dispatch_sessions_starts_one_fresh_serial_session_per_issue() -> None:
         [
             {
                 "session_id": "session-5401",
-                "worker_receipt": {"final_state": "handoff", "task": "#5401"},
+                "worker_receipt": _worker_receipt(5401),
             },
             {
                 "session_id": "session-5402",
-                "worker_receipt": {"final_state": "handoff", "task": "#5402"},
+                "worker_receipt": _worker_receipt(5402),
             },
         ]
     )
@@ -497,8 +519,8 @@ def test_dispatch_sessions_rejects_cross_issue_session_reuse() -> None:
     )
     launcher = _RecordingSessionLauncher(
         [
-            {"session_id": "same-session", "worker_receipt": {"task": "#5601"}},
-            {"session_id": "same-session", "worker_receipt": {"task": "#5602"}},
+            {"session_id": "same-session", "worker_receipt": _worker_receipt(5601)},
+            {"session_id": "same-session", "worker_receipt": _worker_receipt(5602)},
         ]
     )
 
@@ -525,7 +547,7 @@ def test_dispatch_sessions_stops_after_first_failed_session() -> None:
                 "codex exec failed",
                 session_id="session-5701",
             ),
-            {"session_id": "session-5702", "worker_receipt": {"task": "#5702"}},
+            {"session_id": "session-5702", "worker_receipt": _worker_receipt(5702)},
         ]
     )
 
@@ -545,6 +567,23 @@ def test_dispatch_sessions_stops_after_first_failed_session() -> None:
             "error": "codex exec failed",
         }
     ]
+
+    blocked_launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5701-blocked",
+                "worker_receipt": _worker_receipt(5701, final_state="blocked"),
+            },
+            {"session_id": "session-5702", "worker_receipt": _worker_receipt(5702)},
+        ]
+    )
+
+    blocked_receipt = dispatch_issue_sessions(plan, blocked_launcher)
+
+    assert blocked_receipt["status"] == "stopped"
+    assert blocked_receipt["stopped_reason"] == "worker-blocked"
+    assert len(blocked_launcher.calls) == 1
+    assert blocked_receipt["sessions"][0]["status"] == "blocked"
 
 
 def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) -> None:
@@ -590,7 +629,7 @@ def test_dispatch_sessions_cli_emits_receipt_without_github_mutations(
         [
             {
                 "session_id": "session-5901",
-                "worker_receipt": {"final_state": "handoff", "task": "#5901"},
+                "worker_receipt": _worker_receipt(5901),
             }
         ]
     )
