@@ -29,6 +29,8 @@ function while keeping implementation, diagnosis, and independent review bounded
 - Routes valid structured review severity deterministically.
 - Defines the provider-neutral `worker-context-pack.v1`, `worker-invocation.v1`, `worker-result.v2`,
   and `WorkerRuntimePort` seam before any Codex- or Claude-specific adapter.
+- Defines `DeliveryAcceptanceProfile.v1` before reducer terminality or downstream
+  request/preview/approval code can depend on it.
 - Adds `DeliveryReceipt.v2` for immutable acceptance-profile and supersession evidence while
   preserving canonical read support for delivered `DeliveryReceipt.v1`.
 - Uses durable invocation correlations so a worker result cannot attach to another Issue/run/head,
@@ -81,6 +83,9 @@ full durable outbox binding.
 - [ ] Missing, conflicting, or ambiguous authority rules resolve to a typed owner-decision state,
   while missing evidence/system state remains a distinct non-owner block.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_authority_ambiguity_and_system_blocks_are_distinct`.
+- [ ] `DeliveryAcceptanceProfile.v1` is canonical, versioned, immutable, and resolves terminality
+  only from explicit lower-level Issue/PR/CI/review/merge/closure evidence.
+  - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_acceptance_profile_is_canonical_and_evidence_bound`.
 - [ ] `DeliveryReceipt.v2` binds the acceptance profile and superseding/superseded identities,
   round-trips canonically, and does not reinterpret valid v1 bytes.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_delivery_receipt_v2_is_additive_and_version_bound`.

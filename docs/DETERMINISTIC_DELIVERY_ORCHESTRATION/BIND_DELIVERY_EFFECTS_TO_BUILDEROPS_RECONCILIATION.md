@@ -73,8 +73,9 @@ comments, merges, or closures after a crash.
 - [ ] `DeliveryRunView.v1` is reproducible from the authoritative journal, includes wave/step/wait/
   exact-head/next-gate/control state, and cannot authorize an effect.
   - Verify: `tests/builderops/control_plane/test_delivery_run_projection.py::test_active_run_view_is_rebuildable_and_non_authoritative`.
-- [ ] A carrier can be replaced without changing semantic plan/effect/result bytes, and no carrier
-  journal, queue, or workflow ID becomes a second delivery authority.
+- [ ] A carrier can be replaced without changing plan/effect bytes or the normalized semantic
+  worker-result payload. Invocation/provider/provenance envelope bytes remain explicit and may
+  differ; no carrier journal, queue, or workflow ID becomes a second delivery authority.
   - Verify: `tests/builderops/control_plane/test_delivery_worker_carrier_conformance.py::test_carriers_share_semantics_without_authority`.
 
 ## How to Verify (Pre-Merge)

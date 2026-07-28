@@ -422,7 +422,9 @@ terminal profile. `DeliveryAcceptanceProfile.v1` therefore names the selected ga
 - `production_verified`.
 
 The chosen profile is part of request, preview, initiation, plan, and receipt identity. A run cannot
-change its meaning of “delivered” after approval.
+change its meaning of “delivered” after approval. DDO-04 defines the versioned profile before its
+reducer or any downstream slice depends on it; DDO-07 validates profiles in pilots rather than
+inventing the schema late.
 
 ### G6 — Human notification is a projection of typed state
 
@@ -434,9 +436,17 @@ changes.
 
 Any Codex, Claude, GitHub-hosted, local, or future adapter must pass the same conformance suite:
 
+For conformance only, a **normalized result payload** is the projection of a fully validated
+`worker-result.v2` onto shared delivery-domain fields: status, run/plan/effect/Issue/exact-head
+authority, AC verdicts, validation, lifecycle outcome, typed exceptions, owner-doc result, and next
+legal action. The harness maps valid context/invocation identities to fixture placeholders and
+excludes provider/model/usage/provenance envelope values from equality. Production never strips or
+accepts a result without that complete envelope, and raw result bytes are not expected to match
+across carriers.
+
 | Case | Required result |
 | --- | --- |
-| Same context pack through two adapters | Same semantic pack hash; provider details differ only in invocation |
+| Same context pack through two adapters | Same semantic pack hash and normalized result payload; invocation/provider/provenance envelopes remain explicit and may differ |
 | Crash before provider accepts start | `not_started` or evidenced `starting_unknown`; no fabricated session |
 | Crash after provider start before session receipt | readback/reattach; the same invocation identity never starts again |
 | Duplicate start with same idempotency key | one logical invocation |
@@ -497,7 +507,8 @@ A DBOS POC is allowed only after #4167 and the native #4168 binding establish th
 reference implementation. The POC uses one representative worker-launch/wait/recovery flow and must
 prove:
 
-- DDO plan/event/effect/receipt IDs remain unchanged;
+- DDO semantic plan/event/effect identities and canonical payloads remain unchanged; carrier-bound
+  invocation and usage/provenance envelope fields may differ explicitly;
 - no DBOS record directly authorizes GitHub;
 - carrier state can be discarded and reconstructed from BuilderOps plus live GitHub;
 - the complete fault matrix passes with no duplicate invocation/effect;
@@ -581,10 +592,10 @@ No new epic or specification directory is required.
 | Existing owner | Reconciliation |
 | --- | --- |
 | #4163 / DDO README | Retain as the sole capability and acceptance hub; add this architecture gate and owner stories |
-| #4167 / DDO-04 | Own reducer controls, WorkerRuntime port, context/invocation/result bindings, and deterministic owner-decision routing |
+| #4167 / DDO-04 | Own reducer controls, `DeliveryAcceptanceProfile.v1`, WorkerRuntime port, context/invocation/result bindings, additive `DeliveryReceipt.v2`, and deterministic owner-decision routing |
 | #4168 / DDO-05 | Own durable invocation/effect state, reattachment, unknown-start/effect reconciliation, and active-run projection |
 | #4169 / DDO-06 | Own request → preview → approval, CKM terminal receipt projection/reevaluation, notification projection, and static-vs-authenticated UI boundary |
-| #4170 / DDO-07 | Own acceptance profiles, conformance/fault matrix, TCD comparison, and any later DBOS POC decision |
+| #4170 / DDO-07 | Validate immutable acceptance profiles, conformance/fault matrix, TCD comparison, and any later DBOS POC decision |
 | Direction B #4080 | Terminal delivered history; correct stale owner/status docs in this delivery |
 
 The next code slice is still #4167, but it may become `agent:ready` only after its live Issue body

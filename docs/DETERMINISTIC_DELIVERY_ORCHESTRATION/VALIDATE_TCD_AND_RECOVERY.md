@@ -88,6 +88,8 @@ cost or risk elsewhere.
 - Production deployment or stable promotion.
 - Hiding missed targets by changing metric definitions after the run.
 - Keeping the parent open for indefinite observation after repo-verifiable acceptance.
+- Defining or revising `DeliveryAcceptanceProfile.v1`; DDO-04 owns the schema and this task validates
+  its use.
 - Making DBOS, Restate, Temporal, LangGraph, or another external workflow runtime a production
   dependency without a separately approved carrier decision.
 

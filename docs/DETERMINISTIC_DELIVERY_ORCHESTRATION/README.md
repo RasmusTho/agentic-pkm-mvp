@@ -241,7 +241,8 @@ resolves the seam between the delivered contracts/compiler and the remaining run
 
 1. planning uses request → preview → exact approval; it never fabricates approval to show a
    preview;
-2. the reducer owns legal transitions and emits typed effects but performs none;
+2. DDO-04 defines the immutable acceptance-profile schema, and its reducer owns legal transitions
+   and emits typed effects but performs none;
 3. one provider-neutral worker port binds canonical context, invocation, effect identity, provider
    session, heartbeat/reattachment, and structured result;
 4. BuilderOps owns durable execution, fencing, unknown-state reconciliation, active-run projection,
