@@ -134,14 +134,20 @@ def test_primary_fallback_selection_precedence(monkeypatch) -> None:
 
 
 def test_gemini_name_supported() -> None:
-    """'gemini' is in _SUPPORTED_EMBED_PROVIDERS so it is not normalized to 'mock'."""
+    """'gemini' is registered, so embedding resolution preserves it."""
     from app.components.embeddings.legacy import (
-        _SUPPORTED_EMBED_PROVIDERS,
         _resolve_embedding_provider_name,
+        _supported_embed_providers,
     )
 
-    assert "gemini" in _SUPPORTED_EMBED_PROVIDERS
-    assert _resolve_embedding_provider_name("gemini") == "gemini"
+    assert "gemini" in _supported_embed_providers()
+    assert (
+        _resolve_embedding_provider_name(
+            "gemini",
+            provider_source="override_provider",
+        )
+        == "gemini"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -377,10 +383,13 @@ def test_gemini_name_not_normalized_to_mock() -> None:
     """_resolve_embedding_provider_name('gemini') returns 'gemini', not 'mock'."""
     from app.components.embeddings.legacy import _resolve_embedding_provider_name
 
-    result = _resolve_embedding_provider_name("gemini")
+    result = _resolve_embedding_provider_name(
+        "gemini",
+        provider_source="override_provider",
+    )
     assert result == "gemini", (
         f"Expected 'gemini' to pass through but got {result!r} — "
-        "'gemini' must be in _SUPPORTED_EMBED_PROVIDERS"
+        "'gemini' must be in the live provider registry"
     )
 
 
@@ -423,3 +432,166 @@ def test_dim_guardrail_fires_on_ollama_registry_path(monkeypatch) -> None:
         PROVIDER_REGISTRY.clear()
         PROVIDER_REGISTRY.update(original)
         embeddings._embed_single.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Provider-resolution posture (#4191)
+# ---------------------------------------------------------------------------
+
+def test_explicit_unservable_embed_provider_fails_loud(monkeypatch) -> None:
+    """Every embedding-specific configuration source rejects an unservable name."""
+    from unittest.mock import MagicMock
+
+    from app.components.embeddings import resolve_embedding_identity
+    from app.components.embeddings import legacy
+    from app.settings.models import EmbeddingProfile, EmbeddingProfiles
+
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    monkeypatch.delenv("EMBED_PRIMARY_PROVIDER", raising=False)
+
+    with pytest.raises(ValueError, match=r"openai.*servable.*gemini.*mock.*ollama"):
+        resolve_embedding_identity(
+            override_provider="openai",
+            use_implicit_profiles=False,
+        )
+
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "deepseek")
+    with pytest.raises(ValueError, match=r"deepseek.*EMBED_PRIMARY_PROVIDER"):
+        resolve_embedding_identity(use_implicit_profiles=False)
+    monkeypatch.delenv("EMBED_PRIMARY_PROVIDER")
+
+    for field_name in ("primary_provider", "provider"):
+        profile_kwargs = {
+            "provider": "mock",
+            "model": "nomic-embed-text:latest",
+            "dim": 4,
+            field_name: "openai",
+        }
+        profile = EmbeddingProfile(**profile_kwargs)
+        bundle = MagicMock()
+        bundle.embedding_profiles = EmbeddingProfiles(
+            default_profile="default",
+            profiles={"default": profile},
+        )
+        bundle.global_ = MagicMock()
+        bundle.global_.profile = None
+        monkeypatch.setattr(legacy, "get_settings_bundle", lambda: bundle)
+
+        with pytest.raises(ValueError, match=rf"openai.*profile\.{field_name}"):
+            resolve_embedding_identity(
+                profile="default",
+                use_implicit_profiles=False,
+            )
+
+
+def test_chat_provider_spillover_does_not_fail_embedding_resolution(monkeypatch) -> None:
+    """A chat-only LLM_PROVIDER remains tolerant because it is not embed config."""
+    from app.components.embeddings import resolve_embedding_identity
+    from app.components.embeddings import legacy
+    from app.config import llm as llm_config
+
+    monkeypatch.setattr(legacy, "get_settings_bundle", lambda: None)
+    monkeypatch.delenv("EMBED_PRIMARY_PROVIDER", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+
+    identity = resolve_embedding_identity(use_implicit_profiles=False)
+
+    assert identity.provider == "mock"
+    assert identity.model == "mock-embedding"
+
+
+def test_resolved_provider_name_is_always_servable() -> None:
+    """Every non-error resolution result is executable by a live adapter/client."""
+    from app.components.embeddings.legacy import (
+        _resolve_embedding_provider_name,
+        _supported_embed_providers,
+    )
+
+    for candidate in (None, "", "anthropic", "not-a-provider"):
+        resolved = _resolve_embedding_provider_name(
+            candidate,
+            provider_source="LLM_PROVIDER",
+        )
+        assert resolved in _supported_embed_providers()
+
+    for candidate in (*PROVIDER_REGISTRY, "deterministic", "llm", "fake"):
+        resolved = _resolve_embedding_provider_name(
+            candidate,
+            provider_source="override_provider",
+        )
+        assert resolved in _supported_embed_providers()
+
+    with pytest.raises(ValueError, match="not-a-provider"):
+        _resolve_embedding_provider_name(
+            "not-a-provider",
+            provider_source="EMBED_PRIMARY_PROVIDER",
+        )
+
+
+def test_supported_embed_providers_derive_from_registry() -> None:
+    """Registry mutation changes the accepted set without a copied literal edit."""
+    from app.components.embeddings.legacy import _supported_embed_providers
+
+    assert _supported_embed_providers() == frozenset(PROVIDER_REGISTRY) | {
+        "deterministic"
+    }
+    assert "openai" not in _supported_embed_providers()
+    assert "deepseek" not in _supported_embed_providers()
+
+    original = dict(PROVIDER_REGISTRY)
+    try:
+        PROVIDER_REGISTRY["sentinel-live-provider"] = (
+            lambda text, *, model, dim, timeout: tuple(0.0 for _ in range(dim))
+        )
+        assert "sentinel-live-provider" in _supported_embed_providers()
+    finally:
+        PROVIDER_REGISTRY.clear()
+        PROVIDER_REGISTRY.update(original)
+
+
+def test_misconfigured_provider_cannot_silently_write_mock_vectors(
+    monkeypatch,
+) -> None:
+    """The production indexer path fails before adapter dispatch or vector writes."""
+    from app.components.embeddings import legacy
+    from app.services import indexer
+
+    calls = {"embed": 0, "vector_index": 0}
+
+    class _ObjectStore:
+        def get_object(self, _object_id):
+            return None
+
+        def save_object(self, *_args, **_kwargs) -> None:
+            return None
+
+    def _unexpected_embed(*_args, **_kwargs):
+        calls["embed"] += 1
+        raise AssertionError("embedding adapter must not run")
+
+    def _unexpected_vector_index():
+        calls["vector_index"] += 1
+        raise AssertionError("vector index must not be opened")
+
+    monkeypatch.setattr(legacy, "get_settings_bundle", lambda: None)
+    monkeypatch.setattr(indexer, "ObjectStore", _ObjectStore)
+    monkeypatch.setattr(indexer, "embed_with_fallback", _unexpected_embed)
+    monkeypatch.setattr(indexer, "get_vector_index", _unexpected_vector_index)
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "openai")
+    monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+
+    with pytest.raises(ValueError, match=r"openai.*EMBED_PRIMARY_PROVIDER"):
+        indexer.handle_ingest_object_created(
+            {
+                "object_id": "00000000-0000-0000-0000-000000004191",
+                "kind": "note",
+                "source_ref": "issue-4191",
+                "content": "must not become a mock vector",
+                "payload": {},
+            }
+        )
+
+    assert calls == {"embed": 0, "vector_index": 0}
