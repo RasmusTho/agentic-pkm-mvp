@@ -115,6 +115,10 @@ def is_resolvable_verify_target(value: str) -> bool:
     if test_target is not None:
         return is_durable_repo_path(test_target.group("path"))
 
+    repo_path, separator, selector = target.partition("::")
+    if separator and selector and is_durable_repo_path(repo_path):
+        return True
+
     doc_prefix = "doc writeback at "
     if target.startswith(doc_prefix):
         repo_anchor = _strip_backtick_pair(target.removeprefix(doc_prefix))

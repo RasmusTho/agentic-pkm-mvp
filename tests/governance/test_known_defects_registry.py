@@ -213,7 +213,7 @@ Change the affected helper and its focused regression test.
 ## Acceptance Criteria
 
 - [ ] Regression no longer reproduces.
-  Verify: `tests/x.py::test_x`
+  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`
 
 ## Out of Scope
 
@@ -577,7 +577,7 @@ def test_promotion_rejects_empty_or_placeholder_canonical_sections() -> None:
         (
             f"## {heading}\n\n"
             + (
-                "- [ ] A bounded outcome.\n  Verify: `tests/x.py::test_x`"
+                "- [ ] A bounded outcome.\n  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`"
                 if heading == "Acceptance Criteria"
                 else "<placeholder>"
             )
@@ -644,7 +644,7 @@ def test_promotion_rejects_missing_sbs_fields_and_unexpected_top_level_section()
         ),
         (
             _canonical_bug_body().replace(
-                "Verify: `tests/x.py::test_x`",
+                "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
                 "Verify: later",
             ),
             "resolvable Verify",
@@ -1582,10 +1582,10 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
     body = _canonical_bug_body().replace(
-        "- [ ] Regression no longer reproduces.\n  Verify: `tests/x.py::test_x`",
+        "- [ ] Regression no longer reproduces.\n  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
         (
             "- [ ] Regression no longer reproduces.\n"
-            "  Verify: `tests/x.py::test_x`\n"
+            "  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`\n"
             "- [ ] A second behavioral claim is satisfied."
         ),
     )
@@ -1614,10 +1614,10 @@ def test_promotion_rejects_mixed_resolvable_verify_markers(
     known_defects.intake_defect(defect, gateway)
     body = _canonical_bug_body().replace(
         "- [ ] Regression no longer reproduces.\n"
-        "  Verify: `tests/x.py::test_x`",
+        "  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
         (
             "- [ ] Regression no longer reproduces.\n"
-            "  Verify: `tests/x.py::test_x`\n"
+            "  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`\n"
             f"  Verify: {invalid_target}"
         ),
     )
@@ -1644,7 +1644,7 @@ def test_promotion_rejects_duplicate_resolvable_verify_markers() -> None:
     gateway = FakeGateway()
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
-    marker = "Verify: `tests/x.py::test_x`"
+    marker = "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`"
     body = _canonical_bug_body().replace(marker, f"{marker}\n  {marker}")
     gateway.issues[901] = {
         "number": 901,
@@ -1683,7 +1683,7 @@ def test_promotion_rejects_repository_escaping_verify_target() -> None:
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
     body = _canonical_bug_body().replace(
-        "tests/x.py::test_x",
+        "tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac",
         "tests/../../tmp/x.py::test_x",
     )
     gateway.issues[901] = {
@@ -2686,7 +2686,7 @@ def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:
             "Unrelated prose.\n\n- `<path>`",
         )
         .replace(
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: runtime receipt: later",
         )
     )
@@ -2720,17 +2720,17 @@ def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:
             "Source Docs",
         ),
         (
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: doc writeback at `docs/later :: later`",
             "resolvable Verify",
         ),
         (
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: runtime receipt: later",
             "resolvable Verify",
         ),
         (
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: runtime receipt: later.v1",
             "resolvable Verify",
         ),
@@ -2830,7 +2830,7 @@ def test_promotion_rejects_unresolvable_verify_target_parity_cases(
         "title": "bug: reject unresolvable verification authority",
         "state": "open",
         "body": _canonical_bug_body().replace(
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             f"Verify: {verify_target}",
         ),
         "labels": [
@@ -2866,7 +2866,7 @@ def test_promotion_accepts_canonical_non_test_verify_target_parity_cases(
         "title": "bug: accept resolvable verification authority",
         "state": "open",
         "body": _canonical_bug_body().replace(
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             f"Verify: {verify_target}",
         ),
         "labels": [

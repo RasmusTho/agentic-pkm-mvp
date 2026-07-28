@@ -1578,6 +1578,11 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
             "promotion target Acceptance Criteria lack resolvable Verify targets: "
             + missing
         )
+    if report.missing_verify_file_paths:
+        raise KnownDefectsError(
+            "promotion target Acceptance Criteria lack resolvable Verify files: "
+            + ", ".join(report.missing_verify_file_paths)
+        )
     unresolved = [
         item.splitlines()[0].strip()
         for item in _acceptance_items(acceptance)
