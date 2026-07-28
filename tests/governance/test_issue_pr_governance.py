@@ -442,6 +442,18 @@ def test_issue_backed_pr_accepts_single_and_multi_issue_authority() -> None:
     assert authority.supporting_issues == (3626, 3698)
 
 
+def test_narrative_closer_is_rejected_by_javascript_and_python_authority() -> None:
+    """The shared resolver must not authenticate closure authority from prose."""
+    body = (
+        "Governing-Issue: #4211\n\n"
+        "Fixes #4211\n\n"
+        "Daily audit says PR #4141 closed #4140 while review comments remain."
+    )
+
+    assert _js_issue_authority(body)["valid"] is False
+    assert resolve_issue_authority(body) is None
+
+
 def test_verified_merge_neutralized_authority_matches_javascript_and_python() -> None:
     body = (
         "Governing-Issue: #3821\n"

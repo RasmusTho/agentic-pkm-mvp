@@ -73,9 +73,8 @@ CLOSING_ISSUE_ATTEMPT_PATTERN = re.compile(
     re.M,
 )
 CLOSING_ISSUE_PATTERN = re.compile(
-    rf"{_ISSUE_TOKEN_PREFIX}{_CLOSING_KEYWORD}{_ASCII_CLOSING_SEPARATOR}"
-    rf"#([1-9][0-9]*)"
-    rf"{_ISSUE_TOKEN_TERMINATOR}",
+    rf"(?m)^[ \t]*{_CLOSING_KEYWORD}{_ASCII_CLOSING_SEPARATOR}"
+    rf"#([1-9][0-9]*)[ \t]*$",
     re.M,
 )
 SUPPORTING_ISSUE_PATTERN = re.compile(
