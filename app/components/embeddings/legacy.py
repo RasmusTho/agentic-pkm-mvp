@@ -14,11 +14,17 @@ from typing import Iterable, Iterator, Protocol, Sequence
 
 from app.embedding_config import get_embed_dim
 from app.index import embeddings as _index_embeddings
-from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provider, get_primary_provider
+from app.llm.embeddings import (
+    EMBED_MODEL,
+    PROVIDER_REGISTRY,
+    get_embed_model,
+    get_embedding_provider,
+    get_primary_provider,
+)
 from app.settings.runtime import get_settings_bundle
 
 _MOCK_EMBED_MODEL = "mock-embedding"
-_SUPPORTED_EMBED_PROVIDERS = {"mock", "ollama", "openai", "deepseek", "deterministic", "gemini"}
+_CLIENT_LEVEL_EMBED_PROVIDERS = frozenset({"deterministic"})
 
 
 class EmbeddingClientProtocol(Protocol):
@@ -130,7 +136,17 @@ def _normalize_name(value: str | None) -> str | None:
     return value or None
 
 
-def _resolve_embedding_provider_name(value: str | None) -> str:
+def _supported_embed_providers() -> frozenset[str]:
+    """Return provider names executable by an adapter or client short-circuit."""
+
+    return frozenset(PROVIDER_REGISTRY) | _CLIENT_LEVEL_EMBED_PROVIDERS
+
+
+def _resolve_embedding_provider_name(
+    value: str | None,
+    *,
+    provider_source: str,
+) -> str:
     normalized = (_normalize_name(value) or "").lower()
     if normalized == "llm":
         return "ollama"
@@ -138,9 +154,15 @@ def _resolve_embedding_provider_name(value: str | None) -> str:
         return "mock"
     if not normalized:
         return "mock"
-    if normalized not in _SUPPORTED_EMBED_PROVIDERS:
+    if normalized in _supported_embed_providers():
+        return normalized
+    if provider_source == "LLM_PROVIDER":
         return "mock"
-    return normalized
+    servable = ", ".join(sorted(_supported_embed_providers()))
+    raise ValueError(
+        f"Embedding provider {normalized!r} from {provider_source} is not servable; "
+        f"servable providers: {servable}"
+    )
 
 
 def _resolve_embedding_model(provider: str, override_model: str | None, configured_model: str | None = None) -> str:
@@ -233,14 +255,28 @@ def resolve_embedding_identity(
         # profile.provider default ("mock"), otherwise EMBED_PRIMARY_PROVIDER is inert for
         # profiled clients (Codex P2). When the env is unset, profile fields are honored as
         # before (no regression).
-        env_primary = os.getenv("EMBED_PRIMARY_PROVIDER", "").strip().lower() or None
-        profile_provider = (
-            env_primary
-            or getattr(cfg, "primary_provider", None)
-            or cfg.provider
-            or get_embedding_provider()
+        env_primary = _normalize_name(os.getenv("EMBED_PRIMARY_PROVIDER"))
+        profile_primary = _normalize_name(getattr(cfg, "primary_provider", None))
+        profile_provider = _normalize_name(cfg.provider)
+        if override_provider:
+            provider_value = override_provider
+            provider_source = "override_provider"
+        elif env_primary:
+            provider_value = env_primary
+            provider_source = "EMBED_PRIMARY_PROVIDER"
+        elif profile_primary:
+            provider_value = profile_primary
+            provider_source = "profile.primary_provider"
+        elif profile_provider:
+            provider_value = profile_provider
+            provider_source = "profile.provider"
+        else:
+            provider_value = get_embedding_provider()
+            provider_source = "LLM_PROVIDER"
+        provider = _resolve_embedding_provider_name(
+            provider_value,
+            provider_source=provider_source,
         )
-        provider = _resolve_embedding_provider_name(override_provider or profile_provider)
         model = _resolve_embedding_model(provider, override_model, cfg.model)
         dim = cfg.dim or get_embed_dim()
         normalize = cfg.normalize if cfg.normalize is not None else True
@@ -248,7 +284,20 @@ def resolve_embedding_identity(
         return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize, no_prefix=no_prefix)
 
     # No profile matched: honor EMBED_PRIMARY_PROVIDER (env) > LLM_PROVIDER (Codex P2).
-    provider = _resolve_embedding_provider_name(override_provider or get_primary_provider())
+    env_primary = _normalize_name(os.getenv("EMBED_PRIMARY_PROVIDER"))
+    if override_provider:
+        provider_value = override_provider
+        provider_source = "override_provider"
+    elif env_primary:
+        provider_value = get_primary_provider()
+        provider_source = "EMBED_PRIMARY_PROVIDER"
+    else:
+        provider_value = get_primary_provider()
+        provider_source = "LLM_PROVIDER"
+    provider = _resolve_embedding_provider_name(
+        provider_value,
+        provider_source=provider_source,
+    )
     model = _resolve_embedding_model(provider, override_model)
     dim = get_embed_dim()
     return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=True)

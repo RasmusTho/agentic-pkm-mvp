@@ -185,6 +185,20 @@ This identity must be:
 - recorded with the vector index metadata / provenance,
 - attached to emitted indexing events.
 
+**Provider-name resolution posture.** Provider precedence remains
+`override_provider` → `EMBED_PRIMARY_PROVIDER` → embedding-profile
+`primary_provider` → embedding-profile `provider` → `LLM_PROVIDER`. The first four
+sources are authoritative embedding configuration: a non-empty name that cannot be
+served by the live `PROVIDER_REGISTRY` (or by the client-level `deterministic`
+short-circuit) fails identity resolution before adapter dispatch or vector-index
+writes, with the rejected name and servable set in the error. The final
+`LLM_PROVIDER` source is chat-provider spillover, not an embedding-specific
+configuration statement; an unservable chat-only name retains the compatibility
+posture of resolving to `mock` instead of creating a new ingest/query outage. Empty
+or unset provider input still defaults to `mock`, and the `llm` → `ollama` and
+`fake` → `mock` aliases remain supported. Accepted names are derived from the live
+adapter registry plus `deterministic`; no separate provider-name allowlist exists.
+
 **Requested identity vs written identity.** `index.embedding.requested` carries the identity the
 producer *asked for*, resolved through the same `get_embeddings_client` / `get_embedding_identity`
 pair the indexer uses when it consumes the event, so the two cannot disagree about what was
