@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import configparser
+import importlib
 from pathlib import Path
 from typing import Set
 
@@ -211,6 +212,8 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
         "app.instance.runtime",
         "app.instance.vault_registry",
     }
+    runtime_module = importlib.import_module("app.instance.runtime")
+    assert not hasattr(runtime_module, "_STORAGE_MUTATION_CAPABILITY")
 
 
 # ---------------------------------------------------------------------------

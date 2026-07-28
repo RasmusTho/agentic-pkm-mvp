@@ -101,6 +101,8 @@ class InstanceRegistryRuntime:
         vault_root: Path,
         watcher_vault_path: Path,
     ) -> VaultRegistration:
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
         root_identity = resolve_filesystem_root_identity(vault_root)
         watcher_identity = resolve_filesystem_root_identity(watcher_vault_path)
         if not same_filesystem_root(root_identity, watcher_identity):
@@ -120,6 +122,7 @@ class InstanceRegistryRuntime:
                     registration.vault_binding_id,
                     channel_id=self.layout.channel_id,
                     root=Path(root_identity.canonical_path),
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
                 )
                 return registration
         for tombstone in current.removal_tombstones.values():
@@ -338,6 +341,8 @@ class InstanceRegistryRuntime:
         vault_id: str,
         local_instance_id: str,
     ) -> VaultRegistration:
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
         current = self.registry.lookup(vault_binding_id)
         if current is None:
             raise RegistryError(f"unknown vault_binding_id: {vault_binding_id}")
@@ -969,6 +974,8 @@ def _finish_instance_state_deployment(
 ) -> dict[str, object]:
     """Finalize legacy state while stopped, then clear the restart fence."""
 
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
     if quiescence_proof is None:
         raise InstanceStatePreflightError("durable quiescence proof is required")
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
@@ -1045,12 +1052,14 @@ def _finish_instance_state_deployment(
             owners,
             inventory_complete=True,
             writers_drained=True,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
     for registration in registry.registrations.values():
         ledger.recover_or_require_active(
             registration.vault_binding_id,
             channel_id=channel,
             root=Path(registration.path),
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
     if not ledger_snapshot.legacy_bootstrap_complete:
         raise InstanceStatePreflightError("legacy owner bootstrap did not complete")

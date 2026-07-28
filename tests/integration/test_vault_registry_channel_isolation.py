@@ -304,6 +304,7 @@ def test_store_and_ledger_mutators_reject_uncapable_callers(tmp_path) -> None:
         match="storage mutation capability is not caller-constructible",
     ):
         _StorageMutationCapability()
+    forged_capability = object.__new__(_StorageMutationCapability)
 
     host_global = tmp_path / "host-global"
     runtime = _runtime(tmp_path, "dev", host_global)
@@ -368,6 +369,33 @@ def test_store_and_ledger_mutators_reject_uncapable_callers(tmp_path) -> None:
         ):
             mutate()
         assert _runtime_state_bytes(tmp_path, runtime) == before
+
+    with pytest.raises(
+        CapabilityNotReadyError,
+        match="private MVR storage mutation capability is required",
+    ):
+        runtime.registry.register(extra, _capability=forged_capability)
+    assert _runtime_state_bytes(tmp_path, runtime) == before
+
+    with pytest.raises(
+        CapabilityNotReadyError,
+        match="private MVR storage mutation capability is required",
+    ):
+        runtime.ledger.recover_or_require_active(
+            registration.vault_binding_id,
+            channel_id="dev",
+            root=root,
+        )
+    assert _runtime_state_bytes(tmp_path, runtime) == before
+
+    with pytest.raises(
+        CapabilityNotReadyError,
+        match="private MVR storage mutation capability is required",
+    ):
+        runtime.ledger.bootstrap_legacy_owners(
+            [], inventory_complete=True, writers_drained=True
+        )
+    assert _runtime_state_bytes(tmp_path, runtime) == before
 
 
 def _rotation_authority(
@@ -796,12 +824,18 @@ def test_first_upgrade_seeds_all_legacy_channel_owners_before_claim(tmp_path) ->
         ],
         inventory_complete=True,
         writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     assert {lease.channel_id for lease in seeded.leases.values()} == {"dev", "prod"}
 
     missing = OwnershipLedger(tmp_path / "missing-host-global")
     with pytest.raises(LedgerCollisionError, match="complete"):
-        missing.bootstrap_legacy_owners([], inventory_complete=False, writers_drained=True)
+        missing.bootstrap_legacy_owners(
+            [],
+            inventory_complete=False,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
 
 
 def test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed(tmp_path) -> None:

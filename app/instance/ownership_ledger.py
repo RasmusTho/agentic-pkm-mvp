@@ -423,9 +423,11 @@ class OwnershipLedger:
         *,
         channel_id: str,
         root: Path,
+        _capability: _StorageMutationCapability | None = None,
     ) -> OwnershipLease:
         """Authenticate an active owner or finish a committed pending reservation."""
 
+        _require_storage_mutation_capability(_capability)
         self._assert_existing_artifacts()
         with self._locked():
             key = self._load_or_create_key_locked(allow_create=False)
@@ -657,7 +659,9 @@ class OwnershipLedger:
         *,
         inventory_complete: bool,
         writers_drained: bool,
+        _capability: _StorageMutationCapability | None = None,
     ) -> LedgerSnapshot:
+        _require_storage_mutation_capability(_capability)
         if not inventory_complete or not writers_drained:
             raise LedgerCollisionError("legacy owner inventory must be complete and writers drained")
         with self._locked():

@@ -2268,7 +2268,8 @@ def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mut
         watcher_vault_path=prod_vault,
     )
     prod_runtime.ledger.bootstrap_legacy_owners(
-        [], inventory_complete=True, writers_drained=True
+        [], inventory_complete=True, writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     dev_state_root = tmp_path / "dev-state"
     dev_state_root.mkdir()
