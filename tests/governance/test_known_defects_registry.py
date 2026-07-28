@@ -1615,7 +1615,7 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     ],
 )
 def test_durable_authority_paths_reject_traversal(path: str) -> None:
-    assert not known_defects._is_durable_repo_path(path)
+    assert not known_defects.is_durable_repo_path(path)
 
 
 def test_promotion_rejects_repository_escaping_verify_target() -> None:
@@ -2698,6 +2698,132 @@ def test_promotion_rejects_vague_authority_shapes(
 
     with pytest.raises(known_defects.KnownDefectsError, match=expected):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    "source_anchor",
+    [
+        "TBD",
+        "docs/../STATUS.md :: Delivery status",
+        "./docs/STATUS.md :: Delivery status",
+        "docs//STATUS.md :: Delivery status",
+        "<path> :: <anchor>",
+        "docs/later.md :: Delivery status",
+        "docs/STATUS.md :: Delivery later",
+        "docs/later.md :: later",
+    ],
+)
+def test_promotion_rejects_noncanonical_source_anchor_parity_cases(
+    source_anchor: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject noncanonical source authority",
+        "state": "open",
+        "body": _canonical_bug_body().replace(
+            "- `.codex/skills/bug-to-issue/SKILL.md :: Promotion`",
+            f"- `{source_anchor}`",
+        ),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="Source Anchors|placeholder",
+    ):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    "verify_target",
+    [
+        "`tests/../x.py::test_x`",
+        "doc writeback at `docs/../STATUS.md :: Delivery status`",
+        "doc writeback at `./docs/STATUS.md :: Delivery status`",
+        "doc writeback at `<path> :: <anchor>`",
+        "doc writeback at `docs/STATUS.md :: Delivery later`",
+        (
+            "`doc writeback at "
+            "`docs/STATUS.md :: Delivery status``"
+        ),
+        "roadmap diff: `docs//ROADMAP.md :: DDO-03`",
+        "runtime receipt: later",
+        "runtime receipt: later.v1",
+        "runtime receipt: delivery_receipt",
+    ],
+)
+def test_promotion_rejects_unresolvable_verify_target_parity_cases(
+    verify_target: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject unresolvable verification authority",
+        "state": "open",
+        "body": _canonical_bug_body().replace(
+            "Verify: `tests/x.py::test_x`",
+            f"Verify: {verify_target}",
+        ),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="concrete Verify|resolvable Verify",
+    ):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    "verify_target",
+    [
+        "doc writeback at `docs/STATUS.md :: Delivery status`",
+        "roadmap diff: `docs/ROADMAP.md :: DDO-03`",
+        "runtime receipt: delivery_receipt.v1",
+    ],
+)
+def test_promotion_accepts_canonical_non_test_verify_target_parity_cases(
+    verify_target: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: accept resolvable verification authority",
+        "state": "open",
+        "body": _canonical_bug_body().replace(
+            "Verify: `tests/x.py::test_x`",
+            f"Verify: {verify_target}",
+        ),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    receipt = known_defects.promote_defect(
+        defect.defect_id,
+        901,
+        gateway,
+    )
+
+    assert receipt["status"] == "promoted"
+    assert receipt["registry_issue"] == intake["registry_issue"]
 
 
 def test_rest_gateway_fails_closed_on_transport_and_non_json(
