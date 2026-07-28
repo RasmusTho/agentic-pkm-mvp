@@ -289,7 +289,7 @@ bounded residual work, and triggers owner-doc promotion only when the capability
 | Parent validation hub | [#4163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4163) | `agent:blocked`; never a pickup Issue |
 | DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | blocked until this specification and remaining prerequisite PR #4161 are merged; #4159 is delivered |
 | DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | becomes `agent:ready` after this specification is on `main` |
-| DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | blocked on #4165 |
+| DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | delivered by [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226) |
 | DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | blocked on #4164 and #4166 |
 | DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | blocked on #4167; timing reconciles with #3793 |
 | DDO-06 CKM bridge | [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169) | blocked on #4165 and #4168 |
