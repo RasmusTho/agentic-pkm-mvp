@@ -236,6 +236,8 @@ class InstanceRegistryRuntime:
     ) -> LedgerSnapshot:
         """Rotate only inside the existing lease-bound all-owner drain fence."""
 
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
         if quiescence_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
         if legacy_owner_inventory_path is None:
@@ -323,6 +325,7 @@ class InstanceRegistryRuntime:
         return self.ledger.rotate_key(
             precondition=require_rotation_authority,
             crash_after=crash_after,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
 
     def require_initialized(self, vault_binding_id: str) -> VaultRegistration:

@@ -360,6 +360,7 @@ def test_store_and_ledger_mutators_reject_uncapable_callers(tmp_path) -> None:
             channel_id="dev",
             root=root,
         ),
+        lambda: runtime.ledger.rotate_key(precondition=lambda snapshot, roots: None),
     )
 
     for mutate in mutations:

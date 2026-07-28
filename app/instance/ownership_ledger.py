@@ -691,7 +691,9 @@ class OwnershipLedger:
         *,
         precondition: Callable[[LedgerSnapshot, Mapping[str, Path]], None],
         crash_after: str | None = None,
+        _capability: _StorageMutationCapability | None = None,
     ) -> LedgerSnapshot:
+        _require_storage_mutation_capability(_capability)
         self._assert_existing_artifacts()
         with self._locked(recover_rotation=False):
             if self.rotation_path.exists():

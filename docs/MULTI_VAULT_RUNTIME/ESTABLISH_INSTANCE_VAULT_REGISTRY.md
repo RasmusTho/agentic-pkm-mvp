@@ -393,10 +393,11 @@ new-schema state before fork/merge protection exists.
   child selection remains usable, and duplicate-root aliases still coalesce or fail rather than
   creating two bindings.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary`
-- [ ] **MVR-01B:** Every issue-listed registry and ownership-ledger mutation primitive rejects
-  before reading or changing durable state unless it receives the private,
-  non-caller-constructible 01B storage capability; production import boundaries limit that
-  capability and the mutation modules to the sanctioned instance transaction paths.
+- [ ] **MVR-01B:** Every issue-listed registry and ownership-ledger mutation primitive (including
+  legacy-owner bootstrap, pending-lease recovery, and key rotation) rejects before reading or
+  changing durable state unless it receives the private, non-caller-constructible 01B storage
+  capability; production import boundaries limit that capability and the mutation modules to the
+  sanctioned instance transaction paths.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_store_and_ledger_mutators_reject_uncapable_callers`
   - Verify: `tests/architecture/test_import_boundary.py::test_instance_storage_mutation_import_contract_is_complete`
 - [ ] **MVR-01B:** After scalar production cutover, every picker/API/CLI/import/bootstrap/direct-service
