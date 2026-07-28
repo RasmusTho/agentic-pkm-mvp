@@ -39,7 +39,7 @@ Add one deterministic contract seam.
 - Preserve the authority boundary.
 
 ## Acceptance Criteria
-- [ ] The seam is deterministic. Verify: `tests/example.py::test_contract`.
+- [ ] The seam is deterministic. Verify: `tests/example.py::test_contract`
 
 ## Out of Scope
 - Product runtime changes.
