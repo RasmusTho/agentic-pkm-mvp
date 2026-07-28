@@ -2,7 +2,7 @@
 
 Regression coverage for the defect where ``ReasoningMode.PLANNING`` was a
 first-class enum member with no branch in ``run_reasoning``, so every
-``ReasoningFacade.plan()`` call fell through to the terminal
+``ReasoningModeFacade.plan()`` call fell through to the terminal
 ``"mode planning not implemented"`` return.
 """
 

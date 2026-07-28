@@ -2,7 +2,7 @@
 
 Covers the write-capable co-authoring cognition that turns a user intent
 plus the current note body into a generated body revision via the shared
-``ReasoningFacade``. The cognition produces body-only text and never emits
+``ReasoningModeFacade``. The cognition produces body-only text and never emits
 frontmatter; a frontmatter-bearing generation is rejected before write.
 
 The read-only cognition scaffold must remain unchanged and execution-denied.
@@ -88,7 +88,7 @@ def test_generates_body_from_intent() -> None:
     assert result.body == "# Hello\n\nExpanded decision section with trade-offs.\n"
     # Body-only output: no frontmatter delimiter.
     assert not result.body.lstrip().startswith("---")
-    # The cognition consulted the shared ReasoningFacade with intent + body.
+    # The cognition consulted the shared ReasoningModeFacade with intent + body.
     assert len(facade.calls) == 1
     call = facade.calls[0]
     assert "expand the decision section" in str(call["question"])
