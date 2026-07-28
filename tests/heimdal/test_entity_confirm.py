@@ -370,11 +370,14 @@ def test_apply_human_review_decisions_applies_terminal_uncompensated_decision(
         from_id=source if terminal_action == "merge" else None,
         into_id=target if terminal_action == "merge" else None,
     )
+    raw_decision = decision.to_dict()
+    raw_decision.pop("decided_at")
+    raw_decision["audit_tag"] = "retain-forward-compatible-history"
     note = SettingsNote(
         spec=ENTITY_REVIEW,
         values={
             "pending": [entry.to_dict()],
-            "decisions": [decision.to_dict()],
+            "decisions": [raw_decision],
         },
     )
     write_settings_note(
@@ -393,6 +396,13 @@ def test_apply_human_review_decisions_applies_terminal_uncompensated_decision(
     assert register.get_entry(source).lifecycle == (
         LIFECYCLE_MERGED if terminal_action == "merge" else LIFECYCLE_CANONICAL
     )
+    persisted = read_settings_note(
+        vault_root,
+        ENTITY_REVIEW,
+        settings_dir=DEFAULT_SETTINGS_DIR,
+    )
+    assert persisted is not None
+    assert persisted.values["decisions"] == [raw_decision]
 
 
 def test_apply_human_review_decisions_accepts_new_intent_after_undo(tmp_path: Path) -> None:

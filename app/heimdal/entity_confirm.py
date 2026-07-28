@@ -380,7 +380,8 @@ def apply_human_review_decisions(
     """
     note = _read_review_note(vault_root, settings_dir=settings_dir)
     pending = list(note.values.get("pending") or [])
-    decisions = [ReviewDecision.from_dict(d) for d in (note.values.get("decisions") or ())]
+    raw_decisions = list(note.values.get("decisions") or ())
+    decisions = [ReviewDecision.from_dict(d) for d in raw_decisions]
 
     pending_ids = {p.get("queue_entry_id") for p in pending}
     applied: list[AppliedDecision] = []
@@ -431,7 +432,16 @@ def apply_human_review_decisions(
     if applied:
         updated_note = SettingsNote(
             spec=ENTITY_REVIEW,
-            values={**note.values, "pending": remaining_pending, "decisions": [d.to_dict() for d in decisions]},
+            values={
+                **note.values,
+                "pending": remaining_pending,
+                # Parsing validates and folds the supported intent fields, but
+                # the persisted human-authored history is append-only. Keep
+                # every original mapping byte-for-byte at the value layer so
+                # forward-compatible audit fields and omitted optional fields
+                # are never normalized away by application.
+                "decisions": raw_decisions,
+            },
         )
         write_settings_note(
             vault_root,
