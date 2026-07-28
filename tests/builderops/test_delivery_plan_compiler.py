@@ -172,6 +172,7 @@ def _fact(
     *,
     authority: AuthoritySnapshot | None = None,
     risk_class: str = "medium",
+    source_anchors: tuple[str, ...] | None = None,
     dependencies: tuple[DeliveryDependency, ...] = (),
     mutation_paths: tuple[str, ...] = (),
     verify_targets: tuple[str, ...] = ("tests/example.py::test_contract",),
@@ -187,8 +188,13 @@ def _fact(
         priority="high",
         risk_class=risk_class,
         source_anchors=(
-            "docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/"
-            "COMPILE_IMMUTABLE_DELIVERY_PLANS.md :: What This Task Does",
+            source_anchors
+            if source_anchors is not None
+            else (
+                "docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/"
+                "COMPILE_IMMUTABLE_DELIVERY_PLANS.md"
+                " :: What This Task Does",
+            )
         ),
         verify_targets=verify_targets,
         sbs_impact=sbs_impact or _sbs_impact(),
@@ -275,6 +281,9 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     mismatched_dependency = _issue(5208, "8" * 64)
     placeholder_verify = _issue(5213, "d" * 64)
     high_risk = _issue(5214, "e" * 64)
+    malformed_receipt = _issue(5215, "f" * 64)
+    malformed_roadmap = _issue(5216, "0" * 64)
+    malformed_source = _issue(5217, "1" * 64)
     cycle_a = _issue(5210, "a" * 64)
     cycle_b = _issue(5211, "b" * 64)
     cycle_downstream = _issue(5212, "c" * 64)
@@ -292,6 +301,9 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
             mismatched_dependency,
             placeholder_verify,
             high_risk,
+            malformed_receipt,
+            malformed_roadmap,
+            malformed_source,
             cycle_a,
             cycle_b,
             cycle_downstream,
@@ -335,6 +347,18 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
             _fact(placeholder_verify, verify_targets=("TBD",)),
             _fact(high_risk, risk_class="high"),
             _fact(
+                malformed_receipt,
+                verify_targets=("runtime receipt: looks plausible",),
+            ),
+            _fact(
+                malformed_roadmap,
+                verify_targets=("roadmap diff: TBD",),
+            ),
+            _fact(
+                malformed_source,
+                source_anchors=("TBD",),
+            ),
+            _fact(
                 cycle_a,
                 dependencies=(
                     DeliveryDependency(
@@ -372,6 +396,7 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
         "dependency_blocked",
         "dependency_cycle",
         "malformed_sbs_impact",
+        "missing_source_anchors",
         "missing_verify_targets",
         "mutation_overlap",
         "risk_policy_blocked",
@@ -419,6 +444,32 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     assert {
         refusal.code for refusal in stale_snapshot_result.refusals
     } == {"authority_ambiguity"}
+
+
+def test_compiler_accepts_concrete_non_test_verify_targets() -> None:
+    doc_issue = _issue(5241, "1" * 64)
+    receipt_issue = _issue(5242, "2" * 64)
+    result = compile_delivery_plan(
+        _initiation((doc_issue, receipt_issue)),
+        _snapshot(
+            _fact(
+                doc_issue,
+                verify_targets=(
+                    "doc writeback at docs/STATUS.md :: Delivery status",
+                    "roadmap diff: docs/ROADMAP.md :: DDO-03",
+                ),
+            ),
+            _fact(
+                receipt_issue,
+                verify_targets=(
+                    "runtime receipt: builderops:delivery-4166",
+                ),
+            ),
+        ),
+    )
+
+    assert result.plan is not None
+    assert result.refusals == ()
 
 
 def test_compiler_honors_satisfied_internal_dependencies() -> None:

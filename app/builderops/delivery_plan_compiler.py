@@ -74,10 +74,12 @@ _TEST_VERIFY_TARGET = re.compile(
     r"^(?:tests|companion-ui/companion-app/tests)/"
     r"[^\s`]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]\s]+\])?)+$"
 )
-_NON_TEST_VERIFY_PREFIXES: Final[tuple[str, ...]] = (
-    "doc writeback at ",
-    "roadmap diff: ",
-    "runtime receipt: ",
+_REPO_DOC_ANCHOR = re.compile(
+    r"^docs/[^\s`]+\.md :: \S(?:.*\S)?$"
+)
+_RUNTIME_RECEIPT_TARGET = re.compile(
+    r"^runtime receipt: [a-z][a-z0-9_.-]*:"
+    r"[A-Za-z0-9][A-Za-z0-9_.:/#-]*$"
 )
 
 Priority: TypeAlias = Literal["high", "medium", "low"]
@@ -393,7 +395,7 @@ def compile_delivery_plan(
                 "missing_verify_targets",
                 "strict issue contract has no concrete Verify target",
             )
-        if not _clean_values(fact.source_anchors):
+        if not _source_anchors_are_concrete(fact.source_anchors):
             refuse(
                 issue,
                 "missing_source_anchors",
@@ -726,24 +728,24 @@ def _verify_targets_are_concrete(values: tuple[str, ...]) -> bool:
             continue
         if value.startswith("doc writeback at "):
             target = value.removeprefix("doc writeback at ").strip("` ")
-            if target.startswith("docs/") and " :: " in target:
-                path, anchor = target.split(" :: ", 1)
-                if path.endswith(".md") and anchor.strip():
-                    continue
-        if value.startswith(_NON_TEST_VERIFY_PREFIXES[1:]):
-            target = value.split(": ", 1)[-1].strip()
-            if (
-                target
-                and target.casefold() not in {
-                "n/a",
-                "none",
-                "tbd",
-                "todo",
-                }
-            ):
+            if _REPO_DOC_ANCHOR.fullmatch(target):
                 continue
+        if value.startswith("roadmap diff: "):
+            target = value.removeprefix("roadmap diff: ").strip("` ")
+            if _REPO_DOC_ANCHOR.fullmatch(target):
+                continue
+        if _RUNTIME_RECEIPT_TARGET.fullmatch(value):
+            continue
         return False
     return True
+
+
+def _source_anchors_are_concrete(values: tuple[str, ...]) -> bool:
+    cleaned = _clean_values(values)
+    return bool(cleaned) and all(
+        _REPO_DOC_ANCHOR.fullmatch(value)
+        for value in cleaned
+    )
 
 
 def _risk_is_allowed(
