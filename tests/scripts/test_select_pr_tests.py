@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.select_pr_tests as selector
 from scripts.select_pr_tests import select_tests
 
 
@@ -468,6 +469,87 @@ def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
     )
 
 
+def test_missing_node_id_target_is_filtered(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The CLI path must not pass a missing node-id target to pytest."""
+    missing_target = "tests/services/test_removed_target.py::test_removed"
+    monkeypatch.setattr(
+        selector,
+        "SUBSYSTEMS",
+        (("store_ingest", ("app/stores/",), (missing_target,)),),
+    )
+    monkeypatch.setattr(sys, "argv", ["select_pr_tests.py", "--changed-file", "app/stores/postgres.py"])
+
+    assert selector.main() == 0
+    assert missing_target not in capsys.readouterr().out
+
+
+def test_existing_node_id_target_is_selected(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The node-id guard preserves collectable targets on the CLI path."""
+    target = "tests/scripts/test_select_pr_tests.py::test_existing_node_id_target_is_selected"
+    monkeypatch.setattr(
+        selector,
+        "SUBSYSTEMS",
+        (("store_ingest", ("app/stores/",), (target,)),),
+    )
+    monkeypatch.setattr(sys, "argv", ["select_pr_tests.py", "--changed-file", "app/stores/postgres.py"])
+
+    assert selector.main() == 0
+    assert target in capsys.readouterr().out
+
+
+def test_static_target_collectability_fitness_is_always_selected(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every scoped PR runs the static-target collectability fitness."""
+    monkeypatch.setattr(sys, "argv", ["select_pr_tests.py", "--changed-file", "app/stores/postgres.py"])
+
+    assert selector.main() == 0
+    assert selector.STATIC_TARGET_COLLECTABILITY_FITNESS in capsys.readouterr().out
+
+
+def test_missing_static_target_keeps_collectability_fitness_selected(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A deleted static target still schedules the fitness that catches it."""
+    missing_target = "tests/services/test_removed_target.py::test_removed"
+    monkeypatch.setattr(
+        selector,
+        "SUBSYSTEMS",
+        (
+            (
+                "store_ingest",
+                ("app/stores/", missing_target.split("::", 1)[0]),
+                (missing_target,),
+            ),
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["select_pr_tests.py", "--changed-file", missing_target.split("::", 1)[0]])
+
+    assert selector.main() == 0
+    output = capsys.readouterr().out
+    assert missing_target not in output
+    assert selector.STATIC_TARGET_COLLECTABILITY_FITNESS in output
+
+
+def test_static_selector_targets_are_collectable() -> None:
+    """A renamed/deleted static selector target fails in the PR that changes it."""
+    targets = tuple(
+        target
+        for _, _, subsystem_targets in selector.SUBSYSTEMS
+        for target in subsystem_targets
+        if target.split("::", 1)[0].endswith(".py")
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", *targets],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_object_store_module_selects_store_ingest_regressions() -> None:
     """The shared object-store producer belongs to the store/ingest contracts."""
     selection = select_tests(["app/objects/__init__.py"])
@@ -547,7 +629,7 @@ def test_shared_panel_watcher_e2e_file_is_deferred_to_post_merge() -> None:
 
     assert selection.full_suite is False
     assert selection.subsystems == ("e2e",)
-    assert selection.targets == ("tests/ci",)
+    assert selection.targets == selector.ALWAYS_TARGETS
 
 
 def test_unowned_e2e_file_is_deferred_to_post_merge() -> None:
@@ -752,7 +834,7 @@ def test_panel_live_e2e_is_deferred_to_post_merge() -> None:
 
     assert selection.full_suite is False
     assert selection.subsystems == ("e2e",)
-    assert selection.targets == ("tests/ci",)
+    assert selection.targets == selector.ALWAYS_TARGETS
     assert "tests/e2e/test_panel_llm_e2e.py" not in selection.targets
     assert "not panel_llm_e2e" in selection.pytest_args
 

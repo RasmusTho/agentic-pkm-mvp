@@ -140,11 +140,29 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
 
 Verification owns the merge decision.
 
-For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks and repo-standard checks that cover the PR to go green, classify any red check before merge, and resolve the local review gate — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch or non-required GitHub check does not relax them); only the human watching is removed.
+### Delivery-path routing (light vs full)
+
+Delivery depth follows `AGENTS.md :: Proportional delivery` and
+`docs/development/GOVERNANCE_PROPORTIONALITY.md`:
+
+- **Light path — single-issue (or issue-free) Tier 1 and Tier 2 PRs** with no TCD high-risk escalation surface
+  and no explicitly requested review round. The complete merge gate is: current SHA truth intact;
+  required checks and repo-standard checks covering the changed surface green on the head SHA;
+  every closing issue's `Verify:` targets self-verified on that SHA; no scope drift; the PR body
+  declares `Final-Review-Rounds: 0`. Then merge directly with the normal closing-keyword body —
+  GitHub-native closure closes the single governing issue. After merge: verify the issue actually
+  closed, remove `agent:*` labels, apply the fallback `Done` projection when automation has not,
+  and run `post-merge-owner-doc` when shipped behavior or contracts changed. `Running the local
+  review gate`, the verified-merge neutralization/phase-ledger sequence, and the dispatcher
+  verification consumer do not apply on this path.
+- **Full path — everything else:** Tier 3 PRs, multi-issue PRs, TCD high-risk surfaces, or an
+  explicitly requested review round. The remainder of this section applies unchanged.
+
+For autonomous delivery, run the governing path's gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks and repo-standard checks that cover the PR to go green, classify any red check before merge, and — on the full path — resolve the local review gate; do not ask the owner to babysit. Within the governing path, the prerequisites are never waived (an unprotected branch or non-required GitHub check does not relax them); only the human watching is removed.
 
 Wait **how** matters for CI: follow `_shared/CI_WAIT_CONTRACT.md` — use the shared `app.dispatcher.poll_backoff` helper through `scripts/await_pr_checks.sh <PR>` (no `--codex`; the review gate now runs locally per `Running the local review gate` below, not through the shared verdict poller), REST check-runs only, interval + cap + exponential backoff, honor `Retry-After` and x-ratelimit-reset headers, sleep the bulk of CI up front, and back off ≥60–120s. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
 
-Prerequisites for merge:
+Prerequisites for merge (full path; the light path's complete gate is in `Delivery-path routing` above):
 
 - current SHA truth is intact
 - required checks and repo-standard checks that cover the changed surface are green on the current head SHA
@@ -288,8 +306,9 @@ finding and does not re-trigger review.
   governance, docs, skill, or test-enforcement change carrying a high-risk label alone does not
   qualify as a runtime surface.
 - Before publication, record that decision in the canonical PR body as exactly
-  `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2`. Use `2` for the declared high-risk runtime
-  case above. The verification-dispatch producer authenticates this v3 field from the live PR and
+  `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` (light-path PRs declare
+  `Final-Review-Rounds: 0` and skip this gate entirely per `Delivery-path routing`). Use `2` for
+  the declared high-risk runtime case above. The verification-dispatch producer authenticates this v3 field from the live PR and
   every normal, post-launch, and crash-recovery live-truth fence must match it before the durable
   closure ledger can proceed; changing prose or coordinator output cannot lower it.
 - **Low-convergence circuit breaker:** if one round reports two or more P0/P1 blockers in the same

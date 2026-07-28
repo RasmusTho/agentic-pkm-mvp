@@ -118,8 +118,8 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
         raise PRBodyGeneratorError(f"lane must be one of: {', '.join(sorted(LANES))}")
     if inputs.issue_number is not None and inputs.issue_number <= 0:
         raise PRBodyGeneratorError("issue_number must be positive")
-    if inputs.final_review_rounds not in {1, 2}:
-        raise PRBodyGeneratorError("final_review_rounds must be 1 or 2")
+    if inputs.final_review_rounds not in {0, 1, 2}:
+        raise PRBodyGeneratorError("final_review_rounds must be 0, 1, or 2")
     if inputs.lane == "implementation" and inputs.issue_number is None:
         raise PRBodyGeneratorError("implementation lane requires issue_number")
     if inputs.lane == "direct-repair":
@@ -259,7 +259,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sbs", action="append", default=[], help="SBS field as key=value.")
     parser.add_argument("--owner-doc-resolution", choices=sorted(OWNER_DOC_RESOLUTIONS))
     parser.add_argument("--owner-doc-followup-issue")
-    parser.add_argument("--final-review-rounds", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--final-review-rounds", type=int, choices=(0, 1, 2), default=1)
     parser.add_argument("--builderops-records")
     parser.add_argument("--builderops-reason")
     parser.add_argument("--notes", default="None.")

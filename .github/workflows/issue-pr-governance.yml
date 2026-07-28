@@ -220,14 +220,14 @@ jobs:
               /^Final-Review-Rounds:[ \t]*.*$/gm
             ) || [];
             const validFinalReviewRoundLines = body.match(
-              /^Final-Review-Rounds:[ \t]*[12][ \t]*$/gm
+              /^Final-Review-Rounds:[ \t]*[012][ \t]*$/gm
             ) || [];
             if (
               finalReviewRoundLines.length !== 1 ||
               validFinalReviewRoundLines.length !== 1
             ) {
               core.setFailed(
-                "PR body must contain exactly one `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` declaration."
+                "PR body must contain exactly one `Final-Review-Rounds: 0` (light delivery path per docs/development/GOVERNANCE_PROPORTIONALITY.md), `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` declaration."
               );
               return;
             }

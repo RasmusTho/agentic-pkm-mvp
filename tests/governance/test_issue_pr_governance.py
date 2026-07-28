@@ -43,6 +43,8 @@ def test_pr_contract_requires_one_bounded_final_review_declaration() -> None:
     assert "finalReviewRoundLines.length !== 1" in workflow
     assert "validFinalReviewRoundLines.length !== 1" in workflow
     assert "Final-Review-Rounds: 1` or `Final-Review-Rounds: 2" in workflow
+    # Light delivery path (AGENTS.md :: Proportional delivery) declares rounds 0.
+    assert r"Final-Review-Rounds:[ \t]*[012][ \t]*$" in workflow
 
 
 def test_pr_contract_trigger_excludes_review_requested_and_cancels_stale_runs() -> None:

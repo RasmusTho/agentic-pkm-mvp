@@ -47,7 +47,7 @@ Default rule:
 `.codex/skills/publish-pr/SKILL.md :: Step 6` is the authoritative source of the four PR-body
 templates (implementation, docs-authoring, governance, direct-repair) actually used at publication
 time. Copy the template for the chosen lane directly from that step. Each template already carries
-the fields the `pr-contract` gate requires — a single `Final-Review-Rounds: 1` (or `2`) line, a
+the fields the `pr-contract` gate requires — a single `Final-Review-Rounds: 0` (light delivery path per `AGENTS.md :: Proportional delivery`), `1`, or `2` line, a
 filled `## BuilderOps Routing` section with no `<...>` placeholder, and, for direct repair, the
 complete `Type:` / `Reason:` / `Validation:` / `Issue required: no` block — so an agent that copies
 one of them and fills in the bracketed content satisfies the gate by construction.
