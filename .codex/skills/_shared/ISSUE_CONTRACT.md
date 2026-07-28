@@ -65,6 +65,9 @@ Every Acceptance Criterion declares its verification inline with a `Verify:` mar
   (`Verify: doc writeback at \`docs/<path> :: <anchor>\``), roadmap diff, or runtime receipt.
 - An AC without a resolvable `Verify:` target is not executable; the Issue must not be
   `agent:ready` until the AC is refined or split.
+- Ready-label validation resolves every file-based `Verify:` path against the current repository;
+  a referenced file must exist, while a new test function within that file may be written by the
+  implementing builder.
 - `Suggested Validation` lists the commands and procedures that execute the declared `Verify:`
   targets — coupled to the ACs, not a duplicate of them.
 

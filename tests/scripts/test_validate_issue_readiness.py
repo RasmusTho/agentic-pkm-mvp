@@ -69,6 +69,40 @@ def test_missing_verify_reports_exact_item_guidance() -> None:
     assert "acceptance criteria without verify markers" in report.repair_guidance[-1]
 
 
+def test_ready_issue_rejects_missing_verify_file_path() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "tests/scripts/test_missing_verify_path.py::test_missing_path",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+    assert any("tests/scripts/test_missing_verify_path.py" in item for item in report.repair_guidance)
+
+
+def test_ready_issue_accepts_existing_verify_file_path() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_ready_issue_does_not_require_future_verify_test_function() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "tests/scripts/test_validate_issue_readiness.py::test_new_readiness_case",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+
+
 @pytest.mark.parametrize("target", ["<test pointer>", "none", "n/a", "TBD"])
 def test_placeholder_verify_targets_are_not_concrete(target: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
