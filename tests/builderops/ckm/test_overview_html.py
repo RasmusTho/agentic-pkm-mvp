@@ -6,6 +6,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from dataclasses import replace
 from html.parser import HTMLParser
 from pathlib import Path
@@ -1471,22 +1472,93 @@ def test_cockpit_cli_renders_comparison_and_refusal_states(
     assert "No older retained row was searched." in incompatible_html
     assert 'class="comparison-component"' not in incompatible_html
 
-    retention_path.unlink()
-    retention, _ = _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
-    _, refused_selected_input = _retain_for_cockpit(
-        overview_store, retained_at="2026-07-22T00:00:00Z"
-    )
-    with sqlite3.connect(retention.path) as connection:
-        connection.execute(
-            "UPDATE ckm_metric_sample_v1 SET source_payload = NULL WHERE sample_id = ?",
-            (refused_selected_input.sample_id,),
+    def selected_input_refusal(
+        name: str,
+        expected: str,
+        mutate: Callable[[MetricRetentionStore, str], None],
+        *,
+        mutate_during_read: bool = False,
+    ) -> None:
+        retention_path.unlink()
+        _, older_compatible = _retain_for_cockpit(
+            overview_store, retained_at="2026-07-20T00:00:00Z"
         )
-    selected_input_output = tmp_path / "selected-input-refusal.html"
-    selected_input_refusal = _cockpit_cli(overview_store, selected_input_output)
-    assert selected_input_refusal.exit_code == 0
-    selected_input_html = selected_input_output.read_text(encoding="utf-8")
-    assert "tampered_retained_source" in selected_input_html
-    assert 'class="comparison-component"' not in selected_input_html
+        retention, selected_older_input = _retain_for_cockpit(
+            overview_store, retained_at="2026-07-21T00:00:00Z"
+        )
+        _, selected_newer_input = _retain_for_cockpit(
+            overview_store, retained_at="2026-07-22T00:00:00Z"
+        )
+        if not mutate_during_read:
+            mutate(retention, selected_newer_input.sample_id)
+        reads: list[str] = []
+
+        def record_selected_input(store: MetricRetentionStore, sample_id: str) -> dict[str, object]:
+            reads.append(sample_id)
+            if mutate_during_read and sample_id == selected_newer_input.sample_id:
+                mutate(store, sample_id)
+            return original_observation(store, sample_id)
+
+        monkeypatch.setattr(comparison_module, "_observation", record_selected_input)
+        output = tmp_path / f"selected-input-{name}.html"
+        result = _cockpit_cli(overview_store, output)
+
+        assert result.exit_code == 0
+        rendered = output.read_text(encoding="utf-8")
+        assert expected in rendered
+        assert reads == [selected_older_input.sample_id, selected_newer_input.sample_id]
+        assert older_compatible.sample_id not in reads
+        assert "No older retained row was searched." in rendered
+        assert 'class="comparison-component"' not in rendered
+
+    def expire_selected_input(retention: MetricRetentionStore, sample_id: str) -> None:
+        with sqlite3.connect(retention.path) as connection:
+            connection.execute(
+                "UPDATE ckm_metric_sample_v1 SET expires_at = '2000-01-01T00:00:00Z' "
+                "WHERE sample_id = ?",
+                (sample_id,),
+            )
+
+    def delete_selected_input(retention: MetricRetentionStore, sample_id: str) -> None:
+        with sqlite3.connect(retention.path) as connection:
+            connection.execute(
+                "DELETE FROM ckm_metric_sample_v1 WHERE sample_id = ?", (sample_id,)
+            )
+
+    def corrupt_selected_input(retention: MetricRetentionStore, sample_id: str) -> None:
+        with sqlite3.connect(retention.path) as connection:
+            connection.execute(
+                "UPDATE ckm_metric_sample_v1 SET source_payload = x'7B7D' WHERE sample_id = ?",
+                (sample_id,),
+            )
+
+    def mismatch_selected_input(retention: MetricRetentionStore, sample_id: str) -> None:
+        with sqlite3.connect(retention.path) as connection:
+            raw = connection.execute(
+                "SELECT observation_json FROM ckm_metric_sample_v1 WHERE sample_id = ?",
+                (sample_id,),
+            ).fetchone()[0]
+            forged = json.loads(raw)
+            forged["snapshot"]["snapshot_digest"] = "forged"
+            connection.execute(
+                "UPDATE ckm_metric_sample_v1 SET observation_json = ? WHERE sample_id = ?",
+                (json.dumps(forged, sort_keys=True, separators=(",", ":")), sample_id),
+            )
+
+    def tamper_selected_input(retention: MetricRetentionStore, sample_id: str) -> None:
+        with sqlite3.connect(retention.path) as connection:
+            connection.execute(
+                "UPDATE ckm_metric_sample_v1 SET source_payload = NULL WHERE sample_id = ?",
+                (sample_id,),
+            )
+
+    selected_input_refusal("expired", "source_unavailable", expire_selected_input)
+    selected_input_refusal(
+        "deleted-race", "source_unavailable", delete_selected_input, mutate_during_read=True
+    )
+    selected_input_refusal("corrupt", "corrupt_retained_observation", corrupt_selected_input)
+    selected_input_refusal("mismatch", "observation_source_mismatch", mismatch_selected_input)
+    selected_input_refusal("tampered", "tampered_retained_source", tamper_selected_input)
 
 
 def _valid_o1b_payload(
