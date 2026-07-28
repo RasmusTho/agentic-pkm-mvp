@@ -448,7 +448,11 @@ ENTITY_REVIEW = SettingsNoteSpec(
         SectionSpec(
             "queue",
             (
-                FieldSpec("decisions", FIELD_HUMAN_EDITABLE, "human confirm/reject/merge decisions on queued items"),
+                FieldSpec(
+                    "decisions",
+                    FIELD_HUMAN_EDITABLE,
+                    "human merge/reject decisions and pre-application undo entries on queued items",
+                ),
                 FieldSpec("pending", FIELD_AGENT_AUTHORED, "agent-queued entity_ids awaiting human review"),
             ),
         ),

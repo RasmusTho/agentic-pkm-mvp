@@ -48,17 +48,21 @@ our auto-link-vs-confirm-queue threshold"):
 "the ruling itself is a one-line note edit in `entities/review.md`; the UI
 owns no capability the note lacks"): `apply_human_review_decisions` reads
 whatever a human (or an agent proposing on the human's behalf) wrote into
-`decisions` -- `{"queue_entry_id": "merge:<from_id>:<into_id>"}` or
-`{"queue_entry_id": "reject:<entity_id>"}` -- and performs the corresponding
-register mutation. A **merge** decision calls `register.merge(from_id,
-into_id)` directly (A1's mechanism, never reimplemented): it writes
+`decisions` -- `merge`, `reject`, or the pre-application compensating action
+`undo` -- and folds the ordered entries for each pending queue item before
+performing the corresponding register mutation. A **merge** decision calls
+`register.merge(from_id, into_id)` directly (A1's mechanism, never
+reimplemented): it writes
 `merged_into` on the source note AND `merged_from` on the target note (the
 redirect's target-side complement) -- both are the note edit. Every
 confirmed merge stays reversible via `register.split()` (F5) -- this module
 adds no separate un-merge mechanism, it is the same `split()` A1 already
 ships. A **reject** decision removes the entry from
 `pending` without touching the register at all (the candidate stays
-`ambiguous`/`unresolved`, no identity assertion is made).
+`ambiguous`/`unresolved`, no identity assertion is made). An **undo**
+following either decision while the entry remains pending cancels that
+proposed intent: the full decision history and pending entry remain, and no
+register mutation occurs. It never reverses an already-materialized merge.
 
 The side-by-side candidate compare a native-app UI might render is a plain
 ergonomic lens over exactly this data (`pending` entries carry both
@@ -286,25 +290,32 @@ def pending_review_entries(
 @dataclass(frozen=True)
 class ReviewDecision:
     """One `decisions` entry a human (or an agent proposing on the human's
-    behalf) writes into `entities/review.md`. `action` is `"merge"` or
-    `"reject"` -- exactly the two outcomes a human confirmation over a
-    queued candidate can produce (confirm identity, or decline to assert
-    one). This is the whole ruling: a side-by-side compare UI is a lens over
-    the SAME `queue_entry_id` + `into_id` a human could type by hand."""
+    behalf) writes into `entities/review.md`. `action` is `"merge"`,
+    `"reject"`, or the compensating `"undo"`. Merge/reject propose the two
+    outcomes a human confirmation over a queued candidate can produce
+    (confirm identity, or decline to assert one); undo cancels the current
+    proposal only while the queue entry is still pending. This is the whole
+    ruling: a side-by-side compare UI is a lens over the SAME
+    `queue_entry_id` + `into_id` a human could type by hand."""
 
     queue_entry_id: str
-    action: str  # "merge" | "reject"
+    action: str  # "merge" | "reject" | "undo"
     from_id: str | None = None
     into_id: str | None = None
     decided_at: str = field(default_factory=_now_iso)
 
     def __post_init__(self) -> None:
-        if self.action not in ("merge", "reject"):
+        if self.action not in ("merge", "reject", "undo"):
             raise EntityConfirmError(
-                f"ReviewDecision.action must be 'merge' or 'reject', got {self.action!r}"
+                "ReviewDecision.action must be 'merge', 'reject', or 'undo', "
+                f"got {self.action!r}"
             )
         if self.action == "merge" and (not self.from_id or not self.into_id):
             raise EntityConfirmError("ReviewDecision(action='merge') requires from_id and into_id")
+        if self.action == "undo" and (self.from_id is not None or self.into_id is not None):
+            raise EntityConfirmError(
+                "ReviewDecision(action='undo') compensates by queue_entry_id only"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -346,8 +357,7 @@ def apply_human_review_decisions(
     settings_dir: str = DEFAULT_SETTINGS_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
 ) -> tuple[AppliedDecision, ...]:
-    """Apply every not-yet-applied entry in `decisions` (human-editable) and
-    remove the corresponding entry from `pending` (agent-authored).
+    """Fold and apply each pending entry's ordered `decisions` history.
 
     This is the confirmation mechanism itself: reading `decisions` off disk
     IS reading the human ruling -- there is no separate "confirm" API a UI
@@ -357,6 +367,12 @@ def apply_human_review_decisions(
     reversible via `register.split()` (F5) -- never a bespoke mutation here.
     A `reject` decision only clears the queue entry; the register is
     untouched (no identity assertion is made for a declined candidate).
+    A following `undo` resets that queue entry to undecided before
+    application: no register mutation occurs, `pending` remains, and the
+    append-only `decisions` history is retained. A later merge/reject can
+    establish a new terminal intent. Once the hub has applied a decision and
+    removed the pending entry, a later undo is an idempotent no-op rather
+    than a register reversal.
 
     Idempotent: a decision whose `queue_entry_id` is no longer in `pending`
     has already been applied (or never existed) and is skipped rather than
@@ -364,35 +380,68 @@ def apply_human_review_decisions(
     """
     note = _read_review_note(vault_root, settings_dir=settings_dir)
     pending = list(note.values.get("pending") or [])
-    decisions = [ReviewDecision.from_dict(d) for d in (note.values.get("decisions") or ())]
+    raw_decisions = list(note.values.get("decisions") or ())
+    decisions = [ReviewDecision.from_dict(d) for d in raw_decisions]
 
     pending_ids = {p.get("queue_entry_id") for p in pending}
     applied: list[AppliedDecision] = []
     remaining_pending = list(pending)
 
-    for decision in decisions:
+    # Fold every pending queue entry to its final pre-application intent.
+    # An undo deliberately resets to None instead of resurrecting an older
+    # proposal: the client returns to an explicitly undecided state.
+    terminal_by_queue_id: dict[str, tuple[int, ReviewDecision | None]] = {}
+    for index, decision in enumerate(decisions):
         if decision.queue_entry_id not in pending_ids:
-            continue  # already applied (or a stale/unknown id) -- idempotent no-op
+            continue
+        terminal_by_queue_id[decision.queue_entry_id] = (
+            index,
+            None if decision.action == "undo" else decision,
+        )
 
+    for _, effective_decision in sorted(
+        terminal_by_queue_id.values(), key=lambda item: item[0]
+    ):
+        if effective_decision is None:
+            continue
         merged = False
-        if decision.action == "merge":
-            assert decision.from_id is not None and decision.into_id is not None
-            register.merge(decision.from_id, decision.into_id)
+        if effective_decision.action == "merge":
+            assert (
+                effective_decision.from_id is not None
+                and effective_decision.into_id is not None
+            )
+            register.merge(effective_decision.from_id, effective_decision.into_id)
             merged = True
         # "reject": no register mutation -- the candidate stays unresolved/
-        # ambiguous, exactly as it was before queuing.
+        # ambiguous, exactly as it was before queuing. "undo" never reaches
+        # this application loop because the fold represents it as no intent.
 
         remaining_pending = [
-            p for p in remaining_pending if p.get("queue_entry_id") != decision.queue_entry_id
+            p
+            for p in remaining_pending
+            if p.get("queue_entry_id") != effective_decision.queue_entry_id
         ]
         applied.append(
-            AppliedDecision(queue_entry_id=decision.queue_entry_id, action=decision.action, merged=merged)
+            AppliedDecision(
+                queue_entry_id=effective_decision.queue_entry_id,
+                action=effective_decision.action,
+                merged=merged,
+            )
         )
 
     if applied:
         updated_note = SettingsNote(
             spec=ENTITY_REVIEW,
-            values={**note.values, "pending": remaining_pending, "decisions": [d.to_dict() for d in decisions]},
+            values={
+                **note.values,
+                "pending": remaining_pending,
+                # Parsing validates and folds the supported intent fields, but
+                # the persisted human-authored history is append-only. Keep
+                # every original mapping byte-for-byte at the value layer so
+                # forward-compatible audit fields and omitted optional fields
+                # are never normalized away by application.
+                "decisions": raw_decisions,
+            },
         )
         write_settings_note(
             vault_root,
