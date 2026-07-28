@@ -207,6 +207,10 @@ mutation. Do not mark work Ready merely to fill worker slots.
 
 ### Phase 2 — Select the next delivery wave
 
+#### Independent-Issue Fast Lane
+
+For an explicit independent issue set, do not manufacture an epic or parent-closure plan. Admit only strictly ready Issues with no dependency, likely shared mutation surface, migration, contract overlap, or authority ambiguity, and never start more than two workers during the pilot. Give each worker one minimal pack (one Issue, one worktree/branch plan, exact `Verify:` targets, known constraints, and compact terminal-receipt schema). Workers do not message one another routinely; discovered overlap becomes a typed coordinator exception and pauses or rejects the affected wave. Dry-run and persisted run-state are reconstructable evidence only, never delivery authority. Follow `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` and the existing structured severity and known-defect contracts: invalid/P0/P1/protected/low-confidence outcomes block; only a valid P2 may defer through governed intake without synchronous repair or re-review.
+
 Rank executable work by:
 
 1. explicit priority;

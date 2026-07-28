@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -9,6 +11,15 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+try:  # pragma: no cover - POSIX-only, mirrors app.builderops.epic_run_state
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX host
+    fcntl = None  # type: ignore[assignment]
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+from app.builderops import cli as builderops_cli
+from app.builderops import epic_run_state as epic_run_state_module
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_run_state import (
     DEFAULT_EPIC_RUNS_DIR,
@@ -17,7 +28,10 @@ from app.builderops.epic_run_state import (
     assert_learning_evaluation_candidates_terminal,
     apply_epic_run_update,
     create_epic_run_state,
+    create_independent_issue_run_state,
+    new_independent_issue_run_state,
     deserialize_epic_run_state,
+    save_epic_run_state,
     epic_run_state_path,
     load_epic_run_state,
     new_epic_run_state,
@@ -736,3 +750,265 @@ def test_cli_rejects_epic_mismatch_before_writing(tmp_path: Path) -> None:
     assert "already belongs to epic 3229" in result.output
     state = load_epic_run_state("run-owned-by-3229", root=tmp_path)
     assert state["child_queue"] == [{"issue_number": 3247, "state": "queued"}]
+
+
+def test_fast_lane_state_never_becomes_delivery_authority(tmp_path: Path) -> None:
+    state = new_independent_issue_run_state([4164, 4165], "fast-lane-state")
+    assert state["epic_issue_number"] is None
+    assert state["independent_issue_numbers"] == [4164, 4165]
+    assert "parent_closure" not in state
+    assert "github_mutations" not in state
+
+    create_epic_run_state(3229, "separate-epic", root=tmp_path)
+    assert epic_run_state_path("separate-epic", root=tmp_path).exists()
+
+
+def _record_run_state(
+    *,
+    run_id: str,
+    issue_numbers: tuple[int, ...],
+    root: Path,
+    updates: dict[str, object],
+) -> None:
+    """Invoke the `epic-run-state record` implementation without Click's runner.
+
+    Two concurrent `CliRunner.invoke` calls would race on the globally patched
+    stdout, so the concurrency tests drive the command callback directly.
+    """
+
+    builderops_cli.record_epic_run_state.callback(
+        epic_issue_number=None,
+        independent_issues=issue_numbers,
+        run_id=run_id,
+        root=root,
+        update_json=json.dumps(updates),
+        update_file=None,
+        dry_run=False,
+        as_json=True,
+    )
+
+
+def _install_create_race(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    run_id: str,
+    first_call_started: threading.Event,
+    second_call_dispatched: threading.Event,
+) -> None:
+    """Hold the first independent create open until a second create is in flight.
+
+    The delay is injected into `new_independent_issue_run_state`, which both the
+    unlocked and the locked create paths call, so the window between the
+    existence check and the write is observable from a second writer.
+    """
+
+    original_new = epic_run_state_module.new_independent_issue_run_state
+    first_call_seen = threading.Event()
+
+    def delayed_new(
+        issue_numbers: list[int], state_run_id: str, **updates: object
+    ) -> dict[str, object]:
+        state = original_new(issue_numbers, state_run_id, **updates)
+        if state_run_id == run_id and not first_call_seen.is_set():
+            first_call_seen.set()
+            first_call_started.set()
+            assert second_call_dispatched.wait(timeout=5)
+            time.sleep(0.3)
+        return state
+
+    monkeypatch.setattr(
+        epic_run_state_module, "new_independent_issue_run_state", delayed_new
+    )
+    monkeypatch.setattr(
+        builderops_cli, "new_independent_issue_run_state", delayed_new
+    )
+
+
+def test_independent_run_state_creation_is_locked_and_rechecked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "run-independent-concurrent"
+    issue_numbers = (4164, 4165)
+    first_call_started = threading.Event()
+    second_call_dispatched = threading.Event()
+    _install_create_race(
+        monkeypatch,
+        run_id=run_id,
+        first_call_started=first_call_started,
+        second_call_dispatched=second_call_dispatched,
+    )
+
+    errors: list[BaseException] = []
+
+    def record(child_issue: int, ready: threading.Event | None = None) -> None:
+        if ready is not None:
+            ready.set()
+        try:
+            _record_run_state(
+                run_id=run_id,
+                issue_numbers=issue_numbers,
+                root=tmp_path,
+                updates={
+                    "child_queue": [
+                        {"issue_number": child_issue, "state": "queued"}
+                    ]
+                },
+            )
+        except BaseException as exc:  # noqa: BLE001 - reported by the assertions
+            errors.append(exc)
+
+    first = threading.Thread(target=record, args=(4164,))
+    first.start()
+    assert first_call_started.wait(timeout=5)
+    second = threading.Thread(target=record, args=(4165, second_call_dispatched))
+    second.start()
+    first.join(timeout=15)
+    second.join(timeout=15)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+
+    final_state = load_epic_run_state(run_id, root=tmp_path)
+    assert final_state["epic_issue_number"] is None
+    assert final_state["independent_issue_numbers"] == [4164, 4165]
+    assert sorted(
+        entry["issue_number"] for entry in final_state["child_queue"]
+    ) == [4164, 4165]
+
+
+def test_independent_record_rejects_conflicting_run_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "run-independent-owner"
+    first_call_started = threading.Event()
+    second_call_dispatched = threading.Event()
+    _install_create_race(
+        monkeypatch,
+        run_id=run_id,
+        first_call_started=first_call_started,
+        second_call_dispatched=second_call_dispatched,
+    )
+
+    results: dict[str, BaseException | None] = {}
+
+    def record(
+        name: str,
+        issue_numbers: tuple[int, ...],
+        child_issue: int,
+        ready: threading.Event | None = None,
+    ) -> None:
+        if ready is not None:
+            ready.set()
+        try:
+            _record_run_state(
+                run_id=run_id,
+                issue_numbers=issue_numbers,
+                root=tmp_path,
+                updates={
+                    "child_queue": [
+                        {"issue_number": child_issue, "state": "queued"}
+                    ]
+                },
+            )
+        except BaseException as exc:  # noqa: BLE001 - reported by the assertions
+            results[name] = exc
+        else:
+            results[name] = None
+
+    owner = threading.Thread(target=record, args=("owner", (4164, 4165), 4164))
+    owner.start()
+    assert first_call_started.wait(timeout=5)
+    intruder = threading.Thread(
+        target=record, args=("intruder", (4200,), 4200, second_call_dispatched)
+    )
+    intruder.start()
+    owner.join(timeout=15)
+    intruder.join(timeout=15)
+
+    assert not owner.is_alive()
+    assert not intruder.is_alive()
+    assert results["owner"] is None
+    intruder_error = results["intruder"]
+    assert intruder_error is not None, (
+        "a conflicting independent scope must not silently replace the run-state file"
+    )
+    assert "already belongs to" in str(intruder_error)
+
+    final_state = load_epic_run_state(run_id, root=tmp_path)
+    assert final_state["epic_issue_number"] is None
+    assert final_state["independent_issue_numbers"] == [4164, 4165]
+    assert final_state["child_queue"] == [
+        {"issue_number": 4164, "state": "queued"}
+    ]
+
+    # The same in-lock owner check must also reject an epic-owned run id.
+    create_epic_run_state(3229, "run-epic-owned", root=tmp_path)
+    with pytest.raises(EpicRunStateError, match="already belongs to epic 3229"):
+        create_independent_issue_run_state([4164], "run-epic-owned", root=tmp_path)
+
+
+@pytest.mark.skipif(
+    epic_run_state_module.fcntl is None,
+    reason="cross-process run-state locking requires fcntl",
+)
+def test_independent_run_state_creation_serializes_across_processes(
+    tmp_path: Path,
+) -> None:
+    """Prove the `fcntl.flock` arm, not just the in-process thread lock.
+
+    `epic-run-state record` runs as separate OS processes, so the real race is
+    cross-process. A second process that observes the run-state file as absent
+    must block on the file lock and then honour the winner's file.
+    """
+
+    run_id = "run-independent-cross-process"
+    path = epic_run_state_path(run_id, root=tmp_path)
+    lock_path = path.with_name(f".{path.name}.lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "app.builderops",
+                "builderops",
+                "epic-run-state",
+                "record",
+                "--independent-issue",
+                "4200",
+                "--run-id",
+                run_id,
+                "--root",
+                str(tmp_path),
+                "--json",
+            ],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            # The lock is held, so the create must not complete or write.
+            with pytest.raises(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+            assert not path.exists()
+
+            # The winner writes a different independent scope under the lock.
+            save_epic_run_state(
+                new_independent_issue_run_state([4164, 4165], run_id),
+                root=tmp_path,
+            )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+        output, _ = process.communicate(timeout=60)
+
+    assert process.returncode != 0
+    assert "already belongs to" in output
+
+    final_state = load_epic_run_state(run_id, root=tmp_path)
+    assert final_state["epic_issue_number"] is None
+    assert final_state["independent_issue_numbers"] == [4164, 4165]

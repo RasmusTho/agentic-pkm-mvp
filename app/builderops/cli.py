@@ -75,9 +75,11 @@ from app.builderops.epic_run_state import (
     EpicRunStateError,
     apply_epic_run_update,
     create_epic_run_state,
+    create_independent_issue_run_state,
     epic_run_state_path,
     load_epic_run_state,
     new_epic_run_state,
+    new_independent_issue_run_state,
     unresolved_learning_evaluation_candidates,
     update_epic_run_state,
 )
@@ -1579,7 +1581,8 @@ def epic_run_state() -> None:
     "record",
     help="Create or update an epic run-state file from explicit local evidence.",
 )
-@click.option("--epic-issue-number", required=True, type=int)
+@click.option("--epic-issue-number", type=int)
+@click.option("--independent-issue", "independent_issues", multiple=True, type=int)
 @click.option("--run-id", required=True)
 @click.option(
     "--root",
@@ -1597,7 +1600,8 @@ def epic_run_state() -> None:
 @click.option("--dry-run", is_flag=True, help="Preview the state without writing a file.")
 @click.option("--json", "as_json", is_flag=True)
 def record_epic_run_state(
-    epic_issue_number: int,
+    epic_issue_number: int | None,
+    independent_issues: tuple[int, ...],
     run_id: str,
     root: Path | None,
     update_json: str,
@@ -1605,6 +1609,8 @@ def record_epic_run_state(
     dry_run: bool,
     as_json: bool,
 ) -> None:
+    if (epic_issue_number is None) == (not independent_issues):
+        raise click.UsageError("provide exactly one of --epic-issue-number or --independent-issue")
     updates = _merge_json_objects(
         _load_json_object_file(update_file, field="update-file"),
         _parse_json_object(update_json, field="update-json"),
@@ -1615,17 +1621,17 @@ def record_epic_run_state(
         if dry_run:
             if state_exists:
                 base_state = load_epic_run_state(run_id, root=root)
-                if base_state["epic_issue_number"] != epic_issue_number:
+                if base_state["epic_issue_number"] != epic_issue_number or base_state.get("independent_issue_numbers", []) != sorted(independent_issues):
                     raise EpicRunStateError(
                         f"run_id {run_id!r} already belongs to epic "
                         f"{base_state['epic_issue_number']}"
                     )
             else:
-                base_state = new_epic_run_state(epic_issue_number, run_id)
+                base_state = new_epic_run_state(epic_issue_number, run_id) if epic_issue_number is not None else new_independent_issue_run_state(list(independent_issues), run_id)
             state = apply_epic_run_update(base_state, **updates)
         elif state_exists:
             existing_state = load_epic_run_state(run_id, root=root)
-            if existing_state["epic_issue_number"] != epic_issue_number:
+            if existing_state["epic_issue_number"] != epic_issue_number or existing_state.get("independent_issue_numbers", []) != sorted(independent_issues):
                 raise EpicRunStateError(
                     f"run_id {run_id!r} already belongs to epic "
                     f"{existing_state['epic_issue_number']}"
@@ -1636,11 +1642,12 @@ def record_epic_run_state(
                 else existing_state
             )
         else:
-            state = create_epic_run_state(
-                epic_issue_number,
-                run_id,
-                root=root,
-                **updates,
+            state = (
+                create_epic_run_state(epic_issue_number, run_id, root=root, **updates)
+                if epic_issue_number is not None
+                else create_independent_issue_run_state(
+                    list(independent_issues), run_id, root=root, **updates
+                )
             )
     except EpicRunStateError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -1676,7 +1683,8 @@ def show_epic_run_state(run_id: str, root: Path | None, as_json: bool) -> None:
     "dispatch-plan",
     help="Dry-run runtime-neutral worker context packs for an epic run.",
 )
-@click.option("--epic-issue-number", required=True, type=int)
+@click.option("--epic-issue-number", type=int)
+@click.option("--independent-issue", "independent_issues", multiple=True, type=int)
 @click.option("--run-id", required=True)
 @click.option(
     "--root",
@@ -1699,7 +1707,8 @@ def show_epic_run_state(run_id: str, root: Path | None, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True)
 def dispatch_plan(
-    epic_issue_number: int,
+    epic_issue_number: int | None,
+    independent_issues: tuple[int, ...],
     run_id: str,
     root: Path | None,
     candidates_file: Path,
@@ -1707,6 +1716,8 @@ def dispatch_plan(
     runtime_targets: tuple[str, ...],
     as_json: bool,
 ) -> None:
+    if (epic_issue_number is None) == (not independent_issues):
+        raise click.UsageError("provide exactly one of --epic-issue-number or --independent-issue")
     payload = _load_json_object_file(candidates_file, field="candidates-file")
     candidates = payload.get("candidates", [])
     active_leases = payload.get("active_leases", [])
@@ -1716,6 +1727,7 @@ def dispatch_plan(
             state = load_epic_run_state(run_id, root=root)
         plan = build_dispatch_plan(
             epic_issue_number=epic_issue_number,
+            independent_issue_numbers=independent_issues,
             run_id=run_id,
             candidates=candidates,
             max_parallel=max_parallel,
