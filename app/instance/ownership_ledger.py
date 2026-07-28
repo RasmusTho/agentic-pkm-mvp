@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
+from app.instance._storage_boundary import (
+    _StorageMutationCapability,
+    _require_storage_mutation_capability,
+)
 from app.instance.filesystem_identity import (
     FilesystemIdentityError,
     resolve_filesystem_root_identity,
@@ -419,9 +423,11 @@ class OwnershipLedger:
         *,
         channel_id: str,
         root: Path,
+        _capability: _StorageMutationCapability | None = None,
     ) -> OwnershipLease:
         """Authenticate an active owner or finish a committed pending reservation."""
 
+        _require_storage_mutation_capability(_capability)
         self._assert_existing_artifacts()
         with self._locked():
             key = self._load_or_create_key_locked(allow_create=False)
@@ -452,7 +458,9 @@ class OwnershipLedger:
         vault_binding_id: str,
         root: Path,
         allow_same_channel_nested: bool = True,
+        _capability: _StorageMutationCapability | None = None,
     ) -> OwnershipLease:
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(key)
@@ -478,7 +486,13 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return candidate
 
-    def activate(self, vault_binding_id: str) -> OwnershipLease:
+    def activate(
+        self,
+        vault_binding_id: str,
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(key)
@@ -491,7 +505,13 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return active
 
-    def release_to_tombstone(self, vault_binding_id: str) -> OwnershipLease:
+    def release_to_tombstone(
+        self,
+        vault_binding_id: str,
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(key)
@@ -509,7 +529,15 @@ class OwnershipLedger:
             )
             return retired
 
-    def reactivate(self, vault_binding_id: str, *, channel_id: str, root: Path) -> OwnershipLease:
+    def reactivate(
+        self,
+        vault_binding_id: str,
+        *,
+        channel_id: str,
+        root: Path,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(key)
@@ -539,7 +567,9 @@ class OwnershipLedger:
         source_binding_id: str,
         destination_channel_id: str,
         destination_binding_id: str,
+        _capability: _StorageMutationCapability | None = None,
     ) -> TransferReservation:
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(key)
@@ -568,7 +598,12 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases, transfer=reservation), key)
             return reservation
 
-    def activate_transfer(self) -> OwnershipLease:
+    def activate_transfer(
+        self,
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(key)
@@ -624,7 +659,9 @@ class OwnershipLedger:
         *,
         inventory_complete: bool,
         writers_drained: bool,
+        _capability: _StorageMutationCapability | None = None,
     ) -> LedgerSnapshot:
+        _require_storage_mutation_capability(_capability)
         if not inventory_complete or not writers_drained:
             raise LedgerCollisionError("legacy owner inventory must be complete and writers drained")
         with self._locked():
@@ -654,7 +691,9 @@ class OwnershipLedger:
         *,
         precondition: Callable[[LedgerSnapshot, Mapping[str, Path]], None],
         crash_after: str | None = None,
+        _capability: _StorageMutationCapability | None = None,
     ) -> LedgerSnapshot:
+        _require_storage_mutation_capability(_capability)
         self._assert_existing_artifacts()
         with self._locked(recover_rotation=False):
             if self.rotation_path.exists():

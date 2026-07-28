@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import configparser
+import importlib
 from pathlib import Path
 from typing import Set
 
@@ -37,6 +38,18 @@ def _contract_section() -> configparser.SectionProxy:
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER_INI)
     return parser["importlinter:contract:interaction-protected"]
+
+
+def _instance_storage_contract_section() -> configparser.SectionProxy:
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    return parser["importlinter:contract:instance-storage-mutation-protected"]
+
+
+def _instance_storage_capability_contract_section() -> configparser.SectionProxy:
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    return parser["importlinter:contract:instance-storage-capability-protected"]
 
 
 def _module_list(raw: str) -> Set[str]:
@@ -172,6 +185,35 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
     assert not unresolvable, (
         f"source_modules names packages that do not exist under app/: {unresolvable}"
     )
+
+
+def test_instance_storage_mutation_import_contract_is_complete() -> None:
+    """Only the sanctioned transaction modules may import storage mutators."""
+
+    section = _instance_storage_contract_section()
+    assert section["type"] == "protected"
+    assert section.getboolean("as_packages") is False
+    assert _module_list(section["protected_modules"]) == {
+        "app.instance.instance_state",
+        "app.instance.ownership_ledger",
+    }
+    assert _module_list(section["allowed_importers"]) == {
+        "app.instance.instance_state",
+        "app.instance.runtime",
+    }
+    capability_section = _instance_storage_capability_contract_section()
+    assert capability_section["type"] == "protected"
+    assert capability_section.getboolean("as_packages") is False
+    assert _module_list(capability_section["protected_modules"]) == {
+        "app.instance._storage_boundary",
+    }
+    assert _module_list(capability_section["allowed_importers"]) == {
+        "app.instance.ownership_ledger",
+        "app.instance.runtime",
+        "app.instance.vault_registry",
+    }
+    runtime_module = importlib.import_module("app.instance.runtime")
+    assert not hasattr(runtime_module, "_STORAGE_MUTATION_CAPABILITY")
 
 
 # ---------------------------------------------------------------------------

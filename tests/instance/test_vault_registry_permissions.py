@@ -5,6 +5,7 @@ import os
 import pytest
 
 from app.instance.vault_registry import RegistryError, VaultRegistration, VaultRegistryStore, preflight_registry_payload
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 def test_registry_transaction_files_are_private(tmp_path) -> None:
@@ -12,7 +13,10 @@ def test_registry_transaction_files_are_private(tmp_path) -> None:
     previous_umask = os.umask(0)
     try:
         store = VaultRegistryStore(path)
-        store.register(VaultRegistration("binding-a", "path:/a", "/a"))
+        store.register(
+            VaultRegistration("binding-a", "path:/a", "/a"),
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
     finally:
         os.umask(previous_umask)
 
@@ -47,14 +51,20 @@ def test_registry_transaction_files_are_private(tmp_path) -> None:
 def test_registry_write_rejects_symlinked_snapshot_without_mutating_state(tmp_path) -> None:
     path = tmp_path / "state" / "vault-registry.md"
     store = VaultRegistryStore(path)
-    initial = store.register(VaultRegistration("binding-a", "path:/a", "/a"))
+    initial = store.register(
+        VaultRegistration("binding-a", "path:/a", "/a"),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     external = tmp_path / "external.md"
     external.write_text("do not overwrite\n", encoding="utf-8")
     store.snapshot_path.unlink()
     store.snapshot_path.symlink_to(external)
 
     with pytest.raises(RegistryError, match="unsafe registry transaction path"):
-        store.register(VaultRegistration("binding-b", "path:/b", "/b"))
+        store.register(
+            VaultRegistration("binding-b", "path:/b", "/b"),
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
 
     assert external.read_text(encoding="utf-8") == "do not overwrite\n"
     assert store.load().revision == initial.revision

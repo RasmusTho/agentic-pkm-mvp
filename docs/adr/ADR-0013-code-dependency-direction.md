@@ -1,4 +1,4 @@
-State: Accepted and enforced (blocking). Flipped from advisory to blocking 2026-06-24 via #2481: all known violations cleared before flip, no allowlist required, contract exits 0 whenever a PR changes the import graph or its contract. Defines code import-dependency direction as a directional, contract-based projection of DESIGN_PRINCIPLES §3 system layers onto `app.*` packages. v1 enforces one invariant — the interaction layer is import-protected — via a module-level import-linter `forbidden` contract, run BLOCKING on relevant PRs.
+State: Accepted and enforced (blocking). Flipped from advisory to blocking 2026-06-24 via #2481: all known violations cleared before flip, no allowlist required, contract exits 0 whenever a PR changes the import graph or its contract. Defines code import-dependency direction as a directional, contract-based projection of DESIGN_PRINCIPLES §3 system layers onto `app.*` packages. The v1 contract set enforces the interaction invariant plus issue-scoped protected stateful boundaries via module-level import-linter contracts, run BLOCKING on relevant PRs.
 Doc role: Decision record (ADR)
 Authority: Authoritative for code import-dependency direction; the governing rule for `importlinter.ini`.
 Owner: Architecture
@@ -34,7 +34,7 @@ The codebase itself is reasonably modular (~50 small, mostly-acyclic subsystems 
 Code import dependencies are **directional and contract-based**, as a projection of the §3 system layers onto `app.*` packages.
 
 1. **Forward-only.** A package may depend on packages in the same or a lower layer. It must not depend on a higher layer. Layer order, highest to lowest: `interaction → cognition → execution → memory`, with **governance** cross-cutting (depends downward) and a **foundation** (shared kernel) leaf any layer may import.
-2. **Interaction is import-protected.** No package outside the interaction layer may import an interaction-layer package. This is the primary invariant and the only one enforced in v1: nothing reaches *backward* into a human/agent-facing surface.
+2. **Interaction is import-protected.** No package outside the interaction layer may import an interaction-layer package. This is the primary invariant; the v1 contract set also protects explicitly named stateful modules where a slice requires a narrower importer boundary. Nothing reaches *backward* into a human/agent-facing surface or across a named protected boundary.
 3. **Depend on contracts, not internals.** Import another package through its public entrypoint, not a private submodule or underscore-prefixed symbol. Enforcement is **module-level** (import-linter catches cross-package imports of any submodule); symbol-level privacy (`_helper`) is a review convention on top.
 4. **Foundation is exempt.** Shared-kernel packages (`events`, `settings`, `schemas`, `config`, and similar pure contract/util modules) may be imported by any layer and carry no inward restriction. They must stay leaf-like (no upward imports) so they remain safe to depend on everywhere.
 5. **Enforcement posture.** The contract runs on every PR that changes `app/**`, `importlinter.ini`, or its workflow via `import-linter` (`.github/workflows/import-linter.yaml`), **blocking** (no `continue-on-error`). A new backward import from a non-interaction package into the interaction layer (`app.api`, `app.chat`, `app.cli`, `app.web`) will fail that job. Flipped from advisory to blocking in #2481 (2026-06-24) after all known violations were confirmed cleared — the contract ran clean (exit 0, 0 violations) on the first run after the flip. No `ignore_imports` allowlist was required.
@@ -58,11 +58,12 @@ Rationale notes:
 - **Governance depends downward** (reads memory, wraps execution) but nothing depends upward on it for non-governance reasons; it is cross-cutting, not a strict tier.
 - **Foundation must stay acyclic and upward-free.** The broad fan-out of `events` (~63 importers) and `settings` (~42 importers) is tolerable only because these are leaves; keeping them leaves is what makes them safe hubs.
 
-## Enforcement reality (v1, updated to blocking in #2481)
+## Enforcement reality (v1, extended in #4033 and blocking since #2481)
 
-- **One `forbidden` contract**, not a `layered` contract. A `layered` contract over package *groups* would forbid legitimate intra-layer imports (e.g. `orchestrator → services`, both execution) because import-linter treats sibling modules in a layer as mutually independent. The directional invariant that adds value without false positives is the single rule "nothing outside interaction imports interaction", expressed as `type = forbidden` (deeper packages → `app.api`/`chat`/`cli`/`web`). Fuller per-layer `layered`/`independence` contracts are a documented refinement, deferred.
+- **One foundational `forbidden` contract plus issue-scoped `protected` contracts**, not a broad `layered` contract. A `layered` contract over package *groups* would forbid legitimate intra-layer imports (e.g. `orchestrator → services`, both execution) because import-linter treats sibling modules in a layer as mutually independent. The foundational directional invariant is "nothing outside interaction imports interaction", expressed as `type = forbidden` (deeper packages → `app.api`/`chat`/`cli`/`web`). The current protected projections are: `instance-storage-mutation-protected` for `app.instance.instance_state` and `app.instance.ownership_ledger`, and `instance-storage-capability-protected` for `app.instance._storage_boundary`, each with an explicit sanctioned importer set in `importlinter.ini`. Fuller per-layer `layered`/`independence` contracts remain deferred.
 - **Namespace packages converted (#2085).** All 15 `app/` subdirectories that were implicit namespace packages (no `__init__.py`) now have empty `__init__.py` files, including `app.orientation` and `app.reasoning`. They are now included in `source_modules` in `importlinter.ini` and their inward leaks are machine-enforced.
 - **Contract flipped to blocking (#2481, 2026-06-24).** By the time this flip landed, all known violations had been resolved (helpers extracted to `app.text.helpers`, cycle broken). The contract runs clean with no `ignore_imports` allowlist. Any new backward import now fails the job.
+- **Protected storage contracts added in #4033.** These contracts are part of the same blocking `lint-imports --config importlinter.ini` gate; a new production importer outside the declared instance transaction boundary fails the job. Capability identity remains a runtime/test boundary in addition to the module import boundary.
 
 ## Known violations at adoption (all resolved before blocking flip)
 
@@ -87,7 +88,7 @@ The blocking gate is clean. No `ignore_imports` section was added to `importlint
 ## Consequences
 
 - `api → services` / `api → agents` are legitimate forward dependencies; the orphan `forbidden` rule is removed.
-- Module boundaries become legible and self-reporting on every PR without blocking delivery.
+- Module boundaries become legible and self-reporting on every PR, with violations blocking delivery.
 - The contract immediately surfaces genuine coupling (a backward reach + one cycle) that previously had no detector.
 - Foundation packages acquire an explicit obligation to stay leaf-like (no upward imports), constraining how `events`/`settings` may grow.
 - Coverage is partial: intra-interaction private reaches are not enforced (below module granularity). Namespace packages are now fully covered as of #2085. The inventory is the bridge for intra-interaction reaches.
@@ -110,14 +111,14 @@ The blocking gate is clean. No `ignore_imports` section was added to `importlint
 # Contract exists and protects the interaction layer:
 rg -n "interaction-protected|app\.api|app\.chat" importlinter.ini
 
-# Contract evaluates and reports the real leaks (expected exit 1 under non-blocking posture):
+# Contract set evaluates cleanly under the blocking posture:
 lint-imports --config importlinter.ini
 
 # Backward-import cross-check matches the reported violations:
 rg -n '^\s*from app\.(api|chat|cli|web)' app/ | rg -v '^app/(api|chat|cli|web)/'
 
-# The PR gate runs non-blocking:
-rg -n "pull_request|continue-on-error" .github/workflows/import-linter.yaml
+# The PR gate runs blocking:
+rg -n "pull_request" .github/workflows/import-linter.yaml
 ```
 
 ## References

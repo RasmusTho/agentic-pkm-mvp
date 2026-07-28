@@ -7,6 +7,7 @@ import pytest
 import app.instance.vault_registry as registry_module
 from app.instance.filesystem_identity import FilesystemRootIdentity
 from app.instance.vault_registry import RegistryError, VaultRegistration, VaultRegistryStore
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
@@ -20,7 +21,8 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
             path="/vault/a",
             vault_id="logical-shared",
             local_instance_id="clone-a",
-        )
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     store.register(
         VaultRegistration(
@@ -29,7 +31,8 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
             path="/vault/b",
             vault_id="logical-shared",
             local_instance_id="clone-b",
-        )
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
 
     assert [item.vault_binding_id for item in store.list_registrations()] == ["binding-a", "binding-b"]
@@ -43,6 +46,7 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
             local_instance_id="clone-a",
         ),
         expected_revision=2,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     assert updated.revision == 3
 
@@ -56,6 +60,7 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
                 local_instance_id="different-clone",
             ),
             expected_revision=3,
+            _capability=STORAGE_MUTATION_CAPABILITY,
         )
     assert store.load().revision == 3
 
@@ -69,11 +74,19 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
                 local_instance_id="clone-a",
             ),
             expected_revision=3,
+            _capability=STORAGE_MUTATION_CAPABILITY,
         )
     assert store.load().revision == 3
 
-    store.register(VaultRegistration("binding-temporary", "path:/temporary", "/temporary"))
-    store.remove_registration("binding-temporary", expected_revision=4)
+    store.register(
+        VaultRegistration("binding-temporary", "path:/temporary", "/temporary"),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    store.remove_registration(
+        "binding-temporary",
+        expected_revision=4,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
 
     reloaded = VaultRegistryStore(path).load()
     assert reloaded.authority == "dormant"
@@ -88,7 +101,10 @@ def test_registry_round_trip_preserves_multiple_vaults(tmp_path) -> None:
 def test_persisted_registry_rejects_canonical_and_physical_identity_collisions(tmp_path, monkeypatch) -> None:
     canonical_path = tmp_path / "canonical.md"
     canonical_store = VaultRegistryStore(canonical_path)
-    canonical_store.register(VaultRegistration("binding-a", "path:/vault/a", "/vault/a"))
+    canonical_store.register(
+        VaultRegistration("binding-a", "path:/vault/a", "/vault/a"),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     document = registry_module._read_document(canonical_path)
     document.frontmatter["registrations"]["binding-alias"] = {
         "ref": "alias:/vault/a",
@@ -104,8 +120,14 @@ def test_persisted_registry_rejects_canonical_and_physical_identity_collisions(t
 
     physical_path = tmp_path / "physical.md"
     physical_store = VaultRegistryStore(physical_path)
-    physical_store.register(VaultRegistration("binding-a", "path:/mount/a", "/mount/a"))
-    physical_store.register(VaultRegistration("binding-b", "path:/mount/b", "/mount/b"))
+    physical_store.register(
+        VaultRegistration("binding-a", "path:/mount/a", "/mount/a"),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    physical_store.register(
+        VaultRegistration("binding-b", "path:/mount/b", "/mount/b"),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     real_resolver = registry_module.resolve_filesystem_root_identity
 
     def same_inode(value):

@@ -9,6 +9,7 @@ import pytest
 
 import app.instance.vault_registry as registry_module
 from app.instance.vault_registry import RegistryError, RegistryRevisionConflict, VaultRegistration, VaultRegistryStore
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 def _registration(index: int) -> VaultRegistration:
@@ -22,21 +23,36 @@ def _registration(index: int) -> VaultRegistration:
 
 
 def _process_register(path: str, index: int) -> None:
-    VaultRegistryStore(Path(path)).register(_registration(index))
+    VaultRegistryStore(Path(path)).register(
+        _registration(index),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
 
 
 def test_production_mutations_are_locked_atomic_and_revision_checked(tmp_path) -> None:
     path = tmp_path / "vault-registry.md"
     store = VaultRegistryStore(path)
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(lambda index: VaultRegistryStore(path).register(_registration(index)), range(8)))
+        list(
+            pool.map(
+                lambda index: VaultRegistryStore(path).register(
+                    _registration(index),
+                    _capability=STORAGE_MUTATION_CAPABILITY,
+                ),
+                range(8),
+            )
+        )
 
     loaded = store.load()
     assert loaded.revision == 8
     assert len(loaded.registrations) == 8
 
     with pytest.raises(RegistryRevisionConflict, match="expected revision 0"):
-        store.register(_registration(99), expected_revision=0)
+        store.register(
+            _registration(99),
+            expected_revision=0,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
     assert store.load().revision == 8
 
     process_path = tmp_path / "process-registry.md"
@@ -57,7 +73,7 @@ def test_production_mutations_are_locked_atomic_and_revision_checked(tmp_path) -
 def test_restart_recovers_every_precommit_interruption(tmp_path, monkeypatch, interruption_artifact) -> None:
     path = tmp_path / f"interrupted-{interruption_artifact}.md"
     store = VaultRegistryStore(path)
-    store.register(_registration(1))
+    store.register(_registration(1), _capability=STORAGE_MUTATION_CAPABILITY)
     previous = {
         store.path: store.path.read_bytes(),
         store.snapshot_path: store.snapshot_path.read_bytes(),
@@ -79,7 +95,11 @@ def test_restart_recovers_every_precommit_interruption(tmp_path, monkeypatch, in
 
     monkeypatch.setattr(registry_module, "_atomic_private_write", interrupt_after_write)
     with pytest.raises(KeyboardInterrupt, match=f"crash after {interruption_artifact}"):
-        store.register(_registration(2), expected_revision=1)
+        store.register(
+            _registration(2),
+            expected_revision=1,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
     assert store.transaction_path.exists()
     assert store.transaction_path.stat().st_mode & 0o777 == 0o600
 
@@ -95,7 +115,7 @@ def test_restart_recovers_every_precommit_interruption(tmp_path, monkeypatch, in
 def test_restart_rolls_forward_after_committed_marker(tmp_path, monkeypatch) -> None:
     path = tmp_path / "committed-interruption.md"
     store = VaultRegistryStore(path)
-    store.register(_registration(1))
+    store.register(_registration(1), _capability=STORAGE_MUTATION_CAPABILITY)
     real_write = registry_module._atomic_private_write
 
     def interrupt_after_commit_marker(candidate, payload):
@@ -105,7 +125,11 @@ def test_restart_rolls_forward_after_committed_marker(tmp_path, monkeypatch) -> 
 
     monkeypatch.setattr(registry_module, "_atomic_private_write", interrupt_after_commit_marker)
     with pytest.raises(KeyboardInterrupt, match="crash after committed marker"):
-        store.register(_registration(2), expected_revision=1)
+        store.register(
+            _registration(2),
+            expected_revision=1,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
     monkeypatch.setattr(registry_module, "_atomic_private_write", real_write)
 
     recovered = VaultRegistryStore(path).load()
@@ -121,7 +145,7 @@ def test_restart_rolls_forward_after_committed_marker(tmp_path, monkeypatch) -> 
 def test_corrupt_transaction_journal_fails_closed(tmp_path, monkeypatch) -> None:
     path = tmp_path / "corrupt-transaction.md"
     store = VaultRegistryStore(path)
-    store.register(_registration(1))
+    store.register(_registration(1), _capability=STORAGE_MUTATION_CAPABILITY)
     original = path.read_bytes()
     store.transaction_path.write_text('{"schema":')
     store.transaction_path.chmod(0o600)
@@ -132,7 +156,10 @@ def test_corrupt_transaction_journal_fails_closed(tmp_path, monkeypatch) -> None
 
     digest_path = tmp_path / "digest-transaction.md"
     digest_store = VaultRegistryStore(digest_path)
-    digest_store.register(_registration(1))
+    digest_store.register(
+        _registration(1),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     digest_original = digest_path.read_bytes()
     real_write = registry_module._atomic_private_write
 
@@ -144,7 +171,11 @@ def test_corrupt_transaction_journal_fails_closed(tmp_path, monkeypatch) -> None
     with monkeypatch.context() as patch:
         patch.setattr(registry_module, "_atomic_private_write", interrupt_after_snapshot)
         with pytest.raises(KeyboardInterrupt, match="leave prepared journal"):
-            digest_store.register(_registration(2), expected_revision=1)
+            digest_store.register(
+                _registration(2),
+                expected_revision=1,
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
     journal = json.loads(digest_store.transaction_path.read_text())
     journal["previous"]["main"]["sha256"] = "0" * 64
     digest_store.transaction_path.write_text(json.dumps(journal))

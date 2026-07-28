@@ -18,6 +18,12 @@ from uuid import uuid4
 
 import yaml
 
+from app.instance._storage_boundary import (
+    CapabilityNotReadyError,
+    RegistryError,
+    _StorageMutationCapability,
+    _require_storage_mutation_capability,
+)
 from app.instance.filesystem_identity import (
     FilesystemIdentityError,
     FilesystemRootIdentity,
@@ -56,20 +62,12 @@ _REGISTRATION_FIELDS = {
 }
 
 
-class RegistryError(RuntimeError):
-    """Base class for fail-closed registry errors."""
-
-
 class RegistryMigrationError(RegistryError):
     """Legacy state cannot be migrated without guessing identity."""
 
 
 class RegistryRevisionConflict(RegistryError):
     """A caller attempted to write from a stale registry revision."""
-
-
-class CapabilityNotReadyError(RegistryError):
-    """A later delivery floor has not been installed."""
 
 
 class RegistryParseError(RegistryError):
@@ -217,7 +215,9 @@ class VaultRegistryStore:
         registration: VaultRegistration,
         *,
         expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
+        _require_storage_mutation_capability(_capability)
         self._validate_registration(registration)
         with self._locked():
             current = (
@@ -250,9 +250,11 @@ class VaultRegistryStore:
         registration: VaultRegistration,
         *,
         expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Update mutable binding metadata without changing stable identities."""
 
+        _require_storage_mutation_capability(_capability)
         self._validate_registration(registration)
         with self._locked():
             current = self._read_current_locked(recover=True)
@@ -277,9 +279,11 @@ class VaultRegistryStore:
         vault_binding_id: str,
         *,
         expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Remove one dormant registration; production removal remains sealed."""
 
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
@@ -299,9 +303,11 @@ class VaultRegistryStore:
         transfer_lineage: tuple[TransferLineage, ...] | None = None,
         extensions: dict[str, Any] | None = None,
         expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Atomically commit one lifecycle/transfer state transition."""
 
+        _require_storage_mutation_capability(_capability)
         with self._locked():
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
@@ -341,9 +347,11 @@ class VaultRegistryStore:
         principal_state: Mapping[str, object],
         background_state: Mapping[str, object],
         runtime_floors: Mapping[str, object],
+        _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Persist the 01B mechanical state that must survive backup/restore."""
 
+        _require_storage_mutation_capability(_capability)
         current = self.load()
         extensions = copy.deepcopy(current.extensions)
         extensions.update(
@@ -359,6 +367,7 @@ class VaultRegistryStore:
             registrations=dict(current.registrations),
             extensions=extensions,
             expected_revision=current.revision,
+            _capability=_capability,
         )
 
     def require_authoritative_activation(self, proof: RegistryActivationProof) -> None:

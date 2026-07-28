@@ -100,6 +100,8 @@ class InstanceRegistryRuntime:
         vault_root: Path,
         watcher_vault_path: Path,
     ) -> VaultRegistration:
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
         root_identity = resolve_filesystem_root_identity(vault_root)
         watcher_identity = resolve_filesystem_root_identity(watcher_vault_path)
         if not same_filesystem_root(root_identity, watcher_identity):
@@ -119,6 +121,7 @@ class InstanceRegistryRuntime:
                     registration.vault_binding_id,
                     channel_id=self.layout.channel_id,
                     root=Path(root_identity.canonical_path),
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
                 )
                 return registration
         for tombstone in current.removal_tombstones.values():
@@ -136,14 +139,22 @@ class InstanceRegistryRuntime:
             vault_binding_id=registration.vault_binding_id,
             root=Path(registration.path),
             allow_same_channel_nested=False,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         try:
-            self.registry.register(registration, expected_revision=current.revision)
+            self.registry.register(
+                registration,
+                expected_revision=current.revision,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
         except Exception:
             # A retry can recover a prepared lease only when the registry commit exists;
             # otherwise leaving it pending is safer than allowing a conflicting owner.
             raise
-        self.ledger.activate(registration.vault_binding_id)
+        self.ledger.activate(
+            registration.vault_binding_id,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
         return registration
 
     def _require_established_ownership(self, current: RegistrySnapshot) -> None:
@@ -224,6 +235,8 @@ class InstanceRegistryRuntime:
         crash_after: str | None = None,
     ) -> LedgerSnapshot:
         """Rotate only inside the existing lease-bound all-owner drain fence."""
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
         if quiescence_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
@@ -312,6 +325,7 @@ class InstanceRegistryRuntime:
         return self.ledger.rotate_key(
             precondition=require_rotation_authority,
             crash_after=crash_after,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
 
     def require_initialized(self, vault_binding_id: str) -> VaultRegistration:
@@ -329,6 +343,8 @@ class InstanceRegistryRuntime:
         vault_id: str,
         local_instance_id: str,
     ) -> VaultRegistration:
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
         current = self.registry.lookup(vault_binding_id)
         if current is None:
             raise RegistryError(f"unknown vault_binding_id: {vault_binding_id}")
@@ -339,7 +355,10 @@ class InstanceRegistryRuntime:
             vault_id=vault_id,
             extensions={**current.extensions, "status": "initialized"},
         )
-        self.registry.update_registration(updated)
+        self.registry.update_registration(
+            updated,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
         return updated
 
     def _new_registration(self, root: Path) -> VaultRegistration:
@@ -957,6 +976,8 @@ def _finish_instance_state_deployment(
 ) -> dict[str, object]:
     """Finalize legacy state while stopped, then clear the restart fence."""
 
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
     if quiescence_proof is None:
         raise InstanceStatePreflightError("durable quiescence proof is required")
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
@@ -1033,12 +1054,14 @@ def _finish_instance_state_deployment(
             owners,
             inventory_complete=True,
             writers_drained=True,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
     for registration in registry.registrations.values():
         ledger.recover_or_require_active(
             registration.vault_binding_id,
             channel_id=channel,
             root=Path(registration.path),
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
     if not ledger_snapshot.legacy_bootstrap_complete:
         raise InstanceStatePreflightError("legacy owner bootstrap did not complete")
