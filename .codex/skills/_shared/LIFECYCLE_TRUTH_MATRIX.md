@@ -25,7 +25,7 @@ reconciliation.
 | PR | OPEN + Draft | `In Progress` |
 | PR | OPEN + non-draft + review requested | `Review` |
 | PR | OPEN + non-draft, no review requested | `Review` |
-| Any | Present but no Project entry | Add to Project, apply row above |
+| Any | Explicit Project-repair run, but no Project entry | Add to Project, apply row above |
 
 ## Review semantics
 
@@ -38,5 +38,7 @@ PR card in `Review` as drift.
 
 - `agent:ready` is the pickup qualifier after strict validation. `Status=Ready` is its preferred
   legacy board projection, not a precondition or collision guard.
+- Outside an explicit Project-repair run, absence from the Project is not drift and requires no
+  read or mutation.
 - GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project
   state when they disagree; correct the projection to match the harder truth.

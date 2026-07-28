@@ -124,8 +124,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
   rate-limit backoff. Terminal completion
   additionally enforces the authenticated v3 `final_review_rounds` value from the live PR's unique
-  `Final-Review-Rounds: 1|2` declaration. The normal value is one; declared high-risk runtime work
-  uses two. Intake, post-launch delivery validation, artifact replay, explicit restart, and
+  `Final-Review-Rounds: 1|2` declaration. This verification-dispatch path is full-path only:
+  light-path PRs declare `Final-Review-Rounds: 0` and bypass it. Within the full path the normal
+  value is one; declared high-risk runtime work uses two. Intake, post-launch delivery validation, artifact replay, explicit restart, and
   neutralized or merged crash recovery all re-check that live authority before proceeding.
   Independently, the ledger raises the requirement to two when it detects low convergence
   for the same stable mechanism/domain key: two distinct blockers in one review session or an

@@ -1,10 +1,11 @@
-name: Project PR Stage Change
+name: Optional Project Projection - PR Stage Change
 
 on:
   pull_request:
     types: [ready_for_review, converted_to_draft, closed]
 
 concurrency:
+  # Optional legacy projection only; Issue/PR state remains authoritative.
   # Shared group with the other GitHub Project board workflows so only one board
   # writer runs at a time (prevents the multi-workflow GraphQL stampede).
   # `queue: max` keeps pending runs (FIFO, up to 100) so burst board events are
@@ -19,7 +20,7 @@ permissions:
   repository-projects: write
 
 jobs:
-  project-pr-status:
+  project-pr-projection:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

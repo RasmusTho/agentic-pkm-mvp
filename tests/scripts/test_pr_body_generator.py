@@ -62,7 +62,7 @@ def test_generates_valid_governance_lane_body() -> None:
     body = generate_pr_body_from_mapping(_fixture("governance_issue.json"))
 
     assert "- [x] Governance lane" in body
-    assert "Final-Review-Rounds: 1" in body
+    assert "Final-Review-Rounds: 0" in body
     assert "Closes #3275" in body
     assert "## SBS Impact" in body
     assert "- Primary subsystem: Builder System" in body
@@ -72,13 +72,13 @@ def test_generates_valid_governance_lane_body() -> None:
     assert "<" not in body
 
 
-def test_accepts_light_path_zero_final_review_rounds() -> None:
+def test_accepts_full_path_final_review_rounds() -> None:
     mapping = dict(_fixture("governance_issue.json"))
-    mapping["final_review_rounds"] = 0
+    mapping["final_review_rounds"] = 1
 
     body = generate_pr_body_from_mapping(mapping)
 
-    assert "Final-Review-Rounds: 0" in body
+    assert "Final-Review-Rounds: 1" in body
 
 
 def test_rejects_out_of_range_final_review_rounds() -> None:

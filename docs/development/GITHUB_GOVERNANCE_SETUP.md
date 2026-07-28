@@ -98,7 +98,8 @@ Lifecycle guardrails:
 - issues should not move to `Review` only because a PR exists; issue state remains claim/execution truth
 - normal open PRs should default to `Review`; draft is opt-in and should be used only with an explicit reason
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
-- merged or otherwise closed terminal PR items must not remain unset or non-terminal in the Project; they should reconcile to `Done`
+- when optional Project repair is in scope, merged or otherwise closed terminal PR items should
+  reconcile to `Done`
 - parent feature issues are validation hubs, not direct pickup issues; while child slices remain outstanding they normally live in `Backlog` with `agent:blocked`
 - use `agent:needs-human` only when the blocker is a named human decision, tradeoff, missing input, or authority question
 - the `state:known-defect` registry is not an implementation Issue; promotion creates a separate

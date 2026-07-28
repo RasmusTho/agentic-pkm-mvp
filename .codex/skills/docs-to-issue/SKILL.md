@@ -30,7 +30,8 @@ Use maintenance skills instead of this lane when the work is a repair, audit, or
 ## Core rules
 
 - GitHub Issues are the canonical backlog task contract.
-- GitHub Project is the canonical backlog state machine.
+- Issue state and labels are the canonical backlog lifecycle. GitHub Project is an optional legacy
+  projection and never gates Issue creation or readiness.
 - Before drafting an Issue, classify the work as Product/Runtime System, Builder System, or boundary
   work using `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work
   Classification`.
@@ -140,7 +141,7 @@ For each created Issue, include:
 - backlog receipt:
   `BACKLOG RECEIPT: Issue #123 created, labeled ...; optional Project repair: <status|none>.`
 - delivery receipt template:
-  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
+  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Optional Project repair: <Done|none>.`
 
 If no Issue should be created, say so explicitly and explain why.
 

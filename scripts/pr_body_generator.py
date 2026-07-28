@@ -55,7 +55,7 @@ class PRBodyInputs:
     summary: tuple[str, ...]
     sbs_impact: Mapping[str, str]
     owner_doc_resolution: str
-    final_review_rounds: int = 1
+    final_review_rounds: int = 0
     issue_number: int | None = None
     builderops_records: str | None = None
     builderops_reason: str | None = None
@@ -103,7 +103,7 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
         sbs_impact=_string_mapping(data.get("sbs_impact", {}), "sbs_impact"),
         owner_doc_resolution=str(data.get("owner_doc_resolution", "")),
         owner_doc_followup_issue=_optional_text(data.get("owner_doc_followup_issue")),
-        final_review_rounds=int(data.get("final_review_rounds", 1)),
+        final_review_rounds=int(data.get("final_review_rounds", 0)),
         builderops_records=_optional_text(data.get("builderops_records")),
         builderops_reason=_optional_text(data.get("builderops_reason")),
         notes=str(data.get("notes", "None.")),
@@ -259,7 +259,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sbs", action="append", default=[], help="SBS field as key=value.")
     parser.add_argument("--owner-doc-resolution", choices=sorted(OWNER_DOC_RESOLUTIONS))
     parser.add_argument("--owner-doc-followup-issue")
-    parser.add_argument("--final-review-rounds", type=int, choices=(0, 1, 2), default=1)
+    parser.add_argument("--final-review-rounds", type=int, choices=(0, 1, 2), default=0)
     parser.add_argument("--builderops-records")
     parser.add_argument("--builderops-reason")
     parser.add_argument("--notes", default="None.")

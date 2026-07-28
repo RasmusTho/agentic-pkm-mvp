@@ -55,7 +55,7 @@ Four initial execution roles. Each maps to exactly one canonical skill and stays
 |---|---|---|---|
 | `issue_set_coordinator` | `.codex/agents/issue-set-coordinator.toml` | Plan and dispatch an issue-set: readiness tables, pickup order, fan-out rationale, receipt reconciliation. Coordinates only; does not implement. | `.codex/skills/deliver-issue-set/SKILL.md` |
 | `slice_implementer` | `.codex/agents/slice-implementer.toml` | Implement exactly one bounded, strictly validated `agent:ready` issue end to end; Project Status is optional projection. | `.codex/skills/issue-to-code/SKILL.md` |
-| `backlog_contract_maintainer` | `.codex/agents/backlog-contract-maintainer.toml` | Repair stale, malformed, duplicate, or drifted Issue/PR/Project state. | `.codex/skills/issue-maintenance-change-control/SKILL.md` |
+| `backlog_contract_maintainer` | `.codex/agents/backlog-contract-maintainer.toml` | Repair stale, malformed, duplicate, or drifted Issue/PR/label state plus optional Project projection. | `.codex/skills/issue-maintenance-change-control/SKILL.md` |
 | `verification_closer` | `.codex/agents/verification-closer.toml` | Verify a PR against its governing contract, check CI/review state, and close delivery. | `.codex/skills/verification-and-closure/SKILL.md` |
 
 The host-local verification dispatch consumer may launch or resume the coordinator session for this
@@ -70,7 +70,7 @@ strongest-capability attempts.
 |---|---|---|
 | Epic / parent feature / lane / ready-issue-set planning and dispatch | `deliver-issue-set` | `issue_set_coordinator` |
 | One bounded slice issue → code → PR | `issue-to-code` | `slice_implementer` |
-| Issue/PR/label/Project lifecycle correction or drift repair | `issue-maintenance-change-control` | `backlog_contract_maintainer` |
+| Issue/PR/label lifecycle correction or optional Project projection repair | `issue-maintenance-change-control` | `backlog_contract_maintainer` |
 | Verify delivered slice, merge, close the loop | `verification-and-closure` | `verification_closer` |
 
 If a task does not match a role, do not invent one: run the matching skill directly per `AGENTS.md`.

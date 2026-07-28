@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-07-20
+Last reviewed: 2026-07-28
 
 # Builder System Process Map
 
@@ -13,7 +13,14 @@ Last reviewed: 2026-07-20
 
 Yggdrasil's Builder System is the continuous-development enabling system around the Product/Runtime System. It builds, verifies, releases, governs, and learns from Product/Runtime changes; it is not itself a Product SBS runtime subsystem [docs/architecture/SBS_OPERATING_MODEL.md:68-93].
 
-Rasmus provides intent, preferences, constraints, and strategic direction. Routine review, dispatch, CI triage, PR closing, post-merge documentation checking, and learning capture should be performed by the Builder System when the governing contracts are sufficient. Human attention is an exception path: the canonical builder instructions say the default posture is to act, and to escalate only for irreversible, external-facing, or genuinely ambiguous authority decisions [AGENTS.md:161-169]. The review-gate fallback policy removes work from the autonomous-ready queue only when a required review gate is unavailable or a human override is needed [docs/architecture/SBS_OPERATING_MODEL.md §12].
+Rasmus provides intent, preferences, constraints, and strategic direction. Tier-selected review,
+dispatch, CI triage, PR closing, post-merge documentation checking, and learning capture should be
+performed by the Builder System when the governing contracts are sufficient. Human attention is an
+exception path: the canonical builder instructions say the default posture is to act, and to
+escalate only for irreversible, external-facing, or genuinely ambiguous authority decisions
+[AGENTS.md:161-169]. The review-gate fallback policy applies only when the selected delivery path
+requires that gate and it is unavailable, or when a human override is needed
+[docs/architecture/SBS_OPERATING_MODEL.md §12].
 
 The Builder System has these layers:
 
@@ -22,7 +29,7 @@ The Builder System has these layers:
 3. Contract layer: GitHub issues, PR templates, shared skill contracts, labels, `Verify:` markers, and SBS impact blocks define executable work [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109].
 4. Dispatch/routing layer: dispatcher queue/leases, labels, skill routing, model/reasoning policy, and worktree isolation select work and prevent collisions; Project status is projection evidence only [docs/AGENT_ISSUE_DISPATCHER.md:132-180], [AGENTS.md:171-182].
 5. Execution layer: skills, agents, scripts, local worktrees, implementation PRs, and publication boundaries perform work [`.codex/skills/README.md`:144-164], [`.codex/skills/publish-pr/SKILL.md`:53-159].
-6. Verification/evidence layer: local validation, CI, REST-only check waiting, local review gate, delivery receipts, Project reconciliation, and owner-doc receipts prove work. Terminal epic lifecycle dry-runs use the same latest-check-run-per-name selector as CI handoff, with a numeric run-id fallback and fail-closed latest non-green checks; Issue, PR, and CI blockers are reported independently from whether terminal projection writes are allowed [`.codex/skills/verification-and-closure/SKILL.md`:46-77], [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82], [`app/builderops/epic_lifecycle_plan.py`].
+6. Verification/evidence layer: local validation, CI, REST-only check waiting, tier-selected review, delivery receipts, optional Project reconciliation, and owner-doc receipts prove work. Terminal epic lifecycle dry-runs use the same latest-check-run-per-name selector as CI handoff, with a numeric run-id fallback and fail-closed latest non-green checks; Issue, PR, and CI blockers are reported independently from whether optional projection writes are allowed [`.codex/skills/verification-and-closure/SKILL.md`:46-77], [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82], [`app/builderops/epic_lifecycle_plan.py`].
 7. Closure/spec-feedback layer: merge, issue closure, dispatcher completion, parent validation receipts, post-merge owner-doc decisions, and roadmap/spec state updates close work truthfully [`.codex/skills/verification-and-closure/SKILL.md`:194-208], [docs/development/PARENT_ISSUE_CLOSURE.md:13-49].
 8. Continuous improvement and reevaluation layer: BuilderOps records, learning signals, evidence
    packs, review findings, TCD signals, CKM projections, retrospectives, skill/docs updates, fitness
@@ -85,7 +92,7 @@ Read-only GitHub evidence used:
 | PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |
 | PR contract validator | implemented | `issue-pr-governance.yml` | Check PR body lane/issue/paths/BuilderOps routing | PR body/files | Failed or passed check | GitHub Action | [`.github/workflows/issue-pr-governance.yml`:79-218] |
 | review gate | partially_implemented | Local convergence review through `review_before_ci_gate.py`, final `/code-review` skill in `verification-and-closure`, optional Codex verdict resolver | Review high-risk mechanisms before expensive proof and independently review current PR head before merge | Local publishable diff plus convergence packet; current PR diff | Findings/pass | Local receipt, agent comments, or blocked-technical receipt | [scripts/review_before_ci_gate.py], [`.codex/skills/verification-and-closure/SKILL.md`:116-225], [app/dispatcher/poll_backoff.py:21] |
-| merge gate | partially_implemented | `verification-and-closure`, `scripts/await_pr_checks.sh`, `scripts/prepare_verified_issue_set_merge.py`, `scripts/build_verified_issue_set_merge_phase.py`, branch protection on `stable` only | Decide merge eligibility and fence mutable PR-body closure authority | CI/review/exact closing-issue ACs plus governing issue-set contract | Exact-head merge or block; trusted authority plus durable prepared/merged/reconciled/restored phase receipts, bounded repository-event candidate enumeration, and one identity-validated GraphQL `ClosedEvent.closer` batch proving exact target PR/repository/merge attribution before terminal acceptance | REST merge plus explicit issue mutations; platform on `stable` | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`], [`app/dispatcher/verification_consumer.py`], `gh api stable protection -> required checks` |
+| merge gate | implemented light path / partially_implemented full path | `verification-and-closure`, `scripts/await_pr_checks.sh`; full path also uses `scripts/prepare_verified_issue_set_merge.py`, `scripts/build_verified_issue_set_merge_phase.py`; branch protection on `stable` only | Decide merge eligibility with tier-selected depth; fence mutable PR-body closure authority only on the full path | Light: current-SHA CI + exact single-issue ACs. Full: CI/review/exact closing-issue ACs plus governing issue-set contract | Light: plain merge + native closure readback. Full: exact-head merge or block with trusted authority and durable prepared/merged/reconciled/restored phase receipts plus exact closure attribution | REST merge plus explicit issue mutations; platform on `stable` | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`], [`app/dispatcher/verification_consumer.py`], `gh api stable protection -> required checks` |
 | issue closure worker | partially_implemented | `verification-and-closure` | Close issues and set Done | Merged PR | Closed issue, labels removed, receipts | GitHub | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
 | post-merge docs/spec classifier | partially_implemented | `post-merge-owner-doc` skill, classifier and watchdog workflows | Decide owner-doc update/follow-up/no-change | Merged PR diff plus canonical body authority or one unique trusted same-head merge-authority receipt during neutralization | Docs PR, follow-up issue, or PR-specific receipt on every closed child and distinct open governing parent; issue-free receipt on PR | Agent/GitHub Action nudge | [`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-docs-classifier.yml`], [`.github/workflows/post-merge-owner-doc-watchdog.yml`] |
 | autonomous closure gate | implicit | `verification-and-closure` prerequisites | Ensure closure is safe | ACs, CI, review, owner-doc receipt | Delivery receipt | Agent | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
@@ -159,10 +166,10 @@ flowchart TD
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | intent capture | Human strategy/request | Rasmus + agent | Intent | `PROJECT_KERNEL`, `DOCS_INDEX`, owner docs | docs-authoring | PR/docs | Updated docs or issue-ready spec | PR | Docs review | current vs target | docs-to-issue | clarify docs | intent ambiguity | [docs/DOCS_INDEX.md:24-47] |
 | docs/spec authoring | Docs-only change | Agent | Existing docs | `AGENTS.md`, `DOCS_INDEX`, `DEV_WORKFLOW` | docs-authoring | docs/governance checks | Docs PR | PR | factual claim verification | owner doc role | docs-to-issue later | switch to issue-first if implementation | authority ambiguity | [`.codex/skills/docs-authoring/SKILL.md`:18-48] |
-| docs-to-issue | Active docs become executable work | Agent | Docs/source anchors | `ISSUE_CONTRACT`, `docs-to-issue` | docs-to-issue | gh/Project ops | Issue | GitHub | `Verify:` markers | executable? duplicate? ready? | issue maintenance | Backlog/needs-human | named human decision | [`.codex/skills/docs-to-issue/SKILL.md`:69-119] |
+| docs-to-issue | Active docs become executable work | Agent | Docs/source anchors | `ISSUE_CONTRACT`, `docs-to-issue` | docs-to-issue | gh; optional Project repair | Issue | GitHub | `Verify:` markers | executable? duplicate? ready? | issue maintenance | Backlog/needs-human | named human decision | [`.codex/skills/docs-to-issue/SKILL.md`:69-119] |
 | feature breakdown | Capability too large | Agent | Owner/spec docs | feature-breakdown | feature-breakdown | gh/docs | Spec dir, parent/child issues | PR + GitHub | task specs with ACs | parent vs child | validation hub | blocked parent | target acceptance ambiguity | [`.codex/skills/feature-breakdown/SKILL.md`:25-47], [`.codex/skills/feature-breakdown/SKILL.md`:107-129] |
 | issue intake | Issue opened/edited/labeled | GitHub Action + agent | Issue body | issue template, governance | docs-to-issue/learning-to-issue | `issue-pr-governance.yml` | Checked issue | Issue labels/comments | section/source checks | label/status | maintenance | failed governance check | missing human input | [`.github/workflows/issue-pr-governance.yml`:3-78] |
-| issue validation | Before coding | Agent | Issue | `AGENT_OPERATING_PROTOCOL`, issue contract | issue-to-code | source-anchor validation | pass/block | labels/Project | all `Verify:` targets | source truth sufficient? | issue maintenance | `agent:blocked` or `needs-human` | authority unclear | [`.codex/skills/issue-to-code/SKILL.md`:19-72] |
+| issue validation | Before coding | Agent | Issue | `AGENT_OPERATING_PROTOCOL`, issue contract | issue-to-code | source-anchor validation | pass/block | labels; optional Project projection | all `Verify:` targets | source truth sufficient? | issue maintenance | `agent:blocked` or `needs-human` | authority unclear | [`.codex/skills/issue-to-code/SKILL.md`:19-72] |
 | readiness classification | Queue eligibility | Agent + GitHub state | labels | label taxonomy, issue contract | issue-maintenance | readiness validator | ready/non-active | labels | strictly valid `agent:ready` | agent-ready? | drift repair | no pickup | named decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`], [`.codex/skills/_shared/ISSUE_CONTRACT.md`] |
 | dispatcher / queue selection | Work pickup | Agent + dispatcher | Ready tasks | dispatcher contract | issue-to-code | `python -m app.dispatcher next/claim` | Lease/task | dispatcher DB + GitHub label | lease acquired | priority and fit | release/reclaim | fallback to GitHub-label-only | dispatcher unavailable plus unsafe fallback | [docs/AGENT_ISSUE_DISPATCHER.md:165-180] |
 | model routing | Before work | Agent | risk/TCD | `AGENTS.md` TCD | relevant skill | none | model/effort choice | session only | review outcome | under/over-model? | learning | escalate capability | >10 min human steering or repeated failures | [AGENTS.md:112-157] |
@@ -178,9 +185,9 @@ flowchart TD
 | CI | PR/push/schedule/manual | GitHub Actions | PR head | workflows | none | `.github/workflows/**` | checks/artifacts | none | check status | failure? stale? | CI repair | block | blocked-technical/backoff | `gh workflow list`; [`.github/workflows/ci-smoke.yaml`:4-15] |
 | CI triage | CI fail/stale | Agent | check logs | PR escalation | pr-integration | `await_pr_checks.sh`, gh api | failure class | PR commits if caused | re-run/recheck | caused-by-PR? | CI repair loop | block | unresolved residual risk | [docs/development/PR_ESCALATION_PATHS.md:12-20] |
 | PR integration / repair | Triggered by CI/review/drift | Agent | PR | PR hot/escalation | pr-integration | git/gh/tests | ready-for-verification or blocked | PR commits/comments | current SHA + checks | blocking? | repair loops | blocked-* | repeated failure | [`.codex/skills/pr-integration/SKILL.md`:38-67] |
-| machine review | CI green before merge | Agent/subagent | PR diff | verification-and-closure | code-review via verification | local subagent | findings/pass | comments | review gate | blocking finding? | review repair | stop after repeated failure | blocked-technical/capability triage | [`.codex/skills/verification-and-closure/SKILL.md`:116-163] |
-| merge gate | Verification complete | Agent | PR + issue + CI + v2 closer context | verification-and-closure | verification-and-closure | `await_pr_checks.sh`, verified merge preparer/phase writer, REST/GraphQL | exact-head merge/block plus trusted authority and continuous phase ledger | GitHub | CI/review/exact-child ACs/governing issue-set/body neutralization/exact closure attribution | eligible? race? crash after merge? | idempotent merged recovery, repair, or closure reconciliation | no merge before mutation; no delivery receipt without restored phase and exact authorized closure proof | non-waivable gate | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`] |
-| issue closure | After merge | Agent + automation | merged PR | lifecycle matrix | verification-and-closure | gh/Project ops | closed issue, Done | GitHub | readback | partial? | closure loop | follow-up issue | closure ambiguity | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
+| machine review (full path only) | Full-path PR reaches review gate | Agent/subagent | PR diff | verification-and-closure | code-review via verification | local subagent | findings/pass | comments | review gate | blocking finding? | review repair | stop after repeated failure | blocked-technical/capability triage | [`.codex/skills/verification-and-closure/SKILL.md`:116-163] |
+| merge gate | Verification complete | Agent | PR + issue + CI; full path also consumes v2 closer context | verification-and-closure | verification-and-closure | `await_pr_checks.sh`; full path adds verified merge preparer/phase writer and REST/GraphQL attribution | light plain merge/readback or full exact-head merge/block with trusted phase ledger | GitHub | tier-selected CI/AC/review/closure gate | eligible? full-path race/crash? | repair or idempotent full-path recovery | no merge before the selected path's prerequisites | non-waivable selected path | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`] |
+| issue closure | After merge | Agent + automation | merged PR | Issue/PR truth; optional projection matrix | verification-and-closure | gh; optional Project ops | closed issue; optional Done projection | GitHub | readback | partial? | closure loop | follow-up issue | closure ambiguity | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
 | post-merge docs/spec feedback | After merge | Agent + watchdog | merged diff + authenticated issue targets | post-merge-owner-doc | post-merge-owner-doc | watchdog workflow | docs PR/follow-up/no-change plus PR-specific receipts | closed children + distinct open governing parent, or PR for issue-free lane | receipt exists for this PR on every target | owner doc changed? | docs loop | nudge | wording judgment | [`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-owner-doc-watchdog.yml`] |
 | promotion/release | Test/prod promotion | Agent + operator | candidate ref/plan | release docs/skills | promote-* | release workflows/scripts | promotion receipt | operator + PR to stable | health/smoke | reversible? | rollback loop | rollback/block | prod/stable authority | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113], `gh api stable protection` |
 | Mimer/product-lane work | Runtime client task | App agent/human | vault/runtime request | Mimer contracts | `mimer-*` | product APIs/files | governed runtime action | Product authority | Mimer receipts | user/runtime authority | Product loops | human gate | durable knowledge mutation | [`.codex/skills/README.md`:220-250] |
@@ -231,7 +238,8 @@ token, cost, or human-minute measurements remain `unknown`; available inputs may
 inventing the rest or fabricating an accepted-slice denominator.
 
 Authority is unchanged. The evaluator's effect lists are empty and its gate invariants retain CI,
-independent review, merge, and closure as separate required surfaces. It neither rotates/compresses a
+merge, and closure as separate required surfaces; independent review remains separate on the full
+delivery path only. It neither rotates/compresses a
 coordinator nor starts workers or parallel execution. Dispatcher lease state, live GitHub Issue/PR
 truth, exact branch/SHA, CI, and review state must still be refreshed and acted on through their
 existing owning workflows.
@@ -451,7 +459,10 @@ flowchart TD
   RepairContract --> Ready["strict validation + agent:ready"]
 ```
 
-Issue readiness repair loop: triggered by malformed issue, stale anchors, missing `Verify:`, or drift; actor is agent/maintenance skill; no max retry is defined; state is GitHub issue body/labels/Project; escalates to `agent:needs-human` when authority or input is missing [docs/development/AGENT_OPERATING_PROTOCOL.md:73-83], [`.codex/skills/README.md`:168-178].
+Issue readiness repair loop: triggered by malformed issue, stale anchors, missing `Verify:`, or
+drift; actor is agent/maintenance skill; no max retry is defined; authoritative state is GitHub
+Issue body/labels, with Project included only for explicit projection repair; escalates to
+`agent:needs-human` when authority or input is missing [docs/development/AGENT_OPERATING_PROTOCOL.md:73-83], [`.codex/skills/README.md`:168-178].
 
 ```mermaid
 flowchart TD
@@ -506,11 +517,26 @@ flowchart TD
   Triage -->|explicit authority category| Human["Human exception"]
 ```
 
-Review repair loop: re-run after substantive fixes; stop after one clean independent round by default. Require a second clean round only for declared high-risk runtime work or a low-convergence circuit-breaker trigger on the same mechanism/domain key. A multi-blocker or adjacent repeat finding in one stateful mechanism triggers a convergence packet and independent review before another full-suite/CI cycle. A repeated mechanism after two attempts enters capability escalation plus classifier triage, not an automatic owner interrupt [`.codex/skills/verification-and-closure/SKILL.md`:145-225].
+Full-path review repair loop: re-run after substantive fixes; stop after one clean independent round
+by default. Require a second clean round only for declared high-risk runtime work or a
+low-convergence circuit-breaker trigger on the same mechanism/domain key. A multi-blocker or
+adjacent repeat finding in one stateful mechanism triggers a convergence packet and independent
+review before another full-suite/CI cycle. Light-path PRs do not enter this loop. A repeated
+mechanism after two attempts enters capability escalation plus classifier triage, not an automatic
+owner interrupt [`.codex/skills/verification-and-closure/SKILL.md`:145-225].
 
 Frontier rescue loop: triggered by repeated failure, feature-level issue, hidden invariants, or route ambiguity; actor is agent; state moves to issue maintenance, feature-breakdown, or `agent:needs-human`; evidence is blocker receipt or follow-up issue [`.codex/skills/issue-to-code/SKILL.md`:121-124], [AGENTS.md:142-149].
 
-Closure loop: triggered after merge/verification; actor is verification-and-closure; state is issue/PR/Project/dispatcher. A crash in the open neutralized window resumes only from exact receipt/body/budget truth plus a continuous `prepared` phase; a crash after merge resumes from the same trusted authority plus the continuous durable phase ledger. It returns to done only after the restored phase, exact live authorized closure attribution with no unauthorized closure, labels removed, Project Done, owner-doc receipt, and dispatcher complete/release when applicable. Explicit authenticated issue closes require a null closer plus the delivery actor/time fence, while automatic attribution requires the exact target PR/repository/merge SHA; a foreign PR closer is unrelated even when the expected issue is closed [`.codex/skills/verification-and-closure/SKILL.md`].
+Closure loop: triggered after merge/verification; actor is verification-and-closure; authoritative
+state is Issue/PR/dispatcher, with Project optional. A crash in the open neutralized window resumes
+only from exact receipt/body/budget truth plus a continuous `prepared` phase; a crash after merge
+resumes from the same trusted authority plus the continuous durable phase ledger. It returns to done
+only after the restored phase, exact live authorized closure attribution with no unauthorized
+closure, labels removed, owner-doc receipt, and dispatcher complete/release when applicable.
+Optional Project `Done` repair does not gate closure. Explicit authenticated issue closes require a
+null closer plus the delivery actor/time fence, while automatic attribution requires the exact
+target PR/repository/merge SHA; a foreign PR closer is unrelated even when the expected issue is
+closed [`.codex/skills/verification-and-closure/SKILL.md`].
 
 The neutralized-body `pr-contract` window is receipt-authenticated: `Refs` plus
 `Verified-Closing-Issues` pass only when one trusted, non-conflicting exact-head authority receipt
@@ -621,7 +647,7 @@ Evidence: workflow triggers are observed in `.github/workflows/issue-pr-governan
 
 | Integration point | Trigger | Agent role | Inputs | Allowed tools | Forbidden tools | Output | Risk | First safe rollout |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| issue dispatcher | schedule/comment/ready label | queue classifier | issue body/labels/Project | gh read, dispatcher pull/next | merge/push/prod writes | dispatch recommendation artifact | duplicate claims | observe-only then label-only |
+| issue dispatcher | schedule/comment/ready label | queue classifier | issue body/labels; optional Project projection ignored for pickup | gh read, dispatcher pull/next | merge/push/prod writes | dispatch recommendation artifact | duplicate claims | observe-only then label-only |
 | CI repair agent | workflow_run failure | failure classifier/patch proposer | logs, PR diff | gh read, checkout, tests | merge, force-push, prod | failure context + candidate patch | bad patch | artifact-only then patch-branch with guardrails |
 | PR review agent | PR opened/synchronize after CI green | semantic reviewer | PR diff, issue, docs | code-review comments | merge/labels except comments | inline findings | noisy findings | auto-review/comment-only |
 | verification dispatch producer | completed successful `CI Smoke` run | deterministic request builder | workflow run, current PR head, linked issue, evidence-pack identity | GitHub read APIs, artifact upload | model/agent invocation, dispatcher call, merge, branch/issue/label/comment mutation | versioned JSON/Markdown request with stable idempotency key | stale or replayed event | artifact-only producer delivered; Mac mini consumer remains #3603 and autonomous closure remains #3604 |
@@ -630,7 +656,12 @@ Evidence: workflow triggers are observed in `.github/workflows/issue-pr-governan
 | continuous improvement evaluator | cadence/epic close/projection refresh | signal classifier and closure-router | LearningSignals, evidence packs, review findings, TCD signals, CKM projections | gh read/comment, BuilderOps records, docs/governance PRs, issue creation through normal contract | product/runtime mutation, silent owner-doc writes, unreviewed promotion | terminal outcome ledger and bounded follow-up issues/PRs | over-promoting noisy signals | artifact-only report, then governance-lane PR/issue creation |
 | human exception packet generator | stop condition/blocker | packet compiler | failures, tried actions, evidence | gh comment/issue label with confirmation | autonomous merge/production action | Human Exception packet | over-escalation | comment-only |
 
-Codex Action integration is partially present as an optional docs-guardian autofix inside `architecture-ci` when `CODEX_API_KEY` exists [`.github/workflows/architecture-ci.yaml`:31-38]. The current default PR review gate is local, not the Codex verdict path [`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local hook documentation only [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50].
+Codex Action integration is partially present as an optional docs-guardian autofix inside
+`architecture-ci` when `CODEX_API_KEY` exists [`.github/workflows/architecture-ci.yaml`:31-38].
+Light-path PRs have no independent review gate; full-path PRs use the local review gate rather than
+the Codex verdict path [`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action
+integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local hook
+documentation only [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50].
 
 No patch/merge authority should be enabled until branch protection and required guardrails are documented and enforced. Main is currently unprotected by read-only API output, and repo auto-merge is disabled.
 

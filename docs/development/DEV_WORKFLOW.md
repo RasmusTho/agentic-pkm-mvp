@@ -353,7 +353,8 @@ When an Issue is delivered:
 1. Update the owner document to reflect the new shipped state.
 2. Move the truth from the Issue into the owner doc (e.g., `STATUS.md`, roadmap sections, etc.).
 3. Remove or rewrite roadmap/plan wording so it no longer reads as pending when work is delivered.
-4. Keep the GitHub Issue/Project as the authoritative record of backlog state history.
+4. Keep GitHub Issue/PR history and labels as the authoritative backlog and delivery record;
+   Project Status, when maintained, is a rebuildable projection.
 5. If only a slice was delivered, update the parent feature issue with validation evidence and keep owner docs stable until acceptance.
 6. If the work closed a larger capability, make sure the owner docs also record what verified it and what accepted it.
 
