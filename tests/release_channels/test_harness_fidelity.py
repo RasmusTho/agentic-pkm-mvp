@@ -272,7 +272,7 @@ def test_fault_injection_fails_when_preflight_crashes(tmp_path: Path) -> None:
     assert "BASELINE FAILED" in combined or "CRASHED" in combined
 
 
-def test_fault_injection_ignores_ambient_repo_root_pythonpath() -> None:
+def test_fault_injection_isolates_env_per_case() -> None:
     """The private import path wins even if a caller exports the repo root.
 
     This executes the actual gate with precisely the environment that used to
