@@ -213,7 +213,7 @@ Change the affected helper and its focused regression test.
 ## Acceptance Criteria
 
 - [ ] Regression no longer reproduces.
-  Verify: `tests/x.py::test_x`
+  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`
 
 ## Out of Scope
 
@@ -577,7 +577,7 @@ def test_promotion_rejects_empty_or_placeholder_canonical_sections() -> None:
         (
             f"## {heading}\n\n"
             + (
-                "- [ ] A bounded outcome.\n  Verify: `tests/x.py::test_x`"
+                "- [ ] A bounded outcome.\n  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`"
                 if heading == "Acceptance Criteria"
                 else "<placeholder>"
             )
@@ -644,7 +644,7 @@ def test_promotion_rejects_missing_sbs_fields_and_unexpected_top_level_section()
         ),
         (
             _canonical_bug_body().replace(
-                "Verify: `tests/x.py::test_x`",
+                "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
                 "Verify: later",
             ),
             "resolvable Verify",
@@ -1582,10 +1582,10 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
     body = _canonical_bug_body().replace(
-        "- [ ] Regression no longer reproduces.\n  Verify: `tests/x.py::test_x`",
+        "- [ ] Regression no longer reproduces.\n  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
         (
             "- [ ] Regression no longer reproduces.\n"
-            "  Verify: `tests/x.py::test_x`\n"
+            "  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`\n"
             "- [ ] A second behavioral claim is satisfied."
         ),
     )
@@ -1601,7 +1601,67 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
         ],
     }
 
-    with pytest.raises(known_defects.KnownDefectsError, match="lack concrete Verify"):
+    with pytest.raises(known_defects.KnownDefectsError, match="lack resolvable Verify"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize("invalid_target", ["manual QA", ""])
+def test_promotion_rejects_mixed_resolvable_verify_markers(
+    invalid_target: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    body = _canonical_bug_body().replace(
+        "- [ ] Regression no longer reproduces.\n"
+        "  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
+        (
+            "- [ ] Regression no longer reproduces.\n"
+            "  Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`\n"
+            f"  Verify: {invalid_target}"
+        ),
+    )
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject mixed verification authority",
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="lack resolvable Verify",
+    ):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+def test_promotion_rejects_duplicate_resolvable_verify_markers() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    marker = "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`"
+    body = _canonical_bug_body().replace(marker, f"{marker}\n  {marker}")
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject duplicate verification authority",
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="lack resolvable Verify",
+    ):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 
@@ -1615,7 +1675,7 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
     ],
 )
 def test_durable_authority_paths_reject_traversal(path: str) -> None:
-    assert not known_defects._is_durable_repo_path(path)
+    assert not known_defects.is_durable_repo_path(path)
 
 
 def test_promotion_rejects_repository_escaping_verify_target() -> None:
@@ -1623,7 +1683,7 @@ def test_promotion_rejects_repository_escaping_verify_target() -> None:
     defect = _defect()
     known_defects.intake_defect(defect, gateway)
     body = _canonical_bug_body().replace(
-        "tests/x.py::test_x",
+        "tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac",
         "tests/../../tmp/x.py::test_x",
     )
     gateway.issues[901] = {
@@ -2626,7 +2686,7 @@ def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:
             "Unrelated prose.\n\n- `<path>`",
         )
         .replace(
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: runtime receipt: later",
         )
     )
@@ -2660,17 +2720,17 @@ def test_unrelated_prose_cannot_make_placeholder_authority_concrete() -> None:
             "Source Docs",
         ),
         (
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: doc writeback at `docs/later :: later`",
             "resolvable Verify",
         ),
         (
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: runtime receipt: later",
             "resolvable Verify",
         ),
         (
-            "Verify: `tests/x.py::test_x`",
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
             "Verify: runtime receipt: later.v1",
             "resolvable Verify",
         ),
@@ -2698,6 +2758,132 @@ def test_promotion_rejects_vague_authority_shapes(
 
     with pytest.raises(known_defects.KnownDefectsError, match=expected):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    "source_anchor",
+    [
+        "TBD",
+        "docs/../STATUS.md :: Delivery status",
+        "./docs/STATUS.md :: Delivery status",
+        "docs//STATUS.md :: Delivery status",
+        "<path> :: <anchor>",
+        "docs/later.md :: Delivery status",
+        "docs/STATUS.md :: Delivery later",
+        "docs/later.md :: later",
+    ],
+)
+def test_promotion_rejects_noncanonical_source_anchor_parity_cases(
+    source_anchor: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject noncanonical source authority",
+        "state": "open",
+        "body": _canonical_bug_body().replace(
+            "- `.codex/skills/bug-to-issue/SKILL.md :: Promotion`",
+            f"- `{source_anchor}`",
+        ),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="Source Anchors|placeholder",
+    ):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    "verify_target",
+    [
+        "`tests/../x.py::test_x`",
+        "doc writeback at `docs/../STATUS.md :: Delivery status`",
+        "doc writeback at `./docs/STATUS.md :: Delivery status`",
+        "doc writeback at `<path> :: <anchor>`",
+        "doc writeback at `docs/STATUS.md :: Delivery later`",
+        (
+            "`doc writeback at "
+            "`docs/STATUS.md :: Delivery status``"
+        ),
+        "roadmap diff: `docs//ROADMAP.md :: DDO-03`",
+        "runtime receipt: later",
+        "runtime receipt: later.v1",
+        "runtime receipt: delivery_receipt",
+    ],
+)
+def test_promotion_rejects_unresolvable_verify_target_parity_cases(
+    verify_target: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject unresolvable verification authority",
+        "state": "open",
+        "body": _canonical_bug_body().replace(
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
+            f"Verify: {verify_target}",
+        ),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="concrete Verify|resolvable Verify",
+    ):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize(
+    "verify_target",
+    [
+        "doc writeback at `docs/STATUS.md :: Delivery status`",
+        "roadmap diff: `docs/ROADMAP.md :: DDO-03`",
+        "runtime receipt: delivery_receipt.v1",
+    ],
+)
+def test_promotion_accepts_canonical_non_test_verify_target_parity_cases(
+    verify_target: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    intake = known_defects.intake_defect(defect, gateway)
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: accept resolvable verification authority",
+        "state": "open",
+        "body": _canonical_bug_body().replace(
+            "Verify: `tests/governance/test_known_defects_registry.py::test_promotion_requires_concrete_verify_target_on_every_ac`",
+            f"Verify: {verify_target}",
+        ),
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    receipt = known_defects.promote_defect(
+        defect.defect_id,
+        901,
+        gateway,
+    )
+
+    assert receipt["status"] == "promoted"
+    assert receipt["registry_issue"] == intake["registry_issue"]
 
 
 def test_rest_gateway_fails_closed_on_transport_and_non_json(

@@ -19,6 +19,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.builderops.issue_contract_validation import (  # noqa: E402
+    is_resolvable_verify_target,
+)
+
 
 REQUIRED_SECTIONS: tuple[str, ...] = (
     "Context",
@@ -46,10 +54,6 @@ READINESS_CLASSES: tuple[str, ...] = (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-VERIFY_FILE_PATH_PATTERN = re.compile(
-    r"(?<![\w.-])(?P<path>(?:(?:/|\.?\./)?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9]+))"
-)
-
 AMBIGUOUS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -179,26 +183,59 @@ def _summarize_item(item: str) -> str:
     return re.sub(r"\s+", " ", first_line)
 
 
+def _verify_file_path(target: str) -> str | None:
+    canonical = target.strip()
+    if canonical.startswith("`") and canonical.endswith("`"):
+        canonical = canonical[1:-1]
+    if canonical.startswith("runtime receipt: "):
+        return None
+    for prefix in ("doc writeback at ", "roadmap diff: "):
+        if canonical.startswith(prefix):
+            canonical = canonical.removeprefix(prefix)
+            if canonical.startswith("`") and canonical.endswith("`"):
+                canonical = canonical[1:-1]
+            path, separator, _ = canonical.partition(" :: ")
+            return path if separator else None
+    path, separator, _ = canonical.partition("::")
+    return path if separator else None
+
+
+def _target_has_missing_file_path(target: str) -> bool:
+    if re.search(r"<[^>]+>", target):
+        return False
+    path = _verify_file_path(target)
+    if path is None:
+        return False
+    candidate = Path(path)
+    return (
+        candidate.is_absolute()
+        or ".." in candidate.parts
+        or not (REPO_ROOT / candidate).is_file()
+    )
+
+
 def _has_concrete_verify_marker(item: str) -> bool:
-    for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item):
-        target = match.group(1).strip().strip("`").strip()
-        if not target:
-            continue
-        if re.search(r"<[^>]+>", target):
-            continue
-        if re.fullmatch(
-            r"(?:none|n/a|na|tbd|todo|test pointer|doc anchor|verification target|runtime receipt)",
-            target,
-            re.IGNORECASE,
-        ):
-            continue
-        return True
-    return False
+    targets = tuple(
+        match.group(1).strip()
+        for match in re.finditer(
+            r"(?im)(?:^|\b)Verify:[ \t]*(.*)$",
+            item,
+        )
+    )
+    return (
+        bool(targets)
+        and len(set(targets)) == len(targets)
+        and all(
+            is_resolvable_verify_target(target)
+            or _target_has_missing_file_path(target)
+            for target in targets
+        )
+    )
 
 
 def _verify_targets(item: str) -> list[str]:
     return [
-        match.group(1).strip().strip("`").strip()
+        match.group(1).strip()
         for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item)
         if match.group(1).strip()
     ]
@@ -207,14 +244,9 @@ def _verify_targets(item: str) -> list[str]:
 def _missing_verify_file_paths(item: str) -> list[str]:
     missing_paths: list[str] = []
     for target in _verify_targets(item):
-        for match in VERIFY_FILE_PATH_PATTERN.finditer(target):
-            path = match.group("path")
-            candidate = Path(path)
-            if (
-                candidate.is_absolute()
-                or ".." in candidate.parts
-                or not (REPO_ROOT / candidate).is_file()
-            ):
+        if _target_has_missing_file_path(target):
+            path = _verify_file_path(target)
+            if path is not None:
                 missing_paths.append(path)
     return missing_paths
 

@@ -39,13 +39,13 @@ Add one deterministic contract seam.
 - Preserve the authority boundary.
 
 ## Acceptance Criteria
-- [ ] The seam is deterministic. Verify: `tests/example.py::test_contract`.
+- [ ] The seam is deterministic. Verify: `tests/builderops/test_model_inquiry_promotion.py::test_promote_creates_issue_and_receipt`
 
 ## Out of Scope
 - Product runtime changes.
 
 ## Suggested Validation
-- `pytest -q tests/example.py`
+- `pytest -q tests/builderops/test_model_inquiry_promotion.py::test_promote_creates_issue_and_receipt`
 
 ## Source Docs
 - `docs/BUILDEROPS_MODEL_INQUIRY/PROMOTION_AND_TRACEABILITY.md`
