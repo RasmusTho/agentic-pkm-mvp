@@ -88,6 +88,13 @@ coordination:
 | CKM bridge | Draft, preview, authenticated initiation handoff, and receipt projection | Delivery execution or static cockpit mutation | Operator overview and initiation |
 | TCD/acceptance harness | Baseline, pilot metrics, fault tests, and capability acceptance | Runtime scheduling | Evidence and rollout |
 
+The durable carrier for `DeliveryInitiation.v1` remains intentionally undecided. Builder System
+governance owns that later semantic/governance gate. Revisit it only after the compiler, reducer,
+BuilderOps reconciliation binding, and CKM bridge have supplied evidence that either the live
+`PromotionIntent` semantics are sufficient or a distinct record has a lower total contract and
+migration cost. Until then, canonical initiation bytes may be transported by a bounded approval
+envelope but no transport or storage shape becomes contract authority.
+
 ## Deterministic, agentic, and owner decisions
 
 | Decision | Owner |
@@ -112,9 +119,28 @@ coordination:
   cross-worker coordination.
 - **INV-DDO-6 — effects are idempotent and fenced.** Every external effect has a stable identity,
   expected-state guard, read-before-write check, durable worker/run correlation, and reconciliation
-  path. Duplicate delivery events produce one logical effect.
+  path. Duplicate delivery events produce one logical effect. Every non-start causal event must
+  resolve its referenced effect or structured result, including the same PR and exact head, before
+  it can authorize a later effect; a known-defect write additionally binds the exact registry
+  reference and finding hash so distinct P2 dispositions cannot collapse into one effect identity.
+  Success/failure events must carry the effect-specific post-effect authority state: a claim
+  requires an actual transition from a pre-state containing `agent:ready` to a post-state without
+  it, closures must observe the Issue closed, and non-mutating or failed effects cannot silently
+  change the guarded Issue state.
+- **INV-DDO-6a — authority is resolved, not frozen.** The immutable plan input is the origin
+  authority state, not the state every later event must repeat. Structured worker and review result
+  events bind the *resolved current* authority for their Issue: the plan input advanced by the
+  events that legitimately move it — a truthful post-effect readback or an observed authority
+  change bound to the same run and plan. A truthful post-claim result is therefore valid without
+  attaching a stale pre-claim snapshot. Resolution is fail-closed: with no such proven event the
+  plan input remains the resolved state, and an authority state the event log does not prove is
+  rejected. A subjectless causal event — run start, elapsed timer, or recorded exception — may
+  cause an effect, but because it carries no authority of its own its effect must bind the resolved
+  current authority rather than assert one.
 - **INV-DDO-7 — exact-head evidence.** CI, review, merge eligibility, and closure evidence bind the
-  exact current PR head. New commits invalidate prior evidence.
+  exact current PR head. New commits invalidate prior evidence. Each check evidence entry also binds
+  a distinct check-run authority identity, so one reused check run can never be replayed under
+  several required check names and satisfy the required-check set as false-green merge evidence.
 - **INV-DDO-8 — severity routing is fail-closed.** P0/P1, protected risk, false-green evidence,
   malformed verdicts, and low-confidence verdicts block. A valid P2 is recorded once and deferred
   without synchronous repair. It becomes executable work only through the governed Issue path.
@@ -138,7 +164,10 @@ coordination:
   correlation before starting another worker.
 - A provider returns malformed review output: classify it as blocking; do not infer a severity.
 - A valid P2 registry write is unavailable: preserve the review evidence and stop the terminal
-  delivery transition that requires a durable P2 disposition; never emit a false clean receipt.
+  delivery transition that requires a durable P2 disposition. Preserve the failed effect's exact
+  logical outcome keys and a live readback of the exact registry authority without claiming the
+  absent success artifact; a reconciled write must observe that authority as recorded. Never emit a
+  false clean receipt.
 - An external effect times out: mark it unknown, read live GitHub/dispatcher state, and reconcile
   before retrying.
 - BuilderOps is unavailable: ordinary manual repo work may continue under existing skills, but the
@@ -210,6 +239,9 @@ Every pilot receipt records:
 - known P2 dispositions;
 - escaped P0/P1 defects or false-green evidence; and
 - total lead time from approved plan to terminal receipt.
+
+Evidence-derived minima fail closed: an explicitly human-authored worker, review, recovery effect,
+receipt, or merge cannot coexist with a lower `human_interventions` count.
 
 Targets:
 
