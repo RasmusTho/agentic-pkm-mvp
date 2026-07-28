@@ -281,6 +281,12 @@ inspection opens existing databases in SQLite read-only mode so a discovery/open
 a replacement file. The guard checks both lexical and resolved containment, so a database symlink
 located in the shared vault cannot redirect a store open to an outside target.
 
+`builderops vault validate` additionally scans the vault for a SQLite database that is already
+there. That scan is the only part of these commands whose cost grows with vault size, and on a
+synchronized vault it deliberately avoids downloading evicted files it can prove are not database
+images; `--progress` reports what it is doing. See the operator-check block under
+`Model-inquiry artifact records` below for the command, the flag, and the measured cost.
+
 ### Model-inquiry artifact records
 
 Pre-ticket model inquiries are durable file-first records under
