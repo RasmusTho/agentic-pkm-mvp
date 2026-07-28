@@ -22,6 +22,7 @@ not cleanly feasible yet.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -453,3 +454,35 @@ def test_human_flow_sbs_allocation_references_resolve() -> None:
         "verification rows must be explicit. Violations: "
         + "; ".join(issue.format() for issue in issues)
     )
+
+
+def test_delivery_contracts_are_carrier_and_provider_neutral() -> None:
+    """Delivery schemas expose semantic orchestration fields, not adapter choices."""
+    from app.builderops.delivery_orchestration_contracts import (
+        DELIVERY_CONTRACT_FAMILIES,
+    )
+
+    schemas = {
+        family: [contract.model_json_schema() for contract in contracts]
+        for family, contracts in DELIVERY_CONTRACT_FAMILIES.items()
+    }
+    encoded = json.dumps(schemas, sort_keys=True).casefold()
+
+    assert set(schemas) == {
+        "initiation",
+        "plan",
+        "reducer",
+        "structured_result",
+        "receipt",
+    }
+    for forbidden in (
+        "promotionintent",
+        "deliveryintent",
+        "durable_carrier",
+        "ckm_renderer",
+        "static_cockpit",
+        "model_provider",
+        "provider_name",
+        "model_name",
+    ):
+        assert forbidden not in encoded

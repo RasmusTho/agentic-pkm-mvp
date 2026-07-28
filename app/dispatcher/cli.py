@@ -526,7 +526,7 @@ def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
         except NoActiveVaultError as exc:
             return _emit_error(str(exc), args.json)
 
-    result = export_signboard(store, target_path)
+    result = export_signboard(store, target_path, prune_absent=args.prune_absent)
     _emit({"ok": True, **result}, args.json)
     return 0
 
@@ -755,6 +755,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Directory to write kanban columns into. Optional: defaults to "
             "BuilderOpsVault/agent-delivery inside the active vault "
             "(active-vault-selection mechanism); no path needs to be typed."
+        ),
+    )
+    p.add_argument(
+        "--prune-absent",
+        action="store_true",
+        help=(
+            "Also remove generated cards whose task id no longer exists in the "
+            "dispatcher store. Cards carrying human-authored '## Notes' content "
+            "are kept and reported under retained_with_notes instead."
         ),
     )
     p.add_argument("--json", action="store_true")

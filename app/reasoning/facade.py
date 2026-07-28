@@ -1,4 +1,4 @@
-"""ReasoningFacade -- mode-agnostic interface for agents.
+"""ReasoningModeFacade -- mode-agnostic interface for agents.
 
 Wraps the existing ``run_reasoning`` provider with convenience methods
 and adds a graph-builder post-processor that converts CLAIMS output
@@ -39,7 +39,7 @@ class GraphEdge(BaseModel):
 
 
 class GraphExtraction(BaseModel):
-    """Container returned by ``ReasoningFacade.build_graph``."""
+    """Container returned by ``ReasoningModeFacade.build_graph``."""
 
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
@@ -132,7 +132,7 @@ def _claims_to_graph(run: ReasoningRun) -> GraphExtraction:
 # Facade
 # ---------------------------------------------------------------------------
 
-class ReasoningFacade:
+class ReasoningModeFacade:
     """Simplified, mode-agnostic reasoning interface for agents.
 
     The provider is injectable (any callable with the ``run_reasoning``
@@ -245,11 +245,11 @@ class ReasoningFacade:
 # Factory
 # ---------------------------------------------------------------------------
 
-_singleton: ReasoningFacade | None = None
+_singleton: ReasoningModeFacade | None = None
 
 
-def get_reasoning_facade(*, provider: ProviderFn | None = None) -> ReasoningFacade:
-    """Return a (lazily-created) ReasoningFacade singleton.
+def get_reasoning_mode_facade(*, provider: ProviderFn | None = None) -> ReasoningModeFacade:
+    """Return a (lazily-created) ReasoningModeFacade singleton.
 
     Pass *provider* to override the default ``run_reasoning`` function
     (useful in tests).  When a custom provider is given the singleton
@@ -258,10 +258,10 @@ def get_reasoning_facade(*, provider: ProviderFn | None = None) -> ReasoningFaca
     global _singleton  # noqa: PLW0603
 
     if provider is not None:
-        return ReasoningFacade(provider=provider)
+        return ReasoningModeFacade(provider=provider)
 
     if _singleton is None:
-        _singleton = ReasoningFacade()
+        _singleton = ReasoningModeFacade()
     return _singleton
 
 
@@ -269,6 +269,6 @@ __all__ = [
     "GraphEdge",
     "GraphExtraction",
     "GraphNode",
-    "ReasoningFacade",
-    "get_reasoning_facade",
+    "ReasoningModeFacade",
+    "get_reasoning_mode_facade",
 ]

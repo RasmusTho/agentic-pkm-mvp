@@ -28,7 +28,7 @@ The canvas runtime is plumbing without an agent. `app/chat/canvas_writer.py:57` 
 
 Introduces a **write-capable co-authoring cognition** that, during an active user-present canvas session, takes the user's natural-language intent plus the current note body (and optional retrieval context) and produces a generated new body, which is then applied through the existing `CanvasWriter` so all existing governance guards still hold.
 
-- New module `app/chat/coauthoring_cognition.py`: a cognition that plans/generates a body revision via the shared `ReasoningFacade` (`app/reasoning/facade.py`). It is distinct from `read_only_cognition.py`: it is authorized to produce body text, but only body text.
+- New module `app/chat/coauthoring_cognition.py`: a cognition that plans/generates a body revision via the shared `ReasoningModeFacade` (`app/reasoning/facade.py`). It is distinct from `read_only_cognition.py`: it is authorized to produce body text, but only body text.
 - New endpoint `POST /api/canvas/sessions/{session_id}/coauthor` in `app/api/routes/canvas.py` taking `{intent, change_summary?}`. It runs the cognition, applies the generated body via `CanvasWriter.apply_edit`, appends the intent + change summary to the `.chats/` session log as provenance, and returns the applied body.
 - The new path inherits every guard already enforced by `CanvasWriter`: active session required, in-vault note only, frontmatter rejected (a generated body containing frontmatter is a `GovernanceBearingMutationError`, routed to `GovernanceRouter`, never silently applied).
 

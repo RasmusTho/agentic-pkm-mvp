@@ -48,6 +48,7 @@ _REPLACE_MAPPING_FIELDS = ("dispatcher_status",)
 _STATE_FIELDS = (
     "schema_version",
     "epic_issue_number",
+    "independent_issue_numbers",
     "run_id",
     *_LIST_FIELDS,
     *_MERGE_MAPPING_FIELDS,
@@ -105,6 +106,7 @@ def new_epic_run_state(
     state: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "epic_issue_number": _normalize_epic_issue_number(epic_issue_number),
+        "independent_issue_numbers": [],
         "run_id": validate_run_id(run_id),
         "child_queue": [],
         "learning_evaluation_candidates": [],
@@ -121,6 +123,23 @@ def new_epic_run_state(
         "context_budget_receipts": [],
         "last_verified_head_sha": None,
     }
+    if updates:
+        return apply_epic_run_update(state, **updates)
+    return normalize_epic_run_state(state)
+
+
+def new_independent_issue_run_state(
+    issue_numbers: list[int],
+    run_id: str,
+    **updates: Any,
+) -> dict[str, Any]:
+    """Build evidence-only state for an explicit set with no synthetic parent."""
+
+    state = new_epic_run_state(1, run_id)
+    state["epic_issue_number"] = None
+    state["independent_issue_numbers"] = _normalize_independent_issue_numbers(
+        issue_numbers
+    )
     if updates:
         return apply_epic_run_update(state, **updates)
     return normalize_epic_run_state(state)
@@ -152,6 +171,47 @@ def create_epic_run_state(
             return existing
 
         state = new_epic_run_state(epic_issue_number, run_id, **updates)
+        save_epic_run_state(state, root=root)
+        return state
+
+
+def create_independent_issue_run_state(
+    issue_numbers: list[int],
+    run_id: str,
+    *,
+    root: Path | str | None = None,
+    **updates: Any,
+) -> dict[str, Any]:
+    """Create or idempotently load a local independent-issue run-state file.
+
+    Mirrors `create_epic_run_state`: the existence check, the run-owner check,
+    and the write all happen under `_locked_run_state`, so two concurrent
+    creates for the same absent `run_id` cannot both take the create branch and
+    silently discard the loser's scope or updates.
+
+    Deliberately has no `overwrite` escape hatch: an unguarded ownership
+    transfer would reopen the multi-writer hole this function exists to close.
+    """
+
+    path = epic_run_state_path(run_id, root=root)
+    expected_numbers = _normalize_independent_issue_numbers(list(issue_numbers))
+    with _locked_run_state(path):
+        if path.exists():
+            existing = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
+            if (
+                existing["epic_issue_number"] is not None
+                or existing.get("independent_issue_numbers", []) != expected_numbers
+            ):
+                raise EpicRunStateError(
+                    f"run_id {run_id!r} already belongs to epic "
+                    f"{existing['epic_issue_number']}"
+                )
+            if updates:
+                existing = apply_epic_run_update(existing, **updates)
+                save_epic_run_state(existing, root=root)
+            return existing
+
+        state = new_independent_issue_run_state(issue_numbers, run_id, **updates)
         save_epic_run_state(state, root=root)
         return state
 
@@ -340,11 +400,27 @@ def normalize_epic_run_state(state: Mapping[str, Any]) -> dict[str, Any]:
             f"unsupported epic run-state schema_version: {schema_version!r}"
         )
 
+    epic_issue_number = raw.get("epic_issue_number")
+    independent_issue_numbers = _normalize_independent_issue_numbers(
+        raw.get("independent_issue_numbers", [])
+    )
+    if epic_issue_number is None:
+        if not independent_issue_numbers:
+            raise EpicRunStateError(
+                "independent run-state requires independent_issue_numbers"
+            )
+        normalized_epic_issue_number: int | None = None
+    else:
+        normalized_epic_issue_number = _normalize_epic_issue_number(epic_issue_number)
+        if independent_issue_numbers:
+            raise EpicRunStateError(
+                "epic run-state must not include independent_issue_numbers"
+            )
+
     normalized: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "epic_issue_number": _normalize_epic_issue_number(
-            raw.get("epic_issue_number")
-        ),
+        "epic_issue_number": normalized_epic_issue_number,
+        "independent_issue_numbers": independent_issue_numbers,
         "run_id": validate_run_id(raw.get("run_id")),
         "last_verified_head_sha": _normalize_optional_string(
             raw.get("last_verified_head_sha"),
@@ -375,6 +451,15 @@ def _normalize_epic_issue_number(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise EpicRunStateError("epic_issue_number must be a positive integer")
     return value
+
+
+def _normalize_independent_issue_numbers(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        raise EpicRunStateError("independent_issue_numbers must be a list")
+    normalized = [_normalize_epic_issue_number(item) for item in value]
+    if len(set(normalized)) != len(normalized):
+        raise EpicRunStateError("independent_issue_numbers must be unique")
+    return sorted(normalized)
 
 
 def _normalize_optional_string(value: Any, field: str) -> str | None:
@@ -680,10 +765,12 @@ __all__ = [
     "apply_epic_run_update",
     "assert_learning_evaluation_candidates_terminal",
     "create_epic_run_state",
+    "create_independent_issue_run_state",
     "deserialize_epic_run_state",
     "epic_run_state_path",
     "load_epic_run_state",
     "new_epic_run_state",
+    "new_independent_issue_run_state",
     "normalize_epic_run_state",
     "record_dispatcher_status",
     "save_epic_run_state",

@@ -3,7 +3,7 @@
 This cognition is the missing *author* behind ``CanvasWriter``: given a
 user's natural-language intent plus the current note body (and optional
 retrieval context), it produces a generated **body revision** via the shared
-``ReasoningFacade`` (``app/reasoning/facade.py``).
+``ReasoningModeFacade`` (``app/reasoning/facade.py``).
 
 It is deliberately distinct from ``read_only_cognition.py``:
 
@@ -32,7 +32,7 @@ from typing import Any, Callable
 
 from app.chat.canvas_writer import GovernanceBearingMutationError
 from app.text.helpers import body_contains_frontmatter as _body_contains_frontmatter
-from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
+from app.reasoning.facade import ReasoningModeFacade, get_reasoning_mode_facade
 
 # Sentinel prefixes emitted by the mock/degraded reasoning backend. When the
 # facade is not backed by an edit-capable provider, ``answer`` returns a
@@ -77,7 +77,7 @@ class CoAuthoringCognition:
     def __init__(
         self,
         *,
-        facade_factory: Callable[[], ReasoningFacade] = get_reasoning_facade,
+        facade_factory: Callable[[], ReasoningModeFacade] = get_reasoning_mode_facade,
     ) -> None:
         self._facade_factory = facade_factory
 

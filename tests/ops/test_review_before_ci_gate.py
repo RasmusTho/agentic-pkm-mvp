@@ -442,6 +442,16 @@ def test_review_severity_routing_blocks_only_p0_and_p1() -> None:
         assert "P3" in surface and "informational" in normalized_lower
 
 
+def test_fast_lane_consumes_structured_severity_without_weakening_gates() -> None:
+    skill = (REPO_ROOT / ".codex/skills/deliver-issue-set/SKILL.md").read_text(encoding="utf-8")
+    runner = (REPO_ROOT / "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md").read_text(encoding="utf-8")
+    for surface in (skill, runner):
+        assert "AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md" in surface
+        assert ".codex/skills/bug-to-issue/SKILL.md" in surface or "known-defect contracts" in surface
+        assert "P2" in surface
+        assert "P0/P1" in surface
+
+
 def test_protected_review_invariants_cannot_be_downgraded_to_p2() -> None:
     contract = " ".join(REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8").split())
     closure_skill = " ".join(VERIFICATION_SKILL.read_text(encoding="utf-8").split())

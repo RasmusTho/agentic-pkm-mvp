@@ -302,8 +302,14 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   across re-export instead of overwriting it, and its export path defaults to
   `BuilderOpsVault/agent-delivery` under the currently active vault (resolved through the shipped
   `VaultManager` active-vault-selection mechanism) so no CLI/automation caller has to type a manual
-  path (#3312). The projection remains read-only for coordination fields and has no write path for
-  claim, lease, or lock state; dispatcher SQLite remains sole claim/lease authority per ADR-0010.
+  path (#3312). That default is now the single source for the board root: the `/signboard` API route
+  and the full-stack launcher derive from it instead of a home-relative `~/BuilderOpsVault` literal
+  of their own, so with no vault selected there is no board root and the board reports an explicit
+  error state rather than an empty one. `export-signboard --prune-absent` removes generated cards
+  whose task id has left the dispatcher store, retaining any card that carries human-authored
+  `## Notes` or `## Receipts` text (#4198). The projection remains read-only for coordination fields
+  and has no write path for claim, lease, or lock state; dispatcher SQLite remains sole claim/lease
+  authority per ADR-0010.
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /
   `close`, `/api/canvas/sessions*`, session-log persistence, and governance-bearing mutation routing
   are shipped; broader Chat cognition and hybrid Panel/Chat mutation remain separate follow-up work.
