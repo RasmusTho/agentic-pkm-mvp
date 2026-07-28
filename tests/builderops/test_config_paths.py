@@ -14,6 +14,7 @@ import app.builderops.config as builderops_config
 import app.builderops.cutover_evidence as cutover_evidence
 from app.builderops.store import SqliteBuilderOpsStore
 from app.builderops.cutover_evidence import CutoverEvidenceError, build_receipt, discover_legacy_stores, write_receipt
+from tests.helpers.subprocess_pythonpath import isolated_app_pythonpath
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +63,7 @@ def _write_cutover_ack(
 def _run_implicit_cli(*, cwd: Path, home: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["HOME"] = str(home)
-    env["PYTHONPATH"] = str(REPO_ROOT)
+    env["PYTHONPATH"] = isolated_app_pythonpath(cwd.parent / "_pythonpath", REPO_ROOT)
     for key in ("BUILDEROPS_DB_PATH", "BUILDEROPS_STATE_DIR", "BUILDEROPS_VAULT_ROOT"):
         env.pop(key, None)
     return subprocess.run(
@@ -219,7 +220,7 @@ with patch.object(Path, "home", side_effect=RuntimeError("home unavailable")):
     assert paths.db_path == Path({str(explicit_db)!r})
 """
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT)
+    env["PYTHONPATH"] = isolated_app_pythonpath(tmp_path / "_pythonpath", REPO_ROOT)
 
     result = subprocess.run(
         [sys.executable, "-c", code],

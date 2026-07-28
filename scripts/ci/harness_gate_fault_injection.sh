@@ -15,6 +15,19 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 PYTHON="${PYTHON:-python}"
 
+# Private, sitecustomize-free PYTHONPATH default exposing only app/ (issue
+# #4186). $ROOT carries its own root sitecustomize.py (decision-receipt
+# hook); putting $ROOT itself on PYTHONPATH makes Python's site machinery
+# import THAT file instead of the interpreter's real sitecustomize.py (e.g.
+# Homebrew's, which wires up the actual third-party site-packages
+# directory) -- site init imports only the FIRST module literally named
+# `sitecustomize` on sys.path, so the repo's file wins and every
+# third-party import in `-m app.cli` below fails. Symlinking only `app/`
+# into a private directory sidesteps this entirely.
+PYLIB_DIR="$(mktemp -d)"
+trap 'rm -rf "$PYLIB_DIR"' EXIT
+ln -s "$ROOT/app" "$PYLIB_DIR/app"
+
 fail=0
 
 # The marker the preflight emits ONLY for a real channel-env violation. A bare
@@ -33,7 +46,7 @@ _run_preflight() {
   env -i \
     HOME="${HOME:-/root}" \
     PATH="${PATH}" \
-    PYTHONPATH="${PYTHONPATH:-$ROOT}" \
+    PYTHONPATH="$PYLIB_DIR" \
     "$@" \
     "${PYTHON}" -m app.cli ops channel-preflight --channel test --context host 2>&1
 }
