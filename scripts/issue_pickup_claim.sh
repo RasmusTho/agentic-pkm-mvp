@@ -133,6 +133,30 @@ print(f"{mode} {reason}")
 PY
 }
 
+register_worktree() {
+  local mode="$1"
+  local expires_at="${2:-}"
+  local lease_id="${3:-}"
+  local ttl_hours=$(( (TTL_MINUTES + 59) / 60 ))
+  local args=(
+    scripts/agent_worktree.py
+    --cwd "$EXPECTED_WORKTREE"
+    register
+    --path "$EXPECTED_WORKTREE"
+    --task-id "$TASK_ID"
+    --owner "$AGENT_ID"
+    --ttl-hours "$ttl_hours"
+    --coordination-mode "$mode"
+  )
+  if [[ -n "$expires_at" ]]; then
+    args+=(--expires-at "$expires_at")
+  fi
+  if [[ -n "$lease_id" ]]; then
+    args+=(--lease-id "$lease_id")
+  fi
+  "$PYTHON_BIN" "${args[@]}" >/dev/null
+}
+
 read -r DETECTED_MODE DETECTED_REASON < <(detect_coordination_receipt)
 if [[ "$COORDINATION_MODE" == "auto" ]]; then
   RECEIPT_COORDINATION_MODE="$DETECTED_MODE"
@@ -243,7 +267,7 @@ checks = {
 failed = [name for name, ok in checks.items() if not ok]
 if failed:
     raise SystemExit("dispatcher claim verification failed: " + ", ".join(failed))
-print(f"{lease_id} {expected_agent}")
+print(f"{lease_id} {expected_agent} {expires_at}")
 PY
   )"; then
     if release_dispatcher_claim; then
@@ -255,7 +279,15 @@ PY
     exit 1
   fi
 
-  read -r RECEIPT_LEASE_ID RECEIPT_HOLDER <<< "$validation"
+  read -r RECEIPT_LEASE_ID RECEIPT_HOLDER RECEIPT_EXPIRES_AT <<< "$validation"
+  if ! register_worktree "dispatcher-backed" "$RECEIPT_EXPIRES_AT" "$RECEIPT_LEASE_ID"; then
+    if release_dispatcher_claim; then
+      echo "worktree-registration-failed cleanup=released task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=verified-dispatcher-release" >&2
+    else
+      echo "worktree-registration-failed cleanup-failed task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=cleanup-failed" >&2
+    fi
+    exit 1
+  fi
   if ! remove_ready_label; then
     if release_dispatcher_claim; then
       echo "label-removal-failed cleanup=released task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=verified-dispatcher-release" >&2
@@ -290,6 +322,11 @@ if not isinstance(comment_id, int):
 print(comment_id)
 PY
 )"
+
+if ! register_worktree "github-label-only-fallback"; then
+  echo "worktree-registration-failed after claimant intent receipt comment=$comment_id" >&2
+  exit 1
+fi
 
 if ! remove_ready_label; then
   echo "GitHub label removal failed after claimant intent receipt comment=$comment_id" >&2

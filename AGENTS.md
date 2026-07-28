@@ -193,6 +193,7 @@ This is human-first, not human-absent: the owner still owns irreversible, extern
 Many agents run against this repo at once. C_coordination, C_delay, and C_rework dominate when they collide, so isolation is the default, not an upgrade. Skills reference this as `AGENTS.md :: Parallel-agent execution`.
 
 - **Dedicated worktree by default.** Any concurrent implementation or publication runs in its own `git worktree`, never the shared root worktree. Do not edit, commit, or push from the shared root checkout while other agents may be active. The publish/claim boundary (`scripts/agent_workspace_preflight.sh`) enforces this by default and refuses the shared root worktree — set `PKM_ALLOW_SHARED_ROOT=1` for deliberate solo work in the root.
+- **Managed worktree lifecycle.** New agent worktrees must be registered with `scripts/agent_worktree.py register` immediately after creation, heartbeat while active, and be released after handoff. `scripts/agent_worktree.py janitor` is report-only by default; automatic removal is limited to registered, expired, clean, unlocked worktrees. Agents may require the fail-closed gate with `scripts/agent_workspace_preflight.sh --require-registered-worktree`.
 - **Never switch the shared root worktree's branch out from under a concurrent agent.** Branch switches happen in your own worktree. The shared-root HEAD thrash is a real, recurring loss — uncommitted work rides an unexpected checkout.
 - **Branch-truth before write.** Capture `EXPECTED_BRANCH` / `EXPECTED_WORKTREE` at branch creation and run the branch-truth gate before commit and before push (`_shared/BRANCH_TRUTH_GATE.md`). Proportionality never relaxes this.
 - **Smallest shared lease, then local.** Claim the issue/lane with the minimal shared handshake (dispatcher lease when available; otherwise remove `agent:ready` and post a claimant receipt), then keep execution local and deterministic. One active lease per issue.
@@ -387,9 +388,9 @@ The Agent Issue Dispatcher is an operational coordination layer for multi-agent 
 2. **Next**: `dispatcher next --json --agent <agent_id>` — request next eligible `ready` task.
 3. **Claim**: `dispatcher claim <task_id> --agent <agent_id> --ttl-minutes 90 --json` — acquire 90-minute lease.
 4. **Confirm**: `gh issue edit <issue_number> --remove-label agent:ready` — confirm claim in GitHub (unchanged from current behaviour).
-5. **Work**: execute issue scope (implementation, testing, doc updates).
-6. **Heartbeat** (every ~30 min during active work): `dispatcher heartbeat <task_id> --agent <agent_id> --json` — renew lease before 90-min expiry.
-7. **Closure**: `dispatcher complete <task_id> --agent <agent_id> --json` (successful work) or `dispatcher release <task_id> --agent <agent_id> --json` (abandoned/blocked).
+5. **Work**: execute issue scope (implementation, testing, doc updates); the pickup wrapper registers the exact worktree after lease verification.
+6. **Heartbeat** (every ~30 min during active work): `scripts/agent_worktree_lifecycle.sh heartbeat ...` — renew dispatcher lease and local worktree projection together.
+7. **Closure**: `scripts/agent_worktree_lifecycle.sh complete ...` (successful work) or `scripts/agent_worktree_lifecycle.sh release ...` (abandoned/blocked), which releases dispatcher state before removing the local registry entry.
 
 **TTL and heartbeat cadence:**
 - Lease TTL: **90 minutes** (default).
@@ -404,7 +405,8 @@ The Agent Issue Dispatcher is an operational coordination layer for multi-agent 
   - **Log the fallback in the PR body** with the failure reason (e.g., "Dispatcher unavailable (db_exists: false) — used GitHub-label-only claim").
 - If any dispatcher command fails during work (non-zero exit from heartbeat, update, etc.):
   - Log the failure, continue with local work, do not retry dispatcher commands in a loop.
-  - At closure, attempt `dispatcher complete`; if it fails, continue with PR closure via GitHub.
+  - Do not renew or remove the local worktree projection based on the failure; janitor preserves it while dispatcher state is unknown.
+  - At closure, attempt the coupled lifecycle command; if dispatcher completion fails, preserve the worktree and continue with PR closure via GitHub.
 
 **Multi-agent collision handling:**
 - Dispatcher claims are atomic per lease and per agent ID.

@@ -80,6 +80,7 @@ case "$*" in
   *"-m app.dispatcher status --json"*) printf '%s\n' "$FAKE_STATUS_JSON"; exit 0 ;;
   *"-m app.dispatcher claim "*) printf '%s\n' "$FAKE_CLAIM_JSON"; exit "$FAKE_CLAIM_RC" ;;
   *"-m app.dispatcher release "*) printf '%s\n' "$FAKE_RELEASE_JSON"; exit "$FAKE_RELEASE_RC" ;;
+  *"scripts/agent_worktree.py"*) printf '{}\n'; exit 0 ;;
   *) echo "unexpected dispatcher call: $*" >&2; exit 1 ;;
 esac
 """,

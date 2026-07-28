@@ -6,6 +6,10 @@ EXPECTED_BRANCH=""
 EXPECTED_WORKTREE=""
 BASE_BRANCH="main"
 ALLOW_DIRTY=0
+REQUIRE_REGISTERED=0
+if [[ "${PKM_REQUIRE_REGISTERED_WORKTREE:-0}" == "1" ]]; then
+  REQUIRE_REGISTERED=1
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +31,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-dirty)
       ALLOW_DIRTY=1
+      shift
+      ;;
+    --require-registered-worktree)
+      REQUIRE_REGISTERED=1
       shift
       ;;
     *)
@@ -59,3 +67,7 @@ if [[ "${PKM_ALLOW_SHARED_ROOT:-0}" != "1" ]]; then
 fi
 
 python3 scripts/git_hygiene_preflight.py "${ARGS[@]}"
+
+if [[ "$REQUIRE_REGISTERED" -eq 1 ]]; then
+  python3 scripts/agent_worktree.py --cwd "$CWD" verify --path "$CWD"
+fi

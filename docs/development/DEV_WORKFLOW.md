@@ -19,6 +19,39 @@ For non-trivial changes:
 6. Update owner docs in the same change when behavior, contracts, or architecture changed.
 7. Run the relevant validation commands and record any gaps.
 
+### Agent worktree lifecycle
+
+On machines that run multiple agents, use the repository-local registry rather than relying on
+directory age or `git worktree prune`:
+
+```bash
+python3 scripts/agent_worktree.py register \
+  --path /absolute/path/to/worktree \
+  --task-id issue-1234 \
+  --owner codex-mac-mini \
+  --ttl-hours 24
+python3 scripts/agent_worktree.py heartbeat --path /absolute/path/to/worktree
+python3 scripts/agent_worktree.py release --path /absolute/path/to/worktree
+python3 scripts/agent_worktree.py status
+python3 scripts/agent_worktree.py janitor       # report-only
+python3 scripts/agent_worktree.py janitor --apply  # only expired, clean, unlocked entries
+
+# Dispatcher-backed lifecycle: renew/release both authorities together.
+scripts/agent_worktree_lifecycle.sh heartbeat --task-id <task_id> --agent <agent_id> --worktree <path>
+scripts/agent_worktree_lifecycle.sh complete --task-id <task_id> --agent <agent_id> --worktree <path>
+scripts/agent_worktree_lifecycle.sh release --task-id <task_id> --agent <agent_id> --worktree <path>
+```
+
+The registry is machine-local and stored beside the shared Git metadata. Unregistered, dirty,
+missing, or locked worktrees are preserved and reported for human review. For dispatcher-backed
+entries, janitor queries dispatcher state first: active leases are preserved, and unavailable
+dispatcher state is fail-closed. A claim/publication wrapper may add `--require-registered-worktree`
+to `scripts/agent_workspace_preflight.sh` to fail closed when an agent skipped registration.
+
+On the Mac mini, set `PKM_REQUIRE_REGISTERED_WORKTREE=1` in the agent-launch environment after
+existing sessions have been inventoried. This turns registration into a fail-closed preflight
+requirement without changing Git's own worktree metadata or deleting legacy worktrees.
+
 ## Lightweight breakdown model
 
 Use the following practical breakdown model across docs, GitHub, and implementation:

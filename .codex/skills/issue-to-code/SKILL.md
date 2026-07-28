@@ -153,6 +153,23 @@ task id, issue number, status, owner, lease id, lease resource, holder, expiry, 
 before removing `agent:ready`. Database or singleton existence alone never produces a
 dispatcher-backed pickup receipt.
 
+After the dispatcher lease is verified, the same wrapper registers the exact worktree with
+`scripts/agent_worktree.py`, including the dispatcher `lease_id` and `expires_at`, before removing
+`agent:ready`. Registration failure releases the dispatcher lease and aborts pickup. During active
+work use the coupled lifecycle helper so the dispatcher lease and local worktree projection renew
+together:
+
+```bash
+scripts/agent_worktree_lifecycle.sh heartbeat --task-id <task_id> --agent <agent_id> --worktree <path>
+scripts/agent_worktree_lifecycle.sh complete --task-id <task_id> --agent <agent_id> --worktree <path>
+scripts/agent_worktree_lifecycle.sh release --task-id <task_id> --agent <agent_id> --worktree <path>
+```
+
+If dispatcher-backed status is unavailable, the lifecycle helper preserves the local worktree and
+does not infer that it is abandoned. BuilderOps receipts remain an audit/projection surface; they
+are not a second lease authority. The helper performs the normal `dispatcher heartbeat` and
+`dispatcher complete`/`dispatcher release` operations together with the local projection.
+
 If dispatcher claim verification fails, the wrapper exits without changing the Issue label. If the
 lease was verified but label removal fails, it releases the lease before failing. The success receipt
 contains `task_id`, `lease_id`, `holder`, and `evidence=verified-dispatcher-lease`.
@@ -189,9 +206,10 @@ labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle 
 
 Preparing the database does not sync or claim the expected task. If the wrapper reports a missing
 task, sync the dispatcher queue through its existing operator path, then rerun the complete wrapper;
-never remove the label separately. After successful dispatcher-backed pickup, run
-`dispatcher heartbeat` about every 30 minutes and use `dispatcher complete`, `block`, or `release`
-at the normal lifecycle boundary.
+never remove the label separately. After successful dispatcher-backed pickup, run the coupled
+heartbeat about every 30 minutes and use the coupled `complete` or `release` at the normal lifecycle
+boundary. Use `dispatcher block` when the task is blocked, followed by coupled `release` when the
+worktree is handed off.
 
 Project reconciliation, when desired, is a separate cold-path projection repair. Do not query or mutate ProjectV2 in this claim path.
 

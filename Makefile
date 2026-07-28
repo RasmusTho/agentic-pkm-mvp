@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap prepare-instance-ownership dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs worktree-status worktree-janitor worktree-janitor-apply worktree-register worktree-heartbeat worktree-release indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap prepare-instance-ownership dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 # Test vault root for bootstrap / seeded test startup lanes. Honors an
@@ -91,6 +91,27 @@ transcribe:
 qa:
 	@if [ -z "$(QUERY)" ]; then echo "Usage: make qa QUERY='Your question'"; exit 1; fi
 	QUERY="$(QUERY)" $(PYTHON) -c 'import json, os; from app.agents.qa.agent import answer; res = answer(os.environ["QUERY"]); print(json.dumps(res, ensure_ascii=False, indent=2))'
+
+worktree-status:
+	@$(PYTHON) scripts/agent_worktree.py status
+
+worktree-janitor:
+	@$(PYTHON) scripts/agent_worktree.py janitor
+
+worktree-janitor-apply:
+	@$(PYTHON) scripts/agent_worktree.py janitor --apply
+
+worktree-register:
+	@if [ -z "$(WORKTREE_PATH)" ] || [ -z "$(TASK_ID)" ] || [ -z "$(OWNER)" ]; then echo "Usage: make worktree-register WORKTREE_PATH=/abs/worktree TASK_ID=<id> OWNER=<agent> [TTL_HOURS=24]"; exit 2; fi
+	@$(PYTHON) scripts/agent_worktree.py register --path "$(WORKTREE_PATH)" --task-id "$(TASK_ID)" --owner "$(OWNER)" --ttl-hours "$(or $(TTL_HOURS),24)"
+
+worktree-heartbeat:
+	@if [ -z "$(WORKTREE_PATH)" ]; then echo "Usage: make worktree-heartbeat WORKTREE_PATH=/abs/worktree [TTL_HOURS=24]"; exit 2; fi
+	@$(PYTHON) scripts/agent_worktree.py heartbeat --path "$(WORKTREE_PATH)" --ttl-hours "$(or $(TTL_HOURS),24)"
+
+worktree-release:
+	@if [ -z "$(WORKTREE_PATH)" ]; then echo "Usage: make worktree-release WORKTREE_PATH=/abs/worktree"; exit 2; fi
+	@$(PYTHON) scripts/agent_worktree.py release --path "$(WORKTREE_PATH)"
 
 
 cold-boot:
