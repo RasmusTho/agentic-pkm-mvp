@@ -317,6 +317,7 @@ class TaggedProcessTreeCleanup:
 _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
+_MAX_ARTIFACT_LISTING_ROWS = 1_000
 _MAX_REQUEST_BYTES = 1_000_000
 _MAX_CLOSURE_CANDIDATES = 20
 _MAX_REPOSITORY_CLOSURE_EVENTS = 500
@@ -632,6 +633,39 @@ class GhCliVerificationSource:
                 return rows
         raise RuntimeError("GitHub paginated response exceeds bounded scan")
 
+    def _artifact_listing_pages(self, endpoint: str) -> list[object]:
+        """Return a bounded, complete artifact listing or fail before it truncates."""
+
+        rows: list[object] = []
+        separator = "&" if "?" in endpoint else "?"
+        for page in range(1, (_MAX_ARTIFACT_LISTING_ROWS // 100) + 1):
+            page_endpoint = endpoint if page == 1 else f"{endpoint}{separator}page={page}"
+            payload = self._json(page_endpoint)
+            artifacts = payload.get("artifacts") if isinstance(payload, Mapping) else None
+            total_count = payload.get("total_count") if isinstance(payload, Mapping) else None
+            if (
+                not isinstance(artifacts, list)
+                or (
+                    total_count is not None
+                    and (
+                        not isinstance(total_count, int)
+                        or isinstance(total_count, bool)
+                        or total_count < len(rows) + len(artifacts)
+                    )
+                )
+            ):
+                raise RuntimeError("malformed GitHub artifact listing")
+            rows.extend(artifacts)
+            if len(rows) > _MAX_ARTIFACT_LISTING_ROWS:
+                raise RuntimeError("GitHub artifact listing exceeds bounded scan")
+            if isinstance(total_count, int) and total_count <= len(rows):
+                return rows
+            if len(artifacts) < 100:
+                if isinstance(total_count, int) and total_count > len(rows):
+                    raise RuntimeError("GitHub artifact listing is incomplete")
+                return rows
+        raise RuntimeError("GitHub artifact listing exceeds bounded scan")
+
     def _artifact_bytes(self, endpoint: str, artifact_id: int) -> bytes:
         if self.runner is not subprocess.run:
             result = self.runner(
@@ -927,12 +961,12 @@ class GhCliVerificationSource:
     ) -> list[dict[str, object]]:
         if limit <= 0:
             raise ValueError("artifact request limit must be positive")
-        payload = self._json(f"repos/{repository}/actions/artifacts?per_page=100")
-        if not isinstance(payload, Mapping) or not isinstance(payload.get("artifacts"), list):
-            raise RuntimeError("malformed GitHub artifact listing")
+        artifacts = self._artifact_listing_pages(
+            f"repos/{repository}/actions/artifacts?per_page=100"
+        )
         requests: list[dict[str, object]] = []
         first_rejection: _InvalidVerificationArtifact | None = None
-        for artifact in payload["artifacts"]:
+        for artifact in artifacts:
             if len(requests) >= limit:
                 break
             if not isinstance(artifact, Mapping):
