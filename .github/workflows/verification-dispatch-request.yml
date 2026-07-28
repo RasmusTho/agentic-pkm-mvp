@@ -105,7 +105,9 @@ jobs:
           import os
           from pathlib import Path
 
-          from app.dispatcher.verification_contract import resolve_final_review_rounds
+          from scripts.build_verification_dispatch_request import (
+              resolve_final_review_rounds,
+          )
 
           pr = json.loads(Path("verification-dispatch/pr.json").read_text())
           rounds = resolve_final_review_rounds(pr.get("body"))

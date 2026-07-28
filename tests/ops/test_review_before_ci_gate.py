@@ -416,7 +416,13 @@ def test_final_review_rounds_are_proportionate_to_runtime_or_low_convergence() -
     assert "same mechanism/domain key" in verification
     assert "One clean independent final review is the default" in contract
     assert "does not require a second round merely because it carries a high-risk\n  label" in contract
-    assert "stop after one clean independent round by default" in process_map
+    normalized_process_map = " ".join(process_map.split())
+    assert (
+        "Full-path review repair loop: re-run after substantive fixes; stop after one clean "
+        "independent round by default"
+        in normalized_process_map
+    )
+    assert "Light-path PRs do not enter this loop" in process_map
     assert "two clean rounds for high-risk surfaces" not in process_map
     assert "one distinct clean review session" in dispatcher
     assert "ledger-visible low-convergence condition" in dispatcher
