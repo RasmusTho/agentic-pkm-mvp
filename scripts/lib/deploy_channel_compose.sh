@@ -3,6 +3,7 @@ set -euo pipefail
 
 _deploy_channel_compose_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_deploy_channel_compose_lib_dir}/instance_ownership_host_state.sh"
+source "${_deploy_channel_compose_lib_dir}/signboard_root.sh"
 unset _deploy_channel_compose_lib_dir
 
 _deploy_channel_env_value() {
@@ -41,6 +42,83 @@ raise SystemExit(
     if under_full_host_root(lexical_path) and under_full_host_root(resolved_path)
     else 1
 )
+PY
+}
+
+_deploy_channel_signboard_container_root() {
+  local signboard_host_root="${1:?signboard host root required}"
+  local vault_host_root="${2:-}"
+  local vault_container_root="${3:-}"
+  python3 - "${signboard_host_root}" "${vault_host_root}" "${vault_container_root}" <<'PY'
+import os
+import stat
+import sys
+
+signboard_host_root, vault_host_root, vault_container_root = sys.argv[1:]
+same_path_roots = ("/Users", "/Volumes")
+
+
+def normalized_absolute(path: str) -> str:
+    return os.path.normpath(path) if os.path.isabs(path) else ""
+
+
+def contained(path: str, root: str) -> bool:
+    if not path or not root:
+        return False
+    try:
+        return os.path.commonpath((path, root)) == root
+    except ValueError:
+        return False
+
+
+lexical_signboard = normalized_absolute(signboard_host_root)
+resolved_signboard = os.path.realpath(signboard_host_root)
+try:
+    signboard_stat = os.stat(resolved_signboard)
+except OSError:
+    raise SystemExit(3)
+permission_pairs = (
+    stat.S_IRUSR | stat.S_IXUSR,
+    stat.S_IRGRP | stat.S_IXGRP,
+    stat.S_IROTH | stat.S_IXOTH,
+)
+if (
+    not stat.S_ISDIR(signboard_stat.st_mode)
+    or not any(
+        (signboard_stat.st_mode & pair) == pair
+        for pair in permission_pairs
+    )
+    or not os.access(resolved_signboard, os.R_OK | os.X_OK)
+):
+    raise SystemExit(3)
+try:
+    with os.scandir(resolved_signboard):
+        pass
+except OSError:
+    raise SystemExit(3)
+
+if any(
+    contained(lexical_signboard, root) and contained(resolved_signboard, root)
+    for root in same_path_roots
+):
+    sys.stdout.write(resolved_signboard)
+    raise SystemExit(0)
+
+lexical_vault = normalized_absolute(vault_host_root)
+resolved_vault = os.path.realpath(vault_host_root) if lexical_vault else ""
+lexical_container = normalized_absolute(vault_container_root)
+if not (
+    contained(lexical_signboard, lexical_vault)
+    and contained(resolved_signboard, resolved_vault)
+    and lexical_container
+):
+    raise SystemExit(3)
+
+relative = os.path.relpath(resolved_signboard, resolved_vault)
+container_signboard = os.path.normpath(os.path.join(lexical_container, relative))
+if not contained(container_signboard, lexical_container):
+    raise SystemExit(3)
+sys.stdout.write(container_signboard)
 PY
 }
 
@@ -123,6 +201,34 @@ deploy_channel_compose() {
   (
     cd "${root}" || exit 1
 
+    # Resolve the Signboard root independently of the generated runtime env so
+    # a channel deploy can repair a missing or stale runtime-env entry without
+    # regenerating that file. The stdin overlay below carries no value: Compose
+    # forwards SIGNBOARD_ROOT from this governed shell when one resolves and
+    # removes an env_file value when it does not. This preserves the visible
+    # no-active-vault error instead of retaining a stale projection root.
+    resolve_signboard_root_env
+    local signboard_container_root=""
+    if [ -n "${SIGNBOARD_ROOT:-}" ]; then
+      if signboard_container_root="$(
+        _deploy_channel_signboard_container_root \
+          "${SIGNBOARD_ROOT}" \
+          "${vault_host_root}" \
+          "${vault_container_root}"
+      )"; then
+        :
+      else
+        signboard_container_root=""
+      fi
+    fi
+    if [ -n "${signboard_container_root}" ]; then
+      SIGNBOARD_ROOT="${signboard_container_root}"
+      export SIGNBOARD_ROOT
+    else
+      unset SIGNBOARD_ROOT
+    fi
+    compose_args+=(-f -)
+
     # Compose gives the caller shell precedence over --env-file values. Pin the
     # governed selectors here so a stale parent shell cannot swap the selected
     # runtime env, provider selector, or vault after the decisions above. The
@@ -152,12 +258,22 @@ deploy_channel_compose() {
     )
 
     if _deploy_channel_needs_dev_capture_secret "${channel}" "$@"; then
-      "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap \
-        --channel "${channel}" \
-        --consumer heimdal-capture-watch \
+      compose_command=(
+        "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
+        --channel "${channel}"
+        --consumer heimdal-capture-watch
         -- "${compose_command[@]}"
-    else
-      "${compose_command[@]}"
+      )
     fi
+
+    # Keep the override in memory. A temporary env/compose file would persist
+    # operator paths or runtime secrets and would weaken the existing runtime
+    # env ownership boundary.
+    "${compose_command[@]}" <<'YAML'
+services:
+  api:
+    environment:
+      SIGNBOARD_ROOT:
+YAML
   )
 }
