@@ -3544,6 +3544,20 @@ def test_pending_requests_distinguishes_truncated_scan_from_empty_result(
         source.pending_requests(REPO)
 
 
+def test_pending_requests_rejects_short_page_that_contradicts_total_count() -> None:
+    source = GhCliVerificationSource()
+    endpoint = f"repos/{REPO}/actions/artifacts?per_page=100"
+
+    source._json = (  # type: ignore[method-assign]
+        lambda requested_endpoint: {"total_count": 101, "artifacts": []}
+        if requested_endpoint == endpoint
+        else pytest.fail(f"unexpected page: {requested_endpoint}")
+    )
+
+    with pytest.raises(RuntimeError, match="artifact listing is incomplete"):
+        source.pending_requests(REPO)
+
+
 def test_pending_request_rejects_oversized_archive_before_buffering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

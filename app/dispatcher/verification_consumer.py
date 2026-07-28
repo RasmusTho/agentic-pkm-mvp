@@ -650,7 +650,7 @@ class GhCliVerificationSource:
                     and (
                         not isinstance(total_count, int)
                         or isinstance(total_count, bool)
-                        or total_count < len(rows)
+                        or total_count < len(rows) + len(artifacts)
                     )
                 )
             ):
@@ -658,9 +658,11 @@ class GhCliVerificationSource:
             rows.extend(artifacts)
             if len(rows) > _MAX_ARTIFACT_LISTING_ROWS:
                 raise RuntimeError("GitHub artifact listing exceeds bounded scan")
-            if len(artifacts) < 100 or (
-                isinstance(total_count, int) and total_count <= len(rows)
-            ):
+            if isinstance(total_count, int) and total_count <= len(rows):
+                return rows
+            if len(artifacts) < 100:
+                if isinstance(total_count, int) and total_count > len(rows):
+                    raise RuntimeError("GitHub artifact listing is incomplete")
                 return rows
         raise RuntimeError("GitHub artifact listing exceeds bounded scan")
 
