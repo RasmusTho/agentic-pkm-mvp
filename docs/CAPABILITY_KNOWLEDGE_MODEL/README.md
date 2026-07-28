@@ -34,10 +34,18 @@ The CKM is the Builder System subsystem that continuously constructs and maintai
 
 Post-MVP presentation refinement: [DEV_OVERVIEW_DIRECTION_A.md](DEV_OVERVIEW_DIRECTION_A.md) defines the CKM-11 redesign contract implemented by issue #3689. It preserves CKM-10's static, self-contained projection boundary; owner visual acceptance remains on parent #3138.
 
-Target-state presentation successor:
-[CKM Cockpit Direction B](../CKM_COCKPIT_DIRECTION_B/README.md) specifies a bounded opt-in
-enhancement of the same generated Development Overview. It is not delivered and makes no
-current-state support claim; implementation remains sequenced behind CKM Evidence Profile Phase 1.
+## Target-state presentation successor
+
+[CKM Cockpit Direction B](../CKM_COCKPIT_DIRECTION_B/README.md) is the bounded opt-in successor
+to the same generated Development Overview. Its final supported truth, to be promoted only after
+independent parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) acceptance, is
+an opt-in local `ckm overview --cockpit` projection with exact newest-pair O1b
+comparison-or-refusal, one filtering-only inline script, inert drafts, and deterministic print.
+It remains generated, local, deterministic, and non-authoritative: it creates no CKM, GitHub,
+Product/Runtime, or network write authority. The completion evidence in [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222)
+is a terminal owner-doc promotion candidate, not parent acceptance. Until #4080 is independently
+accepted and this promotion candidate is merged, Direction A remains the only supported
+owner-facing default.
 
 ## Execution order
 

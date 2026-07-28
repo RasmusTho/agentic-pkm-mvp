@@ -105,8 +105,11 @@ checks, visual or refusal evidence, and its parent-handoff result here.
 
 Keep this parent blocked while children are outstanding. The terminal child regenerates the artifact
 from a stable fixture, records its digest, validates JS-off behavior, and attaches a manually
-inspected PDF. Independent parent closure verifies live GitHub state, every exact receipt, Evidence
-Profile delivery, and owner-doc posture before closing the capability.
+inspected PDF. Completion issue [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222)
+is a protected production-CLI comparison/refusal evidence input and may carry terminal owner-doc
+promotion wording; it neither accepts nor closes this parent. Independent parent closure verifies
+live GitHub state, every exact receipt, Evidence Profile delivery, and owner-doc posture before
+closing the capability. The owner-doc promotion may merge only after that independent acceptance.
 
 ## Out of Scope
 

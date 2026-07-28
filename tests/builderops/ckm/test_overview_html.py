@@ -1401,6 +1401,94 @@ def _cockpit_cli(overview_store: CkmStore, output: Path) -> object:
     )
 
 
+def test_cockpit_cli_renders_comparison_and_refusal_states(
+    overview_store: CkmStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise the public cockpit CLI for its complete O1b result/refusal surface."""
+    retention_path = overview_store.db_path.with_name(
+        f"{overview_store.db_path.stem}-metric-samples.sqlite"
+    )
+
+    _, compatible_older = _retain_for_cockpit(
+        overview_store, retained_at="2026-07-20T00:00:00Z"
+    )
+    _, compatible_newer = _retain_for_cockpit(
+        overview_store, retained_at="2026-07-21T00:00:00Z"
+    )
+    compatible_output = tmp_path / "compatible.html"
+    compatible = _cockpit_cli(overview_store, compatible_output)
+    assert compatible.exit_code == 0
+    compatible_html = compatible_output.read_text(encoding="utf-8")
+    assert 'class="comparison-result"' in compatible_html
+    assert compatible_older.sample_id in compatible_html
+    assert compatible_newer.sample_id in compatible_html
+
+    retention_path.unlink()
+    source_unavailable_output = tmp_path / "source-unavailable.html"
+    source_unavailable = _cockpit_cli(overview_store, source_unavailable_output)
+    assert source_unavailable.exit_code == 0
+    source_unavailable_html = source_unavailable_output.read_text(encoding="utf-8")
+    assert "source_unavailable" in source_unavailable_html
+    assert 'class="comparison-component"' not in source_unavailable_html
+
+    MetricRetentionStore(retention_path).initialize()
+    insufficient_output = tmp_path / "insufficient.html"
+    insufficient = _cockpit_cli(overview_store, insufficient_output)
+    assert insufficient.exit_code == 0
+    insufficient_html = insufficient_output.read_text(encoding="utf-8")
+    assert "insufficient_retained_samples" in insufficient_html
+    assert 'class="comparison-component"' not in insufficient_html
+
+    retention_path.unlink()
+    _, oldest_compatible = _retain_for_cockpit(
+        overview_store, retained_at="2026-07-20T00:00:00Z"
+    )
+    _, selected_older = _retain_for_cockpit(
+        overview_store, retained_at="2026-07-21T00:00:00Z"
+    )
+    _, selected_newer = _retain_for_cockpit(
+        overview_store,
+        retained_at="2026-07-22T00:00:00Z",
+        metric_id="provenance_coverage",
+    )
+    selected_reads: list[str] = []
+    original_observation = comparison_module._observation
+
+    def record_selected_input(
+        store: MetricRetentionStore, sample_id: str
+    ) -> dict[str, object]:
+        selected_reads.append(sample_id)
+        return original_observation(store, sample_id)
+
+    monkeypatch.setattr(comparison_module, "_observation", record_selected_input)
+    incompatible_output = tmp_path / "incompatible.html"
+    incompatible = _cockpit_cli(overview_store, incompatible_output)
+    assert incompatible.exit_code == 0
+    incompatible_html = incompatible_output.read_text(encoding="utf-8")
+    assert "incompatible_observations" in incompatible_html
+    assert selected_reads == [selected_older.sample_id, selected_newer.sample_id]
+    assert oldest_compatible.sample_id not in selected_reads
+    assert "No older retained row was searched." in incompatible_html
+    assert 'class="comparison-component"' not in incompatible_html
+
+    retention_path.unlink()
+    retention, _ = _retain_for_cockpit(overview_store, retained_at="2026-07-21T00:00:00Z")
+    _, refused_selected_input = _retain_for_cockpit(
+        overview_store, retained_at="2026-07-22T00:00:00Z"
+    )
+    with sqlite3.connect(retention.path) as connection:
+        connection.execute(
+            "UPDATE ckm_metric_sample_v1 SET source_payload = NULL WHERE sample_id = ?",
+            (refused_selected_input.sample_id,),
+        )
+    selected_input_output = tmp_path / "selected-input-refusal.html"
+    selected_input_refusal = _cockpit_cli(overview_store, selected_input_output)
+    assert selected_input_refusal.exit_code == 0
+    selected_input_html = selected_input_output.read_text(encoding="utf-8")
+    assert "tampered_retained_source" in selected_input_html
+    assert 'class="comparison-component"' not in selected_input_html
+
+
 def _valid_o1b_payload(
     *, states: list[dict[str, object]] | None = None, sample_ids: tuple[str, str] = ("older", "newer")
 ) -> dict[str, object]:

@@ -80,11 +80,19 @@ No filters, search, sort, comparison mode, URL state, evolution timeline, print 
 
 ## Direction B amendment
 
-The default Direction A output remains byte-deterministic and script-free. Opt-in cockpit output may
-contain exactly one inline script that only enables its disabled-first capability-map filters, reads
-server-rendered filter tokens, toggles capability-row `hidden` state, and updates the filter count.
-It does not change CKM authority, persist state, access a network, or affect trust, hazards,
-comparison/refusal, subsystem counts, gaps, proposals, provenance, or the footer.
+The default Direction A output remains byte-deterministic and script-free. The final supported
+Direction B amendment (promoted only after independent parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) acceptance) is an opt-in
+`ckm overview --cockpit` projection. It may contain exactly one inline script that only enables its
+disabled-first capability-map filters, reads server-rendered filter tokens, toggles capability-row
+`hidden` state, and updates the filter count. It does not change CKM authority, persist state,
+access a network, or affect trust, hazards, comparison/refusal, subsystem counts, gaps, proposals,
+provenance, or the footer.
+
+The [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222) completion PR carries this
+terminal promotion wording and the exact production-CLI comparison/refusal proof. It is not itself
+an acceptance record: before #4080 independently accepts and the promotion PR merges, current main
+remains Direction A-supported and Direction B remains pre-acceptance.
 
 ## CKM11-VALIDATION
 
