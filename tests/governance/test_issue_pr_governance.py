@@ -1143,6 +1143,16 @@ def test_autonomous_runner_prompt_is_governance_lane_allowed() -> None:
     assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' not in prefixes
 
 
+def test_yggdrasil_design_handoff_surfaces_are_governance_lane_allowed() -> None:
+    text = _read_workflow()
+    exact = text.split("const governanceAllowedExact = new Set([", 1)[1].split("]);", 1)[0]
+    prefixes = text.split("const governanceAllowedPrefixes = [", 1)[1].split("];", 1)[0]
+
+    assert '"companion-ui/design_handoff/README.md"' in exact
+    assert '"companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md"' in exact
+    assert '"companion-ui/prompts/claude-design/"' in prefixes
+
+
 def test_governance_lane_companion_prompt_surface_matches_owner_doc() -> None:
     workflow = _read_development_workflow()
     governance_lane = workflow.split("## Governance lane", 1)[1].split(

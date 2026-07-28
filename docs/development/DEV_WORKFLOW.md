@@ -183,6 +183,9 @@ Use this lane only when:
   - `scripts/validate_source_anchors.py`
   - `scripts/validate_issue_readiness.py`
   - `scripts/lint_skills_consistency.py`
+  - `companion-ui/design_handoff/README.md`
+  - `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`
+  - `companion-ui/prompts/claude-design/**`
   - `companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`
   - `tests/ops/test_git_hygiene.py`
   - `tests/architecture/test_agent_skill_entrypoints.py`
