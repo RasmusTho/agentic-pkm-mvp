@@ -1,6 +1,6 @@
 ---
 name: backlog-reconciliation-drift-audit
-description: "Periodically reconcile docs, Issues, Project state, PRs, and owner docs so backlog truth stays stable over time."
+description: "Periodically reconcile docs, Issues, PRs, owner docs, and optional Project projection so backlog truth stays stable over time."
 ---
 
 # Backlog Reconciliation Drift Audit
@@ -9,7 +9,9 @@ You are a backlog reconciliation and drift-audit agent for a repo-first, docs-as
 This is a Builder System workflow; Product/Runtime SBS impact routes via
 `docs/architecture/SBS_OPERATING_MODEL.md` (see `.codex/skills/README.md`).
 
-Your job is to periodically reconcile docs, GitHub Issues, Project state, merged PRs, and owner docs so backlog truth stays stable over time.
+Your job is to periodically reconcile docs, GitHub Issues, PRs, and owner docs so backlog truth
+stays stable over time, with Project state included only when projection repair is explicitly in
+scope.
 Treat closed PR cards as part of lifecycle truth, not as an afterthought.
 
 This is not feature planning.
@@ -18,7 +20,7 @@ It is a cold-path audit, not a hot-path intake workflow.
 
 ## Audit model
 
-`Docs <-> Issues <-> Project <-> PRs <-> Owner Docs`
+`Docs <-> Issues/PRs <-> Owner Docs` plus optional `Project` projection
 
 You must detect:
 
@@ -29,8 +31,7 @@ You must detect:
 - delivered code with missing owner-doc writeback
 - backlog items that should have been repaired in a batch but were instead handled one-by-one
 - duplicate Issues covering the same anchored source item
-- Issues in false Project status
-- closed PR cards that still have blank or non-terminal Project status
+- when Project repair is explicitly in scope, Issues/PRs in false or missing projected status
 - issues missing required contract sections
 - open implementation Issues missing a truthful agent-state label
 - stale `agent:ready` labels on work that is blocked or already done
@@ -54,7 +55,7 @@ You must detect:
 2. Inspect open Issues.
 3. Inspect recent merged PRs.
 4. Inspect recent closed PRs that are not merged.
-5. Inspect current Project states.
+5. If Project repair is explicitly in scope, inspect current Project states.
 6. Match all of them by `Source Anchors`, doc items, and delivered reality.
 7. Confirm recently merged fix PRs are actually present on `origin/main` when they claim to resolve projection drift.
 
@@ -94,8 +95,9 @@ For each drift case, recommend one concrete corrective action only:
   audit explicitly includes Project repair.
 - Treat `agent:ready` and other agent-state labels per `.codex/skills/_shared/LABEL_TAXONOMY.md` as
   the canonical label semantics; `agent:ready` is the pickup qualifier after strict validation.
-- For Issue and PR cards, follow `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the single
-  source for required Project Status. Skills reference this file instead of carrying their own copy;
+- When optional Project repair is in scope, follow
+  `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the projection source. Skills reference this
+  file instead of carrying their own copy;
   do not restate its rows here — an open non-draft PR legitimately projects to `Review` via the
   shipped Project automation regardless of whether review was explicitly requested, and that is not
   drift.
@@ -115,7 +117,7 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 1. Drift Findings
 2. Backlog Reconciliation Table
 3. Issues to Create or Update
-4. Project State Corrections
+4. Optional Project State Corrections
 5. Doc Writeback Corrections
 6. Receipts
 
@@ -124,9 +126,9 @@ Receipt format:
 - backlog receipt:
   `BACKLOG RECEIPT: Issue #123 created or updated, labeled ...; optional Project repair: <status|none>`
 - delivery receipt:
-  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
+  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Optional Project repair: <Done|none>.`
 - closure receipt:
-  `CLOSURE RECEIPT: PR #456 closed as terminal work. Project Status: Done.`
+  `CLOSURE RECEIPT: PR #456 closed as terminal work. Optional Project repair: <Done|none>.`
 
 If no drift is found, say that explicitly and still report residual risks:
 

@@ -55,7 +55,7 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
         "verification-and-closure",
     ):
         assert name in text
-    assert "agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-and-closure" in text
+    assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
 def test_issue_to_code_preflight_captures_expected_branch_and_worktree() -> None:

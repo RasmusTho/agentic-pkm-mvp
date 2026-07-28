@@ -83,7 +83,7 @@ Treat temporal drift as a mismatch between a document's current claims and one o
 
 - shipped code
 - runtime/operator surfaces
-- open Issues / Project state / merged PRs
+- open Issues / merged PRs / optional Project projection when relevant
 - other owning SoT docs
 - elapsed time since the last explicit verification
 

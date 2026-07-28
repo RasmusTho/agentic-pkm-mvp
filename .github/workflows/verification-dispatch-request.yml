@@ -100,6 +100,26 @@ jobs:
           mkdir -p verification-dispatch
           gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
             > verification-dispatch/pr.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from app.dispatcher.verification_contract import resolve_final_review_rounds
+
+          pr = json.loads(Path("verification-dispatch/pr.json").read_text())
+          rounds = resolve_final_review_rounds(pr.get("body"))
+          full_path = rounds in {1, 2}
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write("full_path=true\n" if full_path else "full_path=false\n")
+          if full_path:
+              Path("verification-dispatch/full-path").touch()
+          PY
+          # Light-path PRs declare Final-Review-Rounds: 0 and never enter
+          # verification dispatch. Stop before the closing-link GraphQL query.
+          if [ ! -f verification-dispatch/full-path ]; then
+            exit 0
+          fi
           OWNER="${REPOSITORY%%/*}"
           REPO="${REPOSITORY#*/}"
           gh api graphql \
@@ -166,6 +186,7 @@ jobs:
 
       - name: Build bounded request
         id: build
+        if: steps.snapshots.outputs.full_path == 'true'
         run: |
           test -f verification-dispatch/pr.json || printf '{}\n' \
             > verification-dispatch/pr.json

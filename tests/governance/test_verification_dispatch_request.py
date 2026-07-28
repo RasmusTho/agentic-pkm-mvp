@@ -104,6 +104,15 @@ def test_explicit_two_round_declaration_is_authenticated_into_request() -> None:
     assert request["final_review_rounds"] == 2
 
 
+def test_light_path_emits_no_verification_dispatch_request() -> None:
+    pr = _pr()
+    pr["body"] = str(pr["body"]).replace(
+        "Final-Review-Rounds: 1", "Final-Review-Rounds: 0"
+    )
+
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
 @pytest.mark.parametrize(
     "declaration",
     ["Final-Review-Rounds: 3", "Final-Review-Rounds: 1\nFinal-Review-Rounds: 2"],
@@ -210,10 +219,19 @@ def test_workflow_bounds_live_closing_link_query_before_pagination() -> None:
         "live_closing_issues",
     ):
         assert fragment in fetch_step
+    assert "resolve_final_review_rounds" in fetch_step
+    assert "full_path=false" in fetch_step
+    assert "verification-dispatch/full-path" in fetch_step
+    assert fetch_step.index("resolve_final_review_rounds") < fetch_step.index("gh api graphql")
     assert fetch_step.count("gh api graphql") == 1
     assert "--paginate" not in fetch_step
     assert "after:" not in fetch_step
     assert "endCursor" not in fetch_step
+
+    build_step = workflow.split("- name: Build bounded request", 1)[1].split(
+        "- uses: actions/upload-artifact", 1
+    )[0]
+    assert "if: steps.snapshots.outputs.full_path == 'true'" in build_step
 
 
 def test_ten_live_closing_links_emit_request_without_extra_graphql_page() -> None:

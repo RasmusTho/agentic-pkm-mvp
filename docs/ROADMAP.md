@@ -422,20 +422,21 @@ The repo now adopts a GitHub-based delivery control plane for implementation wor
 
 - Docs/ADRs/owner docs define intent and architecture.
 - GitHub Issues are the canonical task contract.
-- GitHub Project v2 is the delivery state machine.
-- Local Agent Issue Dispatcher is the active hot-path claim/heartbeat coordination layer; GitHub
-  Issues, labels, PRs, and Project state remain the durable lifecycle truth.
+- GitHub Issues, labels, PRs, and CI are the durable delivery truth.
+- GitHub Project v2 is an optional legacy lifecycle projection.
+- Local Agent Issue Dispatcher is an optional claim/heartbeat collision guard used through the
+  `issue-to-code` pickup wrapper.
 - Coding agents execute only bounded Issues.
 - PR + CI are the validation loop.
 
-Delivery lifecycle:
+Optional Project projection:
 
 `Backlog -> Ready -> In Progress -> Review -> Done`
 
 Builder-agent rule:
 
-- agents only pick Issues with `Status=Ready` and label `agent:ready`
-- `agent:ready` is the pickup qualifier for `Ready`, not a separate lifecycle state
+- agents only pick Issues with a strictly validated `agent:ready` label
+- Project Status never gates pickup
 - Issues must carry the full task contract, including `Source Anchors`, `Suggested Validation`, `Source Docs`, and acceptance criteria with inline `Verify:` targets
 - agents must follow `Constraints`
 - agents must satisfy `Acceptance Criteria`
@@ -444,7 +445,8 @@ Builder-agent rule:
 Platform-state note:
 
 - repo-side enforcement lives in `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/issue-pr-governance.yml`, and `.github/github-governance.yml`
-- GitHub labels, Project fields/views, and Project automation must match that contract
+- GitHub labels and PR/Issue state must match that contract; Project fields/views/automation may
+  mirror it as a rebuildable projection
 
 ## Release Channels
 

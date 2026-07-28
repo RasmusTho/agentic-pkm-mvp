@@ -3,6 +3,10 @@ State: Development reference. Not an auto-loaded instruction file.
 
 These patches were captured as an intermediate migration artifact because the available GitHub connector in the earlier run could create new files but did not expose a direct update path for existing files. They are no longer the primary source of truth now that the owner-doc migration has been applied.
 
+Do not execute the embedded workflow wording. In particular, its Project-as-state-machine language
+predates the current contract: GitHub Issue/PR/label/CI truth is authoritative and Project Status is
+an optional legacy projection.
+
 ## Patch 1 — `docs/ARCHITECTURE.md`
 
 Append:

@@ -27,12 +27,10 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
 3. **Back off ≥ 60–120s** between checks on the tail. One PR's wait must not starve the shared bucket.
 4. **Preflight the free endpoint.** `gh api rate_limit` is **exempt** (does not count) — read it before
    assuming exhaustion, and compare `.graphql.remaining` vs `.core.remaining`.
-5. **`verification-and-closure`'s default merge gate is now a local `code-review` subagent run, not
-   Codex** (see `verification-and-closure` :: *Running the local review gate*) — CI wait no longer
-   needs `--codex` by default. `--codex` remains available below for callers that still want the
-   Codex verdict resolved; if used, Codex is variable and may stall — never hard-wait on it, and
-   resolve it on the same cadence as CI with the stall escape hatch (see `verification-and-closure` ::
-   *Reading the Codex verdict*, inactive as the default gate but kept for `--codex` callers).
+5. **Review depth is not part of CI waiting.** Light-path PRs run no independent review. Full-path
+   PRs use the local `code-review` gate in `verification-and-closure`, not the Codex verdict path.
+   `--codex` remains an explicit opt-in for callers that still need that verdict; if used, Codex is
+   variable and may stall — never hard-wait on it, and resolve it on the same cadence as CI.
 6. **Use the shared helper, preferably through the blessed script.** Do not hand-roll CI or Codex
    wait loops; `scripts/await_pr_checks.sh` delegates shared backoff/verdict behavior to
    `app.dispatcher.poll_backoff`.

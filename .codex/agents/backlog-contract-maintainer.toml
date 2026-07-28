@@ -1,5 +1,5 @@
 name = "backlog_contract_maintainer"
-description = "Repairs stale, malformed, duplicate, or drifted GitHub Issue/PR/Project state through issue-maintenance-change-control."
+description = "Repairs stale, malformed, duplicate, or drifted GitHub Issue/PR/label state and optional Project projection through issue-maintenance-change-control."
 model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"

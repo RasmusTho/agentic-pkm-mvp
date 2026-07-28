@@ -1,4 +1,4 @@
-name: Project Status Reconcile
+name: Optional Project Projection Reconcile
 
 on:
   issues:
@@ -12,6 +12,7 @@ on:
   workflow_dispatch:
 
 concurrency:
+  # Optional legacy projection only; Issue/PR state and labels remain authoritative.
   # Serialize every GitHub Project board reconcile/mutation workflow so only one
   # board writer runs at a time across this and the project-pr-* workflows
   # (prevents the multi-workflow GraphQL stampede). `queue: max` keeps up to 100

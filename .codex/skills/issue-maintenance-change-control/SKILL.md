@@ -1,6 +1,6 @@
 ---
 name: issue-maintenance-change-control
-description: "Keep GitHub Issues, PRs, labels, and Project state truthful when backlog state drifts from repo reality, including high-risk change-control moves across Core Runtime <-> Agentic Lab."
+description: "Keep GitHub Issues, PRs, labels, and optional Project projection truthful when backlog state drifts from repo reality, including high-risk change-control moves across Core Runtime <-> Agentic Lab."
 ---
 
 # Issue Maintenance: Change Control
@@ -9,7 +9,8 @@ You are an Issue maintenance and lifecycle-correction agent for a repo-first, do
 
 ⚠️ **CRITICAL: All authoritative corrections (labels, Issue edits, duplicates, PR reconciliation) must be executed using explicit commands and verified. Project repair is optional cold-path projection maintenance and must not gate Issue readiness or pickup.**
 
-Your job is to keep GitHub Issues, Pull Requests, labels, and Project state truthful when backlog state drifts from implementation reality.
+Your job is to keep GitHub Issues, Pull Requests, and labels truthful when backlog state drifts from
+implementation reality, and to repair Project projection only when explicitly in scope.
 That includes PR lifecycle truth, not only Issue lifecycle truth.
 This is a cold-path maintenance role, not a hot-path implementation routine.
 Use `docs/development/PR_HOT_PATH.md` for normal PR delivery and `docs/development/PARENT_ISSUE_CLOSURE.md` when a delivered parent issue actually needs closure.
@@ -38,7 +39,8 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 - Read `AGENTS.md` first (repo builder-agent policy).
 - For boundary moves, treat `docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md` as the governing change-control contract.
 - Use `docs/DOCS_INDEX.md` to find owner docs for any affected surfaces.
-- For maintenance runs, also read `docs/development/GITHUB_GOVERNANCE_SETUP.md` or `.github/github-governance.yml` so Issue/PR Project status is reconciled to the repo governance contract rather than left to best-effort automation drift.
+- When Project projection repair is explicitly in scope, also read
+  `docs/development/GITHUB_GOVERNANCE_SETUP.md` or `.github/github-governance.yml`.
 
 ## Core rules
 
@@ -69,12 +71,12 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 
 ## Canonical lifecycle expectations
 
-- Open backlog work should be present in the Project.
 - Open implementation Issues should normally carry exactly one truthful agent-state label.
 - Active implementation work should not remain `Ready`.
-- If Project state disagrees with Issue state, PR state, or merged delivery reality, correct the Project projection to match the harder lifecycle truth.
 - Closed Issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`.
-- If repo reality satisfies the Issue, the Issue and Project state should reflect that.
+- If repo reality satisfies the Issue, its Issue/PR state and labels must reflect that.
+- When Project repair is explicitly included, reconcile its projection after authoritative
+  Issue/PR correction; missing Project cards are not lifecycle failures outside that scope.
 
 ### Lifecycle truth matrix
 
@@ -82,13 +84,12 @@ The canonical optional projection matrix lives at `.codex/skills/_shared/LIFECYC
 
 ### Drift patterns that must be flagged explicitly
 
-These are the high-frequency drift patterns that are easy to miss. A maintenance run is not complete until all have been audited:
+These are the high-frequency drift patterns that are easy to miss. Audit authoritative items on
+every run; audit Project-only patterns only when Project repair is explicitly in scope:
 
-- **Merged/closed PRs stuck in `Review` or `In Progress`** — stale handoff state on terminal work. "Terminal status on terminal work" is as common as blank PR cards and must be checked alongside them.
-- **Closed Issues stuck in `Review` or `In Progress`** — the Issue is Done; non-terminal status on closed Issues is drift, not a pending handoff.
 - **Open `agent:ready` Issues with invalid contracts or active foreign claims** — the queue is lying about what is pickable regardless of Project Status.
-- **PRs with no Project Status (blank / not in Project)** — the board cannot reflect lifecycle if the PR isn't represented at all. Open and closed PRs both need Project entries.
-- **Open non-draft PRs stuck in `In Progress`** — the PR is ready for Project review tracking but the board still shows active implementation. Draft PRs remain `In Progress`; opened/reopened non-draft PRs and PRs marked ready for review belong in `Review` (see the lifecycle truth matrix and Project PR automation).
+- **Project-only, when in scope:** terminal Issue/PR cards in non-terminal status, missing cards or
+  status, and open non-draft PR cards outside `Review`.
 
 ## Change-control checklist (Core Runtime <-> Agentic Lab)
 
@@ -109,7 +110,7 @@ If any of the above is missing or unclear, first try to resolve it from the SoT 
 2. Compare Issue `Scope`, `Source Anchors`, `Acceptance Criteria`, and `Source Docs` to current docs.
 3. Compare the Issue to open, merged, and closed PRs and repo reality.
 4. Check whether the Issue is too large, stale, partially shipped, or blocked.
-5. Check whether labels and Project state still match reality (driven by check 1's drift set).
+5. Check whether labels match reality; when check 1 ran, reconcile its Project drift set afterward.
 6. Check whether owner-doc writeback and roadmap/plan cleanup exist for delivered work.
 7. For feature-breakdown issue waves, distinguish parent feature issues from child slice issues before changing labels.
 8. If a child issue delegates its contract to a `Source contract` spec file instead of carrying the standard issue sections, verify whether the spec is already merged and reachable; if the spec is not merged/reachable and the issue body lacks the required local contract sections, do not mark it `agent:ready`.
@@ -123,11 +124,10 @@ If any of the above is missing or unclear, first try to resolve it from the SoT 
 - split oversized work into replacement Issues
 - close duplicate or superseded Issues
 - close delivered Issues
-- add missing Issues/PRs to the Project
-- move Project status to `Backlog`, `Ready`, `In Progress`, `Review`, or `Done`
-- resolve closed terminal PR cards to `Done`
 - remove stale labels that contradict lifecycle reality
 - relabel with the canonical taxonomy from `.codex/skills/_shared/LABEL_TAXONOMY.md` only
+- when Project repair is explicitly in scope, add missing cards and reconcile Status through
+  `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`
 
 When closing stale or duplicate open issues:
 
@@ -149,12 +149,12 @@ If an Issue is closed (already delivered):
    gh issue edit #<N> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
    ```
 
-2. **Set Project Status to Done:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Done` option ID.
-
-3. **Verify:**
+2. **Verify authoritative state:**
    ```bash
-   gh issue view #<N> --json state,labels,projectItems
+   gh issue view #<N> --json state,labels
    ```
+
+3. **Optional Project repair:** when explicitly in scope, apply and verify the `Done` projection.
 
 ### Action: Close Stale Duplicate or Superseded Issue
 
@@ -188,9 +188,9 @@ If an open implementation Issue is malformed, stale, or no longer safely executa
    gh issue edit #<N> --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
    ```
 
-2. **Set Project Status to Backlog (non-active):** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Backlog` option ID.
+2. **Post comment with the required action.**
 
-3. **Post comment with required action**
+3. **Optional Project repair:** when explicitly in scope, apply and verify the `Backlog` projection.
 
 ### Maintenance path versus hot path
 
@@ -213,7 +213,6 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
 1. **Keep them non-active:**
    ```bash
    gh issue edit #<PARENT> --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
-   gh api graphql ... (set Project Status to Backlog)
    ```
 
 2. **Use them to track child slice delivery** in comments and body updates, including validation receipts posted by each delivered child
@@ -252,7 +251,8 @@ Child slice issues may become `agent:ready` only when their executable contract 
 - confirm a PR or merged commit satisfies the Acceptance Criteria
 - ensure owner-doc writeback exists or create a follow-up
 - ensure roadmap/plan wording no longer reads as pending
-- ensure Project status and labels are terminal and truthful
+- ensure Issue/PR state and labels are terminal and truthful
+- reconcile Project status only when optional projection repair is in scope
 - produce a delivery receipt
 - for duplicate/superseded closures, ensure the delivery receipt points to the canonical delivered issue/PR rather than only saying “duplicate”
 - do not keep a delivered parent issue open solely for future adoption or retro observation
@@ -275,13 +275,14 @@ Lead with the human summary; include later sections only when they have content 
 2. Issue State Assessment
 3. Required Corrections
 4. Updated / Replacement Issue Contracts
-5. Project / Label Changes
+5. Lifecycle Changes (and optional Project projection)
 6. Receipts
 
 ## Output expectations
 
 - A corrected/created Issue that a builder can execute.
-- A short receipt: Issue number, labels, and Project Status.
+- A short receipt: Issue number, labels/state, and optional Project projection only when inspected
+  or mutated.
 
 ## Fast maintenance run (open issues)
 
@@ -381,20 +382,22 @@ Use this when the user asks for a maintenance run across everything not done.
      gh issue edit #<DUPLICATE> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
      ```
 
-6. **Reconcile terminal work stuck in non-terminal status** (expanded from "blank PR cards"):
+6. **When Project repair is in scope, reconcile terminal work stuck in non-terminal status**:
    - The pre-flight audit (step 2) should have surfaced these, but enumerate them explicitly here to prevent silent skips.
    - Terminal work is: merged PRs, closed PRs (unmerged), closed Issues.
    - Any of the above sitting in `In Progress`, `Review`, `Backlog`, `Ready`, or with no Status is drift.
    - Set each to `Done`: run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Done` option ID.
    - Do not limit this step to "blank" cards. Stale `In Progress` / `Review` on merged or closed items is as common as missing status and is equally drift.
 
-7. **Reconcile open PR Project status** against the lifecycle truth matrix:
+7. **When Project repair is in scope, reconcile open PR Project status** against the lifecycle truth matrix:
    - Open Draft PRs → `In Progress`
    - Open non-Draft PRs with review explicitly requested → `Review`
    - Open non-Draft PRs without review requested → `Review`
    - Open PRs missing from the Project entirely → add them, then apply the row above
 
-8. **Reconciliation helper (optional, with known gaps).** If the repo has a reconciliation helper (for example `scripts/reconcile_project_status.py`), run it after steps 2, 6, and 7 as a belt-and-braces pass — not as the primary mechanism.
+8. **Reconciliation helper (optional, with known gaps).** Only when Project repair is in scope, a
+   reconciliation helper (for example `scripts/reconcile_project_status.py`) may run after steps 2,
+   6, and 7 as a belt-and-braces pass — not as the primary mechanism.
    - Prefer targeted calls first (one issue/PR per invocation), then optional scan:
      ```bash
      python3 scripts/reconcile_project_status.py --repo <owner/repo> --owner @me --issue <N>
@@ -416,15 +419,10 @@ Use this when the user asks for a maintenance run across everything not done.
    - output the rate-limit reset time when available
    - state that Issue/PR truth remains authoritative until Project reconciliation can resume
 
-10. **Post-condition verification.** After all corrections, re-run the step 2 audit query and verify zero drift cells remain. Specifically check:
-    - Every `agent:ready` open Issue has a strictly valid contract; when optional Project repair is in scope, its preferred projection is `Status=Ready`
-    - Every `agent:blocked` / `agent:needs-human` open Issue is in `Status=Backlog`
-    - Every closed Issue is in `Status=Done`
-    - Every merged / closed PR is in `Status=Done`
-    - Every open Draft PR is in `Status=In Progress`
-    - Every open non-Draft PR with review explicitly requested is in `Status=Review`
-    - Every open non-Draft PR without review requested is in `Status=Review`
-    - Zero Project items are in `NO_STATUS`
-    If any drift remains, the run is not complete — fix before writing the receipt.
+10. **Post-condition verification.** Re-read authoritative Issue/PR state and labels after all
+    corrections. Every `agent:ready` Issue must remain strictly valid and no terminal Issue may
+    retain `agent:*`. When Project repair was in scope, also re-run the step 2 projection audit and
+    verify zero targeted drift cells remain; otherwise record `optional Project repair: none`.
 
-11. Output a receipt listing edited issues, label changes, issue status changes, PR status changes, and the before/after drift counts from step 2 and step 10.
+11. Output a receipt listing edited issues, label changes, Issue/PR state changes, verification
+    reads, and optional Project before/after counts only when step 2 ran.

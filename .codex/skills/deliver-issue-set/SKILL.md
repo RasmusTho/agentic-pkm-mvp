@@ -46,7 +46,8 @@ Use this mode when the user asks to review, plan, prepare, triage, or make issue
 
 Allowed:
 
-- inspect epic, parent issue, child issues, linked PRs, Project state, owner docs, and source anchors
+- inspect epic, parent issue, child issues, linked PRs, owner docs, and source anchors; inspect
+  Project state only for an explicitly Project/Kanban-scoped request
 - classify issue readiness
 - repair issue contracts when the owner docs make the intended contract unambiguous
 - create bounded issues through `docs-to-issue` or `feature-breakdown` when source docs already support the work
@@ -135,10 +136,12 @@ Delivery rules:
 - For each issue, follow `issue-to-code` from claim through implementation and local validation.
 - Use `publish-pr` for branch, commit, push, and PR creation/update.
 - Use `pr-integration` only when the PR needs readiness or repair before verification.
-- Use `verification-and-closure` for merge, Issue closure, Project `Done`, dispatcher release, dependent unblocking, and post-merge owner-doc routing.
+- Use `verification-and-closure` for merge, Issue closure, dispatcher release, dependent unblocking,
+  post-merge owner-doc routing, and optional terminal Project repair when that projection is in scope.
 - When coordinating autonomous delivery, do not treat an unprotected branch or absent required-status-check rule as permission to skip the process gate. `verification-and-closure` still owns the current CI/checks plus local-review-gate prerequisites before merge.
 - A coordinator waits on many PRs at once — the worst case for the shared API budget. Poll per `_shared/CI_WAIT_CONTRACT.md` (REST check-runs only, ≥60–120s backoff, `scripts/await_pr_checks.sh`); never run concurrent `gh pr checks` loops, which drain the shared GraphQL bucket to zero and stall every sub-agent.
-- After every delivered issue, re-read the parent feature issue / Project state and recompute the next pickup target.
+- After every delivered issue, re-read the parent feature issue and live Issue/PR state, then
+  recompute the next pickup target. Inspect Project state only for an explicitly Project-scoped run.
 - Stop forcing the current issue when it is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input. Apply the [no-progress final gate](#no-progress-final-gate) before treating that stop as a delivery conclusion.
 
 Parallel claim is allowed only when all are true:
@@ -245,8 +248,10 @@ Treat "several ready issues" as at least 3 executable pickup issues unless the u
 
 If fewer than the target number are ready:
 
-1. Inspect the epic, parent feature issue, related child issues, active docs, Project backlog, and linked PRs.
-2. Run the relevant Project/lifecycle truth audit from `issue-maintenance-change-control` before readiness mutations.
+1. Inspect the epic, parent feature issue, related child issues, active docs, and linked PRs; inspect
+   Project backlog only when the request is explicitly Project/Kanban-scoped.
+2. Run authoritative lifecycle truth checks from `issue-maintenance-change-control` before readiness
+   mutations; include Project audit only when projection repair is in scope.
 3. Identify candidates that are close to ready.
 4. Repair existing issue contracts only when the source authority is clear.
 5. Use `docs-to-issue` or `feature-breakdown` for new issues, not ad hoc issue creation.
@@ -274,7 +279,7 @@ For each candidate issue, inspect:
 - issue number and title
 - parent / child relationship
 - labels
-- Project Status
+- Optional Project Status (only when inspected)
 - priority
 - linked PRs
 - Product/Runtime System vs Builder System vs boundary classification, with the owner docs required
@@ -403,7 +408,9 @@ Lead with the human summary, then include a section only when it has content —
 6. Blockers And Non-Executable Items (reason and next action per item, stop conditions)
 7. Maintenance And Follow-Ups (issues needing maintenance or breakdown, owner-doc and source-anchor notes)
 
-Receipts for mutations must name the issue number, labels, Project Status, command family used, and verification result.
+Receipts for mutations must name the issue number, authoritative label/Issue/PR state, command
+family used, verification result, and optional Project projection only when it was inspected or
+mutated.
 
 ## Capturing Learning
 

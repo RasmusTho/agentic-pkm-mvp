@@ -204,13 +204,11 @@ If work becomes blocked before or during implementation:
    gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready
    ```
 
-2. **Set Issue Project Status to Backlog:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Backlog` option ID.
+2. **Add a blocking comment to the Issue with the explicit reason and next unblock condition.**
 
-3. **Add a blocking comment to the Issue with explicit reason**
-
-4. **Verify:**
+3. **Verify authoritative state:**
    ```bash
-   gh issue view #<N> --json labels,projectItems
+   gh issue view #<N> --json state,labels,comments
    ```
 
 **Use `agent:blocked`** when blocked by dependency or setup.  
@@ -218,42 +216,27 @@ If work becomes blocked before or during implementation:
 
 ### Action: Open Draft PR (Work In Progress)
 
-When you open a draft PR or continue implementing after opening a PR:
-
-1. **Keep Issue Project Status at In Progress** (no change needed if already set)
-
-2. **If creating PR, no status change yet** — PR remains draft
-
-3. **Verify Issue still shows In Progress:**
-   ```bash
-   gh issue view #<N> --json projectItems
-   ```
+Draft state is owned by the PR itself. Keep the Issue open and free of `agent:ready`; do not perform
+Project reads or writes on this hot path.
 
 ### Action: Request Review (Explicit Handoff)
 
-Only move to Review when the PR is the **explicit review handoff artifact** (normally after review is requested):
-
-1. **Move Issue Project Status to Review:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Review` option ID.
-
-2. **Move PR Project Status to Review:** run the same mutation against the PR's project item ID.
-
-3. **Verify both Issue and PR:**
-   ```bash
-   gh issue view #<N> --json projectItems
-   gh pr view #<PR> --json projectItems
-   ```
-
-**Do not move to Review** just because a PR exists. Move to Review only when review is explicitly requested.
+Make the PR non-draft or request review as the explicit handoff. PR state and review requests are
+the authority. Project automation may mirror that state; manual Project repair belongs to
+`issue-maintenance-change-control`.
 
 ## Quick Reference: State Transitions
 
-| When | Issue Labels | Issue Status | PR Labels | PR Status |
-|------|-------------|-------------|-----------|-----------|
-| Start work | -agent:ready | In Progress | — | — |
-| Blocked mid-work | +agent:blocked,-agent:ready | Backlog | — | — |
-| Open draft PR | (no change) | In Progress | — | (draft, no Project status) |
-| Request review | (no change) | Review | — | Review |
-| Merge + verified | -agent:* | (verification owns) | — | (Done via verification skill) |
+| When | Authoritative Issue state | Authoritative PR state |
+|------|---------------------------|------------------------|
+| Start work | open, `agent:ready` removed | — |
+| Blocked mid-work | open, `agent:blocked` | — |
+| Open draft PR | open, active claim retained | draft |
+| Request review | open, active claim retained | non-draft / review requested |
+| Merge + verified | closed, `agent:*` removed | merged |
+
+Optional Project reconciliation follows `_shared/LIFECYCLE_TRUTH_MATRIX.md` only when explicitly in
+scope; it never adds steps to the implementation hot path.
 
 ## Execution rules
 
@@ -336,7 +319,7 @@ When continuing through anchor drift:
    - If core implementation already exists, do not proceed as fresh implementation; route to `issue-maintenance-change-control` to correct stale or drifted contract state.
    - Treat passing acceptance tests as supporting evidence, not the sole gate for delivered classification.
    - If source specs still say "Not yet implemented" while shipped code exists, route the spec-state writeback through docs/governance repair rather than opening duplicate implementation work.
-4. **Execute Action: Begin Implementation Work** (update labels, Issue Project Status, verify).
+4. **Execute Action: Begin Implementation Work** through the pickup wrapper and verify its claim receipt.
 5. Run the BuilderOps routing checkpoint and create any needed operational record before the context
    becomes hidden local memory.
 6. Restate the bounded outcome from the Issue.
@@ -421,7 +404,7 @@ If blocked, do not guess. Report the blocker only if one of these is true:
 If blocked:
 
 - do not code past the blocker
-- correct Project status and labels so they reflect the blocked reality
+- correct labels and Issue comments so they reflect the blocked reality
 - recommend Issue maintenance when the task contract itself needs correction
 
 Do not block solely because an exact anchor label is absent if the governing doc passages still make the bounded task clear.

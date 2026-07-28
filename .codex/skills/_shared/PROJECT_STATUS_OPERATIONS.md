@@ -4,6 +4,8 @@ State: Shared skill contract. Canonical GitHub Project GraphQL operations.
 
 Single source for the GraphQL blocks that read and mutate Project state. Skills reference these
 operations by name instead of carrying inline copies. Project: `Agent Delivery Control Plane`.
+This is optional legacy projection repair: use it only when a governing workflow explicitly places
+Project repair in scope, never as a readiness, pickup, review, merge, or closure gate.
 
 Resolve stable identifiers once per run and reuse cached values instead of repeating lookups.
 Batch field mutations into one bounded pass near workflow completion where possible.

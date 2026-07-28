@@ -167,7 +167,7 @@ NORMALIZATION RECEIPT: Issue #N normalized to canonical contract. Sections added
 
 **Delivery receipt template (filled by verification-and-closure at merge):**
 ```
-DELIVERY RECEIPT: Issue #N delivered by PR #M. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Upstream artifact repaired: <path>. Project Status: Done.
+DELIVERY RECEIPT: Issue #N delivered by PR #M. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Upstream artifact repaired: <path>. Optional Project repair: <Done|none>.
 ```
 
 ## Capturing learning

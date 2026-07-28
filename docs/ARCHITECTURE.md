@@ -731,7 +731,7 @@ Development control model:
 
 Canonical delivery sequence:
 
-`Docs -> Issue -> Dispatcher claim -> Agent -> PR -> CI -> Feedback`
+`Docs -> Issue -> issue-to-code claim + implementation -> PR -> CI -> Verification -> Feedback`
 
 Required Issue contract:
 
@@ -765,8 +765,8 @@ Guardrails for builder agents:
 
 - A strictly validated `agent:ready` label is the external pickup qualifier.
 - Project Status is a rebuildable projection and does not gate pickup.
-- `In Progress` covers active implementation and open PR work before explicit review handoff.
-- `Review` begins only when review handoff is explicit, normally after review is requested.
+- Issue/PR state is authoritative throughout implementation and review; the optional Project
+  automation may mirror open/draft/non-draft state.
 - Closed or delivered work must not retain `agent:*` labels.
 - Agents only pick Issues with a strictly validated `agent:ready` label and no conflicting dispatcher claim.
 - Agents must stay within the linked Issue scope.

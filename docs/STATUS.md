@@ -483,7 +483,8 @@ Known remaining gaps: none — branch protection with required status checks (`s
 
 Target delivery model:
 - Issues = canonical task contract
-- Project = state machine
+- Issue/PR state + labels + CI = durable lifecycle truth
+- Project = optional legacy projection
 - agents = execution layer
 - PR = implementation artifact
 - CI = validation gate

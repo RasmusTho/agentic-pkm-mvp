@@ -14,7 +14,7 @@ boundary and artifact map in `docs/architecture/SBS_OPERATING_MODEL.md`.
 ## Workflow map
 
 Hot path:
-`Docs -> Issue -> Dispatcher/GitHub claim -> Agent -> issue-to-code -> Publish PR -> CI -> Verification -> Merge -> closure -> Owner Doc`
+`Docs -> Issue -> issue-to-code claim + implementation -> Publish PR -> CI -> Verification -> Merge -> closure -> Owner Doc`
 
 Conditional / maintenance path:
 `Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
@@ -88,13 +88,14 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
 - `issue-to-code`
   - implementation entrypoint for bounded GitHub Issue work
   - classifies the issue as Product/Runtime System, Builder System, or boundary work before pickup
-  - before coding, update lifecycle state truthfully: move active work to `In Progress` and remove `agent:ready`
-  - use that transition as the minimal shared claim/lease compatibility signal in multi-agent environments
+  - before coding, use its pickup wrapper to acquire the available dispatcher lease or durable
+    GitHub-label-only fallback and remove `agent:ready`
 - `start-model-inquiry`
   - launch a durable pre-ticket Fable/GPT inquiry through the shared BuilderOps command after
     fail-closed vault and adapter preflight; issue promotion remains a separate governed step
 - `issue-maintenance-change-control`
-  - repair stale or false Issue / PR / label / Project state before or during execution
+  - repair stale or false Issue / PR / label state before or during execution, plus optional
+    Project projection when explicitly in scope
 - `deliver-issue-set`
   - review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
 - `docs-governance`
@@ -164,7 +165,7 @@ workflow — see `## App-agent skill family (product-lane)` below for the full d
 ## Connected execution paths
 
 - Implementation path:
-  `agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-and-closure -> post-merge-owner-doc`
+  `agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure -> post-merge-owner-doc`
 - Drift-correction path:
   `issue-maintenance-change-control -> issue-to-code` when the Issue becomes executable again
 - Epic / Kanban issue-set delivery path:

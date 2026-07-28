@@ -16,7 +16,8 @@ Fill these out before deciding whether the PR stays on the hot path:
 - `lane`: `docs-authoring` | `implementation` | `governance` | `direct-repair`
 - `risk`: `low` | `normal` | `high`
 - `touches_runtime`: `yes` | `no`
-- `touches_ci_or_skills`: `yes` | `no`
+- `touches_ci`: `yes` | `no`
+- `changes_skill_behavior`: `yes` | `no`
 - `closes_issue`: `yes` | `no`
 
 Promotion is not a PR hot-path lane. Route release-channel work through `prepare-promotion`,
@@ -24,7 +25,9 @@ Promotion is not a PR hot-path lane. Route release-channel work through `prepare
 operator gates and evidence model.
 
 Default rule:
-- if the PR is low-risk and does not touch runtime, CI, skills, migrations, APIs, or public contracts, stay on the hot path
+- low-risk docs, governance, and skill-text changes stay on the hot path
+- touching a skill does not itself escalate delivery depth; escalate only when the skill change
+  alters high-risk runtime/release behavior or another trigger below applies
 - if any escalation trigger is true, use the escalation path instead of adding heavyweight checks here
 
 ## Mandatory Hot-Path Gates

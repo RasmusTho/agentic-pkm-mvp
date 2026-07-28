@@ -11,7 +11,9 @@ Use [`docs/development/PR_HOT_PATH.md`](../../../docs/development/PR_HOT_PATH.md
 Use [`docs/development/PR_ESCALATION_PATHS.md`](../../../docs/development/PR_ESCALATION_PATHS.md) only when the PR hot path says an escalation trigger applies.
 Use [`docs/development/PARENT_ISSUE_CLOSURE.md`](../../../docs/development/PARENT_ISSUE_CLOSURE.md) only when parent closure is relevant, especially for the final child slice or an explicit closure task.
 
-⚠️ **CRITICAL: All lifecycle state changes (labels, Project Status, Issue closure, PR merge) must be executed using explicit commands and verified. Do not describe these changes.**
+⚠️ **CRITICAL: All lifecycle state changes (labels, Issue closure, PR merge, and any explicitly
+scoped Project repair) must be executed using explicit commands and verified. Do not describe these
+changes.**
 Test/check failures must be classified, not dismissed as merely "out of scope" when they are actually blocking.
 
 ## Your Job
@@ -21,10 +23,11 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - ensure shipped truth moved to the right owner docs
 - ensure roadmap or plan wording no longer falsely reads as pending
 - detect false backlog or project states
-- honor automation-driven `Done` projection first, and only fallback-set `Done` when needed
+- treat Project `Done` as optional projection repair; when explicitly in scope, honor automation
+  first and fallback-set it only when needed
 - merge the PR when the delivery contract is satisfied
-- close exactly the PR's authenticated closing issues and set their Project Status to `Done`; keep
-  a governing parent open when it is not itself named by a closing keyword
+- close exactly the PR's authenticated closing issues; keep a governing parent open when it is not
+  itself named by a closing keyword
 - release the dispatcher lease if one was claimed
 - unblock dependent issues when the delivered work truly satisfies them
 
@@ -91,14 +94,13 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
   `## BuilderOps Routing` section means `none` and does not block merge. At every tier, unresolved
   learning, docs freshness, roadmap execution, promotion, projection, or receipt material must be
   represented by a BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
-- Verify project lifecycle state still makes sense
-- Verify closed terminal PR cards do not remain blank in the Project
+- When optional Project repair is explicitly in scope, verify terminal cards project `Done`
 - For terminal projection planning, a caller may generate the local dry-run plan
   `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition done --issue-file <file> --pr-file <file> --json`.
   The plan is advisory data only: it names required reads, proposed label/Project/PR writes, and
   verification reads, while performing no GitHub, Project, dispatcher, run-state, or agent-spawn
-  mutation. Live merge, issue closure, label removal, and Project `Done` correction remain owned by
-  this skill's explicit commands and verification steps.
+  mutation. Live merge, issue closure, and label removal remain owned by this skill; optional
+  Project repair remains an explicit cold-path action.
 - Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
 - Run GitHub GraphQL `reviewThreads` closure checks only when a review-thread closure trigger is present: a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback. Preserve the lightweight hot path for ordinary PRs with no trigger. [review-thread-closure]
 - When a review-thread closure trigger applies, reply on and resolve or explicitly disposition the
@@ -151,8 +153,8 @@ Delivery depth follows `AGENTS.md :: Proportional delivery` and
   every closing issue's `Verify:` targets self-verified on that SHA; no scope drift; the PR body
   declares `Final-Review-Rounds: 0`. Then merge directly with the normal closing-keyword body —
   GitHub-native closure closes the single governing issue. After merge: verify the issue actually
-  closed, remove `agent:*` labels, apply the fallback `Done` projection when automation has not,
-  and run `post-merge-owner-doc` when shipped behavior or contracts changed. `Running the local
+  closed, remove `agent:*` labels, optionally repair the `Done` projection when that work is in
+  scope, and run `post-merge-owner-doc` when shipped behavior or contracts changed. `Running the local
   review gate`, the verified-merge neutralization/phase-ledger sequence, and the dispatcher
   verification consumer do not apply on this path.
 - **Full path — everything else:** Tier 3 PRs, multi-issue PRs, TCD high-risk surfaces, or an
@@ -484,8 +486,8 @@ same exact head back to the ordinary verified-merge sequence below.
 11. if issue-backed, complete or release each applicable closing-issue dispatcher task
 12. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
    labels from a distinct governing parent unless its own lifecycle contract is complete
-13. if issue-backed, set every closing Issue and the PR Project Status to `Done` when automation has
-   not already projected it; never project an unclosed governing parent `Done`
+13. if optional Project repair is explicitly in scope, set every closing Issue and the PR Project
+    Status to `Done` when automation has not already projected it; never project an unclosed governing parent `Done`
 14. if issue-backed, update spec files named by each closing issue's `Source Anchors` from stale
    `State: Not yet implemented` to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
    Record child-delivery validation evidence on any distinct open governing parent
@@ -555,13 +557,13 @@ Rules for the restore:
 
 ## Lifecycle Rules During Verification
 
-Project Status for the Issue and PR follows `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the
-single source (an open non-draft PR legitimately projects to `Review` via the shipped Project
-automation — do not treat that as drift). Merge-stage-specific rules on top of the matrix:
+Issue/PR state, labels, CI, and merge evidence are authoritative. Project Status follows
+`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` only when optional projection repair is explicitly
+in scope. Merge-stage-specific rules:
 
 - do not mark lifecycle `Done` before merge
-- if project/PR automation already projected `Done`, verify that state rather than writing it again
-- only apply the fallback `Done` mutation when the item still needs terminal projection
+- if optional repair is in scope and automation already projected `Done`, verify rather than rewrite
+- do not query or mutate Project solely to complete an otherwise satisfied delivery
 
 ## BuilderOps Closure Checkpoint
 
@@ -590,17 +592,18 @@ Use [`docs/development/PARENT_ISSUE_CLOSURE.md`](../../../docs/development/PAREN
 After merging and delivering work, scan for issues blocked by the delivered Issue.
 Only unblock issues whose actual dependency is truly satisfied.
 
-## Project State Operations
+## Optional Project Projection
 
-Use `gh` CLI and the GitHub GraphQL API to keep Project state truthful.
-Do not leave state updates as recommendations when you can execute them directly.
+Project repair is not a closure gate. When it is explicitly included, use
+`.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`, execute the bounded mutation, and verify it.
+Otherwise record `optional Project repair: none` and complete closure from authoritative state.
 
 ## Status and Closure Enforcement
 
 - do not validate code only; validate delivery state
 - detect and correct false status where possible
-- if issue-backed work is truly delivered, execute and confirm closure plus Project Status = `Done`
-  for exact closing issues only; update any distinct governing parent without falsely closing it
+- if issue-backed work is truly delivered, execute and confirm closure for exact closing issues
+  only; update any distinct governing parent without falsely closing it
 - if direct repair work is truly delivered, write the direct repair delivery receipt and do not create or mutate a governing Issue
 - direct repair delivery receipt shape:
   - `Direct repair merged: PR #<n>, type=<type>, validation=<checks>.`

@@ -251,11 +251,11 @@ Any overlap with your staged file set => STOP: keep the earlier compliant PR, cl
 
 ### Step 6: Create or Update PR
 
-Execute based on lane classification. Every template below includes the required
-`Final-Review-Rounds: 1` line (the `pr-contract` gate rejects a body with zero or more than one
-match of `/^Final-Review-Rounds:[ \t]*[012][ \t]*$/`; declare `0` for light-path PRs per
-`AGENTS.md :: Proportional delivery` — single-issue (or issue-free) Tier 1/2 with no high-risk
-surface — and `2` only when a second final review round is actually planned) and concrete `## BuilderOps Routing` defaults instead of `<...>` placeholders
+Execute based on lane classification. Every template below defaults to the light path with the
+required `Final-Review-Rounds: 0` line (the `pr-contract` gate rejects a body with zero or more than
+one match of `/^Final-Review-Rounds:[ \t]*[012][ \t]*$/`). Raise it to `1` or `2` only when
+`AGENTS.md :: Proportional delivery` selects the full path. The templates also carry concrete
+`## BuilderOps Routing` defaults instead of `<...>` placeholders
 (the gate rejects any routing value matching `^<.*>$`). The `none` / reason defaults shown match what
 `scripts/pr_body_generator.py` emits (`_builderops_section`) — replace them with the actual
 records/projections/receipts and reason whenever BuilderOps material was in fact routed.
@@ -269,7 +269,7 @@ Governing-Issue: #<ISSUE_NUMBER>
 
 Fixes #<ISSUE_NUMBER>
 
-Final-Review-Rounds: 1
+Final-Review-Rounds: 0
 
 ## Summary
 <1-2 sentence summary of the bounded change>
@@ -292,7 +292,7 @@ gh pr create \
   --body "$(cat <<'EOF'
 - [x] Docs authoring lane
 
-Final-Review-Rounds: 1
+Final-Review-Rounds: 0
 
 ## Summary
 <Summary of documentation changes>
@@ -318,7 +318,7 @@ gh pr create \
   --body "$(cat <<'EOF'
 - [x] Governance lane
 
-Final-Review-Rounds: 1
+Final-Review-Rounds: 0
 
 ## Summary
 <Summary of governance/workflow change>
@@ -348,7 +348,7 @@ Reason: state why this qualifies as a bounded, immediate direct repair
 Validation: state the checks that were actually run
 Issue required: no
 
-Final-Review-Rounds: 1
+Final-Review-Rounds: 0
 
 ## Summary
 <1-2 sentence summary of the bounded repair>
@@ -395,16 +395,12 @@ Pre-push PR-body contract gate:
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
 
-### Step 7: Hand Off to pr-integration
+### Step 7: Conditional pr-integration handoff
 
 After PR is created/updated, use pr-integration only when the PR still needs readiness/repair work before verification:
 
-```bash
-# Invoke pr-integration skill to verify, check CI, and prepare for verification
-echo "Handing off to pr-integration skill"
-```
-
-**Do not force this as an immediate publication step.** PR integration resolves merge conflicts, verifies CI, and prepares the PR for verification/merge when the PR needs that readiness path.
+Invoke the `pr-integration` skill only for a concrete mergeability, CI-attachment, branch-drift, or
+review-repair need. Otherwise hand the published PR directly to `verification-and-closure`.
 
 ## PR body requirements
 
