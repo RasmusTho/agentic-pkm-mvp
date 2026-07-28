@@ -2,7 +2,7 @@ State: SoT v5.5 baseline locked with the forward line clarifying v6 design direc
 Doc role: Core SoT
 Authority: Canonical design principles for how architecture and roadmap changes should be framed. This document owns the stable principles for modularity, flexibility, authority boundaries, and documentation layering. It does not override current runtime behavior defined in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
 Owner: Architecture / SoT coordination
-Last reviewed: 2026-03-27
+Last reviewed: 2026-07-28
 
 # Design Principles
 
@@ -117,6 +117,21 @@ It exists to keep high-level design work systematic:
 - Mimer should be treated as a modular, differentiated decomposition, not as one undifferentiated agent runtime.
 - Interaction, cognition, execution, memory, and governance must be able to evolve at different speeds.
 - Cross-layer coupling should be deliberate, minimal, and documented.
+
+### 10. Single-Operator Scale
+
+- The system serves exactly one human on trusted personal infrastructure. Design for that
+  reality, not for a hypothetical enterprise deployment.
+- The simplest mechanism that satisfies the current contract wins. Enterprise-grade patterns —
+  high availability, horizontal scaling, multi-tenancy, zero-trust internal auth, pluggable
+  provider abstractions for hypothetical futures — require an explicit contract or ADR demand;
+  they are never default posture.
+- Ready beats perfect: ship the boring version and let real usage generate the evidence for the
+  next iteration. Robustness investment follows observed failure, not imagined failure.
+- Data integrity and the governed-mutation invariants (Principles 4–5) are not relaxed by this
+  principle; they are what single-operator trust rests on.
+- The builder-side twin of this principle is `AGENTS.md :: Proportional delivery` (right-size
+  default); this principle governs product architecture, that one governs how we build.
 
 ## Documentation Design Principles
 
