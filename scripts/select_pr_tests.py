@@ -6,8 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+STATIC_TARGET_COLLECTABILITY_FITNESS = (
+    "tests/scripts/test_select_pr_tests.py::test_static_selector_targets_are_collectable"
+)
+
 ALWAYS_TARGETS = (
     "tests/ci",
+    # This test must run on every scoped PR: a deleting/renaming PR otherwise
+    # filters its missing static target before pytest has a chance to detect it.
+    STATIC_TARGET_COLLECTABILITY_FITNESS,
 )
 
 PR_MARKER_EXPRESSION = (
