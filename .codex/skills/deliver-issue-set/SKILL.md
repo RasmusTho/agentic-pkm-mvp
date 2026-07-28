@@ -11,6 +11,10 @@ The goal is to produce an executable implementation plan and, when requested, de
 
 This skill is a coordinator. It does not replace `issue-to-code`, `verification-and-closure`, `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`.
 
+For larger `type:bug` sets, the coordinator capability, session isolation, serial default, and
+independent-wave exception are canonical in `AGENTS.md :: Transition-period bug-delivery policy`.
+Apply that policy before the generic independent-issue fast lane or delivery-mode parallel rules.
+
 ## First Context To Load
 
 1. `AGENTS.md`
@@ -119,6 +123,9 @@ Delivery rules:
   lifecycle command only through the owning skill (`issue-to-code` for claim, `verification-and-closure`
   for terminal closure, or issue maintenance for drift repair).
 - Default to delivering one issue at a time.
+- For `type:bug` candidates, the transition-period policy in `AGENTS.md` is stricter: dispatch one
+  end-to-end bug implementation in its own Codex task/session and isolated worktree unless an
+  explicit independent-wave TCD rationale supports more.
 - You may claim multiple issues only when you are immediately assigning them to active sub-agents with isolated worktrees and the parallelization is rational from both token-budget and quality perspectives.
 - Before selecting or dispatching work, classify each candidate as Product/Runtime System,
   Builder System, or boundary work using

@@ -98,6 +98,7 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
     Project projection when explicitly in scope
 - `deliver-issue-set`
   - review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
+  - for larger `type:bug` sets, follow `AGENTS.md :: Transition-period bug-delivery policy`
 - `docs-governance`
   - decision and routing skill for docs-as-code ownership, anti-sprawl, DOCS_INDEX impact, and narrower docs workflow selection
 - `yggdrasil-design-handoff`

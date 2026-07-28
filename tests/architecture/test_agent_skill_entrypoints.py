@@ -31,6 +31,30 @@ def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
     assert ".codex/skills/deliver-issue-set/SKILL.md" in text
     assert "In Progress" in text
     assert "remove `agent:ready`" in text
+    assert "Transition-period bug-delivery policy" in text
+    assert "Known Defects registry Issue #4172" in text
+
+
+def test_bug_delivery_transition_policy_is_linked_across_workflows() -> None:
+    canonical = "AGENTS.md :: Transition-period bug-delivery policy"
+    for path in (
+        ".codex/skills/README.md",
+        ".codex/skills/deliver-issue-set/SKILL.md",
+        ".codex/skills/issue-to-code/SKILL.md",
+        ".codex/skills/bug-to-issue/SKILL.md",
+        ".codex/skills/resume-work/SKILL.md",
+        "docs/development/DEV_WORKFLOW.md",
+        "docs/development/AGENT_OPERATING_PROTOCOL.md",
+    ):
+        assert canonical in " ".join(_read(path).split())
+
+    verification = _read(".codex/skills/verification-and-closure/SKILL.md")
+    assert "rolling Known Defects\n  registry Issue #4172" in verification
+
+    coordinator = _read(".codex/agents/issue-set-coordinator.toml")
+    assert 'model = "gpt-5.6-luna"' in coordinator
+    assert 'model_reasoning_effort = "low"' in coordinator
+    assert canonical in coordinator
 
 
 def test_compatibility_entrypoints_route_to_skill_index() -> None:

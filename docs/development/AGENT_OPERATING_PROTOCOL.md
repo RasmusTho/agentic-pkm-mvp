@@ -70,6 +70,11 @@ Before producing implementation guidance or code, answer each field:
 - explicit stop conditions
 - verifiable delivery at merge time
 
+**Classify larger bug-set coordination as Builder System governance.** Apply
+`AGENTS.md :: Transition-period bug-delivery policy` before dispatch: keep the coordinator
+read-only/minimal-context, give every claimed `type:bug` its own Codex task/session and isolated
+worktree, and retain serial delivery unless an explicit independent-wave TCD rationale exists.
+
 ## Stop conditions
 
 Stop and route to Issue maintenance, human review, or docs repair when any of the following is true:
