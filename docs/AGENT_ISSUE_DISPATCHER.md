@@ -856,12 +856,18 @@ container's `env_file` chain; `/Users` is mounted at the same path, so the host 
 in-container. With no vault selected the variable stays unset and the bootstrap reports
 `signboard_root_missing` instead of writing to an invented location.
 
-The channel deploy wrappers (`scripts/deploy_channel.sh`) do **not** regenerate the runtime env —
-they read the one the last full-stack start produced. A channel whose runtime env predates the
-board-root line therefore starts its API container with `SIGNBOARD_ROOT` empty; that is how the
-Demerzel dev stack ended up serving an empty board. It now shows as an explicit error state rather
-than as "no work", and regenerating the runtime env through the full-stack launcher restores the
-board. On a Mac mini develop stack, use the existing API port over Tailscale:
+The channel deploy wrappers (`scripts/deploy_channel.sh`) do **not** regenerate the runtime env.
+For each Compose invocation they resolve the board root through the same
+`scripts/lib/signboard_root.sh` source and forward a container-readable path to the API with an
+in-memory Compose override. Roots already visible through the same-path `/Users` or `/Volumes`
+mounts stay absolute. A root proven contained by the governed legacy vault bind is translated to
+the same relative suffix beneath `/app/vault`; containment must hold both lexically and after
+symlink resolution. Unreachable or escaped roots fail closed. That deploy-only override wins over
+a missing or stale `SIGNBOARD_ROOT` in the existing runtime env without rewriting the file or
+disturbing its vault bindings. When no active vault resolves, the override removes any stale
+runtime-env value so the API keeps the explicit error state rather than serving an old projection
+or presenting misconfiguration as "no work". On a Mac mini develop stack, use the existing API
+port over Tailscale:
 `http://<mac-mini-tailnet-name>:18001/signboard`. Remote refreshes and moves require the configured
 `API_KEY`, entered into the Signboard session field and sent only as `X-API-Key`; it is not stored
 in URLs or browser persistence. No separate Signboard process is started.

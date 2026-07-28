@@ -60,6 +60,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_state_deployment.sh",
         "scripts/lib/instance_ownership_host_state.sh",
+        "scripts/lib/signboard_root.sh",
         "scripts/instance_state_writer_inventory.py",
     ):
         destination = root / relative
@@ -237,6 +238,7 @@ exec {sys.executable!s} "$@"
     for name in (
         "DESIGN_HANDOFF_APP_LOCAL_SETTINGS",
         "INSTANCE_LEGACY_OWNER_CONFIG_PATHS",
+        "SIGNBOARD_ROOT",
         "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "VAULT_ROOT_DEV",
@@ -255,6 +257,7 @@ exec {sys.executable!s} "$@"
             "DEPLOY_HEALTH_TIMEOUT_SECONDS": "1",
             "XDG_DATA_HOME": str(tmp_path / "xdg"),
             "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "instance-ownership"),
+            "SIGNBOARD_ROOT": "/Users/synthetic-deploy-harness/signboard",
         }
     )
     return root, env, sha
