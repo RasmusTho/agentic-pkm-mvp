@@ -253,8 +253,9 @@ Any overlap with your staged file set => STOP: keep the earlier compliant PR, cl
 
 Execute based on lane classification. Every template below includes the required
 `Final-Review-Rounds: 1` line (the `pr-contract` gate rejects a body with zero or more than one
-match of `/^Final-Review-Rounds:[ \t]*[12][ \t]*$/`; use `2` only when a second final review round
-is actually planned) and concrete `## BuilderOps Routing` defaults instead of `<...>` placeholders
+match of `/^Final-Review-Rounds:[ \t]*[012][ \t]*$/`; declare `0` for light-path PRs per
+`AGENTS.md :: Proportional delivery` — Tier 1 / single-issue Tier 2 with no high-risk surface —
+and `2` only when a second final review round is actually planned) and concrete `## BuilderOps Routing` defaults instead of `<...>` placeholders
 (the gate rejects any routing value matching `^<.*>$`). The `none` / reason defaults shown match what
 `scripts/pr_body_generator.py` emits (`_builderops_section`) — replace them with the actual
 records/projections/receipts and reason whenever BuilderOps material was in fact routed.
@@ -384,8 +385,9 @@ Pre-push PR-body contract gate:
   - governance lane: `- [x] Governance lane`
   - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
-- Verify exactly one `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` line is present — every
-  lane requires it, including direct repair.
+- Verify exactly one `Final-Review-Rounds: 0`, `1`, or `2` line is present — every lane requires
+  it, including direct repair; `0` declares the light delivery path per
+  `AGENTS.md :: Proportional delivery`.
 - Verify BuilderOps Routing per tier — see the `## Core rules` PR-body machinery rule above
   (`docs/development/GOVERNANCE_PROPORTIONALITY.md`); never leave the section present but unfilled,
   and never leave a `<...>` placeholder in a value the gate reads (`Records/projections/receipts:`
@@ -408,7 +410,7 @@ echo "Handing off to pr-integration skill"
 
 Every lane, with no exception:
 
-- include exactly one `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` line
+- include exactly one `Final-Review-Rounds: 0`, `1`, or `2` line (`0` = light delivery path)
 - include a `## BuilderOps Routing` section with concrete `Records/projections/receipts:` and
   `Reason:` values (never a `<...>` placeholder) unless the Tier 1 omission rule in `## Core rules`
   applies

@@ -118,8 +118,8 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
         raise PRBodyGeneratorError(f"lane must be one of: {', '.join(sorted(LANES))}")
     if inputs.issue_number is not None and inputs.issue_number <= 0:
         raise PRBodyGeneratorError("issue_number must be positive")
-    if inputs.final_review_rounds not in {1, 2}:
-        raise PRBodyGeneratorError("final_review_rounds must be 1 or 2")
+    if inputs.final_review_rounds not in {0, 1, 2}:
+        raise PRBodyGeneratorError("final_review_rounds must be 0, 1, or 2")
     if inputs.lane == "implementation" and inputs.issue_number is None:
         raise PRBodyGeneratorError("implementation lane requires issue_number")
     if inputs.lane == "direct-repair":

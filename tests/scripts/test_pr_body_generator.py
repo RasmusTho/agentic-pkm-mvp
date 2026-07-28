@@ -72,6 +72,23 @@ def test_generates_valid_governance_lane_body() -> None:
     assert "<" not in body
 
 
+def test_accepts_light_path_zero_final_review_rounds() -> None:
+    mapping = dict(_fixture("governance_issue.json"))
+    mapping["final_review_rounds"] = 0
+
+    body = generate_pr_body_from_mapping(mapping)
+
+    assert "Final-Review-Rounds: 0" in body
+
+
+def test_rejects_out_of_range_final_review_rounds() -> None:
+    mapping = dict(_fixture("governance_issue.json"))
+    mapping["final_review_rounds"] = 3
+
+    with pytest.raises(PRBodyGeneratorError, match="final_review_rounds must be 0, 1, or 2"):
+        generate_pr_body_from_mapping(mapping)
+
+
 def test_issue_backed_body_emits_governing_issue_identity() -> None:
     body = generate_pr_body_from_mapping(_fixture("governance_issue.json"))
 

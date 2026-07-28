@@ -270,6 +270,14 @@ Only move to Review when the PR is the **explicit review handoff artifact** (nor
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
 - Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery.
 - Route model family, reasoning effort, and escalation/de-escalation per `AGENTS.md :: Total Cost of Development`. The risk tier above, plus the artifact class, environment/channel risk, and stop conditions from the pre-implementation classification check, are the routing inputs — do not restate the policy here.
+- Apply `AGENTS.md :: Proportional delivery`: build the most boring solution that satisfies the
+  ACs — no new gate, receipt, registry, config surface, or abstraction without an explicit
+  contract demand. Spend at most 2 CI-repair rounds per failure mechanism; when the budget is
+  spent, ship the smallest passing subset or hand back with a one-paragraph stop report and a
+  `LearningSignal` instead of grinding. Repeated failure on a bounded slice usually means the
+  solution is too big — shrink it before escalating capability. Single-issue Tier 1/2 PRs with no
+  high-risk surface take the light delivery path (`Final-Review-Rounds: 0`, no independent review
+  round).
 - Before expensive local validation for auth/security/data/migration/concurrency/external-API,
   credential-durability, or explicit state-machine work, run the risk-convergence form of
   `scripts/review_before_ci_gate.py` described by `publish-pr :: Review-Before-CI Gate`. Supply every

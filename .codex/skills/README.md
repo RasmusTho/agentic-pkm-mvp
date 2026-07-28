@@ -21,6 +21,8 @@ Conditional / maintenance path:
 
 This file owns the canonical workflow chain. Skills reference this chain instead of redefining it; if a skill's inline chain disagrees with this file, this file wins. Issue maintenance is part of the conditional path, not the hot path.
 
+Delivery depth is tiered (`AGENTS.md :: Proportional delivery`): Tier 1 PRs and single-issue Tier 2 PRs take the light path — required CI green, self-verified `Verify:` targets, `Final-Review-Rounds: 0`, plain merge with native closing keywords — while Tier 3, multi-issue, and TCD high-risk PRs run the full review + verified-merge ceremony in `verification-and-closure`.
+
 ## BuilderOps Vault routing
 
 BuilderOps Vault is the operational plane for the building system. BuilderOps records are not
