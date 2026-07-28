@@ -30,6 +30,11 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.validate_issue_readiness import (
     analyze_acceptance_criteria,
 )
+from app.builderops.issue_contract_validation import (
+    is_durable_repo_anchor,
+    is_durable_repo_path,
+    is_resolvable_verify_target,
+)
 
 REGISTRY_LABEL = "state:known-defect"
 REGISTRY_LABEL_COLOR = "C5DEF5"
@@ -60,20 +65,6 @@ SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 COMMENT_CREATED_AT_RE = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
 )
-REPO_PATH_RE = re.compile(
-    r"^(?:\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)"
-    r"(?:/[A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]+$"
-)
-VAGUE_AUTHORITY_TOKENS = {
-    "anchor",
-    "heading",
-    "later",
-    "path",
-    "section",
-    "tbd",
-    "todo",
-    "unknown",
-}
 NORMAL_AGENT_STATES = {
     "agent:ready",
     "agent:blocked",
@@ -1438,36 +1429,6 @@ def _has_concrete_section_content(value: str) -> bool:
     return False
 
 
-def _is_durable_repo_path(value: str) -> bool:
-    path = value.strip()
-    if any(part in {"", ".", ".."} for part in path.split("/")):
-        return False
-    try:
-        (REPO_ROOT / path).resolve().relative_to(REPO_ROOT.resolve())
-    except ValueError:
-        return False
-    return (
-        REPO_PATH_RE.fullmatch(path) is not None
-        and re.search(r"<[^>]+>", path) is None
-        and not any(
-            (
-                segment.casefold() in VAGUE_AUTHORITY_TOKENS
-                or Path(segment).stem.casefold() in VAGUE_AUTHORITY_TOKENS
-            )
-            for segment in Path(path).parts
-        )
-    )
-
-
-def _is_durable_anchor(value: str) -> bool:
-    anchor = " ".join(value.split())
-    return (
-        bool(anchor)
-        and re.search(r"<[^>]+>", anchor) is None
-        and anchor.casefold() not in VAGUE_AUTHORITY_TOKENS
-    )
-
-
 def _acceptance_items(section: str) -> list[str]:
     starts = list(
         re.finditer(r"(?m)^\s*[-*]\s+\[[ xX]\]\s+.+$", section)
@@ -1483,47 +1444,7 @@ def _acceptance_items(section: str) -> list[str]:
 
 def _has_resolvable_verify_target(item: str) -> bool:
     for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item):
-        raw_target = match.group(1).strip()
-        target = raw_target.strip("`").strip()
-        if re.fullmatch(
-            r"tests/[A-Za-z0-9_./-]+::[A-Za-z0-9_.\[\]-]+",
-            target,
-        ) and _is_durable_repo_path(target.split("::", 1)[0]):
-            return True
-        doc_writeback = re.fullmatch(
-            r"doc writeback at `((?:docs|\.codex)/[^`]+) :: ([^`]+)`",
-            raw_target,
-            re.IGNORECASE,
-        )
-        if (
-            doc_writeback is not None
-            and _is_durable_repo_path(doc_writeback.group(1))
-            and _is_durable_anchor(doc_writeback.group(2))
-        ):
-            return True
-        roadmap_diff = re.fullmatch(
-            r"roadmap diff:\s+`(docs/[^`]+) :: ([^`]+)`",
-            target,
-            re.IGNORECASE,
-        )
-        if (
-            roadmap_diff is not None
-            and _is_durable_repo_path(roadmap_diff.group(1))
-            and _is_durable_anchor(roadmap_diff.group(2))
-        ):
-            return True
-        runtime_receipt = re.fullmatch(
-            (
-                r"runtime receipt:\s+"
-                r"([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\.v[1-9][0-9]*"
-            ),
-            target,
-            re.IGNORECASE,
-        )
-        if runtime_receipt is not None and not any(
-            token.casefold() in VAGUE_AUTHORITY_TOKENS
-            for token in re.split(r"[._-]+", runtime_receipt.group(1))
-        ):
+        if is_resolvable_verify_target(match.group(1)):
             return True
     return False
 
@@ -1596,16 +1517,12 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
             + ", ".join(empty)
         )
     source_anchors = re.findall(
-        r"(?m)^-\s+`([^`\n]+)::([^`\n]+)`\s*$",
+        r"(?m)^-\s+`([^`\n]+)`\s*$",
         sections["Source Anchors"],
     )
     if (
         not source_anchors
-        or any(
-            not _is_durable_repo_path(path)
-            or not _is_durable_anchor(anchor)
-            for path, anchor in source_anchors
-        )
+        or any(not is_durable_repo_anchor(value) for value in source_anchors)
     ):
         raise KnownDefectsError(
             "promotion target Source Anchors must name a durable path and anchor"
@@ -1616,7 +1533,7 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
     )
     if (
         not source_docs
-        or any(not _is_durable_repo_path(path) for path in source_docs)
+        or any(not is_durable_repo_path(path) for path in source_docs)
     ):
         raise KnownDefectsError(
             "promotion target Source Docs must name a durable repo path"

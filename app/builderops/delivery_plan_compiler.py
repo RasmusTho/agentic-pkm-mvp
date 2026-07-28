@@ -8,7 +8,6 @@ mutation.
 from __future__ import annotations
 
 import posixpath
-import re
 from collections import defaultdict
 from typing import Final, Literal, Protocol, TypeAlias
 
@@ -32,6 +31,10 @@ from app.builderops.delivery_orchestration_contracts import (
     UtcTimestamp,
     canonical_hash,
     validate_delivery_plan_evidence,
+)
+from app.builderops.issue_contract_validation import (
+    is_durable_repo_anchor,
+    is_resolvable_verify_target,
 )
 
 COMPILER_VERSION: Final[
@@ -70,18 +73,6 @@ _EFFECT_ALLOWLIST: Final[tuple[EffectClass, ...]] = (
     "record_known_defect",
     "request_review",
 )
-_TEST_VERIFY_TARGET = re.compile(
-    r"^(?:tests|companion-ui/companion-app/tests)/"
-    r"[^\s`]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]\s]+\])?)+$"
-)
-_REPO_DOC_ANCHOR = re.compile(
-    r"^docs/[^\s`]+\.md :: \S(?:.*\S)?$"
-)
-_RUNTIME_RECEIPT_TARGET = re.compile(
-    r"^runtime receipt: [a-z][a-z0-9_.-]*:"
-    r"[A-Za-z0-9][A-Za-z0-9_.:/#-]*$"
-)
-
 Priority: TypeAlias = Literal["high", "medium", "low"]
 RiskClass: TypeAlias = Literal["low", "medium", "high", "critical"]
 DeliveryStatus: TypeAlias = Literal[
@@ -715,35 +706,16 @@ def _clean_values(values: tuple[str, ...]) -> tuple[str, ...]:
 
 def _verify_targets_are_concrete(values: tuple[str, ...]) -> bool:
     cleaned = _clean_values(values)
-    if not cleaned:
-        return False
-    for value in cleaned:
-        folded = value.casefold()
-        if (
-            folded in {"n/a", "none", "tbd", "todo"}
-            or (value.startswith("<") and value.endswith(">"))
-        ):
-            return False
-        if _TEST_VERIFY_TARGET.fullmatch(value):
-            continue
-        if value.startswith("doc writeback at "):
-            target = value.removeprefix("doc writeback at ").strip("` ")
-            if _REPO_DOC_ANCHOR.fullmatch(target):
-                continue
-        if value.startswith("roadmap diff: "):
-            target = value.removeprefix("roadmap diff: ").strip("` ")
-            if _REPO_DOC_ANCHOR.fullmatch(target):
-                continue
-        if _RUNTIME_RECEIPT_TARGET.fullmatch(value):
-            continue
-        return False
-    return True
+    return bool(cleaned) and all(
+        is_resolvable_verify_target(value)
+        for value in cleaned
+    )
 
 
 def _source_anchors_are_concrete(values: tuple[str, ...]) -> bool:
     cleaned = _clean_values(values)
     return bool(cleaned) and all(
-        _REPO_DOC_ANCHOR.fullmatch(value)
+        is_durable_repo_anchor(value)
         for value in cleaned
     )
 

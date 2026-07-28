@@ -462,7 +462,7 @@ def test_compiler_accepts_concrete_non_test_verify_targets() -> None:
             _fact(
                 receipt_issue,
                 verify_targets=(
-                    "runtime receipt: builderops:delivery-4166",
+                    "runtime receipt: delivery_receipt.v1",
                 ),
             ),
         ),
@@ -470,6 +470,66 @@ def test_compiler_accepts_concrete_non_test_verify_targets() -> None:
 
     assert result.plan is not None
     assert result.refusals == ()
+
+
+@pytest.mark.parametrize(
+    "source_anchor",
+    [
+        "TBD",
+        "docs/../STATUS.md :: Delivery status",
+        "./docs/STATUS.md :: Delivery status",
+        "docs//STATUS.md :: Delivery status",
+        "<path> :: <anchor>",
+        "docs/later.md :: Delivery status",
+        "docs/STATUS.md :: Delivery later",
+        "docs/later.md :: later",
+    ],
+)
+def test_compiler_rejects_noncanonical_source_anchor_parity_cases(
+    source_anchor: str,
+) -> None:
+    issue = _issue(5243)
+
+    result = compile_delivery_plan(
+        _initiation((issue,)),
+        _snapshot(_fact(issue, source_anchors=(source_anchor,))),
+    )
+
+    assert result.plan is None
+    assert {refusal.code for refusal in result.refusals} == {
+        "missing_source_anchors"
+    }
+
+
+@pytest.mark.parametrize(
+    "verify_target",
+    [
+        "TBD",
+        "`tests/../x.py::test_x`",
+        "doc writeback at `docs/../STATUS.md :: Delivery status`",
+        "doc writeback at `./docs/STATUS.md :: Delivery status`",
+        "doc writeback at `<path> :: <anchor>`",
+        "doc writeback at `docs/STATUS.md :: Delivery later`",
+        "roadmap diff: `docs//ROADMAP.md :: DDO-03`",
+        "runtime receipt: later",
+        "runtime receipt: later.v1",
+        "runtime receipt: delivery_receipt",
+    ],
+)
+def test_compiler_rejects_unresolvable_verify_target_parity_cases(
+    verify_target: str,
+) -> None:
+    issue = _issue(5244)
+
+    result = compile_delivery_plan(
+        _initiation((issue,)),
+        _snapshot(_fact(issue, verify_targets=(verify_target,))),
+    )
+
+    assert result.plan is None
+    assert {refusal.code for refusal in result.refusals} == {
+        "missing_verify_targets"
+    }
 
 
 def test_compiler_honors_satisfied_internal_dependencies() -> None:
