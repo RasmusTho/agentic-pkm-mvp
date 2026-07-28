@@ -15,13 +15,10 @@ source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
 
-# Resolve the Signboard projection root here rather than only forwarding a
-# value the caller happened to export (#4198). start_full_system.sh sets it;
-# the channel deploy wrappers never did, which is why the API container ran
-# with SIGNBOARD_ROOT empty and /signboard rendered an empty board. Resolving
-# it in the one place that writes the runtime env covers every launcher.
-source "scripts/lib/signboard_root.sh"
-resolve_signboard_root_env
+# SIGNBOARD_ROOT is resolved by the launcher (start_full_system.sh) and only
+# forwarded here. This exporter deliberately runs no `app.*` import of its own:
+# the settings-location import below is a fail-loud path, and an extra import
+# in front of it would perturb that failure surface (#4198).
 
 # #2005 — no-vault idle posture: when the runtime boots with no vault bound,
 # there is no vault to derive provider/path settings from. Write a minimal

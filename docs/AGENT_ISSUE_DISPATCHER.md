@@ -845,16 +845,20 @@ resolved root does not exist, `/api/signboard/board` returns `status: "error"` w
 message and the UI shows it as a notice. An unreadable root never renders as six empty columns:
 "no work" and "misconfigured" must not look the same.
 
-`make dev-start-full`, the channel deploy wrappers, and the prod full-stack launcher refresh the
-board as part of their existing BuilderOps dispatcher bootstrap. `scripts/export_runtime_env.sh`
-resolves the board root to an absolute host path (via `scripts/lib/signboard_root.sh`, which calls
-the same single source) and writes `SIGNBOARD_ROOT` into the generated runtime env consumed by the
-API container's `env_file` chain; `/Users` is mounted at the same path, so the host path is valid
-in-container. Resolving it there rather than only forwarding whatever the caller shell exported is
-what keeps the channel deploy path from starting the API with an empty `SIGNBOARD_ROOT`. With no
-vault selected the variable stays unset and the bootstrap reports `signboard_root_missing` instead
-of writing to an invented location. On a Mac mini develop stack, use the existing API port over
-Tailscale:
+`make dev-start-full` and the prod full-stack launcher refresh the board as part of their existing
+BuilderOps dispatcher bootstrap. `scripts/start_full_system.sh` resolves the board root to an
+absolute host path (via `scripts/lib/signboard_root.sh`, which calls the same single source) and
+`scripts/export_runtime_env.sh` forwards it into the generated runtime env consumed by the API
+container's `env_file` chain; `/Users` is mounted at the same path, so the host path is valid
+in-container. With no vault selected the variable stays unset and the bootstrap reports
+`signboard_root_missing` instead of writing to an invented location.
+
+The channel deploy wrappers (`scripts/deploy_channel.sh`) do **not** regenerate the runtime env —
+they read the one the last full-stack start produced. A channel whose runtime env predates the
+board-root line therefore starts its API container with `SIGNBOARD_ROOT` empty; that is how the
+Demerzel dev stack ended up serving an empty board. It now shows as an explicit error state rather
+than as "no work", and regenerating the runtime env through the full-stack launcher restores the
+board. On a Mac mini develop stack, use the existing API port over Tailscale:
 `http://<mac-mini-tailnet-name>:18001/signboard`. Remote refreshes and moves require the configured
 `API_KEY`, entered into the Signboard session field and sent only as `X-API-Key`; it is not stored
 in URLs or browser persistence. No separate Signboard process is started.
