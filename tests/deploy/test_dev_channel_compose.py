@@ -341,7 +341,8 @@ def _rendered_mount_source(service: dict[str, object], target: str) -> str | Non
 
 
 @pytest.fixture
-def same_path_test_root(tmp_path: Path) -> Path:
+def users_same_path_test_root(tmp_path: Path) -> Path:
+    """Provide a /Users root when the host permits same-path mount testing."""
     shared_users = Path("/Users/Shared")
     try:
         shared_users.mkdir(parents=True, exist_ok=True)
@@ -358,51 +359,12 @@ def same_path_test_root(tmp_path: Path) -> Path:
         shutil.rmtree(root)
 
 
-@requires_docker
 def test_channel_deploy_supplies_signboard_root(
     tmp_path: Path,
-    same_path_test_root: Path,
 ) -> None:
-    """The real deploy wrapper renders only a container-readable board root."""
+    """The real deploy wrapper renders only a portable, readable board root."""
     wrapper = DEPLOY_COMPOSE_WRAPPER.read_text(encoding="utf-8")
     assert 'source "${_deploy_channel_compose_lib_dir}/signboard_root.sh"' in wrapper
-
-    same_path_vault = same_path_test_root / "vault"
-    same_path_board = same_path_vault / "BuilderOpsVault/agent-delivery"
-    same_path_board.mkdir(parents=True)
-    same_path_compose, _, _ = _render_signboard_deploy_compose(
-        tmp_path / "same-path",
-        signboard_host_root=same_path_board,
-        vault_host_root=same_path_vault,
-    )
-    same_path_api = _rendered_api(same_path_compose)
-    same_path_environment = same_path_api["environment"]
-    assert isinstance(same_path_environment, dict)
-    assert same_path_environment["SIGNBOARD_ROOT"] == str(same_path_board)
-    assert _rendered_mount_source(same_path_api, "/app/vault") is None
-
-    nonexistent_board = same_path_vault / "nonexistent"
-    nonexistent_compose, _, _ = _render_signboard_deploy_compose(
-        tmp_path / "nonexistent",
-        signboard_host_root=nonexistent_board,
-        vault_host_root=same_path_vault,
-    )
-    nonexistent_environment = _rendered_api(nonexistent_compose)["environment"]
-    assert isinstance(nonexistent_environment, dict)
-    assert nonexistent_environment["SIGNBOARD_ROOT"] is None
-
-    unreadable_board = same_path_vault / "unreadable"
-    unreadable_board.mkdir()
-    unreadable_board.chmod(0)
-    unreadable_compose, _, _ = _render_signboard_deploy_compose(
-        tmp_path / "unreadable",
-        signboard_host_root=unreadable_board,
-        vault_host_root=same_path_vault,
-    )
-    unreadable_environment = _rendered_api(unreadable_compose)["environment"]
-    assert isinstance(unreadable_environment, dict)
-    assert unreadable_environment["SIGNBOARD_ROOT"] is None
-    unreadable_board.chmod(0o700)
 
     legacy_vault = tmp_path / "legacy/vault"
     legacy_board = legacy_vault / "BuilderOpsVault/agent-delivery"
@@ -419,6 +381,29 @@ def test_channel_deploy_supplies_signboard_root(
         "/app/vault/BuilderOpsVault/agent-delivery"
     )
     assert _rendered_mount_source(legacy_api, "/app/vault") == str(legacy_vault)
+
+    nonexistent_board = legacy_vault / "nonexistent"
+    nonexistent_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "nonexistent",
+        signboard_host_root=nonexistent_board,
+        vault_host_root=legacy_vault,
+    )
+    nonexistent_environment = _rendered_api(nonexistent_compose)["environment"]
+    assert isinstance(nonexistent_environment, dict)
+    assert nonexistent_environment["SIGNBOARD_ROOT"] is None
+
+    unreadable_board = legacy_vault / "unreadable"
+    unreadable_board.mkdir()
+    unreadable_board.chmod(0)
+    unreadable_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "unreadable",
+        signboard_host_root=unreadable_board,
+        vault_host_root=legacy_vault,
+    )
+    unreadable_environment = _rendered_api(unreadable_compose)["environment"]
+    assert isinstance(unreadable_environment, dict)
+    assert unreadable_environment["SIGNBOARD_ROOT"] is None
+    unreadable_board.chmod(0o700)
 
     stale_root = "/synthetic/stale/signboard"
     no_vault_compose, _, _ = _render_signboard_deploy_compose(
@@ -446,6 +431,28 @@ def test_channel_deploy_supplies_signboard_root(
     escaped_environment = _rendered_api(escaped_compose)["environment"]
     assert isinstance(escaped_environment, dict)
     assert escaped_environment["SIGNBOARD_ROOT"] is None
+
+
+@requires_docker
+def test_channel_deploy_supplies_users_same_path_signboard_root_when_available(
+    tmp_path: Path,
+    users_same_path_test_root: Path,
+) -> None:
+    """A /Users board keeps its host path when that platform root is writable."""
+    same_path_vault = users_same_path_test_root / "vault"
+    same_path_board = same_path_vault / "BuilderOpsVault/agent-delivery"
+    same_path_board.mkdir(parents=True)
+
+    compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "same-path",
+        signboard_host_root=same_path_board,
+        vault_host_root=same_path_vault,
+    )
+    api = _rendered_api(compose)
+    environment = api["environment"]
+    assert isinstance(environment, dict)
+    assert environment["SIGNBOARD_ROOT"] == str(same_path_board)
+    assert _rendered_mount_source(api, "/app/vault") is None
 
 
 @requires_docker
