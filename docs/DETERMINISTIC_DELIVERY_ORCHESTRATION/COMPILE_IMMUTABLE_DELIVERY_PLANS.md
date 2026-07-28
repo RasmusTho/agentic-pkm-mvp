@@ -49,13 +49,17 @@ input digest and requires a new plan; it never silently updates the prior plan.
   refusal and cannot enter an executable wave.
 - Executable pickup authority is canonical and fail-closed: the Issue is open, carries exactly one
   `agent:*` state and that state is `agent:ready`, carries exactly one canonical type and priority
-  label, and the snapshot priority equals the live priority label.
+  label, the snapshot priority equals the live priority label, and the authority observation is no
+  older than the approved initiation.
 - A satisfied dependency present in the same snapshot is accepted only when that live authority is
   closed and delivered. A satisfied dependency outside the snapshot requires one frozen,
   versioned, hash-bound record binding the dependency identity and contract hash to closed
   authority evidence. Missing or contradictory proof is a typed refusal.
 - The compiler and governed Issue intake share one pure canonical validator for repository paths,
-  anchors, test targets, doc/roadmap writebacks, and versioned runtime-receipt identities.
+  anchors, test targets, doc/roadmap writebacks, and versioned runtime-receipt identities; each
+  criterion's Verify-target collection must be non-empty, unique, and fully resolvable.
+- Facts already refused by those admission checks cannot exclude an otherwise eligible peer through
+  mutation-overlap analysis.
 - Snapshot evidence is part of the canonical input digest. Changed evidence creates a new plan
   identity rather than mutating a prior plan.
 

@@ -1443,10 +1443,21 @@ def _acceptance_items(section: str) -> list[str]:
 
 
 def _has_resolvable_verify_target(item: str) -> bool:
-    for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item):
-        if is_resolvable_verify_target(match.group(1)):
-            return True
-    return False
+    targets = [
+        match.group(1).strip()
+        for match in re.finditer(
+            r"(?im)(?:^|\b)Verify:[ \t]*(.*)$",
+            item,
+        )
+    ]
+    return (
+        bool(targets)
+        and len(set(targets)) == len(targets)
+        and all(
+            is_resolvable_verify_target(target)
+            for target in targets
+        )
+    )
 
 
 def _validate_promotion_issue(issue: dict[str, Any]) -> None:
@@ -1564,7 +1575,7 @@ def _validate_promotion_issue(issue: dict[str, Any]) -> None:
     if not report.verify_markers_present:
         missing = "; ".join(report.missing_verify_items)
         raise KnownDefectsError(
-            "promotion target Acceptance Criteria lack concrete Verify targets: "
+            "promotion target Acceptance Criteria lack resolvable Verify targets: "
             + missing
         )
     unresolved = [

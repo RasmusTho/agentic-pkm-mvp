@@ -40,9 +40,10 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
 SHA_D = "d" * 64
-OBSERVED_AT = "2026-07-28T07:00:00Z"
+SOURCE_OBSERVED_AT = "2026-07-28T07:00:00Z"
 APPROVED_AT = "2026-07-28T07:01:00Z"
 CREATED_AT = "2026-07-28T07:02:00Z"
+OBSERVED_AT = "2026-07-28T07:02:15Z"
 SNAPSHOT_AT = "2026-07-28T07:03:00Z"
 RESOLVED_AT = "2026-07-28T07:02:30Z"
 
@@ -67,6 +68,7 @@ def _authority(
         "prio:high",
         "type:task",
     ),
+    observed_at: str = OBSERVED_AT,
 ) -> AuthoritySnapshot:
     return AuthoritySnapshot(
         authority_type="github_issue",
@@ -74,7 +76,7 @@ def _authority(
         content_hash=issue.contract_hash,
         observed_state=state,
         observed_labels=labels,
-        observed_at=OBSERVED_AT,
+        observed_at=observed_at,
     )
 
 
@@ -85,7 +87,10 @@ def _initiation(
     max_worker_starts: int | None = None,
 ) -> DeliveryInitiation:
     issues = tuple(sorted(issues, key=lambda item: item.scope_key))
-    authorities = tuple(_authority(issue) for issue in issues)
+    authorities = tuple(
+        _authority(issue, observed_at=SOURCE_OBSERVED_AT)
+        for issue in issues
+    )
     policy = PolicyProfile(
         profile_id="delivery-low-risk",
         profile_version="v1",
@@ -551,7 +556,7 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     stale_snapshot = DeliveryPlanningSnapshot(
         schema_version="builderops.delivery-planning-snapshot.v2",
         snapshot_id="snapshot-before-initiation",
-        captured_at=OBSERVED_AT,
+        captured_at=SOURCE_OBSERVED_AT,
         issues=(_fact(missing_verify),),
     )
     stale_snapshot_result = compile_delivery_plan(
@@ -562,6 +567,64 @@ def test_compiler_refuses_unexecutable_scope_with_typed_reasons() -> None:
     assert {
         refusal.code for refusal in stale_snapshot_result.refusals
     } == {"authority_ambiguity"}
+
+
+def test_compiler_refuses_pre_initiation_pickup_authority() -> None:
+    issue = _issue(5240, "0" * 64)
+    result = compile_delivery_plan(
+        _initiation((issue,)),
+        _snapshot(
+            _fact(
+                issue,
+                authority=_authority(
+                    issue,
+                    observed_at=SOURCE_OBSERVED_AT,
+                ),
+            )
+        ),
+    )
+
+    assert result.plan is None
+    assert {item.code for item in result.refusals} == {
+        "authority_ambiguity"
+    }
+
+
+def test_compiler_refuses_pre_initiation_same_snapshot_dependency_authority() -> None:
+    dependency = _issue(5269, "7" * 64)
+    dependent = _issue(5270, "8" * 64)
+
+    result = compile_delivery_plan(
+        _initiation((dependency, dependent)),
+        _snapshot(
+            _fact(
+                dependency,
+                authority=_authority(
+                    dependency,
+                    state="closed",
+                    labels=(),
+                    observed_at=SOURCE_OBSERVED_AT,
+                ),
+                delivery_status="delivered",
+            ),
+            _fact(
+                dependent,
+                dependencies=(
+                    DeliveryDependency(
+                        issue=dependency,
+                        satisfied=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert any(
+        item.issue == dependent
+        and item.code == "contradictory_dependency_satisfaction"
+        for item in result.refusals
+    )
+    assert result.plan is None or dependent not in result.plan.final_scope
 
 
 def test_compiler_accepts_concrete_non_test_verify_targets() -> None:
@@ -941,6 +1004,150 @@ def test_compiler_refuses_priority_snapshot_label_mismatch() -> None:
     assert {item.code for item in result.refusals} == {
         "priority_label_mismatch"
     }
+
+
+def test_compiler_refused_scope_does_not_poison_valid_peer_overlap() -> None:
+    refused_issue = _issue(5267, "5" * 64)
+    valid_issue = _issue(5268, "6" * 64)
+
+    result = compile_delivery_plan(
+        _initiation((refused_issue, valid_issue)),
+        _snapshot(
+            _fact(
+                refused_issue,
+                authority=_authority(
+                    refused_issue,
+                    labels=(
+                        "agent:blocked",
+                        "prio:high",
+                        "type:task",
+                    ),
+                ),
+                mutation_paths=("app/shared",),
+            ),
+            _fact(
+                valid_issue,
+                mutation_paths=("app/shared/file.py",),
+            ),
+        ),
+    )
+
+    assert result.plan is not None
+    assert result.plan.final_scope == (valid_issue,)
+    assert any(
+        item.issue == refused_issue
+        and item.code == "invalid_agent_state_labels"
+        for item in result.refusals
+    )
+    assert not any(
+        item.issue == valid_issue
+        and item.code == "mutation_overlap"
+        for item in result.refusals
+    )
+
+
+def test_compiler_dependency_doomed_scope_does_not_poison_peer_overlap() -> None:
+    refused_dependency = _issue(5271, "9" * 64)
+    dependency_doomed = _issue(5272, "a" * 64)
+    independent_peer = _issue(5273, "b" * 64)
+
+    result = compile_delivery_plan(
+        _initiation(
+            (
+                refused_dependency,
+                dependency_doomed,
+                independent_peer,
+            )
+        ),
+        _snapshot(
+            _fact(
+                refused_dependency,
+                authority=_authority(
+                    refused_dependency,
+                    labels=(
+                        "agent:blocked",
+                        "prio:high",
+                        "type:task",
+                    ),
+                ),
+            ),
+            _fact(
+                dependency_doomed,
+                dependencies=(
+                    DeliveryDependency(
+                        issue=refused_dependency,
+                        satisfied=False,
+                    ),
+                ),
+                mutation_paths=("app/shared",),
+            ),
+            _fact(
+                independent_peer,
+                mutation_paths=("app/shared/file.py",),
+            ),
+        ),
+    )
+
+    assert result.plan is not None
+    assert result.plan.final_scope == (independent_peer,)
+    assert any(
+        item.issue == dependency_doomed
+        and item.code == "dependency_blocked"
+        for item in result.refusals
+    )
+    assert not any(
+        item.issue == independent_peer
+        and item.code == "mutation_overlap"
+        for item in result.refusals
+    )
+
+
+def test_compiler_cycle_doomed_scope_does_not_poison_peer_overlap() -> None:
+    cycle_a = _issue(5274, "c" * 64)
+    cycle_b = _issue(5275, "d" * 64)
+    independent_peer = _issue(5276, "e" * 64)
+
+    result = compile_delivery_plan(
+        _initiation((cycle_a, cycle_b, independent_peer)),
+        _snapshot(
+            _fact(
+                cycle_a,
+                dependencies=(
+                    DeliveryDependency(
+                        issue=cycle_b,
+                        satisfied=False,
+                    ),
+                ),
+                mutation_paths=("app/shared",),
+            ),
+            _fact(
+                cycle_b,
+                dependencies=(
+                    DeliveryDependency(
+                        issue=cycle_a,
+                        satisfied=False,
+                    ),
+                ),
+            ),
+            _fact(
+                independent_peer,
+                mutation_paths=("app/shared/file.py",),
+            ),
+        ),
+    )
+
+    assert result.plan is not None
+    assert result.plan.final_scope == (independent_peer,)
+    assert {
+        item.issue
+        for item in result.refusals
+        if item.code == "dependency_cycle"
+    } == {cycle_a, cycle_b}
+    assert not any(
+        item.issue == independent_peer
+        and item.code == "mutation_overlap"
+        for item in result.refusals
+    )
 
 
 @pytest.mark.parametrize(

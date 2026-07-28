@@ -19,6 +19,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.builderops.issue_contract_validation import (  # noqa: E402
+    is_resolvable_verify_target,
+)
+
 
 REQUIRED_SECTIONS: tuple[str, ...] = (
     "Context",
@@ -173,20 +181,21 @@ def _summarize_item(item: str) -> str:
 
 
 def _has_concrete_verify_marker(item: str) -> bool:
-    for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item):
-        target = match.group(1).strip().strip("`").strip()
-        if not target:
-            continue
-        if re.search(r"<[^>]+>", target):
-            continue
-        if re.fullmatch(
-            r"(?:none|n/a|na|tbd|todo|test pointer|doc anchor|verification target|runtime receipt)",
-            target,
-            re.IGNORECASE,
-        ):
-            continue
-        return True
-    return False
+    targets = tuple(
+        match.group(1).strip()
+        for match in re.finditer(
+            r"(?im)(?:^|\b)Verify:[ \t]*(.*)$",
+            item,
+        )
+    )
+    return (
+        bool(targets)
+        and len(set(targets)) == len(targets)
+        and all(
+            is_resolvable_verify_target(target)
+            for target in targets
+        )
+    )
 
 
 def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport:

@@ -107,6 +107,77 @@ def test_template_shaped_verify_targets_are_not_concrete(target: str) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        "manual QA",
+        "tests/scripts/test_validate_issue_readiness.py",
+        "runtime receipt: delivery_receipt",
+        "doc writeback at docs/STATUS.md",
+    ],
+)
+def test_readiness_rejects_verify_targets_without_resolvable_authority(
+    target: str,
+) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(
+        encoding="utf-8"
+    )
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        f"Verify: {target}",
+    )
+
+    report = classify_issue_body(body)
+
+    assert report.readiness_classification == "missing_verify_markers"
+    assert report.acceptance_criteria.missing_verify_items == [
+        "- [ ] The checker reports a ready candidate for canonical issue bodies."
+    ]
+
+
+@pytest.mark.parametrize("invalid_target", ["manual QA", ""])
+def test_readiness_rejects_mixed_resolvable_verify_markers(
+    invalid_target: str,
+) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(
+        encoding="utf-8"
+    )
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        (
+            "Verify: "
+            "`tests/scripts/test_validate_issue_readiness.py::"
+            "test_fixture_classifications`\n"
+            f"  Verify: {invalid_target}"
+        ),
+    )
+
+    report = classify_issue_body(body)
+
+    assert report.readiness_classification == "missing_verify_markers"
+    assert report.acceptance_criteria.missing_verify_items == [
+        "- [ ] The checker reports a ready candidate for canonical issue bodies."
+    ]
+
+
+def test_readiness_rejects_duplicate_resolvable_verify_markers() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(
+        encoding="utf-8"
+    )
+    marker = (
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::"
+        "test_fixture_classifications`"
+    )
+    body = body.replace(marker, f"{marker}\n  {marker}")
+
+    report = classify_issue_body(body)
+
+    assert report.readiness_classification == "missing_verify_markers"
+    assert report.acceptance_criteria.missing_verify_items == [
+        "- [ ] The checker reports a ready candidate for canonical issue bodies."
+    ]
+
+
 @pytest.mark.parametrize("source_docs", ["- <path>", "- `<path>`", "- `docs/<path>.md`", "- TBD"])
 def test_placeholder_source_docs_are_missing(source_docs: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")

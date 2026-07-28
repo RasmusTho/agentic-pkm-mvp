@@ -441,6 +441,7 @@ def compile_delivery_plan(
             fact.authority,
             issue=issue,
             captured_at=snapshot.captured_at,
+            observed_not_before=initiation.provenance.created_at,
         ):
             refuse(
                 issue,
@@ -549,6 +550,7 @@ def compile_delivery_plan(
                 dependent=fact,
                 facts_by_scope=facts_by_scope,
                 captured_at=snapshot.captured_at,
+                observed_not_before=initiation.provenance.created_at,
                 refuse=refuse,
             )
             if (
@@ -563,8 +565,40 @@ def compile_delivery_plan(
                 )
         accepted_facts[issue.scope_key] = fact
 
+    _propagate_dependency_refusals(
+        approved=approved,
+        facts=accepted_facts,
+        refusal_map=refusal_map,
+        refuse=refuse,
+    )
+    dependency_candidates = {
+        scope_key: fact
+        for scope_key, fact in accepted_facts.items()
+        if not _issue_has_refusal(scope_key, refusal_map)
+    }
+    pre_overlap_cycle_keys = _dependency_cycle_keys(
+        dependency_candidates,
+        candidates=set(dependency_candidates),
+    )
+    for scope_key in pre_overlap_cycle_keys:
+        refuse(
+            approved[scope_key],
+            "dependency_cycle",
+            "internal dependency graph contains a cycle",
+        )
+    _propagate_dependency_refusals(
+        approved=approved,
+        facts=accepted_facts,
+        refusal_map=refusal_map,
+        refuse=refuse,
+    )
+    overlap_candidates = {
+        scope_key: fact
+        for scope_key, fact in accepted_facts.items()
+        if not _issue_has_refusal(scope_key, refusal_map)
+    }
     _refuse_mutation_overlap(
-        accepted_facts,
+        overlap_candidates,
         refuse=refuse,
     )
     _propagate_dependency_refusals(
@@ -814,12 +848,17 @@ def _authority_binds_issue(
     *,
     issue: IssueScope,
     captured_at: str,
+    observed_not_before: str | None = None,
 ) -> bool:
     return (
         authority.authority_type == "github_issue"
         and authority.authority_id == issue.authority_id
         and authority.content_hash == issue.contract_hash
         and authority.observed_at <= captured_at
+        and (
+            observed_not_before is None
+            or authority.observed_at >= observed_not_before
+        )
     )
 
 
@@ -894,6 +933,7 @@ def _validate_dependency_satisfaction(
         list[DeliveryIssuePlanningSnapshot],
     ],
     captured_at: str,
+    observed_not_before: str,
     refuse: _Refuse,
 ) -> None:
     same_snapshot_facts = facts_by_scope.get(
@@ -935,6 +975,7 @@ def _validate_dependency_satisfaction(
                 dependency_fact.authority,
                 issue=dependency.issue,
                 captured_at=captured_at,
+                observed_not_before=observed_not_before,
             )
             or dependency_fact.authority.observed_state != "closed"
             or dependency_fact.delivery_status != "delivered"

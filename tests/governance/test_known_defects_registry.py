@@ -1601,7 +1601,67 @@ def test_promotion_requires_concrete_verify_target_on_every_ac() -> None:
         ],
     }
 
-    with pytest.raises(known_defects.KnownDefectsError, match="lack concrete Verify"):
+    with pytest.raises(known_defects.KnownDefectsError, match="lack resolvable Verify"):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+@pytest.mark.parametrize("invalid_target", ["manual QA", ""])
+def test_promotion_rejects_mixed_resolvable_verify_markers(
+    invalid_target: str,
+) -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    body = _canonical_bug_body().replace(
+        "- [ ] Regression no longer reproduces.\n"
+        "  Verify: `tests/x.py::test_x`",
+        (
+            "- [ ] Regression no longer reproduces.\n"
+            "  Verify: `tests/x.py::test_x`\n"
+            f"  Verify: {invalid_target}"
+        ),
+    )
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject mixed verification authority",
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="lack resolvable Verify",
+    ):
+        known_defects.promote_defect(defect.defect_id, 901, gateway)
+
+
+def test_promotion_rejects_duplicate_resolvable_verify_markers() -> None:
+    gateway = FakeGateway()
+    defect = _defect()
+    known_defects.intake_defect(defect, gateway)
+    marker = "Verify: `tests/x.py::test_x`"
+    body = _canonical_bug_body().replace(marker, f"{marker}\n  {marker}")
+    gateway.issues[901] = {
+        "number": 901,
+        "title": "bug: reject duplicate verification authority",
+        "state": "open",
+        "body": body,
+        "labels": [
+            {"name": "type:bug"},
+            {"name": "prio:med"},
+            {"name": "agent:ready"},
+        ],
+    }
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="lack resolvable Verify",
+    ):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
 
