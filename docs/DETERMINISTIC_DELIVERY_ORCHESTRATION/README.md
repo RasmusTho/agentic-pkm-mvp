@@ -174,9 +174,13 @@ The renderer does not infer which label applies.
   snapshot compile without approval or effects. `DeliveryInitiation.v2` approves the exact request
   and preview hashes; drift produces a new preview rather than mutating approval.
 - **INV-DDO-14 — workers are provider-neutral at the semantic boundary.** The reducer emits one
-  canonical `worker-context-pack.v1` and `worker-invocation.v1`. Codex, Claude, or another bounded
-  carrier may implement the same port, but provider sessions, prose, and process exit codes never
-  become delivery authority.
+  canonical `worker-context-pack.v1` and reducer-authorized `worker-invocation.v1`. Conformance
+  preserves the exact context-pack hash and run/plan/effect/Issue/head authority references and
+  compares the normalized delivery-domain result. Every result still carries a complete
+  invocation/carrier/provider/model/session/usage/provenance envelope; those envelope values may
+  differ across Codex, Claude, or another bounded carrier, so raw result and downstream event bytes
+  are not equality targets. Provider sessions, prose, and process exit codes never become delivery
+  authority.
 - **INV-DDO-15 — lifecycle control is typed and fenced.** Pause, resume, cancel, and supersede are
   authenticated, idempotent commands bound to run/version/effect state. Cancellation does not claim
   to undo an already committed external effect, and supersession is a terminal receipt state.
@@ -184,8 +188,11 @@ The renderer does not infer which label applies.
   projection over the reducer/journal. CKM receives terminal evidence and reevaluation signals; the
   static cockpit neither polls nor mutates the run.
 - **INV-DDO-17 — acceptance meaning is immutable.** Every approved run binds one versioned
-  `DeliveryAcceptanceProfile.v1`. Reducer terminality follows that profile, while lower-level Issue,
-  PR, CI, review, merge, and closure facts remain explicit and unchanged.
+  `DeliveryAcceptanceProfile.v1`. DDO-04 binds its exact reference and hash into immutable initial
+  reducer state alongside an unchanged `DeliveryPlan.v1`; every transition and effect preserves the
+  binding through run-version fencing, and `DeliveryReceipt.v2` repeats it. Reducer terminality
+  follows that profile, while lower-level Issue, PR, CI, review, merge, and closure facts remain
+  explicit and unchanged.
 
 ### Partial-failure paths
 

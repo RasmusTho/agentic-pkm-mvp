@@ -66,9 +66,12 @@ full durable outbox binding.
 - [ ] A two-wave fixture advances without coordinator model decisions between terminal worker
   receipts.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_independent_waves_advance_without_model_coordination`.
-- [ ] Context pack, invocation, and result schemas bind the same run, plan, effect, Issue authority,
-  exact head where relevant, contract hash, and invocation identity; provider/model/session data is
-  confined to the invocation and result.
+- [ ] Context pack, invocation, and result schemas bind the same exact context-pack hash and
+  run/plan/effect/Issue/head authority chain. Carrier conformance compares the normalized
+  delivery-domain result while every result retains a complete
+  invocation/carrier/provider/model/session/usage/provenance envelope whose values may differ. The
+  conformance fixture varies those values deliberately; a missing envelope field or mismatched
+  plan/effect/Issue/head authority reference is rejected rather than normalized away.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_worker_contracts_bind_one_authority_chain`.
 - [ ] The worker port exposes idempotent start, inspect, heartbeat, interrupt, reattach,
   await-terminal, and cancel operations with typed not-started, starting-unknown, running, idle,
@@ -84,7 +87,10 @@ full durable outbox binding.
   while missing evidence/system state remains a distinct non-owner block.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_authority_ambiguity_and_system_blocks_are_distinct`.
 - [ ] `DeliveryAcceptanceProfile.v1` is canonical, versioned, immutable, and resolves terminality
-  only from explicit lower-level Issue/PR/CI/review/merge/closure evidence.
+  only from explicit lower-level Issue/PR/CI/review/merge/closure evidence. Its exact reference and
+  hash are bound into immutable initial reducer state alongside unchanged `DeliveryPlan.v1` bytes;
+  every transition and effect preserves the binding through run-version fencing, and
+  `DeliveryReceipt.v2` repeats the identical reference and hash.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_acceptance_profile_is_canonical_and_evidence_bound`.
 - [ ] `DeliveryReceipt.v2` binds the acceptance profile and superseding/superseded identities,
   round-trips canonically, and does not reinterpret valid v1 bytes.

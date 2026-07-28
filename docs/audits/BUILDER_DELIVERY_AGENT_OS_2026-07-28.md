@@ -421,10 +421,13 @@ terminal profile. `DeliveryAcceptanceProfile.v1` therefore names the selected ga
 - `promoted_to_test`; or
 - `production_verified`.
 
-The chosen profile is part of request, preview, initiation, plan, and receipt identity. A run cannot
-change its meaning of “delivered” after approval. DDO-04 defines the versioned profile before its
-reducer or any downstream slice depends on it; DDO-07 validates profiles in pilots rather than
-inventing the schema late.
+The chosen profile is part of request, preview, initiation, immutable initial reducer state, and
+receipt identity. `DeliveryPlan.v1` remains byte-compatible; DDO-04 binds the exact profile reference
+and hash alongside the plan in initial run state, preserves it through fenced transitions and
+effects, and repeats it in `DeliveryReceipt.v2`. A run cannot change its meaning of “delivered” after
+approval. DDO-04 defines the versioned profile before its reducer or any downstream slice depends on
+it; DDO-06 preserves the binding across the authenticated handoff, and DDO-07 validates profiles in
+pilots rather than inventing the schema late.
 
 ### G6 — Human notification is a projection of typed state
 
@@ -439,14 +442,15 @@ Any Codex, Claude, GitHub-hosted, local, or future adapter must pass the same co
 For conformance only, a **normalized result payload** is the projection of a fully validated
 `worker-result.v2` onto shared delivery-domain fields: status, run/plan/effect/Issue/exact-head
 authority, AC verdicts, validation, lifecycle outcome, typed exceptions, owner-doc result, and next
-legal action. The harness maps valid context/invocation identities to fixture placeholders and
-excludes provider/model/usage/provenance envelope values from equality. Production never strips or
-accepts a result without that complete envelope, and raw result bytes are not expected to match
-across carriers.
+legal action. The harness preserves exact context-pack, plan, reducer-authorized worker-launch
+effect, Issue, and head identities; maps valid invocation identities to fixture placeholders; and
+excludes invocation/carrier/provider/model/session/usage/provenance envelope values from equality.
+Every envelope field remains mandatory in production. Raw result and downstream event bytes are not
+expected to match across carriers.
 
 | Case | Required result |
 | --- | --- |
-| Same context pack through two adapters | Same semantic pack hash and normalized result payload; invocation/provider/provenance envelopes remain explicit and may differ |
+| Same context pack through two adapters | Exact context-pack, plan, worker-launch effect, Issue, and head identities plus the same normalized result payload; complete invocation/carrier/provider/model/session/usage/provenance envelopes remain explicit and may differ |
 | Crash before provider accepts start | `not_started` or evidenced `starting_unknown`; no fabricated session |
 | Crash after provider start before session receipt | readback/reattach; the same invocation identity never starts again |
 | Duplicate start with same idempotency key | one logical invocation |
@@ -507,8 +511,9 @@ A DBOS POC is allowed only after #4167 and the native #4168 binding establish th
 reference implementation. The POC uses one representative worker-launch/wait/recovery flow and must
 prove:
 
-- DDO semantic plan/event/effect identities and canonical payloads remain unchanged; carrier-bound
-  invocation and usage/provenance envelope fields may differ explicitly;
+- the exact DDO plan and reducer-authorized worker-launch effect identity remain unchanged, while
+  the normalized delivery-domain result matches and complete
+  invocation/carrier/provider/model/session/usage/provenance envelope fields may differ explicitly;
 - no DBOS record directly authorizes GitHub;
 - carrier state can be discarded and reconstructed from BuilderOps plus live GitHub;
 - the complete fault matrix passes with no duplicate invocation/effect;
@@ -576,7 +581,7 @@ This map addresses technical language, not Swedish-versus-English translation.
 | AOS-07 | MUST | “AI can continue” is emitted only from explicit authority rules; ambiguity needs owner decision. | reducer/owner-decision classifier |
 | AOS-08 | MUST | Active-run operational state is separate from CKM knowledge projection. | BuilderOps/CKM boundary tests |
 | AOS-09 | MUST | Terminal receipts advance CKM evidence through a rebuildable, freshness-labelled projection. | DDO-06 bridge |
-| AOS-10 | GATE | Acceptance meaning is immutable across request, plan, execution, and receipt. | acceptance-profile contract |
+| AOS-10 | GATE | Acceptance meaning is immutable across request, preview, initiation, reducer state, execution, and receipt without changing `DeliveryPlan.v1`. | acceptance-profile contract |
 | AOS-11 | GATE | New interactive/visual surfaces use the live Yggdrasil Design System gate. | design-handoff governance |
 | AOS-12 | MUST | Model/provider/reasoning/fallback and actual TCD remain visible and never alter semantic scope. | invocation/receipt |
 | AOS-13 | GATE | CI/review/merge/closure bind the exact current PR head and authenticated Issue set. | existing verification/closure paths |

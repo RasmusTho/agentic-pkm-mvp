@@ -59,6 +59,10 @@ authorization, execution, and evidence remain separate.
 - [ ] The separate approval boundary authenticates the exact canonical request and preview hashes,
   checks freshness, and cannot expand compiler scope.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_approval_binds_exact_request_and_preview_hashes`.
+- [ ] Request, preview, initiation, reducer handoff, and `DeliveryReceipt.v2` preserve one exact
+  acceptance-profile reference and hash. Profile mismatch or freshness drift requires a new
+  preview; no boundary infers or defaults the profile.
+  - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_acceptance_profile_reference_is_exact_across_handoff`.
 - [ ] The operator surface derives **AI can continue**, **Needs your decision**, and **Blocked by
   evidence/system** only from explicit typed authority/gate state; missing, conflicting, or
   ambiguous authority fails closed to **Needs your decision**.

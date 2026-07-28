@@ -58,9 +58,10 @@ cost or risk elsewhere.
 - [ ] Request → preview → exact approval is proven without preapproval mutation or stale-authority
   reuse.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_request_preview_approval_chain_is_exact_and_fresh`.
-- [ ] Each run binds one immutable acceptance profile, and accepted/partial/blocked/failed/
-  cancelled/superseded terminality is reconstructible from explicit Issue/PR/CI/review/merge/
-  closure evidence.
+- [ ] Each run preserves one exact immutable acceptance-profile reference and hash across request,
+  preview, initiation, initial reducer state, transitions/effects, and receipt; accepted/partial/
+  blocked/failed/cancelled/superseded terminality is reconstructible from explicit
+  Issue/PR/CI/review/merge/closure evidence.
   - Verify: `tests/builderops/test_delivery_acceptance_profiles.py::test_terminal_result_follows_immutable_profile_and_evidence`.
 - [ ] Native worker execution passes the provider-neutral start/inspect/reattach/cancel/result and
   crash-boundary conformance matrix.
@@ -97,10 +98,13 @@ cost or risk elsewhere.
 
 No external agent operating system is required for acceptance. After DDO-05 proves the native
 semantics, a bounded DBOS proof may compare only durable sleep/resume and worker-carrier behavior.
-The proof is accepted only if canonical Yggdrasil plan/effect/result bytes remain unchanged, replay
-never duplicates worker start, unknown-start recovery converges, cancellation is typed, fencing
-still governs external effects, and no DBOS workflow state becomes delivery authority. Failure or
-negative TCD evidence ends the proof without delaying the native path.
+The proof is accepted only if the exact canonical plan and reducer-authorized worker-launch effect
+identity remain unchanged and carrier runs produce the same normalized delivery-domain result.
+Every result must retain its complete invocation/carrier/provider/model/session/usage/provenance
+envelope, whose values and bytes may differ. Replay never duplicates worker start, unknown-start
+recovery converges, cancellation is typed, fencing still governs external effects, and no DBOS
+workflow state becomes delivery authority. Failure or negative TCD evidence ends the proof without
+delaying the native path.
 
 ## Related Docs
 
