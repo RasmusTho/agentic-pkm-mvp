@@ -57,6 +57,7 @@ from app.heimdal.settings_notes import (
     DEFAULT_SETTINGS_DIR,
     ENTITY_REVIEW,
     SettingsNote,
+    read_settings_note,
     write_settings_note,
 )
 from app.vault.manager import VaultContext
@@ -275,9 +276,173 @@ def test_review_decision_rejects_invalid_action() -> None:
         ReviewDecision(queue_entry_id="review:x", action="bogus")
 
 
+def test_review_decision_undo_is_valid_compensating_entry() -> None:
+    decision = ReviewDecision(queue_entry_id="review:x", action="undo")
+
+    assert decision.to_dict()["queue_entry_id"] == "review:x"
+    assert decision.to_dict()["action"] == "undo"
+    assert "from_id" not in decision.to_dict()
+    assert "into_id" not in decision.to_dict()
+
+    with pytest.raises(EntityConfirmError, match="queue_entry_id only"):
+        ReviewDecision(
+            queue_entry_id="review:x",
+            action="undo",
+            from_id="ent:a",
+            into_id="ent:b",
+        )
+
+
 def test_review_decision_merge_requires_ids() -> None:
     with pytest.raises(EntityConfirmError):
         ReviewDecision(queue_entry_id="review:x", action="merge")
+
+
+@pytest.mark.parametrize("terminal_action", ["merge", "reject"])
+def test_apply_human_review_decisions_folds_compensating_undo_without_deleting_history(
+    tmp_path: Path,
+    terminal_action: str,
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    mention = _mention(
+        resolution=RESOLUTION_AMBIGUOUS,
+        confidence=0.75,
+        mention_id=f"mention:undo-{terminal_action}",
+    )
+    entry = queue_for_review(vault_root, mention, candidate_entity_ids=[source, target])
+    terminal = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action=terminal_action,
+        from_id=source if terminal_action == "merge" else None,
+        into_id=target if terminal_action == "merge" else None,
+    )
+    undo = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="undo")
+    history = [terminal.to_dict(), undo.to_dict()]
+    note = SettingsNote(
+        spec=ENTITY_REVIEW,
+        values={
+            "pending": [entry.to_dict()],
+            "decisions": history,
+        },
+    )
+    write_settings_note(
+        vault_root,
+        note,
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+
+    assert apply_human_review_decisions(vault_root, register=register) == ()
+    assert pending_review_entries(vault_root) == (entry,)
+    assert register.get_entry(source).lifecycle == LIFECYCLE_CANONICAL
+    assert register.get_entry(target).lifecycle == LIFECYCLE_CANONICAL
+
+    persisted = read_settings_note(
+        vault_root,
+        ENTITY_REVIEW,
+        settings_dir=DEFAULT_SETTINGS_DIR,
+    )
+    assert persisted is not None
+    assert persisted.values["decisions"] == history
+
+
+@pytest.mark.parametrize("terminal_action", ["merge", "reject"])
+def test_apply_human_review_decisions_applies_terminal_uncompensated_decision(
+    tmp_path: Path,
+    terminal_action: str,
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    mention = _mention(
+        resolution=RESOLUTION_AMBIGUOUS,
+        confidence=0.75,
+        mention_id=f"mention:terminal-{terminal_action}",
+    )
+    entry = queue_for_review(vault_root, mention, candidate_entity_ids=[source, target])
+    decision = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action=terminal_action,
+        from_id=source if terminal_action == "merge" else None,
+        into_id=target if terminal_action == "merge" else None,
+    )
+    raw_decision = decision.to_dict()
+    raw_decision.pop("decided_at")
+    raw_decision["audit_tag"] = "retain-forward-compatible-history"
+    note = SettingsNote(
+        spec=ENTITY_REVIEW,
+        values={
+            "pending": [entry.to_dict()],
+            "decisions": [raw_decision],
+        },
+    )
+    write_settings_note(
+        vault_root,
+        note,
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+
+    applied = apply_human_review_decisions(vault_root, register=register)
+
+    assert len(applied) == 1
+    assert applied[0].action == terminal_action
+    assert applied[0].merged is (terminal_action == "merge")
+    assert pending_review_entries(vault_root) == ()
+    assert register.get_entry(source).lifecycle == (
+        LIFECYCLE_MERGED if terminal_action == "merge" else LIFECYCLE_CANONICAL
+    )
+    persisted = read_settings_note(
+        vault_root,
+        ENTITY_REVIEW,
+        settings_dir=DEFAULT_SETTINGS_DIR,
+    )
+    assert persisted is not None
+    assert persisted.values["decisions"] == [raw_decision]
+
+
+def test_apply_human_review_decisions_accepts_new_intent_after_undo(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    mention = _mention(
+        resolution=RESOLUTION_AMBIGUOUS,
+        confidence=0.75,
+        mention_id="mention:undo-redecide",
+    )
+    entry = queue_for_review(vault_root, mention, candidate_entity_ids=[source, target])
+    decisions = [
+        ReviewDecision(
+            queue_entry_id=entry.queue_entry_id,
+            action="merge",
+            from_id=source,
+            into_id=target,
+        ).to_dict(),
+        ReviewDecision(queue_entry_id=entry.queue_entry_id, action="undo").to_dict(),
+        ReviewDecision(queue_entry_id=entry.queue_entry_id, action="reject").to_dict(),
+    ]
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={"pending": [entry.to_dict()], "decisions": decisions},
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+
+    applied = apply_human_review_decisions(vault_root, register=register)
+
+    assert len(applied) == 1
+    assert applied[0].action == "reject"
+    assert applied[0].merged is False
+    assert register.get_entry(source).lifecycle == LIFECYCLE_CANONICAL
+    assert pending_review_entries(vault_root) == ()
 
 
 # ---------------------------------------------------------------------------

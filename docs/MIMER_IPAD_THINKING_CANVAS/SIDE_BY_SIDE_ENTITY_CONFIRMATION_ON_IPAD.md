@@ -41,13 +41,28 @@ that same mechanism into a comparison surface; it does not change the note contr
 - The client never mutates `pending`, never edits or deletes prior `decisions` entries, and never
   writes the entity register notes themselves (Mimer-organ-owned, ADR-0049 §2).
 
+## Undo boundary
+
+Undo is reversible only at the append-only **decision layer before hub application**. The client
+appends `action: undo` for the same `queue_entry_id`; while that entry is still in `pending`, the
+hub folds the ordered decision history to an undecided state, performs no register mutation, keeps
+the pending entry, and retains every `merge`/`reject`/`undo` history entry. A later merge or reject
+may establish a new terminal intent.
+
+Once the hub has applied an uncompensated merge or reject and cleared `pending`, a later undo is an
+idempotent no-op. It does not reverse an already-materialized register merge, call
+`EntityRegister.split`, or grant the Bifrost client register-write authority. The client must
+refresh the hub-owned pending state rather than present a late undo as a successful register
+reversal.
+
 ## Concretely
 
 iPad simulator with a fixture vault: `_heimdal/entities/review.md` containing one pending entry
 with two candidates → detail shows mention left, two candidate cards right → tapping a candidate
 then **Merge** appends `{queue_entry_id, action: merge, from, into, decided_at}` to `decisions`
-(file diff shows exactly one appended array entry plus provenance update) → **Undo** appends the
-compensating entry; `pending` is untouched by the client in both cases.
+(file diff shows exactly one appended array entry plus provenance update) → **Undo**, before hub
+application, appends `{queue_entry_id, action: undo, decided_at}`; `pending` is untouched by the
+client in both cases and the hub fold preserves it as undecided.
 
 ## Why This Matters
 
