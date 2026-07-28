@@ -74,6 +74,11 @@ Then read the two context hints, if they exist:
 
 From that, classify into one of the four situations and act.
 
+For an interrupted `type:bug` implementation from a larger bug set, resume only its original
+dedicated Codex task/session and worktree. Do not absorb another bug into that session; the serial
+default and any independent-wave exception remain governed by
+`AGENTS.md :: Transition-period bug-delivery policy`.
+
 ## Orchestrated runs: resume the engine before rebuilding from git
 
 Git only sees what reached the working tree. When the interrupted work was driven by an

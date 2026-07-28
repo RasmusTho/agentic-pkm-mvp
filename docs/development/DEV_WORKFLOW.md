@@ -19,6 +19,11 @@ For non-trivial changes:
 6. Update owner docs in the same change when behavior, contracts, or architecture changed.
 7. Run the relevant validation commands and record any gaps.
 
+For larger `type:bug` issue sets, apply `AGENTS.md :: Transition-period bug-delivery policy`: a
+minimal coordinator dispatches each bug to its own end-to-end Codex task/session and isolated
+worktree, with serial implementation as the default. This is Builder System transition guidance,
+not Product/Runtime behavior or evidence of a shipped deterministic orchestrator.
+
 ## Lightweight breakdown model
 
 Use the following practical breakdown model across docs, GitHub, and implementation:

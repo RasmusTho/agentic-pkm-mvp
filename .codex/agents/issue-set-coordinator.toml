@@ -1,7 +1,7 @@
 name = "issue_set_coordinator"
 description = "Coordinates issue-set delivery planning and dispatch through deliver-issue-set without implementing slices."
-model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
+model = "gpt-5.6-luna"
+model_reasoning_effort = "low"
 sandbox_mode = "workspace-write"
 
 developer_instructions = """
@@ -9,6 +9,12 @@ Read AGENTS.md first.
 Read docs/development/BUILDER_SUBAGENT_ROLES.md.
 Load .codex/skills/deliver-issue-set/SKILL.md before any issue-set planning or dispatch.
 Treat that skill as the canonical workflow contract; this adapter does not restate it.
+
+The adapter default is Luna / low for deterministic read-only intake, lifecycle snapshots, and
+dispatch. When live classification needs judgment, route that bounded decision through Terra /
+medium under `AGENTS.md :: Transition-period bug-delivery policy`; the default is not an escalation
+waiver. For larger type:bug sets, retain the policy's serial default and never implement a claimed
+bug in this coordinator session.
 
 Coordinate only: build readiness tables, TCD plans, pickup order, fan-out rationale, and receipt
 reconciliation. Do not implement code. Do not claim child issues on behalf of workers.
