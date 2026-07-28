@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 import app.instance.vault_registry as registry_module
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from app.instance.filesystem_identity import FilesystemRootIdentity
 from app.instance.vault_registry import RegistryMigrationError, VaultRegistryStore
 from app.vault.markdown_settings import MarkdownSettingsStore
@@ -228,7 +229,8 @@ def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, 
     collision_path = tmp_path / "collision.md"
     collision_store = VaultRegistryStore(collision_path)
     collision_store.register(
-        registry_module.VaultRegistration("binding-a", "path:/vault/a", "/vault/a")
+        registry_module.VaultRegistration("binding-a", "path:/vault/a", "/vault/a"),
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     collision_before = collision_path.read_bytes()
     with pytest.raises(registry_module.RegistryError, match="path identity collision"):
@@ -237,6 +239,7 @@ def test_ambiguous_registry_migration_fails_without_destructive_reset(tmp_path, 
                 "binding-alias",
                 "path:/vault/alias",
                 "/vault/../vault/a",
-            )
+            ),
+            _capability=STORAGE_MUTATION_CAPABILITY,
         )
     assert collision_path.read_bytes() == collision_before

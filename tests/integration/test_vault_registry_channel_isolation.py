@@ -22,6 +22,7 @@ from app.instance.instance_state import (
     InstanceStatePreflightError,
     validate_registry_disjoint_from_content,
 )
+from app.instance._storage_boundary import _StorageMutationCapability
 from app.instance.ownership_ledger import (
     LedgerCollisionError,
     LedgerError,
@@ -44,6 +45,7 @@ from app.instance.vault_registry import (
     VaultRegistration,
 )
 from app.vault.manager import iter_vault_markdown_files
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 def _runtime(tmp_path: Path, channel: str, host_global: Path) -> InstanceRegistryRuntime:
@@ -97,9 +99,17 @@ def _mechanically_register_nested_binding(
         vault_binding_id=registration.vault_binding_id,
         root=Path(registration.path),
         allow_same_channel_nested=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
-    runtime.registry.register(registration, expected_revision=current.revision)
-    runtime.ledger.activate(registration.vault_binding_id)
+    runtime.registry.register(
+        registration,
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    runtime.ledger.activate(
+        registration.vault_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     return registration
 
 
@@ -117,6 +127,7 @@ def _mechanically_prepare_transfer(
         source_binding_id=vault_binding_id,
         destination_channel_id=destination_runtime.layout.channel_id,
         destination_binding_id=destination_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     destination_snapshot = destination_runtime.registry.load()
     destination_registration = replace(
@@ -143,6 +154,7 @@ def _mechanically_prepare_transfer(
         registrations=registrations,
         transfer_lineage=lineage,
         expected_revision=destination_snapshot.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     return destination_registration.vault_binding_id
 
@@ -171,10 +183,13 @@ def _mechanically_recover_transfer(
             registrations=registrations,
             removal_tombstones=tombstones,
             expected_revision=source_snapshot.revision,
+            _capability=STORAGE_MUTATION_CAPABILITY,
         )
     if transfer.destination_binding_id not in destination_snapshot.registrations:
         raise LedgerError("prepared transfer is missing its destination registration")
-    source_runtime.ledger.activate_transfer()
+    source_runtime.ledger.activate_transfer(
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     return transfer.destination_binding_id
 
 
@@ -204,8 +219,12 @@ def _mechanically_remove_binding(
         registrations=registrations,
         removal_tombstones=tombstones,
         expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
-    runtime.ledger.release_to_tombstone(vault_binding_id)
+    runtime.ledger.release_to_tombstone(
+        vault_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     return retired
 
 
@@ -226,6 +245,7 @@ def _mechanically_reactivate_binding(
         matched.vault_binding_id,
         channel_id=runtime.layout.channel_id,
         root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     registration = VaultRegistration(
         vault_binding_id=matched.vault_binding_id,
@@ -240,6 +260,7 @@ def _mechanically_reactivate_binding(
     runtime.registry.commit_state(
         registrations=registrations,
         expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     return registration
 
@@ -273,6 +294,80 @@ def test_dormant_runtime_api_exports_no_caller_constructible_activation_seam() -
         assert "CapabilityNotReadyError" in method_source
         assert "self.registry" not in method_source
         assert "self.ledger" not in method_source
+
+
+def test_store_and_ledger_mutators_reject_uncapable_callers(tmp_path) -> None:
+    """Public storage objects reject before any registry or ledger write."""
+
+    with pytest.raises(
+        TypeError,
+        match="storage mutation capability is not caller-constructible",
+    ):
+        _StorageMutationCapability()
+
+    host_global = tmp_path / "host-global"
+    runtime = _runtime(tmp_path, "dev", host_global)
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=root,
+        watcher_vault_path=root,
+    )
+    snapshot = runtime.registry.load()
+    replacement = replace(
+        registration,
+        vault_name="must-not-persist",
+    )
+    extra = VaultRegistration(
+        vault_binding_id="binding-uncapable",
+        ref="path:/uncapable",
+        path="/uncapable",
+        vault_id="vault-uncapable",
+        local_instance_id="local-uncapable",
+    )
+    before = _runtime_state_bytes(tmp_path, runtime)
+    mutations = (
+        lambda: runtime.registry.register(extra),
+        lambda: runtime.registry.update_registration(replacement),
+        lambda: runtime.registry.remove_registration(registration.vault_binding_id),
+        lambda: runtime.registry.commit_state(
+            registrations=dict(snapshot.registrations),
+            expected_revision=snapshot.revision,
+        ),
+        lambda: runtime.registry.set_extension_state(
+            default_vault_binding_id=registration.vault_binding_id,
+            dimensions={},
+            principal_state={},
+            background_state={},
+            runtime_floors={},
+        ),
+        lambda: runtime.ledger.reserve(
+            channel_id="test",
+            vault_binding_id="binding-uncapable",
+            root=root,
+        ),
+        lambda: runtime.ledger.activate(registration.vault_binding_id),
+        lambda: runtime.ledger.begin_transfer(
+            source_binding_id=registration.vault_binding_id,
+            destination_channel_id="test",
+            destination_binding_id="binding-destination",
+        ),
+        lambda: runtime.ledger.activate_transfer(),
+        lambda: runtime.ledger.release_to_tombstone(registration.vault_binding_id),
+        lambda: runtime.ledger.reactivate(
+            registration.vault_binding_id,
+            channel_id="dev",
+            root=root,
+        ),
+    )
+
+    for mutate in mutations:
+        with pytest.raises(
+            CapabilityNotReadyError,
+            match="private MVR storage mutation capability is required",
+        ):
+            mutate()
+        assert _runtime_state_bytes(tmp_path, runtime) == before
 
 
 def _rotation_authority(
@@ -665,12 +760,16 @@ def test_retry_recovers_pending_owner_after_registry_commit(tmp_path, monkeypatc
     original_activate = runtime.ledger.activate
     failures = 0
 
-    def fail_once(vault_binding_id: str):
+    def fail_once(
+        vault_binding_id: str,
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ):
         nonlocal failures
         failures += 1
         if failures == 1:
             raise RuntimeError("injected activate failure")
-        return original_activate(vault_binding_id)
+        return original_activate(vault_binding_id, _capability=_capability)
 
     monkeypatch.setattr(runtime.ledger, "activate", fail_once)
     with pytest.raises(RuntimeError, match="injected activate failure"):

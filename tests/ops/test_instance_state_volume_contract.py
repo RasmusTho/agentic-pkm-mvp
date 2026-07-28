@@ -51,6 +51,7 @@ from scripts.instance_state_writer_inventory import (
     _parse_linux_stat,
     _parse_macos_ps_row,
 )
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -420,7 +421,10 @@ def _install_linux_proc_fixture(
 def test_mvr01a_schema_activation_requires_rollback_capability(tmp_path) -> None:
     registry_path = tmp_path / "vault-registry.md"
     store = VaultRegistryStore(registry_path)
-    store.register(VaultRegistration("binding-a", "path:/a", "/a"))
+    store.register(
+        VaultRegistration("binding-a", "path:/a", "/a"),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
 
     with pytest.raises(CapabilityNotReadyError, match="MVR-01B rollback exporter/transformer"):
         store.require_authoritative_activation(RegistryActivationProof())
@@ -2579,8 +2583,12 @@ def test_backup_resolves_foreign_binding_ids_omitted_by_owner_producer(tmp_path)
         channel_id="dev",
         vault_binding_id=foreign_binding,
         root=foreign_root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
-    runtime.ledger.activate(foreign_binding)
+    runtime.ledger.activate(
+        foreign_binding,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
     proof, owner_receipt = _canonical_test_quiescence_authority(
         layout=layout,
         host_global_root=runtime.ledger.root,
@@ -2744,6 +2752,7 @@ def test_backup_capture_blocks_concurrent_writer_until_generation_is_captured(
                         path=str(second_root.resolve()),
                     ),
                     expected_revision=initial_registry.revision,
+                    _capability=STORAGE_MUTATION_CAPABILITY,
                 )
         except BaseException as exc:
             writer_errors.append(exc)
@@ -2808,14 +2817,19 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
                     path=str(second_root.resolve()),
                 ),
                 expected_revision=current.revision,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
         else:
             runtime.ledger.reserve(
                 channel_id="prod",
                 vault_binding_id=second_binding,
                 root=second_root,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
-            runtime.ledger.activate(second_binding)
+            runtime.ledger.activate(
+                second_binding,
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
         proof, owner_receipt = _canonical_test_quiescence_authority(
             layout=layout,
             host_global_root=runtime.ledger.root,
@@ -2867,6 +2881,7 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
                     path=str(tampered_root.resolve()),
                 ),
                 expected_revision=backup_snapshot.revision,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
         else:
             backup_ledger = InstanceRegistryRuntime.for_paths(
@@ -2880,8 +2895,12 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
                 channel_id="prod",
                 vault_binding_id=second_binding,
                 root=tampered_root,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
-            backup_ledger.activate(second_binding)
+            backup_ledger.activate(
+                second_binding,
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
         _refresh_backup_checksums(backup_root)
         protected_roots = (valid_layout.root, valid_runtime.ledger.root)
         before = {
@@ -2934,8 +2953,12 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
             channel_id="dev",
             vault_binding_id=foreign_binding,
             root=foreign_root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
         )
-        runtime.ledger.activate(foreign_binding)
+        runtime.ledger.activate(
+            foreign_binding,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
         live_channel = "dev"
         live_binding = foreign_binding
         if divergence.endswith("tombstone") or "lineage" in divergence:
@@ -2944,8 +2967,11 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
                 source_binding_id=foreign_binding,
                 destination_channel_id="test",
                 destination_binding_id=destination_binding,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
-            runtime.ledger.activate_transfer()
+            runtime.ledger.activate_transfer(
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
             live_channel = "test"
             live_binding = destination_binding
         if divergence == "cross-channel-self-lineage":
@@ -2954,8 +2980,11 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
                 source_binding_id=destination_binding,
                 destination_channel_id="native",
                 destination_binding_id=final_binding,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
-            runtime.ledger.activate_transfer()
+            runtime.ledger.activate_transfer(
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
             live_channel = "native"
             live_binding = final_binding
 
@@ -3040,8 +3069,12 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
             channel_id="dev",
             vault_binding_id=restore_foreign_binding,
             root=restore_foreign_root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
         )
-        restore_runtime.ledger.activate(restore_foreign_binding)
+        restore_runtime.ledger.activate(
+            restore_foreign_binding,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
         restore_live_channel = "dev"
         restore_live_binding = restore_foreign_binding
         if divergence.endswith("tombstone") or "lineage" in divergence:
@@ -3050,8 +3083,11 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
                 source_binding_id=restore_foreign_binding,
                 destination_channel_id="test",
                 destination_binding_id=restore_destination,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
-            restore_runtime.ledger.activate_transfer()
+            restore_runtime.ledger.activate_transfer(
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
             restore_live_channel = "test"
             restore_live_binding = restore_destination
         if divergence == "cross-channel-self-lineage":
@@ -3060,8 +3096,11 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
                 source_binding_id=restore_destination,
                 destination_channel_id="native",
                 destination_binding_id=restore_final,
+                _capability=STORAGE_MUTATION_CAPABILITY,
             )
-            restore_runtime.ledger.activate_transfer()
+            restore_runtime.ledger.activate_transfer(
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
             restore_live_channel = "native"
             restore_live_binding = restore_final
         restore_complete_owners = _current_registry_owners(restore_runtime) + [
@@ -3316,6 +3355,7 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
         principal_state={"operator": "local"},
         background_state={"mode": "compatibility"},
         runtime_floors={"registry": "01b"},
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     _create_canonical_backup(
         runtime=runtime,
@@ -3420,6 +3460,7 @@ def test_prod_restore_rejects_noncanonical_quiescence_authority_without_mutation
         principal_state={"operator": "changed"},
         background_state={"mode": "changed"},
         runtime_floors={"registry": "changed"},
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
 
     owner_receipt = None
@@ -3551,6 +3592,7 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
         principal_state={"operator": "prod"},
         background_state={"mode": "prod"},
         runtime_floors={"registry": "prod"},
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
 
     proof, owner_receipt = _canonical_test_quiescence_authority(

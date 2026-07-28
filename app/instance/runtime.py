@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import yaml
 
+from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
     same_filesystem_root,
@@ -136,14 +137,22 @@ class InstanceRegistryRuntime:
             vault_binding_id=registration.vault_binding_id,
             root=Path(registration.path),
             allow_same_channel_nested=False,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         try:
-            self.registry.register(registration, expected_revision=current.revision)
+            self.registry.register(
+                registration,
+                expected_revision=current.revision,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
         except Exception:
             # A retry can recover a prepared lease only when the registry commit exists;
             # otherwise leaving it pending is safer than allowing a conflicting owner.
             raise
-        self.ledger.activate(registration.vault_binding_id)
+        self.ledger.activate(
+            registration.vault_binding_id,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
         return registration
 
     def _require_established_ownership(self, current: RegistrySnapshot) -> None:
@@ -339,7 +348,10 @@ class InstanceRegistryRuntime:
             vault_id=vault_id,
             extensions={**current.extensions, "status": "initialized"},
         )
-        self.registry.update_registration(updated)
+        self.registry.update_registration(
+            updated,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
         return updated
 
     def _new_registration(self, root: Path) -> VaultRegistration:

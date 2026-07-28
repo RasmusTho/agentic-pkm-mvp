@@ -5,6 +5,7 @@ import pytest
 from app.instance.vault_registry import RegistryError, VaultRegistration, VaultRegistryStore
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsStore
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 def test_picker_recovers_parse_corrupt_registry_with_backup(tmp_path) -> None:
@@ -71,6 +72,7 @@ def test_populated_registry_corruption_never_reseeds_empty(tmp_path) -> None:
     mutated_missing_main = VaultRegistryStore(path).register(
         VaultRegistration("binding-c", "path:/c", "/c"),
         expected_revision=recovered.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
     )
     assert mutated_missing_main.revision == recovered.revision + 1
     assert len(mutated_missing_main.registrations) == 3
