@@ -3458,6 +3458,92 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
     return GhCliVerificationSource(runner=runner), calls
 
 
+def test_pending_requests_discovers_request_beyond_first_artifact_page() -> None:
+    source = GhCliVerificationSource()
+    endpoint = f"repos/{REPO}/actions/artifacts?per_page=100"
+    calls: list[str] = []
+
+    def read_artifacts(requested_endpoint: str) -> object:
+        calls.append(requested_endpoint)
+        if requested_endpoint == endpoint:
+            return {
+                "total_count": 101,
+                "artifacts": [{"id": index, "name": "unrelated"} for index in range(100)],
+            }
+        if requested_endpoint == f"{endpoint}&page=2":
+            return {"total_count": 101, "artifacts": [{"id": 101, "name": "request"}]}
+        raise AssertionError(requested_endpoint)
+
+    source._json = read_artifacts  # type: ignore[method-assign]
+    source._request_from_artifact = (  # type: ignore[method-assign]
+        lambda _repository, artifact: {"artifact_id": artifact["id"]}
+        if artifact.get("name") == "request"
+        else None
+    )
+
+    assert source.pending_requests(REPO) == [{"artifact_id": 101}]
+    assert calls == [endpoint, f"{endpoint}&page=2"]
+
+
+def test_pending_requests_ignores_unrelated_artifacts_when_filling_limit() -> None:
+    source = GhCliVerificationSource()
+    endpoint = f"repos/{REPO}/actions/artifacts?per_page=100"
+
+    def read_artifacts(requested_endpoint: str) -> object:
+        if requested_endpoint == endpoint:
+            return {
+                "total_count": 102,
+                "artifacts": [{"id": index, "name": "unrelated"} for index in range(100)],
+            }
+        if requested_endpoint == f"{endpoint}&page=2":
+            return {
+                "total_count": 102,
+                "artifacts": [
+                    {"id": 101, "name": "request"},
+                    {"id": 102, "name": "request"},
+                ],
+            }
+        raise AssertionError(requested_endpoint)
+
+    source._json = read_artifacts  # type: ignore[method-assign]
+    source._request_from_artifact = (  # type: ignore[method-assign]
+        lambda _repository, artifact: {"artifact_id": artifact["id"]}
+        if artifact.get("name") == "request"
+        else None
+    )
+
+    assert source.pending_requests(REPO, limit=2) == [
+        {"artifact_id": 101},
+        {"artifact_id": 102},
+    ]
+
+
+def test_pending_requests_distinguishes_truncated_scan_from_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = GhCliVerificationSource()
+    endpoint = f"repos/{REPO}/actions/artifacts?per_page=100"
+    monkeypatch.setattr(verification_consumer, "_MAX_ARTIFACT_LISTING_ROWS", 100)
+
+    source._json = (  # type: ignore[method-assign]
+        lambda requested_endpoint: {"total_count": 0, "artifacts": []}
+        if requested_endpoint == endpoint
+        else pytest.fail(f"unexpected page for empty listing: {requested_endpoint}")
+    )
+    assert source.pending_requests(REPO) == []
+
+    source._json = (  # type: ignore[method-assign]
+        lambda requested_endpoint: {
+            "total_count": 101,
+            "artifacts": [{"id": index, "name": "unrelated"} for index in range(100)],
+        }
+        if requested_endpoint == endpoint
+        else pytest.fail(f"unexpected page beyond bounded scan: {requested_endpoint}")
+    )
+    with pytest.raises(RuntimeError, match="artifact listing exceeds bounded scan"):
+        source.pending_requests(REPO)
+
+
 def test_pending_request_rejects_oversized_archive_before_buffering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
