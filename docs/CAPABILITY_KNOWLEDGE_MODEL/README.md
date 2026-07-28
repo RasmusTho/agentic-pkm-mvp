@@ -5,7 +5,7 @@ Owner: BuilderOps governance
 Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: mixed (this directory for task shape; ADR-0057 for decisions)
-Last reviewed: 2026-07-24
+Last reviewed: 2026-07-28
 
 # Capability Knowledge Model (CKM / Kvasir) — MVP Specification
 
@@ -34,18 +34,22 @@ The CKM is the Builder System subsystem that continuously constructs and maintai
 
 Post-MVP presentation refinement: [DEV_OVERVIEW_DIRECTION_A.md](DEV_OVERVIEW_DIRECTION_A.md) defines the CKM-11 redesign contract implemented by issue #3689. It preserves CKM-10's static, self-contained projection boundary; owner visual acceptance remains on parent #3138.
 
-## Target-state presentation successor
+## Supported opt-in presentation successor
 
 [CKM Cockpit Direction B](../CKM_COCKPIT_DIRECTION_B/README.md) is the bounded opt-in successor
-to the same generated Development Overview. Its final supported truth, to be promoted only after
-independent parent [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) acceptance, is
-an opt-in local `ckm overview --cockpit` projection with exact newest-pair O1b
+to the same generated Development Overview. Independent parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) accepted and closed the capability
+on 2026-07-28 after completion issue
+[#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222) and
+[PR #4224](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4224) supplied the protected
+production-CLI proof. The supported surface is an opt-in local `ckm overview --cockpit` projection
+with exact newest-pair O1b
 comparison-or-refusal, one filtering-only inline script, inert drafts, and deterministic print.
 It remains generated, local, deterministic, and non-authoritative: it creates no CKM, GitHub,
-Product/Runtime, or network write authority. The completion evidence in [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222)
-is a terminal owner-doc promotion candidate, not parent acceptance. Until #4080 is independently
-accepted and this promotion candidate is merged, Direction A remains the only supported
-owner-facing default.
+Product/Runtime, or network write authority. Direction A remains the script-free default; Direction
+B is the supported opt-in cockpit mode. Exact acceptance and closure receipts are recorded on
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102696743) and its
+[terminal closure receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102745391).
 
 ## Execution order
 

@@ -85,7 +85,6 @@ coordinator. This slice removes that tax without waiting for new durability or C
 
 ## Related GitHub Issues
 
-Live task: [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164). It is an initial
-execution slice but remains blocked until the specification plus remaining prerequisite PR #4161
-are merged. Review-severity PR #4159 is already delivered.
-It may then run in parallel with DDO-02 (#4165) if that task is still active.
+Delivery history: [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) is closed and
+delivered. Review-severity PR #4159 and the known-defect prerequisite PR #4161 were delivered before
+the slice ran.

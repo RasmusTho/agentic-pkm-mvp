@@ -104,9 +104,7 @@ state.
 
 ## Related GitHub Issues
 
-Live child [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081) under parent
-[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` until the CKM
-Evidence Profile Phase 1 parent and children are terminally delivered. Cheapest acceptable TCD
-route: **Terra/high** because this is a multi-file public CLI/render boundary with determinism and
-prerequisite-integration risk; escalate to Sol/high only if the Evidence Profile delivery changes
-the agreed renderer seam.
+Delivery history: child [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081) and parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) are closed. Evidence Profile Phase
+1 delivered before this slice. The planned cheapest acceptable TCD route was **Terra/high** because
+this was a multi-file public CLI/render boundary with determinism and prerequisite-integration risk.

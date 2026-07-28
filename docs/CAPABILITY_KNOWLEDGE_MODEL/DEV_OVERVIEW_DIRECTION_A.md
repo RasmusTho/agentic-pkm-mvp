@@ -1,9 +1,9 @@
-State: Implemented by issue #3689; delivery tracked by its implementation PR.
+State: Direction A is the delivered script-free default from issue #3689. The independently accepted Direction B amendment is a supported opt-in mode under closed parent #4080.
 Doc role: Design specification
 Authority: Owns the bounded Direction A presentation contract for the generated CKM overview. Subordinate to ADR-0057 and `DEV_OVERVIEW_HTML_PROJECTION.md`; it changes no CKM data, scoring, or authority semantics.
 Owner: BuilderOps governance
-Temporal class: operational (implementation-ready)
-Last reviewed: 2026-07-14
+Temporal class: operational
+Last reviewed: 2026-07-28
 
 # CKM Development Overview — Direction A
 
@@ -80,19 +80,21 @@ No filters, search, sort, comparison mode, URL state, evolution timeline, print 
 
 ## Direction B amendment
 
-The default Direction A output remains byte-deterministic and script-free. The final supported
-Direction B amendment (promoted only after independent parent
-[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) acceptance) is an opt-in
+The default Direction A output remains byte-deterministic and script-free. The independently
+accepted Direction B amendment under closed parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is a supported opt-in
 `ckm overview --cockpit` projection. It may contain exactly one inline script that only enables its
 disabled-first capability-map filters, reads server-rendered filter tokens, toggles capability-row
 `hidden` state, and updates the filter count. It does not change CKM authority, persist state,
 access a network, or affect trust, hazards, comparison/refusal, subsystem counts, gaps, proposals,
 provenance, or the footer.
 
-The [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222) completion PR carries this
-terminal promotion wording and the exact production-CLI comparison/refusal proof. It is not itself
-an acceptance record: before #4080 independently accepts and the promotion PR merges, current main
-remains Direction A-supported and Direction B remains pre-acceptance.
+Completion issue [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222) and
+[PR #4224](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4224) supplied the terminal
+production-CLI comparison/refusal proof. Parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102696743)
+independently accepted it and records the separate
+[closure receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102745391).
 
 ## CKM11-VALIDATION
 

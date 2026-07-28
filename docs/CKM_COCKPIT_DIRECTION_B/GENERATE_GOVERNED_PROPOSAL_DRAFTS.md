@@ -102,13 +102,11 @@ Issue contract through the normal repo process.
 
 ## Related GitHub Issues
 
-Live child [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085) under parent
-[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) follows terminal CKM-DB-04
-[#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084) and is the delivery contract for
-this slice. CKM-DB-06 [#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086) remains
-blocked until this slice is terminal. Direction B remains a pre-acceptance target and owner docs
-must not claim it as supported before independent parent acceptance.
+Delivery history: child [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085),
+predecessor [#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084), successor
+[#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086), and parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) are closed. Direction B is
+independently accepted.
 
-Cheapest acceptable TCD route: **Terra/high** because the implementation is deterministic
-presentation work but has a high persuasion/authority-boundary risk; escalate to Sol/high if any
-action, PromotionIntent, or GitHub integration is proposed.
+The planned cheapest acceptable TCD route was **Terra/high** because the implementation was
+deterministic presentation work with high persuasion/authority-boundary risk.

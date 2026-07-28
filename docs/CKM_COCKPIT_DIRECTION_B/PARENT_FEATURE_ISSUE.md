@@ -1,4 +1,4 @@
-State: Filed parent feature issue contract. [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is the authoritative live validation hub, open with `agent:blocked`; children #4081–#4086 are also open and blocked in dependency order. This parent is never a pickup Issue.
+State: ACCEPTED/CLOSED parent validation contract. [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) independently accepted Direction B and closed on 2026-07-28 after children #4081–#4086 and completion #4222 delivered. This parent was never a pickup Issue.
 
 # CKM Cockpit Direction B — Parent Validation Hub
 
@@ -6,13 +6,11 @@ State: Filed parent feature issue contract. [#4080](https://github.com/RasmusTho
 
 CKM Direction A was delivered by #3689 / PR #3692, CKM Measurement & Access by parent #3775,
 and owner Gate A by #3972. The owner authorized a small Direction B cockpit design and feature
-breakdown, not automation or a control plane. Live parent
-[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is the validation hub for the
-target-state contract at `docs/CKM_COCKPIT_DIRECTION_B/README.md`; it is never a pickup issue.
-
-Implementation is dependency-blocked until CKM Evidence Profile Phase 1 is delivered. That merged
-spec retires the current scalar/maturity-band render and must precede Direction B so the cockpit
-cannot preserve a known false picture or duplicate its repair.
+breakdown, not automation or a control plane. Parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) was the validation hub for the
+contract at `docs/CKM_COCKPIT_DIRECTION_B/README.md`; it was never a pickup issue. CKM Evidence
+Profile Phase 1 delivered before implementation, preventing the cockpit from preserving the retired
+scalar/maturity-band picture.
 
 ## Scope
 
@@ -52,9 +50,9 @@ evidence, cross-task acceptance, owner-doc promotion, and closure truth.
 ## Constraints
 
 - This parent is never claimed or labeled `agent:ready`.
-- All children remain `agent:blocked` until their live dependencies are closed and their exact bodies
-  pass strict readiness validation.
-- CKM Evidence Profile Phase 1 must be delivered before CKM-DB-01 begins.
+- During delivery, each child remained `agent:blocked` until its live dependencies closed and its
+  exact body passed strict readiness validation.
+- CKM Evidence Profile Phase 1 was delivered before CKM-DB-01 began.
 - Extend the existing overview renderer/CLI; do not create a parallel dashboard or service.
 - No automatic ranking, gating, prioritization, agent scoring, prediction, causal claims, or mutation.
 - No clipboard, GitHub prefill, fetch, network, storage, cookies, or hosted/multi-user behavior.
@@ -66,50 +64,51 @@ evidence, cross-task acceptance, owner-doc promotion, and closure truth.
 
 ## Acceptance Criteria
 
-- [ ] The Evidence Profile prerequisite is delivered with its terminal real-store receipt.
+- [x] The Evidence Profile prerequisite is delivered with its terminal real-store receipt.
   Verify: closed Evidence Profile parent/children plus `docs/CKM_EVIDENCE_PROFILE/README.md :: Verification and acceptance path`
-- [ ] All six Direction B children are delivered in dependency order with current-SHA CI, local review, and parent handoff receipts.
+- [x] All six Direction B children are delivered in dependency order with current-SHA CI, local review, and parent handoff receipts.
   Verify: child delivery receipt ledger on this parent
-- [ ] Capability-level invariants and every refusal/partial-failure state are proven on the production CLI/render path.
+- [x] Capability-level invariants and every refusal/partial-failure state are proven on the production CLI/render path.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_cli_renders_comparison_and_refusal_states`; `tests/builderops/ckm/test_overview_html.py::test_cockpit_answers_fixed_owner_questions_without_authority`
-- [ ] The final generated HTML and PDF contain full trust, hazard, comparison/refusal, map/detail, gaps, proposal, and provenance content without network or hidden filtered omissions.
+- [x] The final generated HTML and PDF contain full trust, hazard, comparison/refusal, map/detail, gaps, proposal, and provenance content without network or hidden filtered omissions.
   Verify: deterministic HTML digest and manual PDF receipt posted on this parent by CKM-DB-06
-- [ ] Every child has a PR-specific owner-doc result and transition-debt result.
+- [x] Every child has a PR-specific owner-doc result and transition-debt result.
   Verify: child closure receipts and post-merge owner-doc comments
-- [ ] Owner docs are promoted only once the full capability is accepted.
+- [x] Owner docs are promoted only once the full capability is accepted; this reconciliation records
+  the terminal supported truth.
   Verify: final docs PR updates `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md` and `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md`, linked from this parent
 
 ## Implementation Tasks
 
 1. CKM-DB-01 [#4081](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4081) —
-   `docs/CKM_COCKPIT_DIRECTION_B/ESTABLISH_TRUST_AND_PORTFOLIO_FRAMING.md`; blocked on Evidence
-   Profile Phase 1.
+   `docs/CKM_COCKPIT_DIRECTION_B/ESTABLISH_TRUST_AND_PORTFOLIO_FRAMING.md`; delivered.
 2. CKM-DB-02 [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082) —
-   `docs/CKM_COCKPIT_DIRECTION_B/SURFACE_INTERPRETATION_HAZARDS_HONESTLY.md`; blocked on #4081.
+   `docs/CKM_COCKPIT_DIRECTION_B/SURFACE_INTERPRETATION_HAZARDS_HONESTLY.md`; delivered.
 3. CKM-DB-03 [#4083](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4083) —
-   `docs/CKM_COCKPIT_DIRECTION_B/RENDER_COMPATIBLE_OBSERVATION_COMPARISONS.md`; blocked on #4082.
+   `docs/CKM_COCKPIT_DIRECTION_B/RENDER_COMPATIBLE_OBSERVATION_COMPARISONS.md`; delivered.
 4. CKM-DB-04 [#4084](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4084) —
-   `docs/CKM_COCKPIT_DIRECTION_B/FILTER_CAPABILITY_MAP_HONESTLY.md`; blocked on #4083.
+   `docs/CKM_COCKPIT_DIRECTION_B/FILTER_CAPABILITY_MAP_HONESTLY.md`; delivered.
 5. CKM-DB-05 [#4085](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4085) —
-   `docs/CKM_COCKPIT_DIRECTION_B/GENERATE_GOVERNED_PROPOSAL_DRAFTS.md`; blocked on #4084.
+   `docs/CKM_COCKPIT_DIRECTION_B/GENERATE_GOVERNED_PROPOSAL_DRAFTS.md`; delivered.
 6. CKM-DB-06 [#4086](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4086) —
-   `docs/CKM_COCKPIT_DIRECTION_B/SUPPORT_DETERMINISTIC_PRINT_OUTPUT.md`; blocked on #4085.
+   `docs/CKM_COCKPIT_DIRECTION_B/SUPPORT_DETERMINISTIC_PRINT_OUTPUT.md`; delivered.
 
 ## Verification Path
 
-Each child executes every named `Verify:` target, the focused CKM suite, `ruff check app tests`,
-`mypy app`, current-head CI, and independent local review. Each merged child posts exact PR/SHA,
-checks, visual or refusal evidence, and its parent-handoff result here.
+Each child executed every named `Verify:` target, the focused CKM suite, `ruff check app tests`,
+`mypy app`, current-head CI, and independent local review. Each merged child posted exact PR/SHA,
+checks, visual or refusal evidence, and its parent-handoff result on #4080.
 
 ## Validation / Acceptance Path
 
-Keep this parent blocked while children are outstanding. The terminal child regenerates the artifact
-from a stable fixture, records its digest, validates JS-off behavior, and attaches a manually
-inspected PDF. Completion issue [#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222)
-is a protected production-CLI comparison/refusal evidence input and may carry terminal owner-doc
-promotion wording; it neither accepts nor closes this parent. Independent parent closure verifies
-live GitHub state, every exact receipt, Evidence Profile delivery, and owner-doc posture before
-closing the capability. The owner-doc promotion may merge only after that independent acceptance.
+The terminal child regenerated the artifact from a stable fixture, recorded its digest, validated
+JS-off behavior, and attached the manually inspected PDF. Completion issue
+[#4222](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4222) supplied the protected
+production-CLI comparison/refusal evidence. Independent
+[#4080 acceptance](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102696743)
+then verified live GitHub state, every exact receipt, Evidence Profile delivery, and owner-doc
+posture before the
+[terminal closure](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102745391).
 
 ## Out of Scope
 

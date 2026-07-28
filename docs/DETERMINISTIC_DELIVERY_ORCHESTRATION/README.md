@@ -1,11 +1,11 @@
-State: Filed target-state specification. Parent #4163 owns live validation state; child Issues #4164–#4170 own executable task state.
+State: Active target-state specification. Parent #4163 owns live validation state. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is the next serial implementation slice after contract reconciliation; #4168–#4170 remain dependency-blocked.
 Doc role: Builder System capability specification
 Authority: Owns the bounded target, decomposition, cross-task invariants, verification path, and acceptance path for deterministic issue-set delivery. GitHub Issues own executable task state after filing.
 Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: this directory for the capability contract; live GitHub, dispatcher, CI, PR, review, merge, and closure evidence for delivery truth
-Last reviewed: 2026-07-27
+Last reviewed: 2026-07-28
 
 # Deterministic Delivery Orchestration
 
@@ -66,13 +66,17 @@ coordination:
 
 ### Full capability
 
-- carrier-neutral `DeliveryInitiation.v1`;
+- separate carrier-neutral `DeliveryRequest.v1`, `DeliveryPreview.v1`, and approved
+  `DeliveryInitiation.v2` contracts;
 - pure, read-only compilation into immutable `DeliveryPlan.v1`;
 - deterministic reducer transitions;
 - idempotent effects through existing BuilderOps fencing/outbox contracts;
-- durable worker correlation and reattachment;
+- one provider-neutral worker context/invocation/result seam with durable correlation and
+  reattachment;
 - crash recovery through live-authority reconciliation;
-- `DeliveryReceipt.v1` with TCD, exception, review, known-defect, and provenance evidence; and
+- typed pause, resume, cancel, and supersede commands plus a separate active-run projection;
+- additive `DeliveryReceipt.v2` with immutable acceptance-profile, supersession, TCD, exception,
+  review, known-defect, and provenance evidence; and
 - separate CKM drafting/approval/receipt projection without cockpit mutation.
 
 ## Architecture modules
@@ -80,7 +84,7 @@ coordination:
 | Module | Owns | Does not own | Primary reason to change |
 | --- | --- | --- | --- |
 | Fast-lane policy | Strict independent-set admission and no-coordination execution profile | Durable orchestration state | Operating policy and immediate TCD reduction |
-| Delivery contracts | `DeliveryInitiation`, `DeliveryPlan`, reducer event/effect, and `DeliveryReceipt` schemas | Persistence or external effects | Contract evolution |
+| Delivery contracts | Request, preview, approved initiation, plan, reducer event/effect, worker-runtime, active-run, acceptance-profile, and receipt schemas | Persistence or external effects | Contract evolution |
 | Plan compiler | Pure scope resolution, readiness checks, dependency waves, exclusions, and typed rejection | Claims, launches, GitHub writes | Planning rules |
 | Delivery reducer | Allowed state transitions and next-effect decisions | Provider execution or authority mutation | State-machine policy |
 | Effect adapters | Claim, worker correlation, CI/review wait, merge/closure calls | Deciding whether an effect is allowed | External integration |
@@ -88,7 +92,7 @@ coordination:
 | CKM bridge | Draft, preview, authenticated initiation handoff, and receipt projection | Delivery execution or static cockpit mutation | Operator overview and initiation |
 | TCD/acceptance harness | Baseline, pilot metrics, fault tests, and capability acceptance | Runtime scheduling | Evidence and rollout |
 
-The durable carrier for `DeliveryInitiation.v1` remains intentionally undecided. Builder System
+The durable carrier for `DeliveryInitiation.v2` remains intentionally undecided. Builder System
 governance owns that later semantic/governance gate. Revisit it only after the compiler, reducer,
 BuilderOps reconciliation binding, and CKM bridge have supplied evidence that either the live
 `PromotionIntent` semantics are sufficient or a distinct record has a lower total contract and
@@ -102,6 +106,17 @@ envelope but no transport or storage shape becomes contract authority.
 | Strict contract validation, dependency waves, concurrency cap, claim eligibility, effect identity, retries, wait scheduling, severity routing from a valid structured verdict, closure eligibility, and receipt construction | Deterministic code |
 | Implementation, novel failure diagnosis after deterministic classification is exhausted, and independent review producing a structured verdict | Bounded model worker |
 | Scope or authority conflict, override of a blocking invariant, irreversible external policy, or a requested Product/Runtime boundary change | Owner |
+
+The owner-facing language is deliberately narrower than the internal state machine:
+
+- **AI can continue** means an explicit authority rule and every deterministic gate authorize the
+  next bounded effect;
+- **Needs your decision** means a named rule reserves the decision for the owner, or authority rules
+  are missing, conflicting, or ambiguous; and
+- **Blocked by evidence/system** means neither a model nor the owner can legitimately skip the
+  missing proof or unavailable dependency.
+
+The renderer does not infer which label applies.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -155,13 +170,39 @@ envelope but no transport or storage shape becomes contract authority.
   recovery do not regress.
 - **INV-DDO-12 — owner docs change at acceptance.** Child merges add validation receipts to the
   parent hub. Current-state owner docs are promoted only after the full capability acceptance gate.
+- **INV-DDO-13 — preview precedes approval.** `DeliveryRequest.v1` and its explicit live planning
+  snapshot compile without approval or effects. `DeliveryInitiation.v2` approves the exact request
+  and preview hashes; drift produces a new preview rather than mutating approval.
+- **INV-DDO-14 — workers are provider-neutral at the semantic boundary.** The reducer emits one
+  canonical `worker-context-pack.v1` and reducer-authorized `worker-invocation.v1`. Conformance
+  preserves the exact context-pack hash and run/plan/effect/Issue/head authority references and
+  compares the normalized delivery-domain result. Every result still carries a complete
+  invocation/carrier/provider/model/session/usage/provenance envelope; those envelope values may
+  differ across Codex, Claude, or another bounded carrier, so raw result and downstream event bytes
+  are not equality targets. Provider sessions, prose, and process exit codes never become delivery
+  authority.
+- **INV-DDO-15 — lifecycle control is typed and fenced.** Pause, resume, cancel, and supersede are
+  authenticated, idempotent commands bound to run/version/effect state. Cancellation does not claim
+  to undo an already committed external effect, and supersession is a terminal receipt state.
+- **INV-DDO-16 — live run state is not CKM truth.** `DeliveryRunView.v1` is a derived operational
+  projection over the reducer/journal. CKM receives terminal evidence and reevaluation signals; the
+  static cockpit neither polls nor mutates the run.
+- **INV-DDO-17 — acceptance meaning is immutable.** Every approved run binds one versioned
+  `DeliveryAcceptanceProfile.v1`. DDO-04 binds its exact reference and hash into immutable initial
+  reducer state alongside an unchanged `DeliveryPlan.v1`; every transition and effect preserves the
+  binding through run-version fencing, and `DeliveryReceipt.v2` repeats it. Reducer terminality
+  follows that profile, while lower-level Issue, PR, CI, review, merge, and closure facts remain
+  explicit and unchanged.
 
 ### Partial-failure paths
 
 - A fast-lane worker discovers overlap: no other worker is contacted; the affected issue is paused,
   the overlap is recorded, and the next wave is deterministically recomputed.
 - A claim succeeds but worker launch is ambiguous: reconcile the lease and durable invocation
-  correlation before starting another worker.
+  correlation. An unknown-start invocation may be reattached or deterministically read back. The
+  same invocation/idempotency key may start only once: `not_started` permits its first start;
+  terminal readback returns the recorded result and never launches again. A retry after a terminal
+  failure requires a new reducer-authorized effect and invocation identity within the repair budget.
 - A provider returns malformed review output: classify it as blocking; do not infer a severity.
 - A valid P2 registry write is unavailable: preserve the review evidence and stop the terminal
   delivery transition that requires a durable P2 disposition. Preserve the failed effect's exact
@@ -174,18 +215,20 @@ envelope but no transport or storage shape becomes contract authority.
   automated run does not fabricate journal state or execute gated effects.
 - CKM is unavailable: the CLI/API initiation path remains usable; delivery does not depend on the
   cockpit renderer.
+- A pause or cancel arrives during an in-flight effect: persist the command, finish reconciling the
+  unknown/committed effect, then stop before the next unauthorized effect.
 - A child merges while the parent remains incomplete: record a child receipt and keep the parent
-  open; no owner-doc promotion occurs.
+  open; no full-capability owner-doc promotion occurs.
 
 ## Implementation tasks and execution order
 
-1. [Run Independent Issues Through a Fast Lane](RUN_INDEPENDENT_ISSUE_FAST_LANE.md) ([#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164)) — immediate
-   value using existing primitives.
+1. [Run Independent Issues Through a Fast Lane](RUN_INDEPENDENT_ISSUE_FAST_LANE.md) ([#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164)) — delivered.
 2. [Define Carrier-Neutral Delivery Contracts](DEFINE_CARRIER_NEUTRAL_DELIVERY_CONTRACTS.md) ([#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165)) —
-   contract seam; may run in parallel with task 1.
-3. [Compile Immutable Delivery Plans](COMPILE_IMMUTABLE_DELIVERY_PLANS.md) ([#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166)) — depends on task 2.
+   delivered contract seam.
+3. [Compile Immutable Delivery Plans](COMPILE_IMMUTABLE_DELIVERY_PLANS.md) ([#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166)) — delivered by
+   [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226).
 4. [Advance Delivery Runs Deterministically](ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md) ([#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167)) — depends
-   on tasks 1 and 3.
+   on the delivered tasks 1 and 3; next serial implementation slice after this reconciliation.
 5. [Bind Delivery Effects to BuilderOps Reconciliation](BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md)
    ([#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168)) — depends on task 4 and reuses #3792.
 6. [Connect CKM Initiation and Delivery Receipts](CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md) ([#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169)) —
@@ -193,10 +236,33 @@ envelope but no transport or storage shape becomes contract authority.
 7. [Validate TCD and Recovery](VALIDATE_TCD_AND_RECOVERY.md) ([#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170)) — final pilot, failure proof,
    acceptance, and owner-doc promotion.
 
-DDO-02 becomes initially `agent:ready` after this specification is merged. DDO-01 is the other
-initial execution slice, but remains blocked until the separately owned known-defect contract in
-PR #4161 is merged; review-severity PR #4159 is already merged. Tasks 3–7 remain dependency-blocked until
-their named predecessors deliver.
+DDO-01 through DDO-03 are delivered. After this reconciliation is merged, the live #4167 body is
+aligned to its exact task specification and strict readiness validation passes, #4167 is the only
+Issue eligible to become `agent:ready`. #4168–#4170 remain serially dependency-blocked.
+
+## Architecture reconciliation after DDO-03
+
+The evidence-backed audit
+[`BUILDER_DELIVERY_AGENT_OS_2026-07-28.md`](../audits/BUILDER_DELIVERY_AGENT_OS_2026-07-28.md)
+resolves the seam between the delivered contracts/compiler and the remaining runtime:
+
+1. planning uses request → preview → exact approval; it never fabricates approval to show a
+   preview;
+2. DDO-04 defines the immutable acceptance-profile schema, and its reducer owns legal transitions
+   and emits typed effects but performs none;
+3. one provider-neutral worker port binds canonical context, invocation, effect identity, provider
+   session, heartbeat/reattachment, and structured result;
+4. BuilderOps owns durable execution, fencing, unknown-state reconciliation, active-run projection,
+   and receipts without replacing GitHub/dispatcher authority;
+5. the static CKM cockpit stays inert; a separate authenticated console/CLI owns approval and typed
+   lifecycle controls; and
+6. no external agent operating system is adopted wholesale. A durable carrier such as DBOS may be
+   evaluated only after DDO-05 through a bounded conformance proof showing replay-safe start,
+   unknown-start recovery, fencing, cancellation, and no second effect authority.
+
+`DeliveryInitiation.v1`, `StructuredWorkerResult`, `DeliveryReceipt.v1`, and the delivered compiler
+remain readable history. DDO-04 may add compatible versioned contracts, including
+`DeliveryReceipt.v2`, but it must not silently reinterpret existing v1 bytes.
 
 ### Per-child TCD capability routing
 
@@ -260,7 +326,7 @@ follow-up decision; it does not justify weakening quality gates.
   Verify: child/PR/merge ledger on the parent feature Issue.
 - [ ] One 4–8 Issue fast-lane pilot demonstrates the immediate-value profile without synthetic epic
   or worker-to-worker coordination.
-  Verify: `DeliveryReceipt.v1` pilot artifact linked from the parent.
+  Verify: `DeliveryReceipt.v2` pilot artifact linked from the parent.
 - [ ] Compiler and reducer invariants pass pure, property, and production-call-site tests.
   Verify: the test targets named by DDO-02 through DDO-05.
 - [ ] Crash injection before effect, after external effect, and before receipt converges without
@@ -284,16 +350,16 @@ bounded residual work, and triggers owner-doc promotion only when the capability
 
 ## Relationship to GitHub Issues
 
-| Role | Issue | Initial lifecycle |
+| Role | Issue | Live lifecycle on 2026-07-28 |
 | --- | --- | --- |
 | Parent validation hub | [#4163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4163) | `agent:blocked`; never a pickup Issue |
-| DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | blocked until this specification and remaining prerequisite PR #4161 are merged; #4159 is delivered |
-| DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | becomes `agent:ready` after this specification is on `main` |
+| DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | delivered and closed |
+| DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | delivered by [PR #4176](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4176) and closed |
 | DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | delivered by [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226) |
-| DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | blocked on #4164 and #4166 |
+| DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | next serial slice; remains blocked until this reconciliation is on `main` and strict readiness passes |
 | DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | blocked on #4167; timing reconciles with #3793 |
-| DDO-06 CKM bridge | [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169) | blocked on #4165 and #4168 |
-| DDO-07 acceptance | [#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170) | blocked on #4164–#4169 |
+| DDO-06 CKM bridge | [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169) | blocked on #4168 |
+| DDO-07 acceptance | [#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170) | blocked on #4167–#4169 |
 
 The live Issues own executable state. This directory owns the stable decomposition and interaction
 contract. PR [#4162](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4162) is the initial
@@ -312,3 +378,4 @@ specification publication.
 - `docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md`
 - `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
 - `docs/CKM_COCKPIT_DIRECTION_B/README.md`
+- `docs/audits/BUILDER_DELIVERY_AGENT_OS_2026-07-28.md`

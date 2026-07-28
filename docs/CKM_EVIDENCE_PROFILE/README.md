@@ -1,11 +1,11 @@
-State: Filed Phase 1 specification directory for CKM Evidence Profile. Parent validation hub [#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089) is open with `agent:blocked`; children #4090–#4092 are open, with #4091–#4092 carrying `agent:blocked`. Grounds the ratified Phase 1 of the CKM evidence-profile redesign (retire the render-time cross-dimension scalar, add per-dimension tri-state, add a per-subsystem counts view) from the advisory plan `research/CKM_EVIDENCE_PROFILE_IMPLEMENTATION_PLAN_2026-07-18.md` (BuilderOps Vault). Phase 2 as originally scoped was superseded 2026-07-18 by the validation-panel verdict (BuilderOps Vault: `research/CKM_PHASE2_VALIDATION_PANEL_2026-07-18.md`) in favor of a linker-precision workstream; Phase 3 is cut from ratification. This docs-only specification and its Issues enact no schema, scoring, or render change on their own.
+State: ACCEPTED/DELIVERED CKM Evidence Profile Phase 1 specification and delivery history. Parent #4089 and children #4090–#4092 are closed after terminal canonical real-store replay and parent acceptance on 2026-07-24. Grounds the ratified Phase 1 redesign (retired render-time cross-dimension scalar, per-dimension tri-state, and per-subsystem counts view) from the advisory plan `research/CKM_EVIDENCE_PROFILE_IMPLEMENTATION_PLAN_2026-07-18.md` (BuilderOps Vault). Phase 2 as originally scoped was superseded 2026-07-18 by the validation-panel verdict (BuilderOps Vault: `research/CKM_PHASE2_VALIDATION_PANEL_2026-07-18.md`) in favor of a linker-precision workstream; Phase 3 is cut from ratification.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the Phase 1 task decomposition, execution order, cross-task invariants, and acceptance path for the CKM Evidence Profile redesign. Subordinate to ADR-0057 (CKM existence and projection-only posture), the accepted CKM MVP contract `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`, and the Direction A presentation contract `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md`. Governs nothing that those owners govern; it specifies bounded implementation work only.
 Owner: BuilderOps governance / Capability Knowledge Model
-Temporal class: operational
+Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: this directory for Phase 1 implementation-task shape; ADR-0057 for CKM authority posture; `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` for the presentation contract this phase amends; the advisory plan in BuilderOps Vault for rationale/red-team history.
-Last reviewed: 2026-07-18
+Last reviewed: 2026-07-28
 
 # CKM Evidence Profile — Phase 1
 
@@ -182,30 +182,30 @@ These invariants hold *across* the three tasks. Each task names the ones it must
 
 ## Acceptance criteria (capability level)
 
-- [ ] No render surface (HTML overview or Markdown twin) reads the cross-dimension aggregate or a
+- [x] No render surface (HTML overview or Markdown twin) reads the cross-dimension aggregate or a
   maturity band; the per-dimension vector is the display. The `aggregate` column is still written.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_aggregate_demoted_label` updated/retired to
   assert absence of the `min` chip and band markup; `tests/builderops/ckm/test_projections.py`
   aggregate-line assertions updated; `tests/builderops/ckm/test_assessment_engine.py::test_aggregate_transparent_and_min_capped` still passes (column still written).
-- [ ] A per-dimension `unassessed` state is renderable and distinct from evidence-starved zero across
+- [x] A per-dimension `unassessed` state is renderable and distinct from evidence-starved zero across
   both the mini-cell grid and the expanded dimension markup, backed by the additive `dimension_status`
   column and the `SUPPORTED_VALUE_STATES` vocabulary; `CKM_SCHEMA_VERSION` is unchanged.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_dimension_cells_render_three_states_and_proportional_fill` extended for per-dimension `unassessed`; `tests/builderops/ckm/test_store.py` additive-column round-trip + legacy-DB back-fill test.
-- [ ] `_documentation` returns `unassessed` (not `0.0`) on the empty documentation-evidence set, and
+- [x] `_documentation` returns `unassessed` (not `0.0`) on the empty documentation-evidence set, and
   its formula id is bumped to `current-doc-evidence-v2`, forcing re-assessment rather than a
   fingerprint skip.
   Verify: `tests/builderops/ckm/test_assessment_engine.py` documentation-empty-set case asserts `unassessed` + `current-doc-evidence-v2`.
-- [ ] A per-subsystem counts view exists in the overview (and optional Markdown twin), reuses `_forest`
+- [x] A per-subsystem counts view exists in the overview (and optional Markdown twin), reuses `_forest`
   unmodified, counts **distinct artifacts** (raw edge counts omitted or secondary), surfaces a
   **shared-evidence indicator** so the ~79% fan-out duplication is visible, stays
   self-contained/deterministic, and uses the global linkage denominator.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_subsystem_counts_distinct_artifacts`; `::test_subsystem_counts_shared_evidence_indicator` (new).
-- [ ] Purity, determinism, read-only, and self-containment contracts still hold after all three tasks.
+- [x] Purity, determinism, read-only, and self-containment contracts still hold after all three tasks.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_pure_render_over_fixture_graph`; `::test_cli_rejects_missing_database_without_creating_it`; `::test_no_scripts_or_external_references`.
-- [ ] `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` acceptance rows referencing the
+- [x] `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` acceptance rows referencing the
   `min` aggregate and the maturity band are updated in the same PR as CKM-EP-01.
   Verify: doc writeback at `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md :: Acceptance criteria` in the CKM-EP-01 PR diff.
-- [ ] The terminal real-store validation gate (INV-EP-6) records all three slice receipts: CKM-EP-01
+- [x] The terminal real-store validation gate (INV-EP-6) records all three slice receipts: CKM-EP-01
   proves Retrieval no longer renders falsely red / `critical`; CKM-EP-02 proves one named,
   genuinely absent documentation-evidence case renders `unassessed`; and CKM-EP-03 proves the
   distinct-artifact totals and shared-evidence indicators for the five stable validation
@@ -216,33 +216,33 @@ These invariants hold *across* the three tasks. Each task names the ones it must
 
 ## Relationship to GitHub issues
 
-The authoritative backlog and live acceptance surface is parent validation hub
-[#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089), which is open with
-`agent:blocked` and is never a pickup issue. Its local pointer and validation-hub map is
+The authoritative backlog and acceptance surface was parent validation hub
+[#4089](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089), which is closed and was never a
+pickup issue. Its local pointer and validation-hub map is
 [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
 
 The three serial child slices are filed from this specification:
 
 1. CKM-EP-01 — [#4090](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4090) —
-   [SCALAR_RETIREMENT.md](SCALAR_RETIREMENT.md); open; first serial slice.
+   [SCALAR_RETIREMENT.md](SCALAR_RETIREMENT.md); delivered and closed.
 2. CKM-EP-02 — [#4091](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4091) —
-   [TRISTATE_STATUS.md](TRISTATE_STATUS.md); open and `agent:blocked` pending CKM-EP-01.
+   [TRISTATE_STATUS.md](TRISTATE_STATUS.md); delivered and closed.
 3. CKM-EP-03 — [#4092](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4092) —
-   [SUBSYSTEM_COUNTS_VIEW.md](SUBSYSTEM_COUNTS_VIEW.md); open and `agent:blocked` pending the
-   serial execution path.
+   [SUBSYSTEM_COUNTS_VIEW.md](SUBSYSTEM_COUNTS_VIEW.md); delivered and closed.
 
-Each delivered child posts its exact PR/SHA, validation, owner-doc result, and parent handoff to
-#4089. The parent remains open until the terminal INV-EP-6 real-store validation receipt resolves
-the capability-level acceptance path.
+Each delivered child posted its exact PR/SHA, validation, owner-doc result, and parent handoff to
+#4089. The
+[terminal INV-EP-6 replay receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089#issuecomment-5072782036)
+and [parent acceptance](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4089#issuecomment-5072981172)
+resolve the capability-level acceptance path.
 
 ## Verification and acceptance path
 
-Each task ships its named focused tests under `tests/builderops/ckm/`, runs `ruff check app tests`,
-`mypy app`, and the standard `pytest -q -m "not pg"` suite, and passes current-SHA CI plus the local
-review gate. The capability is not accepted until the parent feature issue records a terminal
-INV-EP-6 receipt that combines the CKM-EP-01 Retrieval result, the CKM-EP-02 named-absence result,
-and the CKM-EP-03 five-capability count comparison plus all-22 shared-evidence-indicator result on
-the operator's real 31-capability store.
+Each task shipped its named focused tests under `tests/builderops/ckm/`, ran `ruff check app tests`,
+`mypy app`, and the standard `pytest -q -m "not pg"` suite, and passed current-SHA CI plus the local
+review gate. Parent #4089 accepted the terminal INV-EP-6 receipt combining the CKM-EP-01 Retrieval
+result, CKM-EP-02 named-absence result, and CKM-EP-03 five-capability count comparison plus
+all-22 shared-evidence-indicator result on the operator's real 31-capability store.
 No owner-doc promotion beyond the bundled Direction A row updates (INV-EP-5) is implied by Phase 1;
 the maturity→evidence-profile rename and any broader owner-doc claim require a separate future
 specification, authority decision, and issue contract.

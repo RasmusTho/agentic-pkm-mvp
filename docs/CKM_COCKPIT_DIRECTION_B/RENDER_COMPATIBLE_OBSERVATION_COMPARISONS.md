@@ -114,9 +114,8 @@ retention honesty, and the distinction between a two-point delta and a trend.
 
 ## Related GitHub Issues
 
-Live child [#4083](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4083) under parent
-[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) is `agent:blocked` on CKM-DB-02
-[#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082). Cheapest acceptable TCD route:
-**Sol/high** because this slice touches retained data, compatibility/refusal semantics,
-read-side-effect guarantees, and a production CLI boundary; de-escalate implementation mechanics
-to Terra/high only after the exact selector/refusal tests are fixed and locally green.
+Delivery history: child [#4083](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4083),
+predecessor [#4082](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4082), and parent
+[#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080) are closed. The planned cheapest
+acceptable TCD route was **Sol/high** because the slice touched retained data,
+compatibility/refusal semantics, read-side-effect guarantees, and a production CLI boundary.
