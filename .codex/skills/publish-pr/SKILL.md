@@ -254,8 +254,8 @@ Any overlap with your staged file set => STOP: keep the earlier compliant PR, cl
 Execute based on lane classification. Every template below includes the required
 `Final-Review-Rounds: 1` line (the `pr-contract` gate rejects a body with zero or more than one
 match of `/^Final-Review-Rounds:[ \t]*[012][ \t]*$/`; declare `0` for light-path PRs per
-`AGENTS.md :: Proportional delivery` — Tier 1 / single-issue Tier 2 with no high-risk surface —
-and `2` only when a second final review round is actually planned) and concrete `## BuilderOps Routing` defaults instead of `<...>` placeholders
+`AGENTS.md :: Proportional delivery` — single-issue (or issue-free) Tier 1/2 with no high-risk
+surface — and `2` only when a second final review round is actually planned) and concrete `## BuilderOps Routing` defaults instead of `<...>` placeholders
 (the gate rejects any routing value matching `^<.*>$`). The `none` / reason defaults shown match what
 `scripts/pr_body_generator.py` emits (`_builderops_section`) — replace them with the actual
 records/projections/receipts and reason whenever BuilderOps material was in fact routed.
