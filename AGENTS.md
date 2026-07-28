@@ -208,6 +208,29 @@ Many agents run against this repo at once. C_coordination, C_delay, and C_rework
   fail or wait boundedly; never interrupt the holder. Do not background a leased command.
 - **Fail-closed gate composition.** Any command whose exit code gates a subsequent action (commit, push, merge, receipt) must run bare with its status captured directly (`rc=$?`) — never composed with `|| echo`, `| tail`, `| grep`, backgrounding, or anything that substitutes another command's exit status for the gate's. A gate whose failure mode is silent success is not a gate. (Instances: BRANCH_TRUTH_GATE `|| echo` 2026-06-13; PR #2759 pipe-masked merge gate 2026-07-02.)
 
+### Transition-period bug-delivery policy
+
+This is Builder System transition-period delivery policy only. It does not describe
+Product/Runtime truth and does not claim that a future deterministic orchestrator is shipped.
+
+For larger `type:bug` issue sets, use a minimal-context coordinator/dispatcher: Codex Luna / low
+reasoning is appropriate for deterministic read-only intake, live classification, lifecycle
+snapshots, and task dispatch; use Terra / medium only when that coordination requires judgment.
+The coordinator does not implement claimed bugs. Each claimed bug runs end-to-end in its own Codex
+task/session and isolated worktree. Default to serial delivery: no more than one active bug
+implementation. An independent wave may exceed that only with an explicit TCD rationale covering
+independence, coordination cost, isolated worktrees, and expected quality or delay benefit.
+
+Each bug implementation normally uses Codex Terra / medium. Escalate to Terra / high or Sol /
+high–xhigh only under the existing TCD escalation triggers or protected P0/P1/high-risk surfaces;
+resolve tier names to the current generation rather than hardcoding a generation-specific model.
+Severity and deferred-defect authority remain in
+`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` and `bug-to-issue`: only P0/P1
+findings enter repair/re-review; a confirmed P2 leaves the active PR unchanged and is recorded in
+the rolling Known Defects registry Issue #4172 with a `deferred` disposition and reply on the
+original review thread; P3 is informational/non-defect. Protected AC, data, authority, invariant,
+and other protected findings cannot be downgraded to P2/P3.
+
 ### TCD output blocks
 
 Planning/decomposition, review/verification, and retrospective skills reference these blocks by name instead of restating the policy. Emit only the block a skill calls for, and fill only the fields that skill's own output already implies.

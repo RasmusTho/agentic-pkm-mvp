@@ -235,10 +235,10 @@ the disposition; there is no valid `blocking P2` category.
   repair/re-review loop.
 - **P2** — a real defect whose risk is accepted for this PR and deferred to bounded follow-up. Leave
   the PR code unchanged for that finding, invoke the existing
-  `.codex/skills/bug-to-issue/SKILL.md` intake path to create or update durable defect evidence,
-  mark the finding `deferred` in the review receipt, and reply on the original review finding/thread
-  with the Issue reference. Once that reference is live, the finding is non-blocking and allows
-  merge for that finding without another review round.
+  `.codex/skills/bug-to-issue/SKILL.md` intake path to create or update the rolling Known Defects
+  registry Issue #4172, mark the finding `deferred` in the review receipt, and reply on the original
+  review finding/thread with the registry Issue reference. Once that reference is live, the finding
+  is non-blocking and allows merge for that finding without another review round.
 - **P3** — informational advice, style guidance, or a non-defect suggestion. Record it when useful;
   it does not block merge, require defect intake, or trigger another review round.
 

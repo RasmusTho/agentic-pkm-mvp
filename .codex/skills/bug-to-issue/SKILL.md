@@ -37,10 +37,15 @@ not registry intake.
 The classification decision may require engineering judgment, but appending, deduplicating, and
 looking up a confirmed registry entry do not require an LLM coordinator.
 
+When a normal `type:bug` Issue is selected from a larger bug set for implementation, its delivery
+session, worktree, and model routing follow `AGENTS.md :: Transition-period bug-delivery policy`.
+That policy is Builder System transition guidance, not Product/Runtime truth or an assertion that a
+future deterministic orchestrator is shipped.
+
 ## Deferred Known Defects registry
 
-The rolling registry is one open, locked Issue carrying `type:bug` and `state:known-defect`. It is a
-container for schema-marked comments, not an implementation contract, carries no `agent:*` state,
+The current rolling registry is Issue #4172: one open, locked Issue carrying `type:bug` and
+`state:known-defect`. It is a container for schema-marked comments, not an implementation contract, carries no `agent:*` state,
 and must never carry `agent:ready`. Locking limits comments to repository collaborators so marker
 comments remain within the builder authority boundary. `state:known-defect` is defined centrally in
 `.codex/skills/_shared/LABEL_TAXONOMY.md`.
