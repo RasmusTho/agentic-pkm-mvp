@@ -53,6 +53,17 @@ from app.builderops.delivery_orchestration_contracts import (
     validate_reducer_effect_evidence,
     validate_reducer_event_evidence,
 )
+from app.builderops.delivery_reducer import (
+    DeliveryAcceptanceProfile,
+    DeliveryReceiptV2,
+    DeliveryRunEvent,
+    DeliveryRunState,
+    EXISTING_ADAPTER_PATHS,
+    WorkerContextPack,
+    WorkerInvocation,
+    WorkerResultV2,
+    reduce_delivery_run,
+)
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -3544,3 +3555,149 @@ def test_check_evidence_requires_distinct_check_run_identity() -> None:
         match="check run authority identities must not contain duplicates",
     ):
         parse_delivery_contract(payload)
+
+
+def _ddo04_state() -> tuple[DeliveryRunState, DeliveryPlan, IssueScope]:
+    issue = _issue(4167, SHA_A)
+    plan = _plan(issue, _initiation(issue))
+    profile = DeliveryAcceptanceProfile(
+        profile_id="github-merged-profile",
+        required_evidence=("ci_green", "issue_closed", "pr_merged", "review_accepted"),
+    )
+    return (
+        DeliveryRunState(
+            run_id="run-ddo04",
+            plan_ref=ContractRef(schema_version=plan.schema_version, contract_id=plan.plan_id, content_hash=plan.content_hash),
+            acceptance_profile_ref=ContractRef(schema_version=profile.schema_version, contract_id=profile.profile_id, content_hash=profile.content_hash),
+            acceptance_profile_hash=profile.content_hash,
+        ),
+        plan,
+        issue,
+    )
+
+
+def _event(state: DeliveryRunState, kind: str, *, head: str | None = None, **kwargs: object) -> DeliveryRunEvent:
+    return DeliveryRunEvent(
+        event_id=f"{state.version}-{kind}-{head or 'none'}",
+        kind=kind,  # type: ignore[arg-type]
+        run_id=state.run_id,
+        expected_version=state.version,
+        exact_head_sha=head,
+        **kwargs,
+    )
+
+
+def test_reducer_transition_matrix_is_exhaustive() -> None:
+    state, _, _ = _ddo04_state()
+    phases = []
+    for kind, head in (("admit", None), ("claimed", None), ("worker_completed", SHA_D), ("ci_passed", SHA_D), ("review_accepted", SHA_D), ("merged", SHA_D), ("closed", SHA_D)):
+        result = reduce_delivery_run(state, _event(state, kind, head=head))
+        assert result.state is not state
+        state = result.state
+        phases.append(state.phase)
+    assert phases == ["claiming", "working", "awaiting_ci", "awaiting_review", "merging", "closing", "delivered"]
+    assert [effect.kind for effect in result.effects] == ["record_delivery_receipt"]
+
+
+def test_duplicate_and_stale_events_cannot_advance() -> None:
+    state, _, _ = _ddo04_state()
+    admitted = reduce_delivery_run(state, _event(state, "admit")).state
+    duplicate = DeliveryRunEvent("0-admit-none", "admit", state.run_id, state.version)
+    assert reduce_delivery_run(admitted, duplicate).state == admitted
+    stale = DeliveryRunEvent("stale", "claimed", state.run_id, 0)
+    assert reduce_delivery_run(admitted, stale).state == admitted
+    bad_head = reduce_delivery_run(admitted, _event(admitted, "worker_completed", head=SHA_D)).state
+    assert reduce_delivery_run(bad_head, _event(bad_head, "ci_passed", head=SHA_E)).state == bad_head
+
+
+def test_effects_require_exact_prerequisites() -> None:
+    state, _, _ = _ddo04_state()
+    assert not reduce_delivery_run(state, _event(state, "merged", head=SHA_D)).effects
+    admitted = reduce_delivery_run(state, _event(state, "admit"))
+    assert [item.kind for item in admitted.effects] == ["claim_issue"]
+    claimed = reduce_delivery_run(admitted.state, _event(admitted.state, "claimed"))
+    assert [item.kind for item in claimed.effects] == ["launch_worker"]
+
+
+def test_review_severity_routes_fail_closed() -> None:
+    state, _, _ = _ddo04_state()
+    for kind, head in (("admit", None), ("claimed", None), ("worker_completed", SHA_D), ("ci_passed", SHA_D)):
+        state = reduce_delivery_run(state, _event(state, kind, head=head)).state
+    p2 = reduce_delivery_run(state, _event(state, "review_p2", head=SHA_D))
+    assert [effect.kind for effect in p2.effects] == ["record_known_defect"]
+    blocked = reduce_delivery_run(state, _event(state, "review_p2", head=SHA_D, protected=True))
+    assert blocked.state.phase == "blocked"
+    p0 = reduce_delivery_run(state, _event(state, "review_blocking", head=SHA_D))
+    assert p0.state.phase == "blocked"
+
+
+def test_runner_uses_existing_claim_wait_and_verified_closure_paths() -> None:
+    assert EXISTING_ADAPTER_PATHS == {
+        "claim_issue": "scripts/issue_pickup_claim.sh",
+        "await_ci": "scripts/wait_for_pr_checks.py",
+        "request_review": ".codex/skills/verification-and-closure/SKILL.md",
+        "merge_pull_request": ".codex/skills/verification-and-closure/SKILL.md",
+        "close_issue": ".codex/skills/verification-and-closure/SKILL.md",
+    }
+
+
+def test_independent_waves_advance_without_model_coordination() -> None:
+    first, _, _ = _ddo04_state()
+    second, _, _ = _ddo04_state()
+    second = DeliveryRunState(**{**second.__dict__, "run_id": "run-ddo04-wave-2"})
+    assert reduce_delivery_run(first, _event(first, "admit")).effects[0].kind == "claim_issue"
+    assert reduce_delivery_run(second, _event(second, "admit")).effects[0].kind == "claim_issue"
+
+
+def test_worker_contracts_bind_one_authority_chain() -> None:
+    state, plan, issue = _ddo04_state()
+    effect_ref = ContractRef(schema_version=REDUCER_EFFECT_VERSION, contract_id="effect-1", content_hash=SHA_C)
+    pack = WorkerContextPack(context_pack_id="pack-1", run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, issue=issue, required_skills=("issue-to-code",), verify_targets=("pytest",))
+    pack_ref = ContractRef(schema_version=pack.schema_version, contract_id=pack.context_pack_id, content_hash=pack.content_hash)
+    invocation = WorkerInvocation(invocation_id="invoke-1", context_pack_ref=pack_ref, context_pack_hash=pack.content_hash, run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, idempotency_key="start-once", runtime_target="neutral")
+    invocation_ref = ContractRef(schema_version=invocation.schema_version, contract_id=invocation.invocation_id, content_hash=invocation.content_hash)
+    result = WorkerResultV2(result_id="result-1", invocation_ref=invocation_ref, context_pack_ref=pack_ref, context_pack_hash=pack.content_hash, run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, issue=issue, exact_head_sha=SHA_D, status="completed", carrier="carrier-a", provider="provider-a", model="model-a", session_ref="session-a", usage_ref="usage-a", provenance_ref="provenance-a")
+    assert result.context_pack_hash == pack.content_hash
+    with pytest.raises(ValidationError, match="exact context-pack hash"):
+        WorkerInvocation(invocation_id="bad", context_pack_ref=pack_ref, context_pack_hash=SHA_A, run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, idempotency_key="bad", runtime_target="neutral")
+
+
+def test_worker_runtime_port_is_provider_neutral_and_exhaustive() -> None:
+    from app.builderops.delivery_reducer import WorkerRuntimePort
+    assert set(WorkerRuntimePort.__dict__) >= {"start", "inspect", "heartbeat", "interrupt", "reattach", "await_terminal", "cancel"}
+
+
+def test_unstructured_worker_output_cannot_advance() -> None:
+    state, _, _ = _ddo04_state()
+    assert reduce_delivery_run(state, _event(state, "admit")).state.phase == "claiming"
+    assert reduce_delivery_run(state, _event(state, "review_accepted", head=SHA_D)).state == state
+
+
+def test_lifecycle_controls_are_typed_fenced_and_effect_safe() -> None:
+    state, _, _ = _ddo04_state()
+    paused = reduce_delivery_run(state, _event(state, "pause")).state
+    assert paused.phase == "paused"
+    resumed = reduce_delivery_run(paused, _event(paused, "resume"))
+    assert resumed.state.phase == "claiming" and resumed.effects[0].kind == "claim_issue"
+    unauthenticated = reduce_delivery_run(state, _event(state, "cancel", authenticated=False))
+    assert unauthenticated.state.phase == "owner_decision" and not unauthenticated.effects
+
+
+def test_authority_ambiguity_and_system_blocks_are_distinct() -> None:
+    state, _, _ = _ddo04_state()
+    assert reduce_delivery_run(state, _event(state, "authority_ambiguous")).state.phase == "owner_decision"
+    assert reduce_delivery_run(state, _event(state, "system_missing")).state.phase == "system_blocked"
+
+
+def test_acceptance_profile_is_canonical_and_evidence_bound() -> None:
+    state, _, _ = _ddo04_state()
+    assert state.acceptance_profile_ref.content_hash == state.acceptance_profile_hash
+    with pytest.raises(ValidationError, match="sorted"):
+        DeliveryAcceptanceProfile(profile_id="bad", required_evidence=("pr_merged", "ci_green"))
+
+
+def test_delivery_receipt_v2_is_additive_and_version_bound() -> None:
+    state, _, _ = _ddo04_state()
+    receipt = DeliveryReceiptV2("receipt-2", SHA_A, state.acceptance_profile_ref, state.acceptance_profile_hash, "superseded", "run-old", ContractRef(schema_version="builderops.delivery-initiation.v1", contract_id="init-new", content_hash=SHA_B))
+    assert receipt.terminal_outcome == "superseded"
+    assert DeliveryReceipt.model_fields["schema_version"].default == "builderops.delivery-receipt.v1"
