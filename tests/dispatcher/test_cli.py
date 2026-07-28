@@ -201,10 +201,10 @@ def test_heartbeat_no_lease_error(tmp_env, store):
 
 # ---------------------------------------------------------------------------
 # AC: release --json returns updated task state
-# Verify: test_release_json_output
+# Verify: test_release_json_output_clears_task_side_lease_state
 # ---------------------------------------------------------------------------
 
-def test_release_json_output(tmp_env, store):
+def test_release_json_output_clears_task_side_lease_state(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
@@ -215,6 +215,8 @@ def test_release_json_output(tmp_env, store):
     assert data["ok"] is True
     assert data["task"]["status"] == "ready"
     assert data["task"]["claimed_by"] is None
+    assert data["task"]["lease_id"] is None
+    assert data["task"]["lease_expires_at"] is None
 
 
 # ---------------------------------------------------------------------------

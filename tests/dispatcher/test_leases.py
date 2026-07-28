@@ -121,7 +121,7 @@ def test_heartbeat_no_lease_rejected(store: SqliteStore) -> None:
         heartbeat(store, "task-1", "agent-1")
 
 
-def test_release_removes_lease(store: SqliteStore) -> None:
+def test_release_removes_all_task_side_lease_state(store: SqliteStore) -> None:
     task = _task()
     store.upsert_task(task)
 
@@ -131,10 +131,13 @@ def test_release_removes_lease(store: SqliteStore) -> None:
 
     assert released_task.lease_id is None
     assert released_task.claimed_by is None
+    assert released_task.last_heartbeat_at is None
+    assert released_task.lease_expires_at is None
     assert released_task.status == "ready"
 
     fetched_lease = store.get_lease(lease.lease_id)
     assert fetched_lease.released_at is not None
+    assert fetched_lease.expires_at == lease.expires_at
 
 
 def test_release_wrong_agent_rejected(store: SqliteStore) -> None:

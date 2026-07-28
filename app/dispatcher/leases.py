@@ -283,6 +283,7 @@ def release(
     task.lease_id = None
     task.claimed_by = None
     task.last_heartbeat_at = None
+    task.lease_expires_at = None
 
     if task.blocked_reason is None:
         task.status = "ready"
