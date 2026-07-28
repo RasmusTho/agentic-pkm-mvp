@@ -37,11 +37,17 @@ READINESS_CLASSES: tuple[str, ...] = (
     "missing_required_sections",
     "missing_source_docs",
     "missing_verify_markers",
+    "missing_verify_file_paths",
     "malformed_acceptance_criteria",
     "ambiguous_intent",
     "authority_risk",
     "not_agentable",
     "unknown",
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VERIFY_FILE_PATH_PATTERN = re.compile(
+    r"(?<![\w.-])(?P<path>(?:(?:/|\.?\./)?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9]+))"
 )
 
 AMBIGUOUS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
@@ -95,6 +101,7 @@ class AcceptanceCriteriaReport:
     malformed: bool
     verify_markers_present: bool
     missing_verify_items: list[str]
+    missing_verify_file_paths: list[str]
 
 
 @dataclass(frozen=True)
@@ -189,6 +196,29 @@ def _has_concrete_verify_marker(item: str) -> bool:
     return False
 
 
+def _verify_targets(item: str) -> list[str]:
+    return [
+        match.group(1).strip().strip("`").strip()
+        for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item)
+        if match.group(1).strip()
+    ]
+
+
+def _missing_verify_file_paths(item: str) -> list[str]:
+    missing_paths: list[str] = []
+    for target in _verify_targets(item):
+        for match in VERIFY_FILE_PATH_PATTERN.finditer(target):
+            path = match.group("path")
+            candidate = Path(path)
+            if (
+                candidate.is_absolute()
+                or ".." in candidate.parts
+                or not (REPO_ROOT / candidate).is_file()
+            ):
+                missing_paths.append(path)
+    return missing_paths
+
+
 def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport:
     lines = _non_placeholder_lines(section)
     items = _extract_acceptance_items(section)
@@ -198,12 +228,16 @@ def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport
         for item in items
         if not _has_concrete_verify_marker(item)
     ]
+    missing_file_paths = [
+        path for item in items for path in _missing_verify_file_paths(item)
+    ]
     return AcceptanceCriteriaReport(
         present=bool(items),
         count=len(items),
         malformed=malformed,
         verify_markers_present=bool(items) and not missing_verify,
         missing_verify_items=missing_verify,
+        missing_verify_file_paths=missing_file_paths,
     )
 
 
@@ -260,6 +294,8 @@ def classify_issue_body(
         classification = "malformed_acceptance_criteria"
     elif not ac_report.verify_markers_present:
         classification = "missing_verify_markers"
+    elif ac_report.missing_verify_file_paths:
+        classification = "missing_verify_file_paths"
     elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
         classification = "authority_risk"
         human_exception_required = True
@@ -338,6 +374,13 @@ def repair_guidance(
         return [
             "Add an inline `Verify:` marker to every acceptance criterion.",
             "Missing Verify marker on: " + missing_items + ".",
+        ]
+    if classification == "missing_verify_file_paths":
+        return [
+            "Update every file-based `Verify:` target to name an existing repository file.",
+            "Missing Verify file path(s): "
+            + ", ".join(ac_report.missing_verify_file_paths)
+            + ".",
         ]
     return ["Unable to determine repair guidance; rewrite using the canonical task template."]
 
