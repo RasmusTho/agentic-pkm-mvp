@@ -63,6 +63,9 @@ the ruling lands. Whichever source is used — skill template or generator — r
 be concrete before any PR is opened:
 
 - implementation lane requires a linked issue;
+- closing authority must be declared only on a dedicated `Fixes #<id>`, `Closes #<id>`, or
+  `Resolves #<id>` line; narrative prose must never place a closing keyword directly adjacent to
+  `#<id>`;
 - every body requires concrete SBS impact, validation, and owner-doc writeback resolution;
 - issue-backed and direct-repair bodies require concrete BuilderOps routing lines;
 - direct repair requires `Type`, `Reason`, `Validation`, and `Issue required: no`.

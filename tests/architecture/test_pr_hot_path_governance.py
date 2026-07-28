@@ -376,6 +376,56 @@ _VALID_BUILDEROPS_ROUTING = (
 )
 
 
+_CLOSING_LINE = _re.compile(
+    r"^[ \t]*(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)[ \t]*:?[ \t]+#[1-9][0-9]*[ \t]*$",
+    _re.IGNORECASE,
+)
+_CLOSING_MENTION = _re.compile(
+    r"(?<![0-9A-Za-z_])(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)[ \t]*:?[ \t]+#([1-9][0-9]*)(?=$|[ \t.,;:)\]}])",
+    _re.IGNORECASE,
+)
+
+
+def _undeclared_prose_closers(body: str) -> list[tuple[int, int, str]]:
+    """Mirror the pr-contract rule: closers belong on dedicated declaration lines."""
+    found: list[tuple[int, int, str]] = []
+    for line_number, line in enumerate(body.splitlines(), start=1):
+        if _CLOSING_LINE.fullmatch(line):
+            continue
+        for match in _CLOSING_MENTION.finditer(line):
+            found.append((int(match.group(1)), line_number, line))
+    return found
+
+
+def test_prose_closing_keyword_is_rejected() -> None:
+    """AC1: prose cannot grant GitHub closing authority."""
+    body = (
+        "## BuilderOps Routing\n"
+        "Daily audit found PR #4141 closed #4140 while review comments remained."
+    )
+    assert _undeclared_prose_closers(body) == [
+        (4140, 2, "Daily audit found PR #4141 closed #4140 while review comments remained.")
+    ]
+
+    workflow = _read(".github/workflows/issue-pr-governance.yml")
+    assert "const undeclaredClosingMentions =" in workflow
+    assert "PR body closing issue #${offending.issueNumber} on line ${offending.lineNumber}" in workflow
+    assert "Reword narrative prose to avoid a closing keyword directly adjacent" in workflow
+
+
+def test_declared_closing_lines_still_pass() -> None:
+    """AC2: canonical single- and multi-issue declarations remain valid authority."""
+    single_issue = "Governing-Issue: #4211\n\nFixes #4211"
+    multi_issue = "Governing-Issue: #4200\n\nCloses #4201\nResolves #4202"
+
+    assert _undeclared_prose_closers(single_issue) == []
+    assert _undeclared_prose_closers(multi_issue) == []
+
+    workflow = _read(".github/workflows/issue-pr-governance.yml")
+    assert "const canonicalClosingLinePattern =" in workflow
+    assert "const declaredClosingLines = canonicalBody.match(" in workflow
+
+
 def test_direct_repair_accepted_when_block_is_first_section() -> None:
     """AC1: Direct Repair block followed by another section."""
     body = (

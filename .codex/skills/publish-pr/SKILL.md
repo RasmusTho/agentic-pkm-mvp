@@ -418,6 +418,8 @@ Implementation lane:
 - include exactly one `Governing-Issue: #<id>` line and closing keywords only for fully delivered
   Issues; the normal single-Issue body uses a matching `Fixes #<id>`, while approved multi-Issue
   delivery may keep the governing parent open and close delivered children
+- put each closing keyword on its own dedicated declaration line; never use a closing keyword
+  directly adjacent to `#<id>` in narrative prose, including BuilderOps routing or learning notes
 - summarize the bounded change
 - state focused validation that actually ran
 

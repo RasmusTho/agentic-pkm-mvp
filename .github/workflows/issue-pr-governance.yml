@@ -265,9 +265,31 @@ jobs:
               const issueLinkMentions = canonicalBody.match(
                 new RegExp(`${issueTokenPrefix}${closingKeyword}${closingAttemptSeparator}${closingAttemptTarget}`, "gm")
               ) || [];
-              const exactIssueLinkMatches = canonicalBody.match(
-                new RegExp(`${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+              const canonicalClosingLinePattern = new RegExp(
+                `^[ \\t]*${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*[ \\t]*$`,
+                "i"
+              );
+              const declaredClosingLines = canonicalBody.match(
+                new RegExp(
+                  `^[ \\t]*${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*[ \\t]*$`,
+                  "gm"
+                )
               ) || [];
+              const exactIssueLinkMatches = declaredClosingLines;
+              const proseClosingMentionPattern = new RegExp(
+                `${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#([1-9][0-9]*)${issueTokenTerminator}`,
+                "g"
+              );
+              const undeclaredClosingMentions = canonicalBody
+                .split("\n")
+                .flatMap((line, lineIndex) => {
+                  if (canonicalClosingLinePattern.test(line)) return [];
+                  return [...line.matchAll(proseClosingMentionPattern)].map(match => ({
+                    issueNumber: Number(match[1]),
+                    line: line,
+                    lineNumber: lineIndex + 1,
+                  }));
+                });
               const neutralizedClosingLines = canonicalBody.match(
                 /^[ \t]*Verified-Closing-Issues[ \t]*:.*$/gm
               ) || [];
@@ -334,6 +356,7 @@ jobs:
                 hasIssueLink,
                 hasUnsupportedLineSeparator,
                 issueLinkMentions,
+                undeclaredClosingMentions,
                 governingIssue: governingIssueNumber,
                 neutralizedClosingIssues: neutralizedIssueNumbers,
                 neutralizedValid,
@@ -463,6 +486,13 @@ jobs:
             // neutralized-authority-validator:end
             const issueAuthority = classifyIssueAuthority(body);
             const hasIssueAuthority = issueAuthority.hasIssueAuthority;
+            if (issueAuthority.undeclaredClosingMentions.length > 0) {
+              const offending = issueAuthority.undeclaredClosingMentions[0];
+              core.setFailed(
+                `PR body closing issue #${offending.issueNumber} on line ${offending.lineNumber}: ${offending.line}. Reword narrative prose to avoid a closing keyword directly adjacent to \`#<id>\`.`
+              );
+              return;
+            }
             const titleClosureAttempt = classifyIssueAuthority(
               pullRequest.title || ""
             ).issueLinkMentions.length > 0;
