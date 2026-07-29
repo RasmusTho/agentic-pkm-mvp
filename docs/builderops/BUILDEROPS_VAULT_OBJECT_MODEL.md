@@ -1,12 +1,12 @@
-State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, #1507 docs-freshness capture fields, and #1508 roadmap-execution capture fields, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, migration, or product/runtime behavior.
+State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, #1507 docs-freshness capture fields, and #1508 roadmap-execution capture fields, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. ADR-0065 adds a gated target-state boundary for future content-free temporal-intention evidence; no record type or runtime behavior is implemented by that decision.
 Doc role: BuilderOps schema contract
 Authority: Defines the initial BuilderOps Vault object model for #1500, subordinate to ADR-0010 for authority and promotion boundaries.
 Owner: BuilderOps governance
 Temporal class: strategic
 Review cadence: event-driven
-Source of truth: ADR-0010 plus issue #1500 until a later BuilderOps implementation owner exists
-Last reviewed: 2026-06-01
-Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, issues #1498/#1499/#1500/#1495/#1507/#1508, PR #1510
+Source of truth: ADR-0010 plus issue #1500 for the initial model; ADR-0065 additionally owns the gated temporal-intention boundary until a later implementation contract is accepted
+Last reviewed: 2026-07-29
+Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md, docs/adr/ADR-0065-builderops-temporal-intention-authority.md, issues #1498/#1499/#1500/#1495/#1507/#1508/#3793, PR #1510
 
 # BuilderOps Vault Object Model
 
@@ -211,6 +211,40 @@ authority-surface references.
 - `related_issue_refs`, `related_pr_refs`, `related_doc_refs`: convenience references for common repo and GitHub surfaces. These should duplicate, not replace, the authoritative `source_refs`.
 
 ## Object Types
+
+### Gated target-state boundary: temporal-intention lifecycle evidence
+
+ADR-0065 owns the future temporal-intention authority and lifecycle semantics. This contract reserves
+that capability boundary without claiming that a record type, API path, PostgreSQL mapping, or
+projection is implemented.
+
+The first implementation specification may register exactly one non-content-bearing record type. It
+must:
+
+- remain Builder System operational evidence and never become Product intention, commitment,
+  Moment, attention, memory, artifact, or UI authority;
+- admit only `done`, `ignore`, and `never_show_again` with the meanings and explicit reversal rules
+  in `ADR-0065 :: D3 — Closed disposition vocabulary and explicit reversals`;
+- reduce an allowed expiry or explicit reversal to the existing `active` lifecycle state with no
+  current disposition, while preserving the prior disposition in immutable receipt lineage; this
+  reducer outcome is not a fourth client-admissible disposition;
+- use one stable opaque identity, the existing mandatory BuilderOps authority envelope, one
+  idempotency identity, and append-only BuilderOpsReceipt lineage;
+- map explicitly to the ADR-0062 PostgreSQL authority envelope and transaction kernel;
+- use the existing outbox path for derived projection work and keep every projection read-only,
+  rebuildable, and non-authoritative; and
+- fail closed on free text, content, raw paths, raw identifiers of the underlying intention/source/
+  person/host/Product artifact, fingerprints, deterministic source derivatives, HMAC material, or
+  unknown fields.
+
+The production writer gate is the proved BCP-06 cutover in issue #3793. Local SQLite and injected
+adapters may be used only for tests or legacy migration owned elsewhere; they cannot admit
+production temporal-intention authority.
+
+Content-bearing evidence, identifier/fingerprint/HMAC work, retention or physical-erasure semantics,
+collectors, migration, cross-host behavior outside the authenticated API, and Product/cockpit
+projections remain separate future decisions or tasks. They are not extensions of the first record
+shape by default.
 
 ### AgentWorklog
 
