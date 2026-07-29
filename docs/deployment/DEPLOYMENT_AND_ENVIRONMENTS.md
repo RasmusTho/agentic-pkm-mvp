@@ -119,7 +119,9 @@ previous-image refs from the current/target pins, and then starts only the guard
 gateway through that overlay. Scalar mode keeps the capable current-image pin as its durable guard
 identity and records the old target in the rollback anchor; a failed or restarted establishment
 therefore resumes the guarded mode instead of attempting a session-blocked broad-stack restart.
-The gateway uses the channel's managed restart posture. The legacy projection translates only that
+The current guard adopts an existing authenticated session only when its binding, registry
+revision, selected root, export, and policy hashes exactly match the retry. The gateway uses the
+channel's managed restart posture. The legacy projection translates only that
 registration's host path to the container alias and authenticates both the canonical registry
 export and translated projection, so roll-forward restores the original binding identity rather
 than adopting a container path. The ledger validates that alias by its materialized physical-root

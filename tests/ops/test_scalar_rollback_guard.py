@@ -82,6 +82,37 @@ def _scalar_preflight(runtime, registration, root, rollback_path) -> None:
     )
 
 
+def test_scalar_preflight_adopts_only_an_exact_persisted_session(
+    tmp_path,
+) -> None:
+    runtime, registration, root = _runtime(tmp_path)
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _scalar_preflight(runtime, registration, root, rollback_path)
+    session_path = runtime.registry.scalar_rollback_session_path
+    original = session_path.read_bytes()
+
+    _scalar_preflight(runtime, registration, root, rollback_path)
+    assert session_path.read_bytes() == original
+
+    document = json.loads(original)
+    document["payload"]["legacySelectedPath"] = str(tmp_path / "foreign")
+    document["authentication"] = runtime.ledger.authenticate_scalar_rollback_session(
+        document["payload"],
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    session_path.write_text(
+        json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    session_path.chmod(0o600)
+
+    with pytest.raises(
+        RegistryError,
+        match="existing scalar rollback session does not match this retry",
+    ):
+        _scalar_preflight(runtime, registration, root, rollback_path)
+
+
 def test_rollback_gateway_and_mounts_enforce_selected_binding(
     tmp_path,
     monkeypatch,

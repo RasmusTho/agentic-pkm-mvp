@@ -822,35 +822,78 @@ def _preflight_scalar_rollback_locked(
                 raise RegistryError(
                     "scalar rollback policy does not match the activated floor"
                 )
-            store.materialize_legacy_rollback(
-                legacy_path,
-                rollback_vault_binding_id=rollback_vault_binding_id,
-                selected_runtime_path=selected_root,
-            )
-            projection_sha256 = hashlib.sha256(legacy_path.read_bytes()).hexdigest()
             registry_export_sha256 = hashlib.sha256(
                 store.rollback_export_path.read_bytes()
             ).hexdigest()
             floors = snapshot.extensions.get("runtimeFloors") or {}
             if not isinstance(floors, dict):
                 raise RegistryError("runtime floors are invalid")
-            payload: dict[str, object] = {
+            session_invariants: dict[str, object] = {
                 "schema": "agentic-pkm.scalar-roll-forward-lineage.v1",
                 "registrySchema": snapshot.schema,
                 "forkRegistryRevision": snapshot.revision,
                 "rollbackVaultBindingId": rollback_vault_binding_id,
                 "minimumRuntimeSchema": floors.get("minimumRuntimeSchema"),
-                "initialExportSha256": projection_sha256,
                 "registryExportSha256": registry_export_sha256,
                 "legacySelectedPath": str(selected_root),
                 "composePolicySha256": guard_receipt.compose_policy_sha256,
                 "gatewayPolicySha256": guard_receipt.gateway_policy_sha256,
                 "nativeLauncherSha256": guard_receipt.native_launcher_sha256,
             }
-            authentication = ledger.authenticate_scalar_rollback_session(
-                payload,
-                _capability=_STORAGE_MUTATION_CAPABILITY,
-            )
+            if store.scalar_rollback_session_path.exists():
+                payload, authentication = store.load_scalar_rollback_session()
+                ledger.verify_scalar_rollback_session(
+                    payload,
+                    authentication,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
+                if (
+                    any(
+                        payload.get(key) != value
+                        for key, value in session_invariants.items()
+                    )
+                    or re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        str(payload.get("initialExportSha256") or ""),
+                    )
+                    is None
+                ):
+                    raise RegistryError(
+                        "existing scalar rollback session does not match this retry"
+                    )
+                # The old API may already have changed its valid scalar file;
+                # the signed initial digest remains lineage, not a retry-time
+                # immutability assertion.
+                AppLocalSettingsStore(legacy_path).load()
+            else:
+                store.materialize_legacy_rollback(
+                    legacy_path,
+                    rollback_vault_binding_id=rollback_vault_binding_id,
+                    selected_runtime_path=selected_root,
+                )
+                projection_sha256 = hashlib.sha256(
+                    legacy_path.read_bytes()
+                ).hexdigest()
+                payload = session_invariants | {
+                    "initialExportSha256": projection_sha256,
+                }
+                authentication = ledger.authenticate_scalar_rollback_session(
+                    payload,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
+                guard_receipt.revalidate()
+                if _any_deployment_lease_exists(host_global_root) or any(
+                    host_global_root.glob("deployment-*-restart-fence.json")
+                ):
+                    raise RegistryError(
+                        "scalar rollback is blocked by a deployment lease or restart fence"
+                    )
+                store.install_scalar_rollback_session(
+                    payload=payload,
+                    authentication=authentication,
+                    expected_revision=snapshot.revision,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
             guard_receipt.revalidate()
             if _any_deployment_lease_exists(host_global_root) or any(
                 host_global_root.glob("deployment-*-restart-fence.json")
@@ -858,12 +901,6 @@ def _preflight_scalar_rollback_locked(
                 raise RegistryError(
                     "scalar rollback is blocked by a deployment lease or restart fence"
                 )
-            store.install_scalar_rollback_session(
-                payload=payload,
-                authentication=authentication,
-                expected_revision=snapshot.revision,
-                _capability=_STORAGE_MUTATION_CAPABILITY,
-            )
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     print(
