@@ -1,4 +1,6 @@
-State: Reviewed pre-filing specification (bounded Phase 1 delivery; no shipped behavior claimed). Reconciled 2026-07-29 against HSP-02 delivery (#3846 / PR #4008), ADR-0057 A1, amended ADR-0064 §8, and the gap-detection corrections in PRs #4255/#4261. No child issue is filed until this reviewed specification merges.
+State: Active filed specification under parent validation hub #4286. Children #4287–#4292 execute
+serially; only #4287 is initially `agent:ready`. No Phase 1 shipped behavior is claimed until parent
+acceptance.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the task decomposition, execution order, cross-task invariants, and acceptance path for the model access substrate. Subordinate to `docs/adr/ADR-0064-model-access-substrate.md` (the decision), `docs/adr/ADR-0063-shared-llm-contract-kernel.md` (contract seam and fallback vocabulary), ADR-0062 (Builder credential/process separation), `docs/LOCAL_SECRET_PROVISIONING/README.md` (host secret boundary and INV-HSP-1..4), and `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` (provider census and egress posture). Owner docs win on disagreement.
 Owner: Architecture spine / LLM boundary
@@ -297,11 +299,15 @@ credential sharing.
 
 ## Relationship to GitHub issues
 
-No issue is filed for this capability. This directory is authored specification held behind a review
-gate; [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) is a pre-filing draft, not a live hub. When
-issues are created, each child references its task specification as
-`Implements MODEL_ACCESS_SUBSTRATE/{TASK_FILE}`, and the parent becomes the validation hub carrying the
-capability acceptance criteria above.
+Parent [#4286](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4286) is the live validation hub.
+The strict serial children are
+[#4287](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4287) MAS-01 →
+[#4288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4288) MAS-02 →
+[#4289](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4289) MAS-03 →
+[#4290](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4290) MAS-04 →
+[#4291](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4291) MAS-05 →
+[#4292](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4292) MAS-06.
+Each merged child posts current-SHA evidence to #4286 before the next child becomes ready.
 
 ## Related sources
 

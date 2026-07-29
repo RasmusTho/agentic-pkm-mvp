@@ -1,22 +1,23 @@
-State: **Pre-filing draft. No GitHub issue exists for this capability.** Issue creation is deliberately
-held behind a review gate; this file becomes the live-hub contract only once a parent issue is filed,
-at which point its header records the live number and lifecycle state.
-Doc role: Parent feature issue contract (validation hub, unfiled)
+State: Filed as live validation hub #4286 (`agent:blocked`) on 2026-07-29. Children #4287–#4292 form
+the strict serial execution chain. GitHub holds the live acceptance ledger; this file is its
+repo-governed contract.
+Doc role: Parent feature issue contract (live validation hub #4286)
 Authority: Owns the capability-level validation-hub contract and the acceptance ledger. Subordinate to
 `docs/MODEL_ACCESS_SUBSTRATE/README.md` for task shape and to `docs/adr/ADR-0064-model-access-substrate.md`
 for the decision.
 Owner: Architecture spine / LLM boundary
-Temporal class: snapshot (pre-filing draft)
+Temporal class: active delivery contract
 Review cadence: event-driven (filing, each child merge, capability acceptance)
 Source of truth: `docs/MODEL_ACCESS_SUBSTRATE/README.md`
 Last reviewed: 2026-07-29
 
 # Parent feature issue — Model Access Substrate (steps 1-5)
 
-Intended title: `feature: model access substrate — credential and session resolution as part of the model abstraction`
+Live issue: [#4286](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4286),
+`feature: model access substrate — Phase 1 declared headless model access`.
 
-Intended labels at filing: `type:feature`, `agent:blocked`, `prio:high`. The parent is a validation hub,
-never a pickup issue.
+Live labels: `type:feature`, `agent:blocked`, `prio:high`. The parent is a validation hub, never a
+pickup issue.
 
 ---
 
