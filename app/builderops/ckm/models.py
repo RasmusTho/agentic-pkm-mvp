@@ -93,6 +93,22 @@ MATURITY_DIMENSIONS = (
     "requirement_coverage",
 )
 
+# Dimensions declared unmeasurable-for-now: no deterministic linker
+# (``app/builderops/ckm/linkers.py``) can emit a ``maturity_dimension`` value
+# for them, so a live edge count is structurally impossible, not merely absent
+# on this run. ``operational_readiness`` has no producing rule in any of the
+# five linker families (matrix, spec-directory/-source, adr-reference,
+# test-code, github-ref); building one is a separate, out-of-scope design
+# question (docs/CAPABILITY_KNOWLEDGE_MODEL/DETERMINISTIC_EVIDENCE_LINKERS.md).
+# ``app/builderops/ckm/assess.py`` reads this set and stamps every such
+# dimension's ``dimension_status`` as ``"unsupported"`` (a state
+# ``SUPPORTED_VALUE_STATES`` already carries) rather than the ambiguous
+# ``"missing"`` a scorer with genuinely zero evidence this run would report.
+# ``tests/builderops/ckm/test_linker_dimension_coverage.py`` enforces that
+# every dimension outside this set has at least one producing linker, and
+# that this set never masks a dimension that actually has one.
+UNMEASURABLE_MATURITY_DIMENSIONS = frozenset({"operational_readiness"})
+
 # --- Finding -----------------------------------------------------------------
 
 FINDING_KINDS = frozenset({"gap", "missing_evidence"})

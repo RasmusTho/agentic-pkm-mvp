@@ -27,6 +27,39 @@ Implements `app/builderops/ckm/linkers.py` — each linker reads ingested artifa
 
 Each linker is idempotent (INV-CKM-7: natural key = artifact+capability+basis) and re-runs incrementally over artifacts newer than its last watermark. CLI: `python -m app.builderops ckm link`.
 
+**Dimension coverage (2026-07-29, #4258).** Tracing every `_emit(...)` call site in
+`linkers.py` against `MATURITY_DIMENSIONS` (`app/builderops/ckm/models.py`) shows the
+five rule families jointly cover six of the seven dimensions: matrix → functional /
+test / documentation / architectural (by cited artifact kind); spec-directory →
+requirement coverage; github-ref's non-closing, non-merged branch → integration
+completeness. **`operational_readiness` has no producing rule in any linker** — a live
+run against this repo on 2026-07-28 confirmed it: `missing` for all 31 capabilities,
+scoring `0.0` for every one, permanently, because nothing ever emits that
+`maturity_dimension`. That is an instrument defect (a dimension that can never score,
+regardless of how operationally ready the system actually is), not a finding about the
+system. Building an operational-readiness linker is a separate design question (what
+would even constitute deterministic operational evidence — runbooks? health-check
+wiring? deploy scripts? — is unresolved) and is explicitly out of scope here.
+
+Resolution: `operational_readiness` stays a declared dimension in `MATURITY_DIMENSIONS`
+— narrowing the seven-dimension vector from
+`docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md :: 6` is a bigger, separate decision than
+this defect calls for — but it is named in
+`app/builderops/ckm/models.py :: UNMEASURABLE_MATURITY_DIMENSIONS`. `assess.py` reads
+that set and stamps every such dimension's `dimension_status` as `"unsupported"`, a
+state `SUPPORTED_VALUE_STATES` already defines and `overview_html.py` already renders
+distinctly ("Unsupported is not a zero score"). This replaces the ambiguous `"missing"`
+a scorer with genuinely zero evidence *this run* would otherwise report, so the
+resolution is readable straight off the model rather than inferred from an empty
+citations table.
+
+`tests/builderops/ckm/test_linker_dimension_coverage.py` is the standing, deterministic
+guard: it fails and names the offending dimension if any declared dimension outside
+`UNMEASURABLE_MATURITY_DIMENSIONS` ever loses its last producing linker (or a new
+dimension is declared without one), and separately checks that every declared
+"unmeasurable" dimension genuinely still has zero producers — so the escape hatch can
+never quietly cover for a regression instead of a real structural gap.
+
 ## Concretely
 
 ```bash
