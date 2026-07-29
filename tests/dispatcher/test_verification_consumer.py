@@ -279,6 +279,49 @@ class DeliveredLauncher(Launcher):
         }
 
 
+class DeferredFindingRetryLauncher(Launcher):
+    """A closer that recorded a known capability and an out-of-taxonomy outcome.
+
+    Mirrors the 2026-07-29 verification_closer pilot run (vrun-810951877d5ccce8):
+    a ``review`` event self-reports the run's actual capability but an outcome
+    word (``deferred``) outside ``{blocking, clean, fixed, repaired}``.
+    """
+
+    def launch(
+        self,
+        context_pack,
+        *,
+        resume_session_id=None,
+        on_thread_started=None,
+        on_heartbeat=None,
+    ):
+        self.calls.append((context_pack, resume_session_id))
+        session = resume_session_id or "01900000-0000-7000-8000-000000000099"
+        if on_thread_started:
+            on_thread_started(session)
+        return session, {
+            "verdict": "retry",
+            "head_sha": HEAD,
+            "summary": "independent review found a deferred finding pending owner triage",
+            "receipt_ids": ["receipt-69af138f7c6d7911"],
+            "retry_after": None,
+            "review_events": [
+                {
+                    "kind": "review",
+                    "session_id": "01900000-0000-7000-8000-000000000042",
+                    "capability": "gpt-5.6-terra",
+                    "reasoning_effort": "high",
+                    "outcome": "deferred",
+                    "finding_id": "finding-42",
+                    "failure_domain": "review_code_correctness",
+                    "mechanism_id": "mechanism-42",
+                    "strongest": False,
+                }
+            ],
+            "human_exception": None,
+        }
+
+
 class TransitionTruth:
     def __init__(
         self,
@@ -6525,6 +6568,92 @@ def test_negated_rate_limit_summary_does_not_enter_rate_limit_backoff(tmp_path) 
             "SELECT attempt_kind, outcome FROM verification_attempts"
         ).fetchall()
     assert [(row[0], row[1]) for row in attempts] == [("verification", "launched")]
+
+
+def test_receipt_preserves_diagnosable_outcome_for_known_capability() -> None:
+    """Confirm _sanitize_review_event / _allowlisted_receipt_value is the seam.
+
+    Regression for #4271: a review event carrying the run's actual, allowlisted
+    capability (``gpt-5.6-terra``) alongside an outcome word outside
+    ``_SAFE_EVENT_OUTCOMES`` must keep the known capability intact and must not
+    collapse the unrecognized outcome onto a value that could be confused with
+    a real classification (the old ``"recorded"`` fallback was itself not a
+    member of ``_SAFE_EVENT_OUTCOMES``).
+    """
+
+    receipt = {
+        "verdict": "retry",
+        "head_sha": HEAD,
+        "summary": "independent review found a deferred finding",
+        "receipt_ids": ["receipt-1"],
+        "retry_after": None,
+        "review_events": [
+            {
+                "kind": "review",
+                "session_id": "01900000-0000-7000-8000-000000000042",
+                "capability": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+                "outcome": "deferred",
+                "finding_id": "finding-42",
+                "failure_domain": "review_code_correctness",
+                "mechanism_id": "mechanism-42",
+                "strongest": False,
+            }
+        ],
+        "human_exception": None,
+    }
+    schema = (
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+    )
+
+    sanitized = verification_consumer.load_and_validate_verification_closer_receipt(
+        receipt,
+        schema,
+        trusted_repository=REPO,
+        trusted_evidence_urls=frozenset(),
+    )
+
+    event = sanitized["review_events"][0]
+    assert event["capability"] == "gpt-5.6-terra"
+    assert event["outcome"] == "unrecognized-outcome"
+    assert event["outcome"] not in {"blocking", "clean", "fixed", "repaired"}
+    assert event["outcome"] != "recorded"
+    assert event["outcome"] in verification_consumer._SAFE_EVENT_OUTCOMES
+
+
+def test_retry_verdict_receipt_is_diagnosable_without_raw_logs(tmp_path) -> None:
+    """A retry/backoff terminal receipt stays diagnosable through the normal
+    operator surface (``dispatcher verification-status``), not only via raw
+    DB/log access.
+
+    Regression for #4271: the CLI's ``_compact_verification_run`` applies
+    ``redact_durable_diagnostics`` as a read-time defense-in-depth pass. Before
+    this fix, that pass blindly ran every plain string through the free-text
+    redactor, so an already-safe capability/outcome/verdict collapsed to
+    ``"[REDACTED]"`` a second time on the exact surface an operator would use
+    to tell a legitimate finding apart from a receipt-generation malfunction.
+    """
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        DeferredFindingRetryLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+
+    status_view = _compact_verification_run(result)
+    terminal_receipt = status_view["terminal_receipt"]
+    assert terminal_receipt["verdict"] == "retry"
+    event = terminal_receipt["review_events"][0]
+    assert event["capability"] == "gpt-5.6-terra"
+    assert event["outcome"] == "unrecognized-outcome"
+    assert event["outcome"] not in {"blocking", "clean", "fixed", "repaired"}
+    assert event["failure_domain"] == "review_code_correctness"
 
 
 def test_structured_rate_limit_receipt_replays_without_duplicate_attempt(
