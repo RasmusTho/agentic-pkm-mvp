@@ -1811,7 +1811,13 @@ _SAFE_CAPABILITIES = frozenset(
 _SAFE_REASONING_EFFORTS = frozenset(
     {"minimal", "low", "medium", "high", "xhigh", "max"}
 )
-_SAFE_EVENT_OUTCOMES = frozenset({"blocking", "clean", "fixed", "repaired"})
+_SAFE_EVENT_OUTCOMES = frozenset(
+    {"blocking", "clean", "fixed", "repaired", "unrecognized-outcome"}
+)
+_SAFE_RECEIPT_VERDICTS = frozenset(
+    {"delivered", "blocked", "needs_human", "retry"}
+)
+_SAFE_REVIEW_EVENT_KINDS = frozenset({"repair", "review"})
 _CANONICAL_HUMAN_ACTION_COPY = {
     "hold": (
         "Keep delivery blocked",
@@ -2062,7 +2068,7 @@ def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
         "outcome": _allowlisted_receipt_value(
             event["outcome"],
             allowed=_SAFE_EVENT_OUTCOMES,
-            fallback="recorded",
+            fallback="unrecognized-outcome",
         ),
         "finding_id": (
             _pseudonymous_receipt_identifier(finding, prefix="finding")
@@ -2242,7 +2248,14 @@ def sanitize_codex_failure_receipt(
 
 
 def redact_durable_diagnostics(value: object) -> object:
-    """Defence-in-depth redaction for status reads of pre-fix durable rows."""
+    """Defence-in-depth redaction for status reads of pre-fix durable rows.
+
+    Known enum-bounded receipt fields (``capability``, ``reasoning_effort``,
+    ``outcome``, ``verdict``, ``kind``, ``failure_domain``) are re-checked
+    against their own allowlist instead of the generic free-text redactor, so
+    an already-sanitized value stays readable at status-read time rather than
+    collapsing to ``"[REDACTED]"`` alongside genuinely unsafe prose.
+    """
 
     if isinstance(value, Mapping):
         redacted: dict[str, object] = {}
@@ -2265,6 +2278,44 @@ def redact_durable_diagnostics(value: object) -> object:
                 safe_error_type = bounded_error_type(child)
                 if safe_error_type is not None:
                     redacted[key] = safe_error_type
+                continue
+            if normalized == "capability" and isinstance(child, str):
+                redacted[key] = _allowlisted_receipt_value(
+                    child, allowed=_SAFE_CAPABILITIES, fallback="unknown-capability"
+                )
+                continue
+            if normalized == "reasoning_effort" and isinstance(child, str):
+                redacted[key] = _allowlisted_receipt_value(
+                    child, allowed=_SAFE_REASONING_EFFORTS, fallback="unknown"
+                )
+                continue
+            if normalized == "outcome" and isinstance(child, str):
+                redacted[key] = _allowlisted_receipt_value(
+                    child,
+                    allowed=_SAFE_EVENT_OUTCOMES,
+                    fallback="unrecognized-outcome",
+                )
+                continue
+            if normalized == "verdict" and isinstance(child, str):
+                redacted[key] = _allowlisted_receipt_value(
+                    child,
+                    allowed=_SAFE_RECEIPT_VERDICTS,
+                    fallback="unrecognized-verdict",
+                )
+                continue
+            if normalized == "kind" and isinstance(child, str):
+                redacted[key] = _allowlisted_receipt_value(
+                    child,
+                    allowed=_SAFE_REVIEW_EVENT_KINDS,
+                    fallback="unrecognized-kind",
+                )
+                continue
+            if normalized == "failure_domain" and isinstance(child, str):
+                redacted[key] = _allowlisted_receipt_value(
+                    child,
+                    allowed=REPAIR_FAILURE_DOMAINS,
+                    fallback="review_code_correctness",
+                )
                 continue
             redacted[key] = redact_durable_diagnostics(child)
         return redacted
