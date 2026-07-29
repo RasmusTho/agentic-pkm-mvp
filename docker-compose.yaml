@@ -91,6 +91,11 @@ services:
       # MVR-01C roll-forward source. Only the one-shot deployment producer
       # mounts it; current long-lived services never receive this scalar fork.
       - "scalar-rollback-legacy:/app/scalar-rollback"
+      # Host artifacts that Docker Compose actually activates. MVR-01C hashes
+      # these mounted bytes instead of trusting image-local policy copies.
+      - "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro"
+      - "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro"
+      - "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro"
       - "/Users:/Users"
       - "/Volumes:/Volumes"
     command:

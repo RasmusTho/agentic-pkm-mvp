@@ -14,7 +14,8 @@ from app.instance.scalar_rollback_guard import (
     preflight_scalar_rollback_guard,
     require_native_scalar_launcher,
 )
-from app.instance.vault_registry import RegistryError
+from app.instance.vault_registry import AppLocalSettingsStore, RegistryError
+from app.vault.manager import VaultManager
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
@@ -50,6 +51,7 @@ def _scalar_preflight(runtime, registration, root, rollback_path) -> None:
         rollback_vault_binding_id=registration.vault_binding_id,
         legacy_path=rollback_path,
         selected_root=root,
+        compose_base=REPO_ROOT / "docker-compose.yaml",
         compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
         gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
         native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
@@ -71,6 +73,50 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
     assert receipt.mutation_filtering
     assert receipt.direct_api_port_absent
     assert receipt.selected_mount_only
+    wrong_root = tmp_path / "wrong-selected-root"
+    wrong_root.mkdir()
+    with pytest.raises(
+        LedgerError,
+        match="registration ownership is inconsistent",
+    ):
+        _preflight_scalar_rollback(
+            channel=runtime.layout.channel_id,
+            registry_path=runtime.layout.registry_path,
+            host_global_root=runtime.ledger.root,
+            rollback_vault_binding_id=registration.vault_binding_id,
+            legacy_path=tmp_path / "wrong" / "app-local.md",
+            selected_root=wrong_root,
+            compose_base=REPO_ROOT / "docker-compose.yaml",
+            compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+            gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+            native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+        )
+    assert not (tmp_path / "wrong" / "app-local.md").exists()
+
+    host_policy = tmp_path / "host-policy"
+    host_policy.mkdir()
+    compose_base = host_policy / "docker-compose.yaml"
+    compose_overlay = host_policy / "docker-compose.scalar-rollback.yml"
+    gateway_config = host_policy / "nginx.conf"
+    compose_base.write_bytes((REPO_ROOT / "docker-compose.yaml").read_bytes())
+    compose_overlay.write_bytes(
+        (REPO_ROOT / "docker-compose.scalar-rollback.yml").read_bytes()
+    )
+    gateway_config.write_bytes(
+        (REPO_ROOT / "ops/scalar-rollback/nginx.conf").read_bytes() + b"\n"
+    )
+    with pytest.raises(
+        RegistryError,
+        match="gateway policy is incomplete",
+    ):
+        preflight_scalar_rollback_guard(
+            compose_base=compose_base,
+            compose_overlay=compose_overlay,
+            gateway_config=gateway_config,
+            native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+            rollback_vault_binding_id=registration.vault_binding_id,
+            selected_root=root,
+        )
     gateway = (REPO_ROOT / "ops/scalar-rollback/nginx.conf").read_text(
         encoding="utf-8"
     )
@@ -85,6 +131,12 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
     )
     assert "python -m app.instance.runtime authority-cutover" in deployment
     assert "--rollback-vault-binding-id" in deployment
+    assert "--quiescence-proof-path" in deployment
+    assert deployment.index(
+        "python -m app.instance.runtime authority-cutover"
+    ) < deployment.index(
+        "python -m app.instance.runtime deployment-finish"
+    )
     compose = yaml.safe_load(
         (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
     )
@@ -104,8 +156,17 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
         )
         assert rendered["INSTANCE_OWNERSHIP_ROOT"] == "/app/instance-ownership"
 
+    selected_mount = tmp_path / "selected-mount"
+    selected_mount.symlink_to(root, target_is_directory=True)
     rollback_path = tmp_path / "rollback" / "app-local.md"
-    _scalar_preflight(runtime, registration, root, rollback_path)
+    _scalar_preflight(runtime, registration, selected_mount, rollback_path)
+    projected = AppLocalSettingsStore(rollback_path).load()
+    assert projected.known_vaults[registration.ref].path == str(selected_mount)
+    context = VaultManager(
+        app_local_store=AppLocalSettingsStore(rollback_path)
+    ).load_last_active()
+    assert context.status == "uninitialized"
+    assert context.active_vault_path == str(selected_mount)
     before = runtime.layout.registry_path.read_bytes()
     with pytest.raises(
         CapabilityNotReadyError,
@@ -197,6 +258,7 @@ def test_binding_keyed_database_floor_blocks_scalar_runtime(tmp_path) -> None:
             selected_root=Path(
                 runtime.registry.lookup(registration.vault_binding_id).path
             ),
+            compose_base=REPO_ROOT / "docker-compose.yaml",
             compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
             gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
             native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
@@ -225,3 +287,38 @@ def test_binding_keyed_database_floor_blocks_scalar_runtime(tmp_path) -> None:
         )
     assert not pending_rollback.exists()
     assert not pending_runtime.registry.scalar_rollback_session_path.exists()
+
+
+def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),
+        tmp_path / "host-global",
+    )
+    selected_root = tmp_path / "selected"
+    pending_root = tmp_path / "pending"
+    selected_root.mkdir()
+    pending_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=selected_root,
+        watcher_vault_path=selected_root,
+    )
+    runtime.ledger.reserve(
+        channel_id="prod",
+        vault_binding_id="pending-binding",
+        root=pending_root,
+        allow_same_channel_nested=False,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    with pytest.raises(LedgerError, match="no pending ownership transition"):
+        runtime.activate_authority(
+            guard_receipt=preflight_scalar_rollback_guard(
+                compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+                gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+                native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+                rollback_vault_binding_id=registration.vault_binding_id,
+                selected_root=selected_root,
+            )
+        )
+
+    assert runtime.registry.load().authority == "dormant"

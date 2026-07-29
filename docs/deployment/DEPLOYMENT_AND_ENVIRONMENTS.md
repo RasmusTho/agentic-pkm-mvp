@@ -98,14 +98,21 @@ locked registry generation. That generation names one validated scalar rollback 
 the current legacy projection, records the roll-forward fork revision, and proves both the
 authenticated mutation-filtering gateway and the deny-by-default native guard. A partial or missing
 proof leaves `authority: dormant` and every registration producer sealed.
+The cutover runs before deployment finalization clears the host-global lease/restart fence and
+requires the same bound quiescence proof, drained-owner inventory, producer-transition lock, and
+exact active ownership coverage. Pending ownership or an unmatched selected-root filesystem
+identity therefore blocks the authority revision.
 
 Supported container rollback into a previous scalar image uses
 `docker-compose.scalar-rollback.yml`: the old API publishes no direct host port, the base
 companion UI is disabled, the real companion picker select/initialize routes are denied, and the
 old API is reachable from the host only through the authenticated gateway. It mounts only the
-selected content root at `/app/selected-vault`. A current guard image revalidates the activated
-base-plus-overlay Compose model, gateway, and launcher policy, materializes the exact legacy
-projection, and installs a host-key-authenticated scalar session before the old API starts. That
+selected content root at `/app/selected-vault`. The legacy projection translates only that
+registration's host path to the container alias and authenticates both the canonical registry
+export and translated projection, so roll-forward restores the original binding identity rather
+than adopting a container path. A current guard image revalidates the host-mounted base, overlay,
+and nginx bytes that Docker actually activates (not image-local copies), materializes the exact
+legacy projection, and installs a host-key-authenticated scalar session before the old API starts. That
 durable session excludes
 current registry writers for the lifetime of the old image; the old image receives neither the
 host key nor a writable registry mount. Native rollback currently fails closed: the root-owned
@@ -119,6 +126,9 @@ preserves both sides without recreate. The importer is not a free-standing runti
 `MVR01C_ROLL_FORWARD_LEGACY_PATH` asks the normal deployment producer to run
 `scalar-rollback-roll-forward` only after its host-global lease, restart fence, stopped-writer
 proof, and drained-owner receipt are durable, and before `deployment-finish` permits recreate.
+Registry generation and scalar-session retirement share the crash journal; interruption recovers
+the pre-merge session for retry or the complete committed generation without a stranded stale
+session.
 
 ### Target
 

@@ -133,6 +133,7 @@ def _start_scalar_runtime(runtime, registration, root, rollback_path) -> None:
         rollback_vault_binding_id=registration.vault_binding_id,
         legacy_path=rollback_path,
         selected_root=root,
+        compose_base=REPO_ROOT / "docker-compose.yaml",
         compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
         gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
         native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
@@ -429,3 +430,43 @@ def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
     with pytest.raises(RegistryError, match="escaped the selected binding"):
         runtime.merge_previous_scalar_image(divergent)
     assert runtime.layout.registry_path.read_bytes() == before
+
+
+def test_roll_forward_recovers_crash_after_registry_generation_write(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, registration = _active_runtime(tmp_path)
+    rollback_path = tmp_path / "rollback-crash" / "app-local.md"
+    _start_scalar_runtime(
+        runtime,
+        registration,
+        Path(registration.path),
+        rollback_path,
+    )
+    before = runtime.registry.load()
+    original_apply = runtime.registry._apply_generation
+    crashed = False
+
+    def crash_after_generation(generation, *, use_raw_writer=False):
+        nonlocal crashed
+        original_apply(generation, use_raw_writer=use_raw_writer)
+        if (
+            not crashed
+            and generation[runtime.registry.scalar_rollback_session_path] is None
+        ):
+            crashed = True
+            raise SystemExit("injected crash after scalar merge generation")
+
+    monkeypatch.setattr(runtime.registry, "_apply_generation", crash_after_generation)
+    with pytest.raises(SystemExit, match="injected crash"):
+        runtime.merge_previous_scalar_image(rollback_path)
+    monkeypatch.setattr(runtime.registry, "_apply_generation", original_apply)
+
+    recovered = runtime.registry.load()
+    assert recovered.revision == before.revision
+    assert runtime.registry.scalar_rollback_session_path.is_file()
+
+    merged = runtime.merge_previous_scalar_image(rollback_path)
+    assert merged.revision == before.revision + 1
+    assert not runtime.registry.scalar_rollback_session_path.exists()

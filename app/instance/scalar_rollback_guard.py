@@ -72,6 +72,7 @@ class ScalarRollbackGuardReceipt:
     compose_policy_sha256: str
     gateway_policy_sha256: str
     native_launcher_sha256: str
+    compose_base: Path
     compose_overlay: Path
     gateway_config: Path
     native_launcher: Path
@@ -85,6 +86,7 @@ class ScalarRollbackGuardReceipt:
         self.require_valid()
         current = preflight_scalar_rollback_guard(
             compose_overlay=self.compose_overlay,
+            compose_base=self.compose_base,
             gateway_config=self.gateway_config,
             native_launcher=self.native_launcher,
             rollback_vault_binding_id=self.rollback_vault_binding_id,
@@ -104,6 +106,7 @@ class ScalarRollbackGuardReceipt:
 
 def preflight_scalar_rollback_guard(
     *,
+    compose_base: Path = _CANONICAL_COMPOSE_BASE,
     compose_overlay: Path,
     gateway_config: Path,
     native_launcher: Path,
@@ -116,21 +119,17 @@ def preflight_scalar_rollback_guard(
     root = selected_root.expanduser().resolve(strict=True)
     if not binding_id or not root.is_dir():
         raise RegistryError("one existing scalar rollback binding/root is required")
+    compose_base_path = compose_base.resolve(strict=True)
     compose_path = compose_overlay.resolve(strict=True)
     gateway_path = gateway_config.resolve(strict=True)
     launcher_path = native_launcher.resolve(strict=True)
-    if (
-        compose_path != _CANONICAL_COMPOSE_OVERLAY.resolve(strict=True)
-        or gateway_path != _CANONICAL_GATEWAY_CONFIG.resolve(strict=True)
-        or launcher_path != _CANONICAL_NATIVE_LAUNCHER.resolve(strict=True)
-    ):
-        raise RegistryError("canonical scalar rollback policy files are required")
+    if launcher_path != _CANONICAL_NATIVE_LAUNCHER.resolve(strict=True):
+        raise RegistryError("canonical scalar rollback native launcher is required")
     compose = compose_path.read_text(encoding="utf-8")
-    compose_base_path = _CANONICAL_COMPOSE_BASE.resolve(strict=True)
-    compose_base = compose_base_path.read_text(encoding="utf-8")
+    compose_base_text = compose_base_path.read_text(encoding="utf-8")
     gateway = gateway_path.read_text(encoding="utf-8")
     try:
-        base_model = yaml.load(compose_base, Loader=_ComposeLoader)
+        base_model = yaml.load(compose_base_text, Loader=_ComposeLoader)
         overlay_model = yaml.load(compose, Loader=_ComposeLoader)
     except yaml.YAMLError as exc:
         raise RegistryError("scalar rollback compose guard is invalid") from exc
@@ -163,10 +162,11 @@ def preflight_scalar_rollback_guard(
         selected_mount_only=True,
         native_guard_fail_closed=True,
         compose_policy_sha256=hashlib.sha256(
-            compose_base.encode("utf-8") + b"\0" + compose.encode("utf-8")
+            compose_base_text.encode("utf-8") + b"\0" + compose.encode("utf-8")
         ).hexdigest(),
         gateway_policy_sha256=hashlib.sha256(gateway.encode("utf-8")).hexdigest(),
         native_launcher_sha256=hashlib.sha256(launcher_path.read_bytes()).hexdigest(),
+        compose_base=compose_base_path,
         compose_overlay=compose_path,
         gateway_config=gateway_path,
         native_launcher=launcher_path,
@@ -218,6 +218,9 @@ def _validate_compose_model(base_model: object, overlay_model: object) -> None:
         "/app/instance-ownership",
         "/app/scalar-rollback",
         "/app/selected-vault",
+        "/run/scalar-rollback-policy/docker-compose.yaml",
+        "/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml",
+        "/run/scalar-rollback-policy/nginx.conf",
     }:
         raise RegistryError("scalar rollback guard mount set is invalid")
     gateway_targets = _volume_targets(gateway.get("volumes"))
@@ -252,6 +255,33 @@ def _validate_compose_model(base_model: object, overlay_model: object) -> None:
     }
     if api_dependents != {"companion-ui"}:
         raise RegistryError("base Compose has an ungoverned scalar API dependent")
+    init_service = base_services.get("instance-state-init")
+    if not isinstance(init_service, dict):
+        raise RegistryError("base Compose scalar rollback producer is missing")
+    init_targets = _volume_targets(init_service.get("volumes"))
+    if not {
+        "/app/scalar-rollback",
+        "/run/scalar-rollback-policy/docker-compose.yaml",
+        "/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml",
+        "/run/scalar-rollback-policy/nginx.conf",
+    }.issubset(init_targets):
+        raise RegistryError(
+            "base Compose scalar rollback producer lacks host policy/source mounts"
+        )
+    forbidden_current_targets = {
+        "/app/scalar-rollback",
+        "/run/scalar-rollback-policy/docker-compose.yaml",
+        "/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml",
+        "/run/scalar-rollback-policy/nginx.conf",
+    }
+    for name in ("api", "worker", "watcher", "heimdal-capture-watch"):
+        service = base_services.get(name)
+        if not isinstance(service, dict):
+            raise RegistryError("base Compose current producer set is invalid")
+        if _volume_targets(service.get("volumes")) & forbidden_current_targets:
+            raise RegistryError(
+                "current long-lived service can access scalar rollback policy/source"
+            )
     if "scalar-rollback-session.json" not in str(api.get("command")):
         raise RegistryError("scalar rollback API does not require the durable session")
 

@@ -12,6 +12,9 @@ services:
         bind:
           create_host_path: false
       - "scalar-rollback-legacy:/app/scalar-rollback"
+      - "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro"
+      - "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro"
+      - "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro"
       - type: bind
         source: ${SCALAR_ROLLBACK_VAULT_ROOT:?validated selected root is required}
         target: /app/selected-vault
@@ -35,10 +38,12 @@ services:
       - /app/scalar-rollback/app-local.md
       - --selected-root
       - /app/selected-vault
+      - --compose-base
+      - /run/scalar-rollback-policy/docker-compose.yaml
       - --compose-overlay
-      - /app/docker-compose.scalar-rollback.yml
+      - /run/scalar-rollback-policy/docker-compose.scalar-rollback.yml
       - --gateway-config
-      - /app/ops/scalar-rollback/nginx.conf
+      - /run/scalar-rollback-policy/nginx.conf
       - --native-launcher
       - /app/scripts/scalar_rollback_native.sh
     restart: "no"

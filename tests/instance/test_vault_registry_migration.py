@@ -117,6 +117,7 @@ def test_parent_registry_acceptance(tmp_path) -> None:
         rollback_vault_binding_id=first.vault_binding_id,
         legacy_path=rollback_path,
         selected_root=first_root,
+        compose_base=REPO_ROOT / "docker-compose.yaml",
         compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
         gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
         native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",

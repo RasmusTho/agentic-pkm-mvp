@@ -188,9 +188,15 @@ class OwnershipLedger:
         self,
         *,
         channel_id: str,
-        registrations: Mapping[str, Path],
+        registrations: Mapping[str, Path | None],
     ) -> None:
-        """Reject rollback while any ownership transition is pending or mismatched."""
+        """Reject rollback while any ownership transition is pending or mismatched.
+
+        A ``None`` root checks lease coverage only. This lets the selected-only
+        rollback guard prove every binding is actively owned without mounting
+        every content root; the selected binding still supplies its mounted
+        root and must match the ledger's authenticated filesystem identity.
+        """
 
         self._assert_existing_artifacts()
         with self._locked():
@@ -213,7 +219,11 @@ class OwnershipLedger:
                 )
             for binding_id, root in registrations.items():
                 lease = channel_leases[binding_id]
-                if not self._matches_complete_root_identity(lease, root, key):
+                if root is not None and not self._matches_complete_root_identity(
+                    lease,
+                    root,
+                    key,
+                ):
                     raise LedgerError(
                         "scalar rollback registration ownership is inconsistent"
                     )

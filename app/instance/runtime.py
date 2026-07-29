@@ -259,42 +259,64 @@ class InstanceRegistryRuntime:
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
-        guard_receipt.revalidate()
-        current = self.registry.load()
-        target_id = guard_receipt.rollback_vault_binding_id
-        target = current.registrations.get(target_id or "")
-        if (
-            target is None
-            or guard_receipt.rollback_vault_binding_id != target_id
-            or guard_receipt.selected_root
-            != Path(target.path).expanduser().resolve(strict=True)
-            or not guard_receipt.gateway_authenticated
-            or not guard_receipt.mutation_filtering
-            or not guard_receipt.direct_api_port_absent
-            or not guard_receipt.selected_mount_only
-            or not guard_receipt.native_guard_fail_closed
-        ):
-            raise CapabilityNotReadyError(
-                "MVR-01C authority cutover guard receipt does not match the selected binding"
+        with self._bootstrap_locked():
+            guard_receipt.revalidate()
+            current = self.registry.load()
+            target_id = guard_receipt.rollback_vault_binding_id
+            target = current.registrations.get(target_id or "")
+            if (
+                target is None
+                or guard_receipt.rollback_vault_binding_id != target_id
+                or not same_filesystem_root(
+                    resolve_filesystem_root_identity(guard_receipt.selected_root),
+                    resolve_filesystem_root_identity(target.path),
+                )
+                or not guard_receipt.gateway_authenticated
+                or not guard_receipt.mutation_filtering
+                or not guard_receipt.direct_api_port_absent
+                or not guard_receipt.selected_mount_only
+                or not guard_receipt.native_guard_fail_closed
+            ):
+                raise CapabilityNotReadyError(
+                    "MVR-01C authority cutover guard receipt does not match the selected binding"
+                )
+            registrations: dict[str, Path | None] = {
+                binding_id: Path(registration.path)
+                for binding_id, registration in current.registrations.items()
+            }
+            self.ledger.require_scalar_rollback_ready(
+                channel_id=self.layout.channel_id,
+                registrations=registrations,
             )
-        if inject_failure_before_commit:
-            raise RegistryError("injected partial MVR-01C activation")
-        return self.registry.require_authoritative_activation(
-            RegistryActivationProof(
-                rollback_exporter=True,
-                rollback_transformer=True,
-                previous_image_preflight=True,
-                rollback_vault_binding_id=target_id,
-                authenticated_gateway=guard_receipt.gateway_authenticated,
-                native_guard=guard_receipt.native_guard_fail_closed,
-                roll_forward_lineage=True,
-                compose_policy_sha256=guard_receipt.compose_policy_sha256,
-                gateway_policy_sha256=guard_receipt.gateway_policy_sha256,
-                native_launcher_sha256=guard_receipt.native_launcher_sha256,
-            ),
-            expected_revision=current.revision,
-            _capability=_STORAGE_MUTATION_CAPABILITY,
-        )
+            self.ledger.require_scalar_rollback_ready(
+                channel_id=self.layout.channel_id,
+                registrations={
+                    binding_id: (
+                        guard_receipt.selected_root
+                        if binding_id == target_id
+                        else None
+                    )
+                    for binding_id in current.registrations
+                },
+            )
+            if inject_failure_before_commit:
+                raise RegistryError("injected partial MVR-01C activation")
+            return self.registry.require_authoritative_activation(
+                RegistryActivationProof(
+                    rollback_exporter=True,
+                    rollback_transformer=True,
+                    previous_image_preflight=True,
+                    rollback_vault_binding_id=target_id,
+                    authenticated_gateway=guard_receipt.gateway_authenticated,
+                    native_guard=guard_receipt.native_guard_fail_closed,
+                    roll_forward_lineage=True,
+                    compose_policy_sha256=guard_receipt.compose_policy_sha256,
+                    gateway_policy_sha256=guard_receipt.gateway_policy_sha256,
+                    native_launcher_sha256=guard_receipt.native_launcher_sha256,
+                ),
+                expected_revision=current.revision,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
 
     def prepare_previous_scalar_image(self, legacy_path: Path) -> None:
         self._legacy_path = Path(legacy_path).expanduser().resolve(strict=False)
@@ -631,6 +653,7 @@ def _preflight_scalar_rollback(
     rollback_vault_binding_id: str,
     legacy_path: Path,
     selected_root: Path,
+    compose_base: Path,
     compose_overlay: Path,
     gateway_config: Path,
     native_launcher: Path,
@@ -657,17 +680,25 @@ def _preflight_scalar_rollback(
             snapshot = store.load()
             _require_runtime_floor(snapshot, scalar_runtime=True)
             ledger = OwnershipLedger(host_global_root)
+            target = snapshot.registrations.get(rollback_vault_binding_id)
+            if target is None:
+                raise RegistryError("scalar rollback target is not registered")
             ledger.require_scalar_rollback_ready(
                 channel_id=channel,
                 registrations={
-                    binding_id: Path(registration.path)
-                    for binding_id, registration in snapshot.registrations.items()
+                    binding_id: (
+                        selected_root
+                        if binding_id == rollback_vault_binding_id
+                        else None
+                    )
+                    for binding_id in snapshot.registrations
                 },
             )
             floor = snapshot.extensions.get("scalarRollback")
             if not isinstance(floor, dict):
                 raise RegistryError("active registry scalar rollback floor is invalid")
             guard_receipt = preflight_scalar_rollback_guard(
+                compose_base=compose_base,
                 compose_overlay=compose_overlay,
                 gateway_config=gateway_config,
                 native_launcher=native_launcher,
@@ -688,8 +719,12 @@ def _preflight_scalar_rollback(
             store.materialize_legacy_rollback(
                 legacy_path,
                 rollback_vault_binding_id=rollback_vault_binding_id,
+                selected_runtime_path=selected_root,
             )
             projection_sha256 = hashlib.sha256(legacy_path.read_bytes()).hexdigest()
+            registry_export_sha256 = hashlib.sha256(
+                store.rollback_export_path.read_bytes()
+            ).hexdigest()
             floors = snapshot.extensions.get("runtimeFloors") or {}
             if not isinstance(floors, dict):
                 raise RegistryError("runtime floors are invalid")
@@ -700,6 +735,8 @@ def _preflight_scalar_rollback(
                 "rollbackVaultBindingId": rollback_vault_binding_id,
                 "minimumRuntimeSchema": floors.get("minimumRuntimeSchema"),
                 "initialExportSha256": projection_sha256,
+                "registryExportSha256": registry_export_sha256,
+                "legacySelectedPath": str(selected_root),
                 "composePolicySha256": guard_receipt.compose_policy_sha256,
                 "gatewayPolicySha256": guard_receipt.gateway_policy_sha256,
                 "nativeLauncherSha256": guard_receipt.native_launcher_sha256,
@@ -737,16 +774,32 @@ def _activate_mvr01c_authority(
     host_global_root: Path,
     rollback_vault_binding_id: str,
     selected_root: Path,
+    compose_base: Path,
     compose_overlay: Path,
     gateway_config: Path,
     native_launcher: Path,
+    inventory_path: Path | None = None,
+    quiescence_proof_path: Path | None = None,
 ) -> int:
+    if (inventory_path is None) != (quiescence_proof_path is None):
+        raise InstanceStatePreflightError(
+            "authority cutover requires complete stopped-window proof"
+        )
+    if inventory_path is not None and quiescence_proof_path is not None:
+        proof = _load_deployment_quiescence_proof(quiescence_proof_path)
+        _bind_legacy_owner_inventory_to_proof(
+            inventory_path=inventory_path,
+            quiescence_proof=proof,
+            channel=channel,
+            host_global_root=host_global_root,
+        )
     runtime = InstanceRegistryRuntime.for_paths(
         InstanceStateLayout.for_channel(instance_state_root, channel),
         host_global_root,
         initialize_layout=False,
     )
     receipt = preflight_scalar_rollback_guard(
+        compose_base=compose_base,
         compose_overlay=compose_overlay,
         gateway_config=gateway_config,
         native_launcher=native_launcher,
@@ -1464,6 +1517,7 @@ def main(argv: list[str] | None = None) -> int:
     scalar.add_argument("--rollback-vault-binding-id", required=True)
     scalar.add_argument("--legacy-path", type=Path, required=True)
     scalar.add_argument("--selected-root", type=Path, required=True)
+    scalar.add_argument("--compose-base", type=Path, required=True)
     scalar.add_argument("--compose-overlay", type=Path, required=True)
     scalar.add_argument("--gateway-config", type=Path, required=True)
     scalar.add_argument("--native-launcher", type=Path, required=True)
@@ -1484,9 +1538,12 @@ def main(argv: list[str] | None = None) -> int:
     activate.add_argument("--host-global-root", type=Path, required=True)
     activate.add_argument("--rollback-vault-binding-id", required=True)
     activate.add_argument("--selected-root", type=Path, required=True)
+    activate.add_argument("--compose-base", type=Path, required=True)
     activate.add_argument("--compose-overlay", type=Path, required=True)
     activate.add_argument("--gateway-config", type=Path, required=True)
     activate.add_argument("--native-launcher", type=Path, required=True)
+    activate.add_argument("--inventory-path", type=Path, required=True)
+    activate.add_argument("--quiescence-proof-path", type=Path, required=True)
     begin = subparsers.add_parser("deployment-begin")
     begin.add_argument("--channel", required=True)
     begin.add_argument("--instance-state-root", type=Path, required=True)
@@ -1525,6 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
             rollback_vault_binding_id=args.rollback_vault_binding_id,
             legacy_path=args.legacy_path,
             selected_root=args.selected_root,
+            compose_base=args.compose_base,
             compose_overlay=args.compose_overlay,
             gateway_config=args.gateway_config,
             native_launcher=args.native_launcher,
@@ -1536,9 +1594,12 @@ def main(argv: list[str] | None = None) -> int:
             host_global_root=args.host_global_root,
             rollback_vault_binding_id=args.rollback_vault_binding_id,
             selected_root=args.selected_root,
+            compose_base=args.compose_base,
             compose_overlay=args.compose_overlay,
             gateway_config=args.gateway_config,
             native_launcher=args.native_launcher,
+            inventory_path=args.inventory_path,
+            quiescence_proof_path=args.quiescence_proof_path,
         )
     if args.command == "scalar-rollback-roll-forward":
         return _roll_forward_scalar_rollback(

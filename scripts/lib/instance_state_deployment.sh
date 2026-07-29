@@ -183,17 +183,10 @@ prepare_instance_state_deployment() {
     fi
   fi
 
-  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
-    python -m app.instance.runtime deployment-finish \
-      "${finish_args[@]}"
-  inventory_rc=$?
-  if [ "${inventory_rc}" -ne 0 ]; then
-    return "${inventory_rc}"
-  fi
-
   # MVR-01C is an explicit authority cutover, never an inferred side effect of
-  # deploying the capable image. When selected, validate every rollback guard
-  # against the same binding/root before the one atomic authority commit.
+  # deploying the capable image. Keep the deployment lease, restart fence,
+  # stopped-writer proof, and drained-owner receipt live through the one atomic
+  # authority commit; only deployment-finish may clear that stopped window.
   if [ -n "${MVR01C_ROLLBACK_VAULT_BINDING_ID:-}" ] || [ -n "${MVR01C_ROLLBACK_VAULT_ROOT:-}" ]; then
     if [ -z "${MVR01C_ROLLBACK_VAULT_BINDING_ID:-}" ] || [ -z "${MVR01C_ROLLBACK_VAULT_ROOT:-}" ]; then
       echo "MVR-01C cutover requires both rollback binding and root" >&2
@@ -206,9 +199,23 @@ prepare_instance_state_deployment() {
         --host-global-root /app/instance-ownership \
         --rollback-vault-binding-id "${MVR01C_ROLLBACK_VAULT_BINDING_ID}" \
         --selected-root "${MVR01C_ROLLBACK_VAULT_ROOT}" \
-        --compose-overlay /app/docker-compose.scalar-rollback.yml \
-        --gateway-config /app/ops/scalar-rollback/nginx.conf \
-        --native-launcher /app/scripts/scalar_rollback_native.sh
-    return $?
+        --compose-base /run/scalar-rollback-policy/docker-compose.yaml \
+        --compose-overlay /run/scalar-rollback-policy/docker-compose.scalar-rollback.yml \
+        --gateway-config /run/scalar-rollback-policy/nginx.conf \
+        --native-launcher /app/scripts/scalar_rollback_native.sh \
+        --inventory-path "${inventory_path}" \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      return "${inventory_rc}"
+    fi
+  fi
+
+  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    python -m app.instance.runtime deployment-finish \
+      "${finish_args[@]}"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    return "${inventory_rc}"
   fi
 }

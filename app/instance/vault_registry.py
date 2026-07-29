@@ -565,6 +565,7 @@ class VaultRegistryStore:
         target_path: Path,
         *,
         rollback_vault_binding_id: str | None = None,
+        selected_runtime_path: Path | None = None,
     ) -> AppLocalSettings:
         """Transform the latest scalar-representable revision for a previous image."""
 
@@ -584,9 +585,20 @@ class VaultRegistryStore:
                 raise CapabilityNotReadyError(
                     "MVR-01C explicit rollback target is required for multiple registrations"
                 )
-            payload = self._rollback_export_payload(current, selected_binding_id=selected)
-            if not self.rollback_export_path.exists() or self.rollback_export_path.read_bytes() != payload:
+            canonical_payload = self._rollback_export_payload(
+                current,
+                selected_binding_id=selected,
+            )
+            if (
+                not self.rollback_export_path.exists()
+                or self.rollback_export_path.read_bytes() != canonical_payload
+            ):
                 raise RegistryError("latest-revision legacy rollback export is missing or stale")
+            payload = self._rollback_export_payload(
+                current,
+                selected_binding_id=selected,
+                selected_runtime_path=selected_runtime_path,
+            )
             target = Path(target_path)
             _atomic_private_write(target, payload)
         return AppLocalSettingsStore(Path(target_path)).load()
@@ -608,6 +620,8 @@ class VaultRegistryStore:
             self._assert_revision(current, expected_revision)
             floor = current.extensions.get("scalarRollback")
             initial_export_sha256 = str(payload.get("initialExportSha256") or "")
+            registry_export_sha256 = str(payload.get("registryExportSha256") or "")
+            legacy_selected_path = _optional_str(payload.get("legacySelectedPath"))
             if (
                 current.authority != REGISTRY_AUTHORITY_ACTIVE
                 or not isinstance(floor, dict)
@@ -627,9 +641,11 @@ class VaultRegistryStore:
                 or payload.get("nativeLauncherSha256")
                 != floor.get("nativeLauncherSha256")
                 or not _is_sha256(initial_export_sha256)
+                or not _is_sha256(registry_export_sha256)
+                or legacy_selected_path is None
                 or not self.rollback_export_path.is_file()
                 or hashlib.sha256(self.rollback_export_path.read_bytes()).hexdigest()
-                != initial_export_sha256
+                != registry_export_sha256
             ):
                 raise RegistryError("scalar rollback session does not match current authority")
             document = {
@@ -697,6 +713,23 @@ class VaultRegistryStore:
             initial_export_sha256 = str(
                 session_payload.get("initialExportSha256") or ""
             )
+            registry_export_sha256 = str(
+                session_payload.get("registryExportSha256") or ""
+            )
+            legacy_selected_path = _optional_str(
+                session_payload.get("legacySelectedPath")
+            )
+            expected_initial_export_sha256 = (
+                hashlib.sha256(
+                    self._rollback_export_payload(
+                        current,
+                        selected_binding_id=target_id,
+                        selected_runtime_path=Path(legacy_selected_path),
+                    )
+                ).hexdigest()
+                if legacy_selected_path is not None
+                else None
+            )
             if (
                 session_payload.get("schema") != ROLL_FORWARD_LINEAGE_SCHEMA
                 or session_payload.get("registrySchema") != current.schema
@@ -705,16 +738,19 @@ class VaultRegistryStore:
                 or session_payload.get("rollbackVaultBindingId") != target_id
                 or current.revision != floor.get("forkRegistryRevision")
                 or not _is_sha256(initial_export_sha256)
+                or not _is_sha256(registry_export_sha256)
+                or legacy_selected_path is None
+                or initial_export_sha256 != expected_initial_export_sha256
                 or not self.rollback_export_path.is_file()
                 or hashlib.sha256(self.rollback_export_path.read_bytes()).hexdigest()
-                != initial_export_sha256
+                != registry_export_sha256
             ):
                 raise RegistryError("scalar rollback lineage is stale, ambiguous, or divergent")
             if set(legacy.known_vaults) != {target.ref}:
                 raise RegistryError("scalar rollback mutation escaped the selected binding")
             changed = legacy.known_vaults[target.ref]
             if (
-                changed.path != target.path
+                changed.path != legacy_selected_path
                 or changed.vault_id != target.vault_id
                 or changed.local_instance_id != target.local_instance_id
                 or legacy.last_active_vault_ref not in (None, target.ref)
@@ -762,9 +798,7 @@ class VaultRegistryStore:
                 settings_rebind=copy.deepcopy(current.settings_rebind),
                 extensions=extensions,
             )
-            self._write_locked(merged)
-            self.scalar_rollback_session_path.unlink()
-            _fsync_directory(self.scalar_rollback_session_path.parent)
+            self._write_locked(merged, retire_scalar_session=True)
             return merged
 
     def _empty_snapshot(self) -> RegistrySnapshot:
@@ -921,7 +955,12 @@ class VaultRegistryStore:
             return None
         return snapshot, payload
 
-    def _write_locked(self, snapshot: RegistrySnapshot) -> None:
+    def _write_locked(
+        self,
+        snapshot: RegistrySnapshot,
+        *,
+        retire_scalar_session: bool = False,
+    ) -> None:
         if snapshot.schema != CURRENT_REGISTRY_SCHEMA or snapshot.authority not in {
             REGISTRY_AUTHORITY_DORMANT,
             REGISTRY_AUTHORITY_ACTIVE,
@@ -940,12 +979,20 @@ class VaultRegistryStore:
             self.snapshot_path: _read_previous_transaction_file(self.snapshot_path),
             self.snapshot_checksum_path: _read_previous_transaction_file(self.snapshot_checksum_path),
             self.rollback_export_path: _read_previous_transaction_file(self.rollback_export_path),
+            self.scalar_rollback_session_path: _read_previous_transaction_file(
+                self.scalar_rollback_session_path
+            ),
         }
         next_generation = {
             self.path: payload,
             self.snapshot_path: payload,
             self.snapshot_checksum_path: checksum,
             self.rollback_export_path: rollback_export,
+            self.scalar_rollback_session_path: (
+                None
+                if retire_scalar_session
+                else previous[self.scalar_rollback_session_path]
+            ),
         }
         prepared = self._transaction_manifest("prepared", previous, next_generation)
         _atomic_private_write(self.transaction_path, prepared)
@@ -1001,9 +1048,16 @@ class VaultRegistryStore:
 
     def _decode_generation(self, value: object) -> dict[Path, bytes | None]:
         legacy_names = {"main", "snapshot", "checksum"}
+        pre_session_names = {
+            "main",
+            "snapshot",
+            "checksum",
+            "rollback_export",
+        }
         if not isinstance(value, dict) or frozenset(value) not in {
             frozenset(self._transaction_artifacts()),
             frozenset(legacy_names),
+            frozenset(pre_session_names),
         }:
             raise RegistryError("registry transaction generation is malformed")
         decoded: dict[Path, bytes | None] = {}
@@ -1036,6 +1090,7 @@ class VaultRegistryStore:
             "snapshot": self.snapshot_path,
             "checksum": self.snapshot_checksum_path,
             "rollback_export": self.rollback_export_path,
+            "scalar_rollback_session": self.scalar_rollback_session_path,
         }
 
     def _recover_transaction_locked(self) -> None:
@@ -1064,6 +1119,7 @@ class VaultRegistryStore:
         snapshot = generation.get(self.snapshot_path)
         checksum = generation.get(self.snapshot_checksum_path)
         rollback_export = generation.get(self.rollback_export_path)
+        scalar_session = generation.get(self.scalar_rollback_session_path)
         if payload is None or snapshot != payload or checksum is None:
             raise RegistryError("registry transaction next generation is incomplete")
         if checksum != (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii"):
@@ -1073,8 +1129,22 @@ class VaultRegistryStore:
             parsed = self._snapshot_from_frontmatter(frontmatter)
             if rollback_export is not None and rollback_export != self._rollback_export_payload(parsed):
                 raise RegistryError("registry transaction rollback export is invalid")
+            if scalar_session is not None:
+                session = json.loads(scalar_session)
+                if (
+                    not isinstance(session, dict)
+                    or not isinstance(session.get("payload"), dict)
+                    or not isinstance(session.get("authentication"), dict)
+                ):
+                    raise RegistryError(
+                        "registry transaction scalar rollback session is invalid"
+                    )
         except (UnicodeDecodeError, RegistryParseError, RegistryError) as exc:
             raise RegistryError("registry transaction next generation payload is invalid") from exc
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RegistryError(
+                "registry transaction scalar rollback session is invalid"
+            ) from exc
 
     def _assert_current_generation_belongs_to_transaction(
         self,
@@ -1097,6 +1167,7 @@ class VaultRegistryStore:
             self.snapshot_checksum_path,
             self.rollback_export_path,
             self.path,
+            self.scalar_rollback_session_path,
         ):
             payload = generation[path]
             if payload is None:
@@ -1153,6 +1224,7 @@ class VaultRegistryStore:
         snapshot: RegistrySnapshot,
         *,
         selected_binding_id: str | None = None,
+        selected_runtime_path: Path | None = None,
     ) -> bytes:
         if selected_binding_id is None and snapshot.authority == REGISTRY_AUTHORITY_ACTIVE:
             floor = snapshot.extensions.get("scalarRollback")
@@ -1167,7 +1239,13 @@ class VaultRegistryStore:
             registrations = (selected,)
         known = {
             item.ref: {
-                "path": item.path,
+                "path": (
+                    str(selected_runtime_path)
+                    if selected_binding_id is not None
+                    and item.vault_binding_id == selected_binding_id
+                    and selected_runtime_path is not None
+                    else item.path
+                ),
                 "vaultId": item.vault_id,
                 "vaultName": item.vault_name,
                 "localInstanceId": item.local_instance_id,
