@@ -443,6 +443,90 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/CAPTURE_PHOTOS_DOCUMENTS_AND_VIDEO.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/CONSOLIDATE_MEETING_ON_END.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ENFORCE_MEETING_BLOCK_OWNERSHIP.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/PROJECT_LIVE_TRANSCRIPT_AND_DEFAULT_ANALYSIS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/PROVE_CROSS_DEVICE_ROUND_TRIP_WITH_RECONNECT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/RETAIN_ORIGINALS_UNTIL_BACKEND_RECEIPT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/RUN_LIVE_MEETING_ON_IPAD.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/SHOW_DURABLE_TRANSFER_QUEUE_ON_IPAD.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/TRACK_MEETING_SESSIONS_AND_SEGMENT_GAPS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
       "artifact": "docs/ENVIRONMENTS.md",
       "category": "iv",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
