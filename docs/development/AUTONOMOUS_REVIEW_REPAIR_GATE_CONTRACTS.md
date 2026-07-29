@@ -330,6 +330,13 @@ classification alone does not expand it to a repo-wide full suite.
 Creating the packet or changing reviewer capability never resets the existing per-mechanism repair
 budget.
 
+If `origin/main` advances after a clean convergence review or expensive validation, an eligible
+base-only rebase may reuse that evidence under
+`GOVERNANCE_PROPORTIONALITY.md :: Post-validation base-drift evidence reuse`. This is not a repair
+round and does not reset a budget. Any changed delivery blob, conflict resolution, scope change, or
+relevant base change returns to convergence/affected-surface validation. Current-head CI and the
+final independent review gate are never carried forward.
+
 ### Low-convergence receipt
 
 Record the triggering review round, mechanism key, packet location or concise receipt, reviewer

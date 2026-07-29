@@ -55,6 +55,12 @@ drifted between the gates. Non-zero exit => STOP, do not push; relocate the comm
 branch (for example cherry-pick onto `$EXPECTED_BRANCH` and reset the drifted branch) before
 pushing.
 
+This gate answers whether publication comes from the intended isolated branch and contains the
+current base. It does not by itself decide whether expensive validation must be repeated after an
+otherwise irrelevant rebase. That separate decision is fail-closed and owned by
+`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Post-validation base-drift evidence reuse` as
+invoked by `publish-pr`.
+
 ## Fallback (no script available)
 
 If the preflight script cannot run, assert the branch name directly:

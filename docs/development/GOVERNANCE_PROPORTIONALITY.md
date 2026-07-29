@@ -65,6 +65,32 @@ expensive. Budgets are never rebound to a new mechanism key to reset accounting.
 deliveries run without sub-agent fan-out. Repeated failure on a bounded change is evidence the
 solution is too big — shrink the solution before escalating capability.
 
+## Post-validation base-drift evidence reuse
+
+Branch freshness does not make byte-identical validation evidence false. When `origin/main`
+advances after expensive local validation but before the first push, rebase as required by the
+branch-truth gate and carry that evidence forward only when every condition below is proven:
+
+- the rebased delivery patch has the same stable patch ID as the validated patch;
+- every delivery-owned file blob is byte-identical to the validated patch;
+- the incoming base commits do not overlap delivery-owned paths and a changed-surface review finds
+  no semantic effect on dependencies, contracts, runtime configuration, schemas, migrations,
+  generated inputs, test selection, CI/build tooling, or the validation command itself;
+- no repair, scope change, conflict resolution, or delivery-owned edit occurred during the rebase;
+- the rebased head passes the bounded `Verify:` targets and cheap integration/contract checks that
+  can detect interaction with the incoming base; and
+- the publication receipt records the validated SHA, rebased SHA, stable patch ID, incoming commit
+  range, overlap result, checks rerun, and the expensive validation carried forward.
+
+Any unresolved relevance question fails closed and reruns the affected validation. A code,
+dependency, configuration, schema, migration, test-selection, CI/build-tooling, or contract change
+that can affect the delivery is relevant even when filenames do not overlap.
+
+This rule replaces unconditional full-suite repetition for irrelevant base-only SHA changes. It
+does not carry forward GitHub CI, live-environment proof, mergeability, or a required final review:
+those remain bound to the current PR head. It also never carries evidence across a repair commit,
+scope change, conflict resolution, or changed delivery blob.
+
 ## Right-size default
 
 The default solution is the most boring one that satisfies the acceptance criteria. A new gate,
@@ -82,6 +108,8 @@ Product-side scale posture is owned by `docs/DESIGN_PRINCIPLES.md`.
 - `Verify:` targets on issue-backed acceptance criteria.
 - Branch-truth gates at the publication boundary.
 - Required CI checks green on the current head SHA before any merge, at every tier.
+- Required final reviews run on the current head SHA; only eligible pre-publication expensive
+  validation may use the base-drift evidence-reuse rule above.
 
 ## CI enforcement
 
