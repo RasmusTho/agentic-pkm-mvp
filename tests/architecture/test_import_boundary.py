@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import ast
 import configparser
+from datetime import date
 import importlib
 from pathlib import Path
+import subprocess
 from typing import Set
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +52,12 @@ def _instance_storage_capability_contract_section() -> configparser.SectionProxy
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER_INI)
     return parser["importlinter:contract:instance-storage-capability-protected"]
+
+
+def _builder_llm_authority_contract_section() -> configparser.SectionProxy:
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    return parser["importlinter:contract:builder-llm-authority"]
 
 
 def _module_list(raw: str) -> Set[str]:
@@ -185,6 +193,88 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
     assert not unresolvable, (
         f"source_modules names packages that do not exist under app/: {unresolvable}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MAS-02 — the interim Builder -> Product LLM authority leak is one, visible,
+# and time-boxed until MAS-06 replaces CKM's Product routing.
+# ---------------------------------------------------------------------------
+
+
+def test_builder_does_not_import_product_llm_without_exemption(tmp_path: Path) -> None:
+    """The CI-consumed linter rejects a second Builder -> Product LLM import."""
+    contract = _builder_llm_authority_contract_section()
+    assert contract["type"] == "forbidden"
+    assert _module_list(contract["source_modules"]) == {"app.builderops"}
+    assert _module_list(contract["forbidden_modules"]) == {"app.components.llm"}
+
+    # Both PR workflows invoke this same config, so this proves the production
+    # CI gate rather than a test-local reimplementation of the contract.
+    for workflow in (".github/workflows/import-linter.yaml", ".github/workflows/ci-smoke.yaml"):
+        assert "lint-imports --config importlinter.ini" in (REPO_ROOT / workflow).read_text(
+            encoding="utf-8"
+        )
+
+    synthetic_import = APP_ROOT / "builderops" / "_mas02_forbidden_import_probe.py"
+    synthetic_import.write_text(
+        "from app.components.llm.fabric import get_chat_client\n", encoding="utf-8"
+    )
+    try:
+        result = subprocess.run(
+            ["lint-imports", "--config", str(IMPORTLINTER_INI)],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        synthetic_import.unlink(missing_ok=True)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "Builder System must not import the Product LLM fabric" in output
+    assert "app.builderops._mas02_forbidden_import_probe" in output
+
+
+def test_interim_exemption_is_single_named_and_dated() -> None:
+    """Only MAS-06 may carry the one dated CKM authority-leak exception."""
+    raw = IMPORTLINTER_INI.read_text(encoding="utf-8")
+    section = raw.split("[importlinter:contract:builder-llm-authority]", maxsplit=1)[1]
+    section = section.split("[importlinter:contract:", maxsplit=1)[0]
+
+    assert section.count("ignore_imports =") == 1
+    assert "MAS-06" in section
+    granted_date = "2026-07-27"
+    assert granted_date in section
+    assert date.fromisoformat(granted_date) == date(2026, 7, 27)
+
+    contract = _builder_llm_authority_contract_section()
+    assert _module_list(contract["ignore_imports"]) == {
+        "app.builderops.ckm.semantic -> app.components.llm.constrained",
+        "app.builderops.ckm.semantic -> app.components.llm.fabric",
+    }
+
+
+def test_importlinter_header_states_blocking_gate_posture() -> None:
+    """The config header describes the two workflows that block on this gate."""
+    header = IMPORTLINTER_INI.read_text(encoding="utf-8").split("[importlinter]", maxsplit=1)[0]
+    assert "Run BLOCKING" in header
+    assert ".github/workflows/import-linter.yaml" in header
+    assert ".github/workflows/ci-smoke.yaml" in header
+    assert "non-blocking" not in header.lower()
+
+
+def test_interaction_protected_contract_coverage_is_unchanged() -> None:
+    """MAS-02 adds a separate contract without weakening the existing one."""
+    section = _contract_section()
+    assert section["type"] == "forbidden"
+    assert _module_list(section["source_modules"])
+    assert _module_list(section["forbidden_modules"]) == {
+        "app.api",
+        "app.chat",
+        "app.cli",
+        "app.web",
+    }
 
 
 def test_instance_storage_mutation_import_contract_is_complete() -> None:
