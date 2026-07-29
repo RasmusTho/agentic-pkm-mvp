@@ -374,8 +374,11 @@ def test_export_runtime_env_delegated_sitecustomize_preserves_loader_metadata(
     metadata_path = tmp_path / "delegated-sitecustomize-metadata"
     (real_hook_dir / "sitecustomize.py").write_text(
         """\
+import importlib.machinery
+import importlib.util
 import os
 from pathlib import Path
+import sys
 
 if __spec__ is None or __spec__.name != "sitecustomize":
     raise RuntimeError("delegated sitecustomize lost its spec")
@@ -387,6 +390,54 @@ Path(os.environ["PKM_DELEGATED_SITECUSTOMIZE_METADATA"]).write_text(
     f"{__spec__.name}|{Path(__file__).resolve()}|{type(__loader__).__name__}",
     encoding="utf-8",
 )
+
+# This module stands in for "an interpreter that already ships its own
+# sitecustomize.py". On a plain interpreter that is the end of the line.
+# But on some real developer interpreters (e.g. Homebrew's macOS CPython)
+# this stand-in is not actually the last word: the interpreter needs a
+# *further* sitecustomize hop of its own -- e.g. Homebrew's ships one,
+# further down sys.path, whose only load-bearing line wires up the
+# interpreter's actual third-party site-packages directory via
+# ``site.addsitedir(...)`` -- to make third-party imports (like
+# ``pydantic_settings``) work at all. A fixture that stops delegating
+# after this one hop silently breaks every such interpreter, which is
+# the same class of defect this whole fixture chain exists to guard
+# against (issue #4186), just one layer deeper. Re-run the identical
+# re-delegation search used by the settings-location-failure hook, one
+# level further down, so this stand-in stays host-agnostic instead of
+# only working on interpreters that need exactly one sitecustomize hop.
+#
+# Excluding only this module's own directory is not enough here: the
+# settings-location-failure hook's directory still precedes this one on
+# sys.path (it put itself first specifically so it would be found before
+# this stand-in), and searching that back into scope would re-find *it*
+# and recurse forever. Search only what comes after this module's own
+# sys.path entry, so both this stand-in and everything already visited
+# ahead of it are excluded.
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+_this_index = next(
+    i for i, p in enumerate(sys.path) if os.path.abspath(p) == _this_dir
+)
+_search_path = sys.path[_this_index + 1 :]
+_further_spec = importlib.machinery.PathFinder().find_spec(
+    "sitecustomize", path=_search_path
+)
+if (
+    _further_spec is not None
+    and _further_spec.loader is not None
+    and hasattr(_further_spec.loader, "exec_module")
+    and (
+        _further_spec.origin is None
+        or os.path.abspath(_further_spec.origin) != os.path.abspath(__file__)
+    )
+):
+    _further_module = importlib.util.module_from_spec(_further_spec)
+    _this_module = sys.modules[__name__]
+    sys.modules[_further_spec.name] = _further_module
+    try:
+        _further_spec.loader.exec_module(_further_module)
+    finally:
+        sys.modules[_further_spec.name] = _this_module
 """,
         encoding="utf-8",
     )
