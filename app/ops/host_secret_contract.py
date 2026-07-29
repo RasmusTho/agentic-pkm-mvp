@@ -35,19 +35,6 @@ _CHILD_BINDING_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _KIND_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,15}$")
 _ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 _IDENTIFIER_MAX_LENGTH = 128
-_FORBIDDEN_IDENTIFIER_FRAGMENTS = frozenset(
-    {
-        "actual",
-        "bearer",
-        "credential",
-        "material",
-        "password",
-        "private",
-        "secret",
-        "token",
-    }
-)
-_FORBIDDEN_IDENTIFIER_PREFIXES = ("sk-", "sk_", "sk.")
 
 
 class UndeclaredSecretConsumerError(ValueError):
@@ -108,14 +95,11 @@ class HostSecretContract:
 
 
 def _is_identifier(value: object, pattern: re.Pattern[str]) -> bool:
-    if not isinstance(value, str) or len(value) > _IDENTIFIER_MAX_LENGTH:
-        return False
-    lowered = value.lower()
-    if lowered.startswith(_FORBIDDEN_IDENTIFIER_PREFIXES):
-        return False
-    if any(fragment in lowered for fragment in _FORBIDDEN_IDENTIFIER_FRAGMENTS):
-        return False
-    return pattern.fullmatch(value) is not None
+    return (
+        isinstance(value, str)
+        and len(value) <= _IDENTIFIER_MAX_LENGTH
+        and pattern.fullmatch(value) is not None
+    )
 
 
 def _validated_unique_string_list(

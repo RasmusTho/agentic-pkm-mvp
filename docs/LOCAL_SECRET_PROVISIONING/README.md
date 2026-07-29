@@ -55,10 +55,12 @@ The v1 Keychain service is pinned to the stable non-secret namespace
 `yggdrasil.host-secrets`, and its account is derived by percent-encoding each
 `{channel}:{consumer}:{secret}` component before colon-joining the declared tuple, so distinct
 tuples cannot collide and each channel resolves a distinct item. The loader accepts only
-grammar-valid, contract-declared identifiers. Identifier namespaces are length-bounded, reserve
-credential/value-shaped fragments and common key prefixes, require logical-id/validation-kind
-agreement, and derive each child binding from its logical identifier. Any string that crosses those
-relations is rejected rather than treated as potential secret material.
+grammar-valid, contract-declared identifiers. Identifier namespaces are length-bounded, require
+logical-id/validation-kind agreement, and derive each child binding from its logical identifier.
+Value-freedom is structural and semantic: the schema is closed at every level, duplicate keys fail,
+declarations carry no value field, and exact grants constrain every identifier. Identifier strings
+and the deliberately provider-agnostic `api-key` value validator are not required to have disjoint
+lexical languages.
 Contract JSON must use unique object keys; a duplicate declaration fails closed rather than allowing a
 value to be hidden behind a later canonical field.
 The delivered HSP-02 bootstrap resolves each consumer's allowlist into a temporary mode-0600 file.

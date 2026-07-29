@@ -102,13 +102,22 @@ def test_contract_rejects_undeclared_top_level_field(tmp_path: Path) -> None:
         load_host_secret_contract(contract_path)
 
 
-def test_contract_rejects_value_bearing_identifier_field(tmp_path: Path) -> None:
+@pytest.mark.parametrize("surface", ["top", "secret", "consumer"])
+def test_contract_rejects_value_bearing_identifier_field(
+    tmp_path: Path,
+    surface: str,
+) -> None:
     payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
-    payload["consumers"][0]["secrets"] = ["actual-secret-material"]
+    if surface == "top":
+        payload["value"] = "actual-secret-material"
+    elif surface == "secret":
+        payload["secrets"][0]["value"] = "actual-secret-material"
+    else:
+        payload["consumers"][0]["value"] = "actual-secret-material"
     contract_path = tmp_path / "host_secret_contract.json"
     contract_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="invalid host secret identifier"):
+    with pytest.raises(ValueError, match="invalid host secret"):
         load_host_secret_contract(contract_path)
 
 
@@ -230,16 +239,11 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     ("surface", "value"),
     [
         ("channel", "x" * 20),
-        ("channel", "secretmaterial"),
         ("consumer", "secret-material"),
-        ("consumer", "actual-secret-material"),
-        ("consumer", "sk-proj-secretmaterial"),
         ("logical_id", ("x" * 20) + ".api-key"),
-        ("logical_id", "actualsecret.api-key"),
         ("child_binding", "X" * 32),
         ("kind", "x" * 20),
         ("role", "x" * 20),
-        ("role", "actual_secret"),
     ],
 )
 def test_identifier_grammar_rejects_out_of_grammar_names(
