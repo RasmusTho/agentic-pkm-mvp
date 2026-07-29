@@ -193,18 +193,12 @@ Change the affected helper and its focused regression test.
 - Primary subsystem: Builder System / CES boundary
 - Secondary subsystem(s): none
 - Write class: governance/docs/process
-- Authority impact: bounded defect repair
 - Persistence impact: none
 - Derived/rebuildable impact: none
-- Human knowledge impact: none
-- Memory impact: none
-- Retrieval/context impact: none
-- Sync/deployment impact: none
-- External boundary impact: none
 - New or changed contract: none
 - Owner-doc impact: none
 - Transition debt impact: reduces
-- Fitness rule impact: strengthens
+- Boundary risk: bounded defect repair must not bypass the canonical issue contract
 
 ## Constraints
 
@@ -609,7 +603,7 @@ def test_promotion_rejects_missing_sbs_fields_and_unexpected_top_level_section()
         "title": "bug: reject incomplete SBS contracts",
         "state": "open",
         "body": _canonical_bug_body().replace(
-            "- Fitness rule impact: strengthens",
+            "- Boundary risk: bounded defect repair must not bypass the canonical issue contract",
             "- Other impact: none",
         ),
         "labels": [
@@ -618,7 +612,7 @@ def test_promotion_rejects_missing_sbs_fields_and_unexpected_top_level_section()
             {"name": "agent:ready"},
         ],
     }
-    with pytest.raises(known_defects.KnownDefectsError, match="Fitness rule"):
+    with pytest.raises(known_defects.KnownDefectsError, match="Boundary risk"):
         known_defects.promote_defect(defect.defect_id, 901, gateway)
 
     gateway.issues[901]["body"] = (

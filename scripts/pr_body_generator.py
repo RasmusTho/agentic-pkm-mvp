@@ -29,18 +29,11 @@ SBS_FIELDS = (
     ("primary_subsystem", "Primary subsystem"),
     ("secondary_subsystems", "Secondary subsystem(s)"),
     ("write_class", "Write class"),
-    ("authority_impact", "Authority impact"),
     ("persistence_impact", "Persistence impact"),
     ("derived_rebuildable_impact", "Derived/rebuildable impact"),
-    ("human_knowledge_impact", "Human knowledge impact"),
-    ("memory_impact", "Memory impact"),
-    ("retrieval_context_impact", "Retrieval/context impact"),
-    ("sync_deployment_impact", "Sync/deployment impact"),
-    ("external_boundary_impact", "External boundary impact"),
     ("new_or_changed_contract", "New or changed contract"),
     ("owner_doc_impact", "Owner-doc impact"),
     ("transition_debt_impact", "Transition debt impact"),
-    ("fitness_rule_impact", "Fitness rule impact"),
     ("boundary_risk", "Boundary risk"),
 )
 

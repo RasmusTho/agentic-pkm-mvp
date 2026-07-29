@@ -216,6 +216,49 @@ jobs:
               pull_number: context.payload.pull_request.number,
             });
             const body = pullRequest.body || "";
+            // sbs-impact-consistency:start
+            const sbsImpactWarnings = (candidateBody, changedFiles) => {
+              const impactSection = candidateBody.match(
+                /(?:^|\n)## SBS Impact\s*\n([\s\S]*?)(?=\n##\s|\n---|$)/i
+              );
+              const impactValue = (label) => {
+                if (!impactSection) return "";
+                const match = impactSection[1].match(
+                  new RegExp(`^\\s*-\\s*${label}:\\s*(.*?)\\s*$`, "im")
+                );
+                return match ? match[1].trim() : "";
+              };
+              const declaresNone = (value) => /^(?:none|unaffected)\b/i.test(value);
+              const warnings = [];
+              if (
+                changedFiles.some(path => path.startsWith("app/alembic/versions/")) &&
+                declaresNone(impactValue("Persistence impact"))
+              ) {
+                warnings.push(
+                  "SBS Impact declares `Persistence impact: none` or `unaffected`, but this PR adds an Alembic migration."
+                );
+              }
+              if (
+                changedFiles.some(path => /^docs\/contracts\/[^/]+\.md$/i.test(path)) &&
+                declaresNone(impactValue("New or changed contract"))
+              ) {
+                warnings.push(
+                  "SBS Impact declares `New or changed contract: none` or `unaffected`, but this PR changes a contract document."
+                );
+              }
+              return warnings;
+            };
+            // sbs-impact-consistency:end
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const changedFiles = files.map(file => file.filename);
+            for (const warning of sbsImpactWarnings(body, changedFiles)) {
+              core.warning(warning);
+            }
             const finalReviewRoundLines = body.match(
               /^Final-Review-Rounds:[ \t]*.*$/gm
             ) || [];
@@ -659,13 +702,6 @@ jobs:
               "tests/fixtures/issue_readiness/",
               "tests/fixtures/pr_body_generator/",
             ];
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
-            const changedFiles = files.map(file => file.filename);
             const allowedExact = isGovernanceLane ? governanceAllowedExact : docsAllowedExact;
             const allowedPrefixes = isGovernanceLane ? governanceAllowedPrefixes : docsAllowedPrefixes;
             const disallowed = changedFiles.filter(filename => {

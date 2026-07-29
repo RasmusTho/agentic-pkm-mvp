@@ -45,20 +45,13 @@ PLANNING_SNAPSHOT_VERSION: Final[
 ] = "builderops.delivery-planning-snapshot.v2"
 
 REQUIRED_SBS_IMPACT_FIELDS: Final[tuple[str, ...]] = (
-    "Authority impact",
     "Boundary risk",
     "Derived/rebuildable impact",
-    "External boundary impact",
-    "Fitness rule impact",
-    "Human knowledge impact",
-    "Memory impact",
     "New or changed contract",
     "Owner-doc impact",
     "Persistence impact",
     "Primary subsystem",
-    "Retrieval/context impact",
     "Secondary subsystem(s)",
-    "Sync/deployment impact",
     "Transition debt impact",
     "Write class",
 )
