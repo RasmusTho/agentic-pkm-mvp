@@ -197,18 +197,19 @@ By contrast, additive work on a single surface that mirrors an existing pattern 
    - parent feature issue body, comments, or both
    - owner-doc promotion trigger
 7. If docs are still too vague, stop at `enrich-docs` instead of creating weak specs.
-8. Create or update the parent feature issue on GitHub (if needed).
+8. Immediately before the first `gh issue create` (parent or child), run the **Live duplicate re-check — immediately before creation** step from `.codex/skills/docs-to-issue/SKILL.md :: Before creating any Issue`. The step-3 search is an analysis-time snapshot, and spec authoring (steps 4–7) leaves a wide gap in which a concurrent session can file the same backlog (seen 2026-07-29: hub #4286 + children #4287–#4292 duplicated by #4298–#4304).
+9. Create or update the parent feature issue on GitHub (if needed).
    - If you create it, immediately update the local `PARENT_FEATURE_ISSUE.md` to state that the GitHub issue now exists and is the authoritative backlog/validation surface.
    - In the same commit, update the capability `README.md` so its `State:` line and relationship-to-GitHub-issues section match the new GitHub issue state.
    - If the GitHub parent issue later closes, update the local `PARENT_FEATURE_ISSUE.md` again so it no longer reads as an unfiled or active draft.
    - When closing, also update the capability `README.md` so it no longer reads as an active pre-delivery lane and so any now-satisfied acceptance checklist truthfully reflects the delivered docs/spec state.
-9. Create or update GitHub issues from the task specifications, in dependency order.
-10. Keep authoritative labels truthful; Project status is optional projection:
+10. Create or update GitHub issues from the task specifications, in dependency order.
+11. Keep authoritative labels truthful; Project status is optional projection:
     - parent feature issue normally starts with `agent:blocked`
     - ready tasks use `agent:ready` after strict validation
     - blocked tasks use `agent:blocked`
     - decision-dependent tasks use `agent:needs-human` only when a named human decision, tradeoff, missing input, or authority question is still open
-11. Emit one clear breakdown receipt showing the parent feature issue, implementation tasks, evidence surface, and execution order.
+12. Emit one clear breakdown receipt showing the parent feature issue, implementation tasks, evidence surface, and execution order.
 
 ## Parent feature issue requirements
 

@@ -27,10 +27,9 @@ skill.
 - Claude Code does not consume Codex TOML as authority. Claude should use this role map together with
   `AGENTS.md` and the skills. Native `.claude/agents/**` adapters are intentionally **not** added; see
   Claude compatibility below.
-- `.codex/agents/` also contains the legacy `docs-guardian.yaml` CI-invoked automation agent
-  (`codex run docs-guardian` in `.github/workflows/architecture-ci.yaml`). It predates the TOML
-  execution-role adapters and uses a different schema; it is a separate, narrower CI-repair agent, not
-  a specialist delivery role in this map.
+- `.codex/agents/` also contains the legacy `docs-guardian.yaml` definition. MAS-03 removed its
+  optional credential-gated invocation from `.github/workflows/architecture-ci.yaml`; the retained
+  file is not a live CI integration or a specialist delivery role in this map.
 
 ## Classification
 

@@ -377,6 +377,22 @@ def _stash_ref(line: str) -> str:
     return line.split(":", 1)[0]
 
 
+def _current_stash_selector_for_sha(cwd: Path, sha: str) -> str | None:
+    """Resolve which `stash@{N}` currently holds commit `sha`, or None.
+
+    Uses a plain (no `--date`) listing so the returned selector is always a
+    small positional index that `git stash drop` can act on directly. Called
+    fresh immediately before every drop so a prior drop's renumbering of the
+    stash reflog can never make this resolution stale.
+    """
+    listing = run_git(["stash", "list", "--format=%gd %H"], cwd)
+    for entry in listing.splitlines():
+        selector, _, entry_sha = entry.partition(" ")
+        if entry_sha == sha:
+            return selector
+    return None
+
+
 def _utc_stamp(now: float | None = None) -> str:
     value = dt.datetime.fromtimestamp(time.time() if now is None else now, tz=dt.UTC)
     return value.strftime("%Y%m%dT%H%M%SZ")
@@ -935,12 +951,30 @@ def build_janitor_plan(
     cutoff = (time.time() if now is None else now) - stale_after_days * 24 * 60 * 60
     old_stashes = []
     stash_output = run_git(["stash", "list", "--date=unix"], cwd)
-    for line in stash_output.splitlines():
+    stash_lines = stash_output.splitlines()
+    candidate_rows: list[tuple[int, str]] = []
+    for index, line in enumerate(stash_lines):
         epoch = _stash_epoch(line)
         if epoch and epoch < cutoff and "preserve-local-drift" in line:
-            old_stashes.append({"ref": _stash_ref(line), "line": line})
+            candidate_rows.append((index, line))
         elif epoch and epoch < cutoff:
             skipped.append({"artifact": "stash", "name": _stash_ref(line), "reason": "missing_preserve_local_drift_marker"})
+    if candidate_rows:
+        # A companion plain listing (no --date), taken immediately after this
+        # scan with no intervening mutation, recovers each candidate's stable
+        # commit hash by position. `_stash_ref(line)` (the `--date=unix`
+        # selector) must never be treated as that identity: it is a
+        # positional index that a prior drop in the same apply run
+        # renumbers, and with `--date` applied git can additionally fold
+        # several entries pushed within the same second into one rendered
+        # selector, so it cannot even be resolved back to a specific reflog
+        # position on its own. `janitor_apply` re-resolves this hash to
+        # whatever position currently holds it immediately before every
+        # drop, instead of trusting any positional selector.
+        stash_shas = run_git(["stash", "list", "--format=%H"], cwd).splitlines()
+        for index, line in candidate_rows:
+            sha = stash_shas[index] if index < len(stash_shas) else None
+            old_stashes.append({"ref": _stash_ref(line), "line": line, "sha": sha})
 
     prune_candidates = {
         "worktree": run_git(["worktree", "prune", "--dry-run"], cwd).splitlines(),
@@ -1399,7 +1433,70 @@ def janitor_apply(
                 },
             )
     for stash in plan["candidates"]["old_stashes"]:
-        apply_git(["stash", "drop", stash["ref"]], {"artifact": "stash", "action": "drop", **stash})
+        expected_sha = stash.get("sha")
+        if not expected_sha:
+            errors.append(
+                {
+                    "artifact": "stash",
+                    "action": "drop",
+                    "reason": "missing_stash_identity",
+                    **stash,
+                }
+            )
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
+        # Never trust `stash["ref"]`: it is the positional selector captured
+        # when the plan was built, and a prior drop in this same loop
+        # renumbers every stash above the one it removed. Re-resolve the
+        # candidate's stable commit hash to whatever selector currently holds
+        # it, verify that selector still names the intended commit, and only
+        # then drop it. A candidate that can no longer be found or no longer
+        # matches aborts the whole loop rather than risk touching an
+        # unrelated stash.
+        current_selector = _current_stash_selector_for_sha(cwd, expected_sha)
+        if current_selector is None:
+            errors.append(
+                {
+                    "artifact": "stash",
+                    "action": "drop",
+                    "reason": "stash_identity_not_found",
+                    **stash,
+                }
+            )
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
+        verify = run_git_result(["rev-parse", "--verify", f"{current_selector}^{{commit}}"], cwd)
+        if verify.returncode != 0 or verify.stdout.strip() != expected_sha:
+            errors.append(
+                {
+                    "artifact": "stash",
+                    "action": "drop",
+                    "reason": "stash_identity_mismatch",
+                    "resolved_selector": current_selector,
+                    **stash,
+                }
+            )
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
+        apply_git(
+            ["stash", "drop", current_selector],
+            {"artifact": "stash", "action": "drop", **stash},
+        )
 
     return {
         **plan,

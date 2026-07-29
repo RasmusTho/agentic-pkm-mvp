@@ -75,6 +75,10 @@ promote public internet readiness.
 
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
+- CI no longer treats absent model-provider credentials as a passing live-provider check: the optional
+  Panel LLM E2E job and credential-gated Codex docs-guardian path are removed. Reintroducing either
+  requires a separately declared credential backend and explicit cost/egress posture; deterministic
+  smoke, ADR-index, and docs-guard paths remain.
 - The runbook uses affected-subsystem PR tests plus curated fitness gates before merges; the leased full non-PG/alpha-excluded suite is reserved for an explicit contract or cross-system blast-radius escalation.
 - PR-unit test selection maps Heimdal/Mimer implementation, contract-doc, and test paths to the scoped `tests/heimdal` and `tests/knowledge_acquisition` suites; an unmapped changed surface fails selection before pytest rather than producing a false-green run.
 - The dormant instance-local multi-vault registry core lives in `app/instance/vault_registry.py` and

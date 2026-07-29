@@ -341,7 +341,7 @@ GitHub platform limitations observed in this session:
 ## Required follow-up outside the repo
 
 ~~1. Optionally add branch protection or repository rules that require the governance workflow to pass before merge.~~
-Branch protection with required status checks is now active on `stable` (delivered 2026-05-10, issue #844).
+Branch protection with required status checks is now active on `stable` (delivered 2026-05-10, issue #844) and on `main` (`Unit tests (not pg)`; see the delivery receipt below).
 
 ## Governance receipts
 
@@ -355,3 +355,4 @@ Delivery receipt:
 - On 2026-03-30, the repository labels, Project v2 board, linked repository, required status taxonomy, custom `Agent State` field, and initial item states were applied on the GitHub platform.
 - On 2026-03-30, the required `Kanban` and `Agent Queue` views plus the built-in Project lifecycle automation were completed manually in the GitHub UI after the repo and field baseline was applied.
 - On 2026-05-10, required status checks (`smoke`, `smoke-docker`, `pr-contract`, `strict=true`) were added to `stable` branch protection via issue #844. A PR targeting `stable` now requires all three checks to pass before merge is permitted.
+- `main` is protected with a single required status check, `Unit tests (not pg)` (the `pr-unit-tests-not-pg` job in `.github/workflows/ci-smoke.yaml`): `contexts=["Unit tests (not pg)"]`, `strict=false`, `enforce_admins=true`, `required_pull_request_reviews=null`. A PR targeting `main` cannot be merged through the API while that check is red (HTTP 405). Verified via `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on 2026-07-29. The check was first observed hard-blocking a merge on 2026-07-17, shortly after PR #3913 (merged 2026-07-16, issue #3892) activated the PR-path gates and moved this job out of the retired `ci.yml`; the exact promotion timestamp is not recorded because branch protection is platform state, not repo state.

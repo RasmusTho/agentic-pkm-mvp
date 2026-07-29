@@ -9,7 +9,7 @@ depends_on: [MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (child issue #4289, filed 2026-07-29). Sibling extension of the
+State: Implemented. Delivered by PR #4345 (issue #4289, 2026-07-29). Sibling extension of the
 delivered Local Secret Provisioning mechanism; **not** a re-filing of HSP-02, which is closed (#3846 /
 PR #4008).
 
@@ -50,10 +50,13 @@ snapshot. This task updates only the newly expanded model-provider scope.
    grant in this task.
 2. Replace `_INITIAL_CHANNELS`, `_INITIAL_CONSUMER`, and `_INITIAL_SECRET`
    (`app/ops/host_secret_contract.py:16-18`) with declared data plus a **strict identifier grammar**.
-   The v1 loader's anti-smuggling property — "any other identifier-bearing string is rejected rather
-   than treated as a potential secret value" (`docs/LOCAL_SECRET_PROVISIONING/README.md:53-54`) — is
-   preserved by the grammar and a length bound rather than by exact string equality against one
-   constant. `test_contract_rejects_value_bearing_identifier_field` must still pass unchanged.
+   The v1 loader's value-free/anti-smuggling property is structural and semantic: top-level, secret,
+   and consumer objects have closed schemas; duplicate keys and undeclared value-bearing fields fail;
+   identifier classes are length-bounded and grammar-constrained; logical IDs must agree with their
+   validation kind; child bindings are derived from logical IDs; and exact grants constrain every
+   reference. Because the provider-agnostic `api-key` validator intentionally accepts any 20–512
+   printable non-whitespace characters, its lexical language necessarily overlaps some legitimate
+   metadata identifiers. Lexical disjointness is neither required nor claimed.
 3. Make the logical-identifier-to-environment-variable mapping data. `_SECRET_ENV_NAMES`
    (`app/ops/host_secret_bootstrap.py:23`) currently hardcodes one pair; the mapping moves into the
    declared contract so a new provider is a declaration.
@@ -100,12 +103,18 @@ declared credential backend and explicit cost/egress posture.
 
 ```
 $ python -m app.ops.host_secret_bootstrap --channel dev --consumer builderops-model-inquiry -- \
-    python -c "import os; print('OPENAI_API_KEY' in os.environ)"
-True
+    python -c "import os; print('HOST_SECRET_RUNTIME_ENV_FILE' in os.environ, \
+    'OPENAI_API_KEY' not in os.environ, 'ANTHROPIC_API_KEY' not in os.environ)"
+True True True
 
-# with the Keychain item absent:
+# The mode-0600 file named by HOST_SECRET_RUNTIME_ENV_FILE contains only the
+# declared OPENAI_API_KEY and ANTHROPIC_API_KEY bindings. MAS-05 owns bounded
+# in-process consumption of that file; the bootstrap never copies either
+# value into the child's ambient environment.
+
+# with the Anthropic item present but the OpenAI item absent:
 $ python -m app.ops.host_secret_bootstrap --channel dev --consumer builderops-model-inquiry -- true
-host secret bootstrap failed for declared consumer: openai.api-key
+host secret bootstrap failed for declared secret: openai.api-key
 $ echo $?
 1
 
@@ -140,9 +149,11 @@ workflows green-on-absent would leave the decision undelivered.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
 - [ ] An identifier of unknown kind still fails closed rather than being passed through unvalidated.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_unknown_secret_kind_still_fails_closed`
-- [ ] The anti-smuggling property survives the move to data: a value-shaped string in an identifier
-      field is rejected, and the existing contract tests pass without relaxation.
-      Verify: `tests/ops/test_host_secret_contract.py::test_contract_rejects_value_bearing_identifier_field`
+- [ ] The value-free/anti-smuggling property survives the move to data: undeclared value-bearing
+      fields at top-level, secret, or consumer scope and duplicate keys are rejected; strict field
+      grammars, logical-id/kind/binding relations, and exact grants remain enforced. Identifier and
+      `api-key` lexical languages are not required to be disjoint.
+      Verify: `tests/ops/test_host_secret_contract.py::test_contract_rejects_value_bearing_field`
       Verify: `tests/ops/test_host_secret_contract.py::test_identifier_grammar_rejects_out_of_grammar_names`
 - [ ] `dev`, `test`, and `prod` resolve distinct Keychain accounts for the same model-provider
       identifier, and a `dev` request cannot resolve a `prod` item.

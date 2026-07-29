@@ -50,3 +50,19 @@ def test_ci_smoke_gates_heavy_pytest_for_docs_only_prs() -> None:
     assert "heavy_smoke:" in workflow
     assert "Skip heavy pytest smoke for docs-only PR" in workflow
     assert "github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'" in workflow
+
+
+def test_no_workflow_step_is_green_on_absent_provider_secret() -> None:
+    workflow_dir = REPO_ROOT / ".github" / "workflows"
+    all_workflows = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(workflow_dir.iterdir())
+        if path.is_file()
+    )
+
+    assert "PANEL_AGENT_LLM_E2E_CI" not in all_workflows
+    assert "Detect live-LLM CI configuration" not in all_workflows
+    assert "steps.live-llm.outputs.enabled" not in all_workflows
+    assert "Detect Codex secret" not in all_workflows
+    assert "CODEX_API_KEY=${{ secrets.CODEX_API_KEY }}" not in all_workflows
+    assert "codex run docs-guardian" not in all_workflows

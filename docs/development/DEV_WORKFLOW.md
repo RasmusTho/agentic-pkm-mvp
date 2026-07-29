@@ -99,14 +99,29 @@ Enforcement note:
 
 ### CI / validation expectations
 
-The CI workflow runs a non-required `Unit tests (not pg)` check automatically on `pull_request`.
-That check uses `scripts/select_pr_tests.py` to execute affected-subsystem pytest targets without a
-Postgres service, so relevant unit regressions are visible before merge without paying for the
-repo-wide suite on every PR.
+`CI Smoke` (`.github/workflows/ci-smoke.yaml`) runs the `Unit tests (not pg)` check
+(`pr-unit-tests-not-pg`) automatically on `pull_request`. That check
+uses `scripts/select_pr_tests.py` to execute affected-subsystem pytest targets without a Postgres
+service, so relevant unit regressions are visible before merge without paying for the repo-wide
+suite on every PR. [`TEST_STRATEGY_HOT_PATH.md`](TEST_STRATEGY_HOT_PATH.md) owns that selection
+behavior and its paths filter.
 
-This PR check is intentionally non-required until it has been observed green on real PRs. Promoting
-the check to a required branch-protection gate, or adding `pg`-marked tests with a Postgres service
-to the PR path, is deferred to follow-up work based on observed signal and CI cost/flakiness.
+`Unit tests (not pg)` is a **required** status check in `main` branch protection. A red run blocks
+merge at the platform level: the REST merge API rejects the merge with HTTP 405 while the check is
+failing. `main` protection requires this single check, requires no approving review, does not
+require the branch to be up to date (`strict=false`), and applies to admins. Verified against
+`gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on 2026-07-29; the durable receipt
+lives in [`GITHUB_GOVERNANCE_SETUP.md`](GITHUB_GOVERNANCE_SETUP.md).
+
+Platform enforcement is a floor, not the process gate. [`PR_HOT_PATH.md`](PR_HOT_PATH.md) still
+governs when a PR may merge, and the absence of a protection rule on any other surface never waives
+it.
+
+`pg`-marked tests reach the PR path only through the narrow `Index PG contracts`
+(`pr-index-pg-contracts`) job, which runs `pytest -m "pg"` against a pgvector service for the exact
+index/outbox/YouTube-quota acceptance files when those paths change. That job is not a required
+check. Broad `pg` and integration coverage stays on `integration-nightly.yaml` (nightly schedule
+plus `workflow_dispatch`).
 
 ## Documentation rules
 
@@ -346,6 +361,17 @@ Enforcement surfaces:
   forward on the new record (`prior_bindings`, deduplicated by branch and bounded to the 8 most
   recent) rather than dropping it. Broad `git worktree prune`
   remains report-only. The current checkout is always skipped.
+- Stash cleanup within the same apply run only ever drops a stash it resolved as a
+  `preserve-local-drift`-marked, age-eligible candidate; it never drops by a stale positional
+  index. `stash@{N}` is a position in the stash reflog, not a stable name — worktree paths and
+  branch names do not shift when a sibling is removed, but every drop of an earlier stash renumbers
+  every later one, and (independently) capturing that selector from a `--date`-formatted listing
+  can make it unresolvable to any real reflog position at all. Each candidate is instead identified
+  by its stash commit hash, captured once at plan time; immediately before every drop, `janitor_apply`
+  re-resolves that hash to whichever `stash@{N}` currently holds it and verifies the match. A
+  candidate that cannot be re-resolved, or whose re-resolved entry no longer matches, aborts the
+  remaining stash cleanup for that run with a recorded error rather than dropping a different,
+  non-candidate stash.
 - Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 

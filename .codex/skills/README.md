@@ -91,7 +91,7 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `agentic-pkm`
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
 - `resume-work`
-  - dev-time recovery for interrupted Codex/Claude/ChatGPT sessions (quota, network, hung command, tool failure, context loss); reconstruct state from git first, keep a lightweight `.codex-tmp/HANDOFF.md`, continue when clear, and escalate only on destructive or contract/SoT ambiguity; not a runtime/product feature
+  - dev-time recovery for interrupted Codex/Claude/ChatGPT sessions (quota, network, hung command, tool failure, context loss); check resumable orchestration journals/runs before git reconstruction, use git reconstruction as the fallback, keep a lightweight `.codex-tmp/HANDOFF.md`, continue when clear, and escalate only on destructive or contract/SoT ambiguity; not a runtime/product feature
 - `issue-to-code`
   - implementation entrypoint for bounded GitHub Issue work
   - classifies the issue as Product/Runtime System, Builder System, or boundary work before pickup

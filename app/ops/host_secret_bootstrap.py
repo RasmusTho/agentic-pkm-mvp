@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+import ctypes
 import os
 from pathlib import Path
 import re
@@ -20,9 +21,6 @@ from app.ops.host_secret_contract import HostSecretContract, load_host_secret_co
 
 
 HOST_SECRET_RUNTIME_ENV_FILE = "HOST_SECRET_RUNTIME_ENV_FILE"
-_SECRET_ENV_NAMES = {
-    "heimdal.raw-store-key": "HEIMDAL_RAW_STORE_KEY",
-}
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _CHILD_WAIT_POLL_SECONDS = 0.1
 _CHILD_TERMINATION_GRACE_SECONDS = 5.0
@@ -70,6 +68,8 @@ def _temporary_signal_handlers(handler: SignalHandler) -> Iterator[None]:
 
 
 def _security_keychain_lookup(service: str, account: str) -> str:
+    if account.endswith(".api-key"):
+        return _security_framework_keychain_lookup(service, account)
     try:
         result = subprocess.run(
             [
@@ -95,7 +95,69 @@ def _security_keychain_lookup(service: str, account: str) -> str:
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         )
-    return result.stdout.rstrip("\r\n")
+    value = result.stdout
+    if value.endswith("\n"):
+        value = value[:-1]
+        if value.endswith("\r"):
+            value = value[:-1]
+    return value
+
+
+def _security_framework_keychain_lookup(service: str, account: str) -> str:
+    """Read exact Keychain bytes so validation sees control characters."""
+    try:
+        framework = ctypes.CDLL(
+            "/System/Library/Frameworks/Security.framework/Security"
+        )
+        find_password = framework.SecKeychainFindGenericPassword
+        find_password.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_void_p,
+        ]
+        find_password.restype = ctypes.c_int32
+        free_content = framework.SecKeychainItemFreeContent
+        free_content.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        free_content.restype = ctypes.c_int32
+
+        service_bytes = service.encode("utf-8")
+        account_bytes = account.encode("utf-8")
+        password_length = ctypes.c_uint32()
+        password_data = ctypes.c_void_p()
+        status = find_password(
+            None,
+            len(service_bytes),
+            service_bytes,
+            len(account_bytes),
+            account_bytes,
+            ctypes.byref(password_length),
+            ctypes.byref(password_data),
+            None,
+        )
+        if status != 0 or password_data.value is None:
+            raise HostSecretBootstrapError(
+                "host secret bootstrap failed for declared consumer"
+            )
+        try:
+            raw_value = ctypes.string_at(password_data, password_length.value)
+        finally:
+            free_status = free_content(None, password_data)
+            if free_status != 0:
+                raise HostSecretBootstrapError(
+                    "host secret bootstrap failed for declared consumer"
+                )
+        return raw_value.decode("utf-8", errors="strict")
+    except HostSecretBootstrapError:
+        raise
+    except Exception as exc:
+        raise HostSecretBootstrapError(
+            "host secret bootstrap failed for declared consumer"
+        ) from exc
 
 
 def _declared_secrets(
@@ -116,10 +178,26 @@ def _declared_secrets(
     return secrets
 
 
-def _validate_secret(secret: str, value: str) -> bool:
-    if secret == "heimdal.raw-store-key":
+def _validate_secret(kind: str, value: str) -> bool:
+    if kind == "raw-store-key":
         return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
+    if kind == "api-key":
+        return (
+            value == value.strip()
+            and 20 <= len(value) <= 512
+            and all(char.isprintable() and not char.isspace() for char in value)
+        )
     return False
+
+
+def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:
+    if kind == "api-key":
+        return HostSecretBootstrapError(
+            f"host secret bootstrap failed for declared secret: {secret}"
+        )
+    return HostSecretBootstrapError(
+        "host secret bootstrap failed for declared consumer"
+    )
 
 
 def _resolve_consumer_environment(
@@ -136,21 +214,19 @@ def _resolve_consumer_environment(
             channel=channel,
             consumer=consumer,
         ):
-            env_name = _SECRET_ENV_NAMES.get(secret)
-            if env_name is None:
-                raise HostSecretBootstrapError(
-                    "host secret bootstrap failed for declared consumer"
-                )
+            env_name = contract.binding_for(secret)
+            kind = contract.kind_for(secret)
             account = contract.keychain_account(
                 channel=channel,
                 consumer=consumer,
                 secret=secret,
             )
-            value = keychain_lookup(contract.keychain_service, account)
-            if not _validate_secret(secret, value):
-                raise HostSecretBootstrapError(
-                    "host secret bootstrap failed for declared consumer"
-                )
+            try:
+                value = keychain_lookup(contract.keychain_service, account)
+            except Exception as exc:
+                raise _secret_failure(secret=secret, kind=kind) from exc
+            if not _validate_secret(kind, value):
+                raise _secret_failure(secret=secret, kind=kind)
             resolved[env_name] = value
     except HostSecretBootstrapError:
         raise
@@ -337,15 +413,21 @@ def run_with_host_secrets(
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         )
+    try:
+        selected_contract = contract or load_host_secret_contract()
+    except Exception as exc:
+        raise HostSecretBootstrapError(
+            "host secret bootstrap failed for declared consumer"
+        ) from exc
     with materialize_consumer_environment(
         channel=channel,
         consumer=consumer,
         keychain_lookup=keychain_lookup,
-        contract=contract,
+        contract=selected_contract,
         directory=directory,
     ) as env_file:
         child_env = dict(os.environ)
-        for env_name in _SECRET_ENV_NAMES.values():
+        for env_name in selected_contract.child_bindings:
             child_env.pop(env_name, None)
         child_env[HOST_SECRET_RUNTIME_ENV_FILE] = str(env_file)
         return runner(selected_command, child_env)
@@ -378,9 +460,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 128 + exc.signum
-    except HostSecretBootstrapError:
+    except HostSecretBootstrapError as exc:
         print(
-            "host secret bootstrap failed for declared consumer; "
+            f"{exc}; "
             "verify the declared Keychain item and non-interactive access",
             file=sys.stderr,
         )
