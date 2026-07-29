@@ -235,22 +235,81 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
         "DupFd",
         "FileIO",
         "TextIOWrapper",
+        "callback",
+        "closing",
         "dup",
         "dup2",
         "dup3",
+        "enter_async_context",
+        "enter_context",
         "fcntl",
         "fdopen",
+        "finalize",
         "fromfd",
+        "partial",
+        "push",
+        "push_async_callback",
+        "register",
     }
 
+    def assigned_names(target: ast.expr) -> list[str]:
+        if isinstance(target, ast.Name):
+            return [target.id]
+        if isinstance(target, (ast.List, ast.Tuple)):
+            return [name for element in target.elts for name in assigned_names(element)]
+        return []
+
+    def resolve_reference(
+        expression: ast.expr,
+        aliases: dict[str, str],
+    ) -> str | None:
+        if isinstance(expression, ast.Name):
+            return aliases.get(expression.id, expression.id)
+        if isinstance(expression, ast.Attribute):
+            owner = resolve_reference(expression.value, aliases)
+            return f"{owner}.{expression.attr}" if owner is not None else expression.attr
+        return None
+
     def assert_no_fd_aliases(function: ast.FunctionDef) -> None:
-        assert not any(isinstance(node, (ast.With, ast.AsyncWith)) for node in ast.walk(function))
+        aliases: dict[str, str] = {}
+        assignments = [
+            node for node in ast.walk(function) if isinstance(node, (ast.Assign, ast.AnnAssign))
+        ]
+        for _ in range(len(assignments) + 1):
+            changed = False
+            for assignment in assignments:
+                value = assignment.value
+                if value is None:
+                    continue
+                reference = resolve_reference(value, aliases)
+                if reference is None:
+                    continue
+                targets = (
+                    assignment.targets
+                    if isinstance(assignment, ast.Assign)
+                    else [assignment.target]
+                )
+                for target in targets:
+                    for name in assigned_names(target):
+                        if aliases.get(name) != reference:
+                            aliases[name] = reference
+                            changed = True
+            if not changed:
+                break
+
+        assert not any(
+            isinstance(node, (ast.With, ast.AsyncWith, ast.Lambda)) for node in ast.walk(function)
+        )
         for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
-            assert call_name(call) not in forbidden_wrapper_names
+            resolved = resolve_reference(call.func, aliases)
+            resolved_tail = resolved.rsplit(".", 1)[-1] if resolved is not None else None
+            assert resolved_tail not in forbidden_wrapper_names
             assert not (isinstance(call.func, ast.Name) and call.func.id == "open")
             if isinstance(call.func, ast.Attribute) and call.func.attr == "open":
                 assert isinstance(call.func.value, ast.Name)
                 assert call.func.value.id == "os"
+            if isinstance(call.func, ast.Name) and call.func.id in aliases:
+                assert resolved not in {"os.close", "os.open"}
 
     for function in (create, probe):
         assert_no_fd_aliases(function)
@@ -261,6 +320,12 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
         "def mutant(fd):\n    io.FileIO(fd, closefd=False)\n",
         "def mutant(fd):\n    io.TextIOWrapper(io.FileIO(fd, closefd=False))\n",
         "def mutant(path):\n    pathlib.Path(path).open()\n",
+        "def mutant(fd):\n    weakref.finalize(fd, os.close, fd)\n",
+        "def mutant(fd):\n    stack = ExitStack()\n    stack.callback(os.close, fd)\n",
+        "def mutant(fd):\n    clone = os.dup\n    clone(fd)\n",
+        "def mutant(fd):\n    clone = os.dup\n    clone_again = clone\n    clone_again(fd)\n",
+        "def mutant(fd):\n    closer = os.close\n    closer(fd)\n",
+        "def mutant(fd):\n    callback = lambda: os.close(fd)\n",
     ]
     for source in alias_mutants:
         mutant = next(

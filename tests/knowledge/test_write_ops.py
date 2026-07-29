@@ -823,6 +823,10 @@ def test_candidate_create_once_real_same_target_race(
     _assert_exact_stage_names(stage_names)
 
 
+def _assert_candidate_fault_outcome(outcome: object) -> None:
+    assert isinstance(outcome, (OSError, RuntimeError))
+
+
 @pytest.mark.parametrize(
     "fault",
     [
@@ -840,6 +844,8 @@ def test_candidate_create_once_real_same_target_race(
         "loser_unlink",
         "loser_fsync",
         "winner_stat",
+        "winner_nonregular",
+        "post_rename_fsync",
         "final_parent_close",
     ],
 )
@@ -855,6 +861,8 @@ def test_candidate_create_once_fault_matrix(
     target = parent / "candidate.md"
     if fault in {"loser_unlink", "loser_fsync", "winner_stat"}:
         target.write_bytes(b"winner")
+    elif fault == "winner_nonregular":
+        target.mkdir()
     sentinel = parent / ".candidate-stage-11111111111111111111111111111111"
     sentinel.write_bytes(b"unrelated")
 
@@ -873,6 +881,7 @@ def test_candidate_create_once_fault_matrix(
     close_attempts: dict[str, int] = {}
     cleanup_events: list[tuple[object, ...]] = []
     unlink_succeeded = False
+    publication_succeeded = False
     arms: dict[str, int] = {}
 
     def hit(arm: str, message: str) -> None:
@@ -932,6 +941,8 @@ def test_candidate_create_once_fault_matrix(
             hit("cleanup_fsync", "cleanup fsync fault")
         if fault == "loser_fsync" and unlink_succeeded:
             hit("loser_fsync", "loser fsync fault")
+        if fault == "post_rename_fsync" and publication_succeeded:
+            hit("post_rename_fsync", "post-rename parent fsync fault")
         real_fsync(fd)
 
     def faulting_close(fd: int) -> None:
@@ -946,9 +957,11 @@ def test_candidate_create_once_fault_matrix(
         real_close(fd)
 
     def faulting_publish(*args: object) -> None:
+        nonlocal publication_succeeded
         if fault in {"publish", "cleanup_unlink", "cleanup_fsync"}:
             hit("publish", "publication fault")
         real_publish(*args)  # type: ignore[arg-type]
+        publication_succeeded = True
 
     def faulting_unlink(
         path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
@@ -972,6 +985,8 @@ def test_candidate_create_once_fault_matrix(
     ) -> os.stat_result:
         if fault == "winner_stat" and path == "candidate.md":
             hit("winner_stat", "winner stat fault")
+        if fault == "winner_nonregular" and path == "candidate.md":
+            arms["winner_nonregular"] = arms.get("winner_nonregular", 0) + 1
         return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(os, "mkdir", faulting_mkdir)
@@ -983,14 +998,18 @@ def test_candidate_create_once_fault_matrix(
     monkeypatch.setattr(os, "stat", faulting_stat)
     monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", faulting_publish)
 
-    with pytest.raises((OSError, RuntimeError)):
-        write_ops.create_candidate_note_once(
+    outcome: object
+    try:
+        outcome = write_ops.create_candidate_note_once(
             "Sources/candidate.md",
             "complete candidate",
             vault_root=vault,
             action="candidate.test",
             write_guard=WriteGuard(lambda: {"state": "healthy"}),
         )
+    except (OSError, RuntimeError) as exc:
+        outcome = exc
+    _assert_candidate_fault_outcome(outcome)
 
     expected_arms = (
         {"publish": 1, fault: 1} if fault in {"cleanup_unlink", "cleanup_fsync"} else {fault: 1}
@@ -1002,10 +1021,12 @@ def test_candidate_create_once_fault_matrix(
     if fault in {"root_close", "stage_close", "final_parent_close"}:
         assert close_attempts[fault.removesuffix("_close")] == 1
 
-    if fault == "final_parent_close":
+    if fault in {"final_parent_close", "post_rename_fsync"}:
         assert target.read_bytes() == b"complete candidate"
     elif fault in {"loser_unlink", "loser_fsync", "winner_stat"}:
         assert target.read_bytes() == b"winner"
+    elif fault == "winner_nonregular":
+        assert target.is_dir()
     else:
         assert not target.exists()
 
@@ -1021,3 +1042,17 @@ def test_candidate_create_once_fault_matrix(
             index for index, event in enumerate(cleanup_events) if event[0] == "unlink"
         )
         _assert_cleanup_fence(cleanup_events[unlink_index:])
+
+    if fault in {
+        "publish",
+        "cleanup_unlink",
+        "cleanup_fsync",
+        "loser_unlink",
+        "loser_fsync",
+        "winner_stat",
+        "winner_nonregular",
+        "post_rename_fsync",
+    }:
+        for false_success in ("already_exists", "written"):
+            with pytest.raises(AssertionError):
+                _assert_candidate_fault_outcome(false_success)
