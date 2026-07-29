@@ -82,6 +82,24 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
+def test_skill_readme_resume_work_summary_matches_recovery_order() -> None:
+    index = _read(".codex/skills/README.md")
+    skill = _read(".codex/skills/resume-work/SKILL.md")
+
+    summary = _section_between(index, "- `resume-work`", "- `issue-to-code`")
+    recovery_contract = _section_between(
+        skill,
+        "## Orchestrated runs: resume the engine before rebuilding from git",
+        "## Decide: continue or escalate",
+    )
+
+    assert "resumable orchestration journals/runs" in summary
+    assert "git reconstruction as the fallback" in summary
+    assert recovery_contract.index("Check for a resumable run") < recovery_contract.index(
+        "Fall back to git"
+    )
+
+
 def test_yggdrasil_design_handoff_is_routed_and_fail_closed() -> None:
     agents = _read("AGENTS.md")
     index = _read(".codex/skills/README.md")
