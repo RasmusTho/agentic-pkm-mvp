@@ -179,6 +179,7 @@ def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
         [
             "app/cli/__init__.py",
             "app/cli/settings_explain.py",
+            "app/components/settings/providers_loader.py",
             "app/config/paths.py",
             "app/services/companion_eligibility.py",
             "app/services/settings.py",
@@ -192,6 +193,7 @@ def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
 
     for adapter_path in (
         "app/cli/settings_explain.py",
+        "app/components/settings/providers_loader.py",
         "app/services/companion_eligibility.py",
         "app/services/settings.py",
     ):
