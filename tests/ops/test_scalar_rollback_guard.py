@@ -774,6 +774,74 @@ def test_authority_cutover_requires_stopped_window_at_core_boundary(
     assert runtime.registry.load().authority == "dormant"
 
 
+def test_authority_cutover_keeps_the_v2_observable_block_through_commit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),
+        tmp_path / "host-global",
+    )
+    selected_root = tmp_path / "selected"
+    selected_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=selected_root,
+        watcher_vault_path=selected_root,
+    )
+    proof, inventory = establish_authority_window(runtime, tmp_path)
+    receipt = preflight_scalar_rollback_guard(
+        compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+        rollback_vault_binding_id=registration.vault_binding_id,
+        selected_root=selected_root,
+    )
+    original_activate = runtime.registry.require_authoritative_activation
+    old_v2_begin_was_blocked = False
+
+    def observed_activate(*args, **kwargs):
+        nonlocal old_v2_begin_was_blocked
+        with pytest.raises(FileExistsError):
+            runtime_module._write_private_json(
+                runtime.ledger.root / "deployment-host-global-lease.json",
+                {
+                    "schema": "agentic-pkm.host-deployment-lease.v2",
+                    "channel_id": "prod",
+                    "nonce": "late-v2",
+                    "phase": "claimed",
+                    "controller": {
+                        "pid": os.getpid(),
+                        "start_token": f"linux:{'1' * 64}",
+                    },
+                },
+            )
+        old_v2_begin_was_blocked = True
+        return original_activate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        runtime.registry,
+        "require_authoritative_activation",
+        observed_activate,
+    )
+    activated = runtime.activate_authority(
+        guard_receipt=receipt,
+        inventory_path=inventory,
+        quiescence_proof=proof,
+    )
+
+    assert activated.authority == "active"
+    assert old_v2_begin_was_blocked
+    root_block = json.loads(
+        (
+            runtime.ledger.root / "deployment-host-global-lease.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert (
+        root_block["schema"]
+        == "agentic-pkm.host-deployment-compatibility-block.v1"
+    )
+
+
 def test_authority_cutover_serializes_against_deployment_finish(
     tmp_path,
     monkeypatch,

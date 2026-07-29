@@ -216,7 +216,9 @@ This slice promotes the existing seed without changing content-vault authority.
   Rollback admission and deployment start serialize on one host-global lock. The old API takes a
   shared runtime-admission lock from a key-free host-global control directory, checks the canonical
   deployment lease, and carries the lock across exec; deployment proves quiescence only after
-  taking the exclusive side.
+  taking the exclusive side. A compatibility block occupies the shipped root-level v2 lease path
+  for the complete cutover/cleanup interval, so a still-running v2 helper cannot create overlapping
+  deployment authority.
 - Native-host scalar rollback is an equally constrained supported path, never an exemption from that
   fence: a root-owned launcher accepts only the validated binding's canonical root, applies a
   deny-by-default filesystem sandbox/allow-list before exec, removes picker select/initialize

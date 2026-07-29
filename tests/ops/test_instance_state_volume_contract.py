@@ -354,6 +354,7 @@ def _clear_test_deployment_authority(
 ) -> None:
     for path in (
         _deployment_lease_path(host_global_root),
+        host_global_root / "deployment-host-global-lease.json",
         host_global_root / "deployment-quiescence-inventory.json",
         host_global_root / "deployment-quiescence-proof.json",
         host_global_root / "legacy-owner-inventory.json",
@@ -877,7 +878,13 @@ def test_deployment_begin_migrates_a_dead_legacy_claim_without_bypassing_it(
         controller_start_token=f"linux:{'2' * 64}",
     )
 
-    assert not legacy_lease.exists()
+    compatibility_block = json.loads(
+        legacy_lease.read_text(encoding="utf-8")
+    )
+    assert (
+        compatibility_block["schema"]
+        == "agentic-pkm.host-deployment-compatibility-block.v1"
+    )
     current_lease = json.loads(
         _deployment_lease_path(ownership).read_text(encoding="utf-8")
     )
@@ -952,22 +959,27 @@ def test_legacy_claim_migration_recovers_after_v3_fence_publication(
         encoding="utf-8",
     )
     legacy_lease.chmod(0o600)
-    original_unlink = Path.unlink
+    original_replace = runtime_module._replace_private_json
     interrupted = False
 
-    def interrupt_legacy_retirement(path, *args, **kwargs):
+    def interrupt_legacy_replacement(path, payload):
         nonlocal interrupted
-        if path == legacy_lease and not interrupted:
+        if (
+            path == legacy_lease
+            and payload.get("schema")
+            == "agentic-pkm.host-deployment-compatibility-block.v1"
+            and not interrupted
+        ):
             interrupted = True
-            raise OSError("injected legacy lease retirement interruption")
-        return original_unlink(path, *args, **kwargs)
+            raise OSError("injected compatibility block interruption")
+        return original_replace(path, payload)
 
     monkeypatch.setattr(
-        Path,
-        "unlink",
-        interrupt_legacy_retirement,
+        runtime_module,
+        "_replace_private_json",
+        interrupt_legacy_replacement,
     )
-    with pytest.raises(OSError, match="injected legacy lease retirement"):
+    with pytest.raises(OSError, match="injected compatibility block"):
         _begin_instance_state_deployment(
             channel="prod",
             instance_state_root=state,
@@ -985,8 +997,15 @@ def test_legacy_claim_migration_recovers_after_v3_fence_publication(
         )
     )
     assert current_fence["deployment_nonce"] == current_lease["nonce"]
-    assert legacy_lease.is_file()
-    monkeypatch.setattr(Path, "unlink", original_unlink)
+    assert (
+        json.loads(legacy_lease.read_text(encoding="utf-8"))["schema"]
+        == "agentic-pkm.host-deployment-lease.v2"
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_replace_private_json",
+        original_replace,
+    )
 
     recovered = _begin_instance_state_deployment(
         channel="prod",
@@ -997,7 +1016,10 @@ def test_legacy_claim_migration_recovers_after_v3_fence_publication(
         controller_start_token=f"linux:{'2' * 64}",
     )
     assert recovered["deployment_nonce"] == current_lease["nonce"]
-    assert not legacy_lease.exists()
+    assert (
+        json.loads(legacy_lease.read_text(encoding="utf-8"))["schema"]
+        == "agentic-pkm.host-deployment-compatibility-block.v1"
+    )
     assert _deployment_lease_path(ownership).is_file()
 
 
@@ -1144,7 +1166,7 @@ def test_quiescence_proof_preserves_a_late_live_legacy_claim(
 
     with pytest.raises(
         InstanceStatePreflightError,
-        match="legacy host-global deployment lease remains active",
+        match="root deployment compatibility block does not match",
     ):
         _prove_empty_quiescence(
             channel="prod",
@@ -1336,7 +1358,11 @@ def test_quiescence_proof_rejects_a_claim_adopted_after_its_first_read(
     assert not prove_thread.is_alive()
     assert len(failures) == 1
     assert isinstance(failures[0], InstanceStatePreflightError)
-    assert "lease changed before quiescence proof" in str(failures[0])
+    assert (
+        "root deployment compatibility block does not match"
+        in str(failures[0])
+        or "lease changed before quiescence proof" in str(failures[0])
+    )
     adopted_lease = json.loads(
         _deployment_lease_path(ownership).read_text(encoding="utf-8")
     )
@@ -1623,7 +1649,7 @@ def test_deployment_finish_preserves_a_late_live_legacy_claim(
 
     with pytest.raises(
         InstanceStatePreflightError,
-        match="legacy host-global deployment lease remains active",
+        match="root deployment compatibility block does not match",
     ):
         _finish_instance_state_deployment(
             channel="prod",
@@ -1641,6 +1667,67 @@ def test_deployment_finish_preserves_a_late_live_legacy_claim(
         == current_lease_bytes
     )
     assert fence_path.read_bytes() == fence_bytes
+
+
+def test_deployment_cleanup_keeps_the_v2_observable_block_until_terminal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "state", "prod"),
+        tmp_path / "ownership",
+    )
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, inventory = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=_current_registry_owners(runtime),
+    )
+    compatibility_path = (
+        runtime.ledger.root / "deployment-host-global-lease.json"
+    )
+    original_unlink = Path.unlink
+    old_v2_begin_was_blocked = False
+
+    def observed_terminal_unlink(path, *args, **kwargs):
+        nonlocal old_v2_begin_was_blocked
+        if path == compatibility_path:
+            with pytest.raises(FileExistsError):
+                runtime_module._write_private_json(
+                    compatibility_path,
+                    {
+                        "schema": "agentic-pkm.host-deployment-lease.v2",
+                        "channel_id": "prod",
+                        "nonce": "late-v2",
+                        "phase": "claimed",
+                        "controller": {
+                            "pid": os.getpid(),
+                            "start_token": _controller_token(os.getpid()),
+                        },
+                    },
+                )
+            old_v2_begin_was_blocked = True
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", observed_terminal_unlink)
+    receipt = _finish_instance_state_deployment(
+        channel="prod",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        inventory_path=inventory,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    assert receipt["restart_fence_cleared"] is True
+    assert old_v2_begin_was_blocked
+    assert not compatibility_path.exists()
+    assert not _deployment_lease_path(runtime.ledger.root).exists()
 
 
 def test_restore_rejects_missing_durable_quiescence_proof_before_writes(tmp_path) -> None:

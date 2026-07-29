@@ -141,12 +141,15 @@ proof, and drained-owner receipt are durable, and before `deployment-finish` per
 Roll-forward and finalization use the same host-admission then channel-producer lock order.
 Deployment begin treats the claimed lease as the retry journal for an interrupted channel-fence
 projection. Finalization records its result in a cleanup-phase lease before removing the restart
-fence and proof, then removes the lease last. Registry generation and scalar-session retirement
+fence and proof. A root-level compatibility block occupies the exact shipped v2 lease path through
+cutover and cleanup, preventing a running v2 helper from creating overlapping authority; it is the
+last authority artifact removed. Registry generation and scalar-session retirement
 share their existing crash journal; interruption recovers the pre-merge session for retry or the
 complete committed generation without a stranded stale session.
 An already-durable root-level v2 lease remains a blocking authority during upgrade. Only a dead
-same-channel `claimed` controller is migrated by publishing the public v3 lease and matching fence
-before v2 is retired; live or `proved` v2 state stays fail-closed on its original recovery path.
+same-channel `claimed` controller is migrated by publishing the public v3 lease, matching fence,
+and root compatibility block without an absence gap; live or `proved` v2 state stays fail-closed on
+its original recovery path.
 
 ### Target
 

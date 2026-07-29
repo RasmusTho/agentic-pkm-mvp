@@ -457,6 +457,7 @@ def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
         local_instance_id=selected.local_instance_id,
         last_opened_at="2026-07-29T00:00:00Z",
     )
+    settings.last_active_vault_ref = None
     rollback.save(settings)
 
     proof, owner_inventory, proof_path = _deployment_authority(
@@ -477,6 +478,7 @@ def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
     merged = runtime.registry.load()
 
     assert merged.registrations[first.vault_binding_id].vault_name == "Renamed during rollback"
+    assert merged.last_active_vault_ref is None
     assert merged.extensions["scalarRollForwardLineage"][-1]["mergedRegistryRevision"] == merged.revision
     deployment = (
         REPO_ROOT / "scripts/lib/instance_state_deployment.sh"

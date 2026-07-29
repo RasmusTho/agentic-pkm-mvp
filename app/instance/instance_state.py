@@ -27,6 +27,9 @@ _REQUIRED_CONSUMERS = frozenset({"api", "worker", "watcher", "heimdal-capture-wa
 _BACKUP_SCHEMA = "agentic-pkm.instance-state-backup.v1"
 _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
+_DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
+    "agentic-pkm.host-deployment-compatibility-block.v1"
+)
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _FINAL_EXPORT_SEAL = os.urandom(32)
@@ -99,6 +102,9 @@ class DeploymentQuiescenceProof:
         canonical_lease = (
             root / "deployment-public" / "deployment-host-global-lease.json"
         )
+        canonical_compatibility_block = (
+            root / "deployment-host-global-lease.json"
+        )
         canonical_inventory = root / "deployment-quiescence-inventory.json"
         canonical_receipt = root / "legacy-owner-inventory.json"
         canonical_fence = root / f"deployment-{channel_id}-restart-fence.json"
@@ -129,6 +135,9 @@ class DeploymentQuiescenceProof:
                 raise ValueError
             self.require_valid(channel_id=channel_id)
             lease = _read_private_json(canonical_lease)
+            compatibility_block = _read_private_json(
+                canonical_compatibility_block
+            )
             fence = _read_private_json(canonical_fence)
             inventory_bytes = _read_private_bytes(canonical_inventory)
             inventory = json.loads(inventory_bytes)
@@ -173,6 +182,22 @@ class DeploymentQuiescenceProof:
                 or lease.get("owner_receipt_digest") != self.owner_receipt_digest
                 or lease.get("controller") != controller
                 or lease.get("all_consumers_stopped") is not True
+                or compatibility_block.get("schema")
+                != _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+                or compatibility_block.get("channel_id") != channel_id
+                or compatibility_block.get("nonce") != self.nonce
+                or compatibility_block.get("compatibility_v3_nonce")
+                != self.nonce
+                or compatibility_block.get("phase") != "proved"
+                or compatibility_block.get("controller") != controller
+                or compatibility_block.get("legacy_path")
+                != lease.get("legacy_path")
+                or compatibility_block.get("inventory_digest")
+                != self.inventory_digest
+                or compatibility_block.get("all_consumers_stopped")
+                is not True
+                or compatibility_block.get("owner_receipt_digest")
+                != self.owner_receipt_digest
                 or fence.get("schema") != _DEPLOYMENT_FENCE_SCHEMA
                 or fence.get("channel_id") != channel_id
                 or fence.get("deployment_nonce") != self.nonce

@@ -373,6 +373,7 @@ class InstanceRegistryRuntime:
             )
             if inject_failure_before_commit:
                 raise RegistryError("injected partial MVR-01C activation")
+            _require_matching_compatibility_block(self.ledger.root)
             return self.registry.require_authoritative_activation(
                 RegistryActivationProof(
                     rollback_exporter=True,
@@ -1003,6 +1004,9 @@ _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _LEGACY_INVENTORY_SOURCE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
+_DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
+    "agentic-pkm.host-deployment-compatibility-block.v1"
+)
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _CONTROLLER_START_TOKEN_RE = re.compile(r"^(?:linux|darwin):[0-9a-f]{64}$")
 
@@ -1185,14 +1189,23 @@ def _read_legacy_deployment_lease(
         metadata = path.lstat()
         payload = json.loads(path.read_text(encoding="utf-8"))
         controller = payload.get("controller")
+        schema = payload.get("schema")
+        is_legacy = schema == "agentic-pkm.host-deployment-lease.v2"
+        is_compatibility_block = (
+            schema == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+        )
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.geteuid()
             or metadata.st_mode & 0o777 != 0o600
             or not isinstance(payload, dict)
-            or payload.get("schema")
-            != "agentic-pkm.host-deployment-lease.v2"
-            or payload.get("phase") not in {"claimed", "proved"}
+            or not (is_legacy or is_compatibility_block)
+            or payload.get("phase")
+            not in (
+                {"claimed", "proved"}
+                if is_legacy
+                else {"claimed", "proved", "cleanup"}
+            )
             or not isinstance(payload.get("channel_id"), str)
             or not isinstance(payload.get("nonce"), str)
             or not isinstance(controller, dict)
@@ -1201,6 +1214,17 @@ def _read_legacy_deployment_lease(
                 str(controller.get("start_token") or "")
             )
             is None
+            or (
+                is_compatibility_block
+                and (
+                    not isinstance(
+                        payload.get("compatibility_v3_nonce"), str
+                    )
+                    or payload.get("compatibility_v3_nonce")
+                    != payload.get("nonce")
+                    or not isinstance(payload.get("legacy_path"), str)
+                )
+            )
         ):
             raise ValueError
         return payload
@@ -1210,13 +1234,78 @@ def _read_legacy_deployment_lease(
         ) from exc
 
 
-def _require_no_legacy_deployment_lease(host_global_root: Path) -> None:
-    legacy_path = _legacy_deployment_lease_path(host_global_root)
-    if legacy_path.exists():
-        _read_legacy_deployment_lease(host_global_root)
-        raise InstanceStatePreflightError(
-            "legacy host-global deployment lease remains active"
+def _compatibility_block_payload(
+    lease: Mapping[str, object],
+) -> dict[str, object]:
+    payload = {
+        "schema": _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA,
+        "channel_id": lease["channel_id"],
+        "nonce": lease["nonce"],
+        "compatibility_v3_nonce": lease["nonce"],
+        "phase": lease["phase"],
+        "controller": lease["controller"],
+        "legacy_path": lease["legacy_path"],
+    }
+    for key in (
+        "diagnostic_fingerprint",
+        "inventory_digest",
+        "all_consumers_stopped",
+        "owner_receipt_digest",
+        "result",
+    ):
+        if key in lease:
+            payload[key] = lease[key]
+    return payload
+
+
+def _require_matching_compatibility_block(
+    host_global_root: Path,
+    lease: Mapping[str, object] | None = None,
+    *,
+    reconcile_from_previous_phase: bool = False,
+) -> dict[str, object]:
+    current = (
+        _read_deployment_lease(host_global_root)
+        if lease is None
+        else dict(lease)
+    )
+    root_authority = _read_legacy_deployment_lease(host_global_root)
+    expected = _compatibility_block_payload(current)
+    if (
+        root_authority != expected
+        and reconcile_from_previous_phase
+        and root_authority.get("schema")
+        == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+        and all(
+            root_authority.get(key) == expected.get(key)
+            for key in (
+                "channel_id",
+                "nonce",
+                "compatibility_v3_nonce",
+                "controller",
+                "legacy_path",
+            )
         )
+        and (
+            (root_authority.get("phase"), expected.get("phase"))
+            in {("claimed", "proved"), ("proved", "cleanup")}
+            or (
+                root_authority.get("phase") == expected.get("phase")
+                and root_authority.get("owner_receipt_digest") is None
+                and expected.get("owner_receipt_digest") is not None
+            )
+        )
+    ):
+        _replace_private_json(
+            _legacy_deployment_lease_path(host_global_root),
+            expected,
+        )
+        root_authority = expected
+    if root_authority != expected:
+        raise InstanceStatePreflightError(
+            "root deployment compatibility block does not match the public lease"
+        )
+    return root_authority
 
 
 def _controller_identity_is_live(controller: object) -> bool:
@@ -1297,10 +1386,57 @@ def _begin_instance_state_deployment(
         "start_token": controller_start_token,
     }
     with _deployment_admission_locked(ownership_root):
-        legacy_lease_path = _legacy_deployment_lease_path(ownership_root)
-        legacy_lease: dict[str, object] | None = None
-        if legacy_lease_path.exists():
-            legacy_lease = _read_legacy_deployment_lease(ownership_root)
+        root_lease_path = _legacy_deployment_lease_path(ownership_root)
+        root_authority = (
+            _read_legacy_deployment_lease(ownership_root)
+            if root_lease_path.exists()
+            else None
+        )
+        existing_lease: dict[str, object] | None = None
+        if lease_path.exists():
+            existing_lease = _read_deployment_lease(ownership_root)
+            if existing_lease.get("phase") == "cleanup":
+                _complete_instance_state_deployment_cleanup(ownership_root)
+                existing_lease = None
+                root_authority = None
+            elif (
+                root_authority is not None
+                and root_authority.get("schema")
+                == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+            ):
+                _require_matching_compatibility_block(
+                    ownership_root, existing_lease
+                )
+        compatibility_resume = (
+            root_authority is not None
+            and root_authority.get("schema")
+            == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+            and existing_lease is None
+        )
+        legacy_lease = (
+            root_authority
+            if root_authority is not None
+            and root_authority.get("schema")
+            == "agentic-pkm.host-deployment-lease.v2"
+            else None
+        )
+        if compatibility_resume:
+            if root_authority is None:
+                raise AssertionError
+            if root_authority.get("phase") == "cleanup":
+                _complete_instance_state_deployment_cleanup(ownership_root)
+                root_authority = None
+                compatibility_resume = False
+            elif (
+                root_authority.get("phase") != "claimed"
+                or root_authority.get("channel_id") != channel
+                or root_authority.get("legacy_path") != str(source)
+                or root_authority.get("controller") != controller
+            ):
+                raise InstanceStatePreflightError(
+                    "incomplete deployment compatibility block targets another claim"
+                )
+        if legacy_lease is not None:
             if (
                 legacy_lease.get("phase") != "claimed"
                 or legacy_lease.get("channel_id") != channel
@@ -1312,12 +1448,8 @@ def _begin_instance_state_deployment(
                 raise InstanceStatePreflightError(
                     "legacy host-global deployment controller is active"
                 )
-        existing_lease: dict[str, object] | None = None
-        if lease_path.exists():
-            existing_lease = _read_deployment_lease(ownership_root)
-            if existing_lease.get("phase") == "cleanup":
-                _complete_instance_state_deployment_cleanup(ownership_root)
-            elif (
+        if existing_lease is not None:
+            if (
                 existing_lease.get("phase") != "claimed"
                 or existing_lease.get("channel_id") != channel
                 or existing_lease.get("legacy_path") != str(source)
@@ -1325,7 +1457,7 @@ def _begin_instance_state_deployment(
                 raise InstanceStatePreflightError(
                     "another host-global deployment lease is active"
                 )
-            elif existing_lease.get("controller") == controller:
+            if existing_lease.get("controller") == controller:
                 existing_fence_path = _deployment_fence_path(
                     ownership_root, channel
                 )
@@ -1333,9 +1465,7 @@ def _begin_instance_state_deployment(
                     existing_fence = _read_deployment_fence(
                         ownership_root, channel
                     )
-                    if (
-                        existing_fence.get("legacy_path") != str(source)
-                    ):
+                    if existing_fence.get("legacy_path") != str(source):
                         raise InstanceStatePreflightError(
                             "existing restart fence does not match the deployment lease"
                         )
@@ -1344,15 +1474,25 @@ def _begin_instance_state_deployment(
                         == existing_lease.get("nonce")
                         and existing_fence.get("controller") == controller
                     ):
-                        if legacy_lease is not None:
-                            legacy_lease_path.unlink(missing_ok=True)
-                            _fsync_directory(ownership_root)
+                        compatibility = _compatibility_block_payload(
+                            existing_lease
+                        )
+                        if root_lease_path.exists():
+                            _replace_private_json(
+                                root_lease_path, compatibility
+                            )
+                        else:
+                            _write_private_json(
+                                root_lease_path, compatibility
+                            )
                         return existing_fence
             elif _controller_identity_is_live(existing_lease.get("controller")):
                 raise InstanceStatePreflightError(
                     "another host-global deployment controller is active"
                 )
-            else:
+            elif (
+                existing_lease.get("controller") != controller
+            ):
                 fence_path = _deployment_fence_path(ownership_root, channel)
                 if fence_path.exists():
                     existing_fence = _read_deployment_fence(ownership_root, channel)
@@ -1397,13 +1537,17 @@ def _begin_instance_state_deployment(
                 )
         if (
             not lease_path.exists()
-            and legacy_lease is None
+            and root_authority is None
             and fence_path.exists()
         ):
             raise InstanceStatePreflightError(
                 "channel restart fence exists without its host-global lease"
             )
-        nonce = uuid4().hex
+        nonce = (
+            str(root_authority["nonce"])
+            if compatibility_resume and root_authority is not None
+            else uuid4().hex
+        )
         lease: dict[str, object] = {
             "schema": _DEPLOYMENT_LEASE_SCHEMA,
             "channel_id": channel,
@@ -1421,6 +1565,9 @@ def _begin_instance_state_deployment(
             "legacy_path": str(source),
             "diagnostic_fingerprint": diagnostic_fingerprint,
         }
+        compatibility = _compatibility_block_payload(lease)
+        if not root_lease_path.exists():
+            _write_private_json(root_lease_path, compatibility)
         if lease_path.exists():
             _replace_private_json(lease_path, lease)
         else:
@@ -1429,9 +1576,7 @@ def _begin_instance_state_deployment(
             _replace_private_json(fence_path, payload)
         else:
             _write_private_json(fence_path, payload)
-        if legacy_lease is not None:
-            legacy_lease_path.unlink(missing_ok=True)
-            _fsync_directory(ownership_root)
+        _replace_private_json(root_lease_path, compatibility)
         return payload
 
 
@@ -1442,8 +1587,12 @@ def _prove_instance_state_quiescence(
     root = _assert_mount_root(host_global_root, "host-global")
     lease_path = _deployment_lease_path(root)
     try:
-        _require_no_legacy_deployment_lease(root)
         lease = _read_deployment_lease(root)
+        _require_matching_compatibility_block(
+            root,
+            lease,
+            reconcile_from_previous_phase=True,
+        )
         inventory_file = Path(inventory_path)
         inventory_metadata = inventory_file.lstat()
         if (
@@ -1497,8 +1646,12 @@ def _prove_instance_state_quiescence(
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise InstanceStatePreflightError("complete two-pass host-wide quiescence inventory is required") from exc
     with _scalar_rollback_runtime_quiescent(root):
-        _require_no_legacy_deployment_lease(root)
         lease = _read_deployment_lease(root)
+        _require_matching_compatibility_block(
+            root,
+            lease,
+            reconcile_from_previous_phase=True,
+        )
         if (
             any(
                 lease.get(key) != value
@@ -1519,6 +1672,10 @@ def _prove_instance_state_quiescence(
             "all_consumers_stopped": True,
         }
         _replace_private_json(lease_path, lease)
+        _replace_private_json(
+            _legacy_deployment_lease_path(root),
+            _compatibility_block_payload(lease),
+        )
         proof_path = root / "deployment-quiescence-proof.json"
         controller = lease["controller"]
         if not isinstance(controller, dict):
@@ -1661,6 +1818,11 @@ def _bind_legacy_owner_inventory_to_proof(
         raise InstanceStatePreflightError(
             "durable quiescence proof is required for drained-owner binding"
         ) from exc
+    _require_matching_compatibility_block(
+        ownership_root,
+        lease,
+        reconcile_from_previous_phase=True,
+    )
     fence = _read_deployment_fence(ownership_root, channel)
     if (
         fence.get("deployment_nonce") != quiescence_proof.nonce
@@ -1706,6 +1868,10 @@ def _bind_legacy_owner_inventory_to_proof(
     if existing_lease_digest is None:
         lease = lease | {"owner_receipt_digest": receipt_digest}
         _replace_private_json(lease_path, lease)
+        _replace_private_json(
+            _legacy_deployment_lease_path(ownership_root),
+            _compatibility_block_payload(lease),
+        )
 
     bound_proof = replace(
         quiescence_proof,
@@ -1834,10 +2000,26 @@ def _complete_instance_state_deployment_cleanup(
     """Complete the durable cleanup phase and return its stored receipt."""
 
     ownership_root = Path(host_global_root).expanduser().resolve(strict=False)
-    _require_no_legacy_deployment_lease(ownership_root)
-    lease = _read_deployment_lease(ownership_root)
-    result = lease.get("result")
-    channel = lease.get("channel_id")
+    public_path = _deployment_lease_path(ownership_root)
+    root_path = _legacy_deployment_lease_path(ownership_root)
+    root_authority = _read_legacy_deployment_lease(ownership_root)
+    if root_authority.get("schema") != _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA:
+        raise InstanceStatePreflightError(
+            "valid deployment cleanup compatibility block is required"
+        )
+    if public_path.exists():
+        lease = _read_deployment_lease(ownership_root)
+        _require_matching_compatibility_block(
+            ownership_root,
+            lease,
+            reconcile_from_previous_phase=True,
+        )
+        result = lease.get("result")
+        channel = lease.get("channel_id")
+    else:
+        lease = root_authority
+        result = root_authority.get("result")
+        channel = root_authority.get("channel_id")
     if (
         lease.get("phase") != "cleanup"
         or not isinstance(channel, str)
@@ -1851,9 +2033,21 @@ def _complete_instance_state_deployment_cleanup(
     _deployment_fence_path(ownership_root, channel).unlink(missing_ok=True)
     (ownership_root / "deployment-quiescence-proof.json").unlink(missing_ok=True)
     _fsync_directory(ownership_root)
-    _require_no_legacy_deployment_lease(ownership_root)
-    _deployment_lease_path(ownership_root).unlink(missing_ok=True)
+    public_path.unlink(missing_ok=True)
     _fsync_directory(_deployment_public_root(ownership_root))
+    current_root = _read_legacy_deployment_lease(ownership_root)
+    if (
+        current_root.get("schema")
+        != _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+        or current_root.get("phase") != "cleanup"
+        or current_root.get("result") != result
+        or current_root.get("channel_id") != channel
+    ):
+        raise InstanceStatePreflightError(
+            "deployment cleanup compatibility block changed"
+        )
+    root_path.unlink()
+    _fsync_directory(ownership_root)
     return dict(result)
 
 
@@ -1874,15 +2068,31 @@ def _finish_instance_state_deployment_locked(
 
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
-    _require_no_legacy_deployment_lease(ownership_root)
     if _deployment_lease_path(ownership_root).exists():
         active_lease = _read_deployment_lease(ownership_root)
+        _require_matching_compatibility_block(
+            ownership_root,
+            active_lease,
+            reconcile_from_previous_phase=True,
+        )
         if active_lease.get("phase") == "cleanup":
             if active_lease.get("channel_id") != channel:
                 raise InstanceStatePreflightError(
                     "deployment cleanup targets another channel"
                 )
             return _complete_instance_state_deployment_cleanup(ownership_root)
+    else:
+        root_authority = _read_legacy_deployment_lease(ownership_root)
+        if (
+            root_authority.get("schema")
+            == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+            and root_authority.get("phase") == "cleanup"
+            and root_authority.get("channel_id") == channel
+        ):
+            return _complete_instance_state_deployment_cleanup(ownership_root)
+        raise InstanceStatePreflightError(
+            "public deployment lease is required"
+        )
     if quiescence_proof is None:
         raise InstanceStatePreflightError("durable quiescence proof is required")
     quiescence_proof.require_valid(channel_id=channel)
@@ -1982,8 +2192,8 @@ def _finish_instance_state_deployment_locked(
         "restart_fence_cleared": True,
     }
     lease_path = _deployment_lease_path(ownership_root)
-    _require_no_legacy_deployment_lease(ownership_root)
     lease = _read_deployment_lease(ownership_root)
+    _require_matching_compatibility_block(ownership_root, lease)
     if (
         lease.get("channel_id") != channel
         or lease.get("phase") != "proved"
@@ -1992,9 +2202,11 @@ def _finish_instance_state_deployment_locked(
         raise InstanceStatePreflightError(
             "proved deployment lease changed before cleanup"
         )
+    cleanup_lease = lease | {"phase": "cleanup", "result": result}
+    _replace_private_json(lease_path, cleanup_lease)
     _replace_private_json(
-        lease_path,
-        lease | {"phase": "cleanup", "result": result},
+        _legacy_deployment_lease_path(ownership_root),
+        _compatibility_block_payload(cleanup_lease),
     )
     return _complete_instance_state_deployment_cleanup(ownership_root)
 
@@ -2131,10 +2343,22 @@ def main(argv: list[str] | None = None) -> int:
                 args.quiescence_proof_path
             )
         except InstanceStatePreflightError:
-            lease = _read_deployment_lease(args.host_global_root)
+            if _deployment_lease_path(args.host_global_root).exists():
+                lease = _read_deployment_lease(args.host_global_root)
+            else:
+                lease = _read_legacy_deployment_lease(
+                    args.host_global_root
+                )
             if (
                 lease.get("phase") != "cleanup"
                 or lease.get("channel_id") != args.channel
+                or (
+                    lease.get("schema")
+                    not in {
+                        _DEPLOYMENT_LEASE_SCHEMA,
+                        _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA,
+                    }
+                )
             ):
                 raise
             proof = None
